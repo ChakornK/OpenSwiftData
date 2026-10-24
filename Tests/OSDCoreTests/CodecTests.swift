@@ -61,6 +61,14 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(try PersistentValue.decode(Payload.self, from: stored), payload)
     }
 
+    func testCodableDictionaryUsesSortedJSONAndRoundTrips() throws {
+        let dictionary = ["z": 2, "a": 1, "m": 3]
+
+        let stored = try PersistentValue.encode(dictionary)
+        XCTAssertEqual(stored, .blob(Array(#"{"a":1,"m":3,"z":2}"#.utf8)))
+        XCTAssertEqual(try PersistentValue.decode([String: Int].self, from: stored), dictionary)
+    }
+
     func testSignedAndUnsignedIntegerRoundTrips() throws {
         XCTAssertEqual(try PersistentValue.encode(Int.min), .int(Int64(Int.min)))
         XCTAssertEqual(try PersistentValue.encode(Int8.min), .int(Int64(Int8.min)))

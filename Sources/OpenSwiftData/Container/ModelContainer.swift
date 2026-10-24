@@ -261,10 +261,14 @@ public final class ModelContainer: Sendable {
     }
 
     /// Deletes all persistent data owned by this container.
-    public func deleteAllData() throws {}
+    public func deleteAllData() throws {
+        throw SwiftDataError.unsupportedStore("Deleting all data is unavailable without a persistent store.")
+    }
 
     /// Erases this container's store.
-    public func erase() throws {}
+    public func erase() throws {
+        throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
+    }
 
     private static func unqualifiedTypeName(_ type: String) -> String {
         type.split(separator: ".").last.map(String.init) ?? type

@@ -306,6 +306,28 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
+    func testDestructiveContainerOperationsFailWithoutAStore() throws {
+        let configurations = [
+            ModelConfiguration("memory", isStoredInMemoryOnly: true),
+            ModelConfiguration("file", url: URL(fileURLWithPath: "/tmp/osd-test.sqlite")),
+        ]
+
+        for configuration in configurations {
+            let container = try ModelContainer(for: [TransactionFixture.self], configurations: [configuration])
+            XCTAssertThrowsError(try container.deleteAllData()) { error in
+                guard case SwiftDataError.unsupportedStore = error else {
+                    return XCTFail("Expected unsupportedStore, got \\(error)")
+                }
+            }
+            XCTAssertThrowsError(try container.erase()) { error in
+                guard case SwiftDataError.unsupportedStore = error else {
+                    return XCTFail("Expected unsupportedStore, got \\(error)")
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testMainContextsAreSpecificToTheirContainers() throws {
         let firstContainer = try ModelContainer(for: TransactionFixture.self)
         let secondContainer = try ModelContainer(for: TransactionFixture.self)
@@ -612,20 +634,26 @@ final class RuntimeAPITests: XCTestCase {
     @MainActor
     func testNestedSuccessfulTransactionDefersSaveUntilOuterCommit() {
         let context = ModelContext()
-        let model = TransactionFixture()
-        context.insert(model)
+        let preexistingInsertion = TransactionFixture()
+        context.insert(preexistingInsertion)
+        let newInsertion = TransactionFixture()
 
         XCTAssertThrowsError(
             try context.transaction {
+                preexistingInsertion.title = "outer change"
                 try context.transaction {
-                    model.title = "inner success"
+                    context.insert(newInsertion)
+                    newInsertion.title = "inner insertion change"
                 }
                 throw SwiftDataError.unsupportedStore("outer failure")
             })
 
-        XCTAssertEqual(model.title, "original")
-        XCTAssertTrue(model.modelContext === context)
-        XCTAssertTrue(context.insertedModelsArray.contains { $0 === model })
+        XCTAssertEqual(preexistingInsertion.title, "original")
+        XCTAssertTrue(preexistingInsertion.modelContext === context)
+        XCTAssertTrue(context.insertedModelsArray.contains { $0 === preexistingInsertion })
+        XCTAssertEqual(newInsertion.title, "original")
+        XCTAssertNil(newInsertion.modelContext)
+        XCTAssertFalse(context.insertedModelsArray.contains { $0 === newInsertion })
         XCTAssertTrue(context.hasChanges)
     }
 
@@ -639,8 +667,11 @@ final class RuntimeAPITests: XCTestCase {
         try context.transaction {
             try context.transaction {
                 model.title = "inner success"
+                try context.save()
             }
             XCTAssertEqual(saveCount, 0)
+            XCTAssertTrue(context.hasChanges)
+            XCTAssertTrue(model.hasChanges)
         }
 
         XCTAssertEqual(saveCount, 1)

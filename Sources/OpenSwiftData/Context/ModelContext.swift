@@ -157,6 +157,7 @@ public final class ModelContext {
 
     /// Saves pending changes when a supported store is available.
     public func save() throws {
+        guard transactionFrames.isEmpty else { return }
         guard let testSaveHook else { throw unsupportedStore("Saving") }
         try testSaveHook()
         finalizePendingChanges()

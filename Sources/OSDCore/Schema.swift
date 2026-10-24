@@ -1,7 +1,7 @@
 /// Describes the entities and version metadata in a persistent store.
 public struct Schema: Sendable {
     /// Describes a persisted model entity.
-    public struct Entity: Sendable, Hashable {
+    public struct Entity: Hashable, Sendable {
         /// The entity's stable model type name.
         public let name: String
         /// The entity's persisted attributes.
@@ -52,6 +52,16 @@ public struct Schema: Sendable {
         /// The original property name used for renaming.
         public let originalName: String?
 
+        /// Creates metadata describing attribute options without property details.
+        public init(_ options: Option...) {
+            self.name = ""
+            self.type = ""
+            self.isOptional = false
+            self.defaultValue = nil
+            self.options = Set(options)
+            self.originalName = nil
+        }
+
         /// Creates attribute metadata.
         public init(
             name: String,
@@ -71,7 +81,7 @@ public struct Schema: Sendable {
     }
 
     /// Describes a persisted model relationship.
-    public struct Relationship: Sendable, Hashable {
+    public struct Relationship: Hashable, Sendable {
         /// Describes relationship delete behavior.
         public enum DeleteRule: Sendable, Hashable {
             /// Removes the relationship reference when its destination is deleted.
@@ -100,6 +110,37 @@ public struct Schema: Sendable {
         public let maximumModelCount: Int?
         /// The original relationship name used for renaming.
         public let originalName: String?
+
+        /// Creates metadata describing relationship options without property details.
+        public init(
+            deleteRule: DeleteRule = .nullify,
+            minimumModelCount: Int? = nil,
+            maximumModelCount: Int? = nil,
+            inverse: AnyKeyPath? = nil,
+            inverseName: String? = nil,
+            originalName: String? = nil
+        ) {
+            self.name = ""
+            self.destination = ""
+            self.isToMany = false
+            self.inverse = inverseName ?? inverse.flatMap(Self.inversePropertyName)
+            self.deleteRule = deleteRule
+            self.minimumModelCount = minimumModelCount
+            self.maximumModelCount = maximumModelCount
+            self.originalName = originalName
+        }
+
+        private static func inversePropertyName(_ keyPath: AnyKeyPath) -> String? {
+            let description = String(describing: keyPath)
+            guard description.hasPrefix("\\"), let propertyStart = description.lastIndex(of: ".") else {
+                return nil
+            }
+            let name = String(description[description.index(after: propertyStart)...])
+            guard !name.isEmpty, !name.contains(" "), !name.contains("("), !name.contains(")") else {
+                return nil
+            }
+            return name.first == "`" && name.last == "`" ? String(name.dropFirst().dropLast()) : name
+        }
 
         /// Creates relationship metadata.
         public init(
@@ -180,7 +221,7 @@ public struct Schema: Sendable {
             self.name = name
             self.keypath = keypath
             self.metadata = metadata
-            self.isRelationship = false
+            self.isRelationship = metadata?.base is Schema.Relationship
             self.defaultValue = defaultValue.map { String(describing: $0) }
             self.options = []
             if let defaultValue {

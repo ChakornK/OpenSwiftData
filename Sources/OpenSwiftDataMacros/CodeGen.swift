@@ -1,4 +1,5 @@
 import SwiftSyntax
+import SwiftSyntaxBuilder
 
 enum CodeGen {
     struct Property {

@@ -12,6 +12,10 @@ final class SwiftDataErrorTests: XCTestCase {
             .migrationUnsupported("relationship changed")
         )
         XCTAssertEqual(SwiftDataError.optimisticLockConflict, .optimisticLockConflict)
+        XCTAssertEqual(
+            SwiftDataError.unsupportedRelationshipElement("optional model element"),
+            .unsupportedRelationshipElement("optional model element")
+        )
     }
 
     func testErrorCasesConformToErrorAndSendable() {
@@ -19,7 +23,8 @@ final class SwiftDataErrorTests: XCTestCase {
             SwiftDataError.unsupportedPredicate("predicate"),
             SwiftDataError.migrationUnsupported("migration"),
             SwiftDataError.optimisticLockConflict,
+            SwiftDataError.unsupportedRelationshipElement("relationship element"),
         ]
-        XCTAssertEqual(errors.count, 3)
+        XCTAssertEqual(errors.count, 4)
     }
 }

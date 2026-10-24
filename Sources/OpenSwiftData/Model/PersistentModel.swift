@@ -1,11 +1,5 @@
 import Observation
 
-/// Represents the context managing persistent models.
-public final class ModelContext: @unchecked Sendable {
-    /// Creates an empty model context.
-    public init() {}
-}
-
 /// A model whose properties are stored in OpenSwiftData backing data.
 public protocol PersistentModel: AnyObject {
     associatedtype Model: PersistentModel = Self
@@ -31,6 +25,18 @@ public extension PersistentModel {
     }
 
     func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value) {
+        persistentBackingData.willMutate()
         persistentBackingData.setValue(forKey: keyPath, to: value)
+        persistentBackingData.recordMutation()
     }
+
+    func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }
+    func markSavedLifecycle() { persistentBackingData.markSaved() }
+    func restoreLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restore(snapshot) }
+    func restoreValuesLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restoreValues(snapshot) }
+    func restoreValuesAndDetachLifecycle(_ snapshot: BackingDataSnapshot) {
+        persistentBackingData.restoreValuesAndDetach(snapshot)
+    }
+    func detachLifecycle() { persistentBackingData.detach() }
+    func detachDeletedLifecycle() { persistentBackingData.detachDeleted() }
 }

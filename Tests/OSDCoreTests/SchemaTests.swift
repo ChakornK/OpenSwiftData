@@ -40,6 +40,16 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(entity.relationships.first?.maximumModelCount, 8)
     }
 
+    func testRelationshipMetadataExtractsInverseFromStoredKeyPath() {
+        struct Model {
+            let inverse: String?
+        }
+
+        let relationship = Schema.Relationship(inverse: \Model.inverse)
+
+        XCTAssertEqual(relationship.inverse, "inverse")
+    }
+
     func testPropertyMetadataSupportsGeneratedMacroInitializerAndLegacyInitializer() {
         struct Model {
             let title: String
@@ -49,6 +59,11 @@ final class SchemaTests: XCTestCase {
             keypath: \Model.title,
             defaultValue: nil,
             metadata: nil
+        )
+        let relationship = Schema.PropertyMetadata(
+            name: "relationship",
+            keypath: \Model.title,
+            metadata: AnyHashable(Schema.Relationship(name: "relationship", destination: "Destination"))
         )
         let legacy = Schema.PropertyMetadata(
             name: "legacy",
@@ -60,6 +75,8 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(generated.name, "title")
         XCTAssertEqual(generated.keypath, \Model.title)
         XCTAssertNil(generated.metadata)
+        XCTAssertFalse(generated.isRelationship)
+        XCTAssertTrue(relationship.isRelationship)
         XCTAssertEqual(legacy.name, "legacy")
         XCTAssertTrue(legacy.isRelationship)
         XCTAssertEqual(legacy.defaultValue, "1")

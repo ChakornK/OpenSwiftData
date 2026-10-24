@@ -6,4 +6,12 @@ public enum SwiftDataError: Error, Sendable, Equatable {
     case migrationUnsupported(String)
     /// A saved model was changed by another context since it was fetched.
     case optimisticLockConflict
+    /// The requested persistence operation is unavailable in this implementation.
+    case unsupportedStore(String)
+    /// Multiple model types have the same unqualified entity name.
+    case duplicateEntityName(String)
+    /// A model property cannot be represented in the inferred schema.
+    case unsupportedSchemaProperty(String)
+    /// A relationship collection contains optional model elements.
+    case unsupportedRelationshipElement(String)
 }

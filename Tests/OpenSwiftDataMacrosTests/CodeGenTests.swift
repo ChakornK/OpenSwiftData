@@ -50,6 +50,23 @@ final class CodeGenTests: XCTestCase {
             """)
     }
 
+    func testInverseKeyPathIsPreservedWithoutSynthesizedName() throws {
+        let declaration = try parseClass(
+            """
+            final class Model {
+                @Relationship(inverse: \\.Destination.someProperty) var destination: Destination?
+                @Relationship(inverse: \\.Destination.`class`) var escaped: Destination?
+            }
+            """)
+
+        XCTAssertEqual(
+            CodeGen.persistedProperties(in: declaration).map(\.metadata),
+            [
+                "Schema.Relationship(inverse: \\.Destination.someProperty)",
+                "Schema.Relationship(inverse: \\.Destination.`class`)",
+            ])
+    }
+
     func testTuplePatternsAreIgnoredWithoutGeneratingInvalidNames() throws {
         let declaration = try parseClass(
             """

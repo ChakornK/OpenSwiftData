@@ -151,21 +151,26 @@ public struct Schema: Sendable {
         public let defaultValue: String?
         /// Property-specific options.
         public let options: [String]
+        package let runtimeDefaultValue: Any?
 
         /// Creates property metadata using the model macro contract.
-        public init<Value: Hashable>(
+        public init<Value>(
             name: String,
             keypath: KeyPath<some Any, Value>,
-            defaultValue: Any? = nil,
+            defaultValue: Value? = nil,
             metadata: AnyHashable? = nil
         ) {
             self.name = name
             self.keypath = keypath
             self.metadata = metadata
             self.isRelationship = false
-            self.defaultValue = defaultValue.map(String.init(describing:))
+            self.defaultValue = defaultValue.map { String(describing: $0) }
+            runtimeDefaultValue = defaultValue
             self.options = []
         }
+
+        // Package visibility lets OpenSwiftData initialize detached storage without exposing runtime values publicly.
+        package var packageRuntimeDefaultValue: Any? { runtimeDefaultValue }
 
         /// Creates property metadata.
         public init(name: String, isRelationship: Bool = false, defaultValue: String? = nil, options: [String] = []) {
@@ -174,7 +179,28 @@ public struct Schema: Sendable {
             self.metadata = nil
             self.isRelationship = isRelationship
             self.defaultValue = defaultValue
+            runtimeDefaultValue = nil
             self.options = options
+        }
+
+        /// Compares property metadata without considering runtime-only values.
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.name == rhs.name
+                && lhs.isRelationship == rhs.isRelationship
+                && lhs.defaultValue == rhs.defaultValue
+                && lhs.options == rhs.options
+                && lhs.keypath == rhs.keypath
+                && lhs.metadata == rhs.metadata
+        }
+
+        /// Hashes property metadata without considering runtime-only values.
+        public func hash(into hasher: inout Hasher) {
+            hasher.combine(name)
+            hasher.combine(isRelationship)
+            hasher.combine(defaultValue)
+            hasher.combine(options)
+            hasher.combine(keypath)
+            hasher.combine(metadata)
         }
     }
 

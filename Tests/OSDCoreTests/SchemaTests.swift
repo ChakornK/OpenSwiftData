@@ -64,6 +64,31 @@ final class SchemaTests: XCTestCase {
         XCTAssertTrue(legacy.isRelationship)
         XCTAssertEqual(legacy.defaultValue, "1")
         XCTAssertEqual(legacy.options, ["indexed"])
+        XCTAssertEqual(Set([legacy, legacy]).count, 1)
+    }
+
+    func testGeneratedMetadataRetainsTypedDefaultAndStringifiesLegacyValue() {
+        struct Model {
+            let count: Int
+        }
+        let generated = Schema.PropertyMetadata(
+            name: "count",
+            keypath: \Model.count,
+            defaultValue: 1,
+            metadata: nil
+        )
+        let equivalent = Schema.PropertyMetadata(
+            name: "count",
+            keypath: \Model.count,
+            defaultValue: 2,
+            metadata: nil
+        )
+
+        XCTAssertEqual(generated.defaultValue, "1")
+        XCTAssertEqual(generated.runtimeDefaultValue as? Int, 1)
+        XCTAssertEqual(equivalent.defaultValue, "2")
+        XCTAssertNotEqual(generated, equivalent)
+        XCTAssertEqual(Set([generated, equivalent]).count, 2)
     }
 
     func testTransformableOptionStoresTransformerTypeIdentifier() {

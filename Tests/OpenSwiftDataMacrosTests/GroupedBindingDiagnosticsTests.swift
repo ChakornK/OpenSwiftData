@@ -11,7 +11,7 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
             @Model final class Grouped { var first, second: Int = 0 }
             """,
             expandedSource: """
-                final class Grouped { var first, second: Int = 0
+                final class Grouped { var first, second: Int = 0\( " " )
 
                     @Transient
                     private var _$backingData: any BackingData<Grouped> = Grouped.createBackingData()

@@ -31,6 +31,8 @@ public struct Schema: Sendable {
             case preserveValueOnDeletion
             /// Enables Spotlight indexing.
             case spotlight
+            /// Stores values using the named value transformer type.
+            case transformable(by: String)
             /// Allows cloud encryption.
             case allowsCloudEncryption
             /// Stores values ephemerally.

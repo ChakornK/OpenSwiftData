@@ -40,6 +40,15 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(entity.relationships.first?.maximumModelCount, 8)
     }
 
+    func testTransformableOptionStoresTransformerTypeIdentifier() {
+        let transformerTypeIdentifier = "Example.ArchiveTransformer"
+        let option = Schema.Attribute.Option.transformable(by: transformerTypeIdentifier)
+        let attribute = Schema.Attribute(name: "payload", type: "Payload", options: [option])
+
+        XCTAssertEqual(attribute.options, [.transformable(by: transformerTypeIdentifier)])
+        XCTAssertEqual(Set([option, .transformable(by: transformerTypeIdentifier)]).count, 1)
+    }
+
     func testEntityOrderingAndLookupAreDeterministic() {
         let schema = Schema([
             Schema.Entity(name: "Trip"),

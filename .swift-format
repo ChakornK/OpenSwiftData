@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "lineLength": 120,
+  "indentation": {
+    "spaces": 4
+  },
+  "rules": {
+    "AllPublicDeclarationsHaveDocumentation": true,
+    "AlwaysUseLowerCamelCase": true,
+    "FileScopedDeclarationPrivacy": true,
+    "UseEarlyExits": true
+  }
+}

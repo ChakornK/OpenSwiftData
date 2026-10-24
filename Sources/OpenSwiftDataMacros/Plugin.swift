@@ -1,5 +1,7 @@
 import SwiftCompilerPlugin
+import SwiftDiagnostics
 import SwiftSyntax
+import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
 
 @main
@@ -22,14 +24,30 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         providingMembersOf declaration: some DeclGroupSyntax,
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] { [] }
+    ) throws -> [DeclSyntax] {
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
+        diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)
+        return CodeGen.memberSources(classDeclaration).map(DeclSyntax.init(stringLiteral:))
+    }
 
     static func expansion(
         of node: AttributeSyntax,
         attachedTo declaration: some DeclGroupSyntax,
         providingAttributesFor member: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
-    ) throws -> [AttributeSyntax] { [] }
+    ) throws -> [AttributeSyntax] {
+        guard let variable = member.as(VariableDeclSyntax.self),
+            let binding = variable.bindings.first, variable.bindings.count == 1,
+            binding.pattern.is(IdentifierPatternSyntax.self),
+            binding.accessorBlock == nil,
+            !variable.modifiers.contains(where: { ["static", "class", "lazy"].contains($0.name.text) }),
+            !variable.attributes.contains(where: { element in
+                guard case let .attribute(attribute) = element else { return false }
+                return attribute.attributeName.trimmedDescription == "Transient"
+            })
+        else { return [] }
+        return [AttributeSyntax(stringLiteral: "@_PersistedProperty")]
+    }
 
     static func expansion(
         of node: AttributeSyntax,
@@ -37,7 +55,37 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         providingExtensionsOf type: some TypeSyntaxProtocol,
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
-    ) throws -> [ExtensionDeclSyntax] { [] }
+    ) throws -> [ExtensionDeclSyntax] {
+        return CodeGen.extensionSources(declaration)
+            .filter {
+                $0.contains("PersistentModel") || $0.contains("Observation.Observable")
+                    || $0.contains("@unchecked Sendable")
+            }
+            .compactMap { DeclSyntax(stringLiteral: $0).as(ExtensionDeclSyntax.self) }
+    }
+
+    static func diagnoseGroupedBindingsForTesting(
+        in declaration: ClassDeclSyntax,
+        context: some MacroExpansionContext
+    ) {
+        for member in declaration.memberBlock.members {
+            guard let variable = member.decl.as(VariableDeclSyntax.self), variable.bindings.count > 1 else {
+                continue
+            }
+            let diagnostic = Diagnostic(
+                node: Syntax(variable),
+                message: GroupedBindingDiagnostic()
+            )
+            context.diagnose(diagnostic)
+        }
+    }
+}
+
+private struct GroupedBindingDiagnostic: DiagnosticMessage {
+    let message =
+        "@Model does not support variable declarations with multiple bindings; split each property into its own declaration"
+    let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "grouped-model-bindings")
+    let severity = DiagnosticSeverity.error
 }
 
 struct AttributeMacro: PeerMacro {
@@ -95,10 +143,28 @@ struct ModelActorMacro: MemberMacro, ExtensionMacro {
     ) throws -> [ExtensionDeclSyntax] { [] }
 }
 
-struct PersistedPropertyMacro: PeerMacro {
+struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
+    static func expansion(
+        of node: AttributeSyntax,
+        providingAccessorsOf declaration: some DeclSyntaxProtocol,
+        in context: some MacroExpansionContext
+    ) throws -> [AccessorDeclSyntax] {
+        guard let variable = declaration.as(VariableDeclSyntax.self), variable.bindings.count == 1,
+            let binding = variable.bindings.first,
+            let property = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+        else { return [] }
+        return CodeGen.accessorSources(property: property).map(AccessorDeclSyntax.init(stringLiteral:))
+    }
+
     static func expansion(
         of node: AttributeSyntax,
         providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] { [] }
+    ) throws -> [DeclSyntax] {
+        guard let variable = declaration.as(VariableDeclSyntax.self), variable.bindings.count == 1,
+            let binding = variable.bindings.first,
+            let property = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+        else { return [] }
+        return CodeGen.peerSources(property: property, variant: .c).map(DeclSyntax.init(stringLiteral:))
+    }
 }

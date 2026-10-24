@@ -25,7 +25,7 @@ public final class DetachedBackingData<Model: AnyObject>: BackingData, @unchecke
     private let identifier: PersistentIdentifier
     private let metadata: [Schema.PropertyMetadata]
 
-    /// Creates detached storage initialized from schema defaults.
+    /// Creates detached storage for a model's schema.
     public init(metadata: [Schema.PropertyMetadata]) {
         self.metadata = metadata
         identifier = PersistentIdentifier(
@@ -35,7 +35,7 @@ public final class DetachedBackingData<Model: AnyObject>: BackingData, @unchecke
         )
         for property in metadata {
             guard let keyPath = property.keypath else { continue }
-            guard let defaultValue = property.packageRuntimeDefaultValue else { continue }
+            guard let defaultValue = property.runtimeDefaultValue else { continue }
             values[keyPath] = defaultValue
         }
     }

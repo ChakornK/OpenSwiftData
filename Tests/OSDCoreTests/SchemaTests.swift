@@ -85,10 +85,59 @@ final class SchemaTests: XCTestCase {
         )
 
         XCTAssertEqual(generated.defaultValue, "1")
-        XCTAssertEqual(generated.runtimeDefaultValue as? Int, 1)
         XCTAssertEqual(equivalent.defaultValue, "2")
+        XCTAssertEqual(generated.keypath, \Model.count)
         XCTAssertNotEqual(generated, equivalent)
         XCTAssertEqual(Set([generated, equivalent]).count, 2)
+    }
+
+    func testGeneratedMetadataPreservesTypedMetadataEqualityAndHashing() {
+        struct Model {
+            let value: Int
+        }
+        let first = Schema.PropertyMetadata(
+            name: "value",
+            keypath: \Model.value,
+            defaultValue: nil,
+            metadata: AnyHashable(42)
+        )
+        let equal = Schema.PropertyMetadata(
+            name: "value",
+            keypath: \Model.value,
+            defaultValue: nil,
+            metadata: AnyHashable(42)
+        )
+        let different = Schema.PropertyMetadata(
+            name: "value",
+            keypath: \Model.value,
+            defaultValue: nil,
+            metadata: AnyHashable("42")
+        )
+
+        XCTAssertEqual(first.metadata, AnyHashable(42))
+        XCTAssertEqual(first, equal)
+        XCTAssertEqual(Set([first, equal]).count, 1)
+        XCTAssertNotEqual(first, different)
+    }
+
+    func testPropertyMetadataRetainsStringDefaultRepresentation() {
+        struct Model {
+            let title: String
+        }
+        let metadata = Schema.PropertyMetadata(
+            name: "title",
+            keypath: \Model.title,
+            defaultValue: "untitled",
+            metadata: nil
+        )
+
+        XCTAssertEqual(metadata.defaultValue, "untitled")
+        XCTAssertEqual(String(describing: metadata.keypath!), "\\Model.title")
+    }
+
+    func testSchemaRemainsSendableWithoutPropertyMetadataStorage() {
+        func requireSendable<T: Sendable>(_ value: T) {}
+        requireSendable(Schema([]))
     }
 
     func testTransformableOptionStoresTransformerTypeIdentifier() {

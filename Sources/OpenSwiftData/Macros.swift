@@ -1,14 +1,18 @@
 import Observation
 import OSDCore
 
-@attached(accessor)
+@attached(accessor, names: named(init), named(get), named(set))
 @attached(peer, names: prefixed(_))
 public macro _PersistedProperty() = #externalMacro(module: "OpenSwiftDataMacros", type: "PersistedPropertyMacro")
 
 /// Marks a class as a persistent model.
-@attached(member, names: arbitrary, named(createBackingData))
+@attached(
+    member,
+    names: arbitrary, named(createBackingData), named(persistentBackingData), named(schemaMetadata),
+    named(_$backingData), named(_$observationRegistrar), named(_SwiftDataNoType)
+)
 @attached(memberAttribute)
-@attached(extension, conformances: Observation.Observable, Sendable)
+@attached(extension, conformances: PersistentModel, Observation.Observable, Sendable)
 public macro Model() = #externalMacro(module: "OpenSwiftDataMacros", type: "ModelMacro")
 
 /// Describes options for a persisted attribute.
@@ -27,20 +31,12 @@ public enum Attribute {
 }
 @attached(peer)
 public macro Attribute(_ options: Attribute.Option...) =
-    #externalMacro(
-        module: "OpenSwiftDataMacros",
-        type: "AttributeMacro"
-    )
+    #externalMacro(module: "OpenSwiftDataMacros", type: "AttributeMacro")
 
 /// Describes options for a persisted relationship.
 public enum Relationship {
     /// Behavior applied when deleting a related model.
-    public enum DeleteRule: Sendable, Hashable {
-        case nullify
-        case cascade
-        case deny
-        case noAction
-    }
+    public enum DeleteRule: Sendable, Hashable { case nullify, cascade, deny, noAction }
 }
 @attached(peer)
 public macro Relationship(

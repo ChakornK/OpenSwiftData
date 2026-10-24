@@ -149,7 +149,9 @@ enum CodeGen {
 
     static func persistedProperties(in declaration: ClassDeclSyntax) -> [Property] {
         declaration.memberBlock.members.flatMap { member -> [Property] in
-            guard let variable = member.decl.as(VariableDeclSyntax.self) else { return [] }
+            guard let variable = member.decl.as(VariableDeclSyntax.self),
+                variable.bindings.count == 1
+            else { return [] }
             return variable.bindings.compactMap { binding in
                 guard binding.pattern.is(IdentifierPatternSyntax.self) else { return nil }
                 let property = Property(binding, attributes: variable.attributes, modifiers: variable.modifiers)

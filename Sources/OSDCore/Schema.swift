@@ -138,9 +138,13 @@ public struct Schema: Sendable {
     }
 
     /// Describes metadata for one persisted model property.
-    public struct PropertyMetadata: Sendable, Hashable {
+    public struct PropertyMetadata: Hashable {
         /// The property name.
         public let name: String
+        /// The typed key path to the property, when available.
+        public let keypath: AnyKeyPath?
+        /// Schema-level attribute or relationship metadata.
+        public let metadata: AnyHashable?
         /// Whether the property is a relationship.
         public let isRelationship: Bool
         /// A textual default value, if provided.
@@ -148,9 +152,26 @@ public struct Schema: Sendable {
         /// Property-specific options.
         public let options: [String]
 
+        /// Creates property metadata using the model macro contract.
+        public init<Value: Hashable>(
+            name: String,
+            keypath: KeyPath<some Any, Value>,
+            defaultValue: Any? = nil,
+            metadata: AnyHashable? = nil
+        ) {
+            self.name = name
+            self.keypath = keypath
+            self.metadata = metadata
+            self.isRelationship = false
+            self.defaultValue = defaultValue.map(String.init(describing:))
+            self.options = []
+        }
+
         /// Creates property metadata.
         public init(name: String, isRelationship: Bool = false, defaultValue: String? = nil, options: [String] = []) {
             self.name = name
+            self.keypath = nil
+            self.metadata = nil
             self.isRelationship = isRelationship
             self.defaultValue = defaultValue
             self.options = options

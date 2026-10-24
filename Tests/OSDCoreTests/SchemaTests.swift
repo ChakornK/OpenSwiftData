@@ -40,6 +40,32 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(entity.relationships.first?.maximumModelCount, 8)
     }
 
+    func testPropertyMetadataSupportsGeneratedMacroInitializerAndLegacyInitializer() {
+        struct Model {
+            let title: String
+        }
+        let generated = Schema.PropertyMetadata(
+            name: "title",
+            keypath: \Model.title,
+            defaultValue: nil,
+            metadata: nil
+        )
+        let legacy = Schema.PropertyMetadata(
+            name: "legacy",
+            isRelationship: true,
+            defaultValue: "1",
+            options: ["indexed"]
+        )
+
+        XCTAssertEqual(generated.name, "title")
+        XCTAssertEqual(generated.keypath, \Model.title)
+        XCTAssertNil(generated.metadata)
+        XCTAssertEqual(legacy.name, "legacy")
+        XCTAssertTrue(legacy.isRelationship)
+        XCTAssertEqual(legacy.defaultValue, "1")
+        XCTAssertEqual(legacy.options, ["indexed"])
+    }
+
     func testTransformableOptionStoresTransformerTypeIdentifier() {
         let transformerTypeIdentifier = "Example.ArchiveTransformer"
         let option = Schema.Attribute.Option.transformable(by: transformerTypeIdentifier)

@@ -61,7 +61,12 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenSwiftDataMacrosTests",
-            dependencies: ["OpenSwiftData"]
+            dependencies: [
+                "OpenSwiftData",
+                "OpenSwiftDataMacros",
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]

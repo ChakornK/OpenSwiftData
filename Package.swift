@@ -25,7 +25,7 @@ let package = Package(
         ),
         .target(
             name: "OpenSwiftData",
-            dependencies: ["OSDCore", "OpenSwiftDataMacros"]
+            dependencies: ["OSDCore", "OpenSwiftDataMacroDeclarations"]
         ),
         .target(
             name: "OSDStorage",
@@ -35,12 +35,17 @@ let package = Package(
             name: "OSDQuery",
             dependencies: ["OpenSwiftData"]
         ),
+        .target(
+            name: "OpenSwiftDataMacroDeclarations",
+            dependencies: ["OpenSwiftDataMacros"]
+        ),
         .macro(
             name: "OpenSwiftDataMacros",
             dependencies: [
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
-            ]
+            ],
+            path: "Sources/OpenSwiftDataMacros"
         ),
         .testTarget(
             name: "OSDCoreTests",
@@ -56,7 +61,7 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenSwiftDataMacrosTests",
-            dependencies: ["OpenSwiftDataMacros"]
+            dependencies: ["OpenSwiftData"]
         ),
     ],
     swiftLanguageModes: [.v6]

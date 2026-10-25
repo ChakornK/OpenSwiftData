@@ -1,7 +1,30 @@
 import Foundation
 
+private protocol OptionalCodable {
+    static func encodeOptional(_ value: Any) throws -> StoredValue
+    static func decodeOptional(from storedValue: StoredValue) throws -> Any
+}
+
+extension Optional: OptionalCodable where Wrapped: Codable {
+    static func encodeOptional(_ value: Any) throws -> StoredValue {
+        guard let optional = value as? Self else { throw CodecError.invalidRepresentation }
+        guard let wrapped = optional else { return .null }
+        return try Codec.encode(wrapped)
+    }
+
+    static func decodeOptional(from storedValue: StoredValue) throws -> Any {
+        guard case .null = storedValue else {
+            return (try Codec.decode(Wrapped.self, from: storedValue) as Wrapped?) as Any
+        }
+        return Optional<Wrapped>.none as Any
+    }
+}
+
 internal enum Codec {
     static func encode<T: Encodable>(_ value: T) throws -> StoredValue {
+        if let optionalType = T.self as? any OptionalCodable.Type {
+            return try optionalType.encodeOptional(value)
+        }
         if let value = value as? Bool { return .int(value ? 1 : 0) }
         if let value = value as? UUID {
             return .blob(withUnsafeBytes(of: value.uuid) { Array($0) })
@@ -29,6 +52,12 @@ internal enum Codec {
     }
 
     static func decode<T: Decodable>(_ type: T.Type, from storedValue: StoredValue) throws -> T {
+        if let optionalType = type as? any OptionalCodable.Type {
+            guard let value = try optionalType.decodeOptional(from: storedValue) as? T else {
+                throw CodecError.invalidRepresentation
+            }
+            return value
+        }
         if type == Bool.self { return try cast(decodeBool(from: storedValue)) }
         if type == UUID.self { return try cast(decodeUUID(from: storedValue)) }
         if type == Date.self { return try cast(decodeDate(from: storedValue)) }

@@ -11,11 +11,13 @@ public protocol PersistentModel: AnyObject {
     init(backingData: any BackingData<Self>)
     static func schemaMetadata() -> [Schema.PropertyMetadata]
     static func createBackingData() -> DetachedBackingData<Self>
+    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>]
     func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value
     func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value)
 }
 
 public extension PersistentModel {
+    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>] { [] }
     var persistentModelID: PersistentIdentifier { persistentBackingData.persistentModelID }
     var modelContext: ModelContext? { persistentBackingData.modelContext }
     var isDeleted: Bool { persistentBackingData.isDeleted }
@@ -31,6 +33,11 @@ public extension PersistentModel {
     }
 
     func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }
+    func setInsertionChanged() { persistentBackingData.restoreInsertionState() }
+    func markPersistedLifecycle(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
+        persistentBackingData.markPersisted(
+            storeIdentifier: storeIdentifier, entityID: entityID, primaryKey: primaryKey, version: version)
+    }
     func markSavedLifecycle() { persistentBackingData.markSaved() }
     func restoreLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restore(snapshot) }
     func restoreValuesLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restoreValues(snapshot) }

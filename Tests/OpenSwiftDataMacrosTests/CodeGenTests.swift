@@ -20,6 +20,7 @@ final class CodeGenTests: XCTestCase {
                 "@Transient\nprivate var _$backingData: any BackingData<Trip> = Trip.createBackingData()",
                 "public var persistentBackingData: any BackingData<Trip> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
                 "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n    return [\n        Schema.PropertyMetadata(name: \"name\", keypath: \\Trip.name, defaultValue: nil, metadata: nil),\n        Schema.PropertyMetadata(name: \"days\", keypath: \\Trip.days, defaultValue: 1, metadata: nil),\n        Schema.PropertyMetadata(name: \"notes\", keypath: \\Trip.notes, defaultValue: nil, metadata: nil),\n        Schema.PropertyMetadata(name: \"stops\", keypath: \\Trip.stops, defaultValue: [], metadata: Schema.Relationship(deleteRule: .cascade, inverse: \\Stop.trip))\n    ]\n}",
+                "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Trip>] {\n    [\n        TypedPropertyAdapter<Trip, String>(\"name\", keyPath: \\Trip.name, encode: { model in try PersistentValue.encode(model.name) }, decode: { value, model in model.name = try PersistentValue.decode(String.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, Int>(\"days\", keyPath: \\Trip.days, encode: { model in try PersistentValue.encode(model.days) }, decode: { value, model in model.days = try PersistentValue.decode(Int.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(Int.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, String?>(\"notes\", keyPath: \\Trip.notes, encode: { model in try PersistentValue.encode(model.notes) }, decode: { value, model in model.notes = try PersistentValue.decode(String?.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String?.self, from: value)) as Any })\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
                 "internal nonisolated func access<_M>(keyPath: KeyPath<Trip, _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
@@ -143,7 +144,7 @@ final class CodeGenTests: XCTestCase {
             }
             """)
         XCTAssertEqual(
-            CodeGen.memberSources(declaration, variant: .b)[3],
+            CodeGen.memberSources(declaration, variant: .b)[4],
             """
             public init(backingData: any BackingData<Trip>) {
                 _$backingData = backingData
@@ -151,6 +152,74 @@ final class CodeGenTests: XCTestCase {
                 _days = _SwiftDataNoType()
             }
             """)
+    }
+
+    func testTypedAdaptersAreGeneratedForPersistedAttributes() throws {
+        let declaration = try parseClass("final class Model { var count: Int = 0 }")
+        let adapters = try XCTUnwrap(CodeGen.memberSources(declaration).first { $0.contains("persistenceAdapters()") })
+        XCTAssertTrue(adapters.contains("TypedPropertyAdapter<Model, Int>"))
+        XCTAssertTrue(adapters.contains("PersistentValue.encode(model.count)"))
+    }
+
+    func testExplicitAttributeCustomTypesGetAdaptersAndRelationshipsDoNot() throws {
+        let declaration = try parseClass(
+            """
+            final class Garage {
+                var owner: Person?
+                var cars: [Car] = []
+                var payload: Payload
+                @Attribute var storedPayload: Payload
+            }
+            """)
+
+        let adapters =
+            CodeGen.memberSources(declaration).first {
+                $0.contains("persistenceAdapters()")
+            } ?? ""
+        XCTAssertFalse(adapters.contains("TypedPropertyAdapter<Garage, Person?>(\"owner\""))
+        XCTAssertFalse(adapters.contains("TypedPropertyAdapter<Garage, [Car]>(\"cars\""))
+        XCTAssertTrue(adapters.contains("storedPayload"))
+        XCTAssertTrue(adapters.contains("PersistentValue.decode(Payload.self, from: value)"))
+    }
+
+    func testRelationshipAdaptersUseMetadataAndActualModelTypes() throws {
+        let declaration = try parseClass(
+            """
+            final class Parcel {
+                var unrelatedString: String
+                var destination: Destination?
+                @Relationship var explicitlyMarked: String?
+                @Relationship() var explicitlyMarkedWithEmptyArguments: String?
+                @Attribute(.transformable(by: "Codec")) var payload: Payload
+            }
+            """)
+
+        let generatedAdapters = try XCTUnwrap(
+            CodeGen.memberSources(declaration).first {
+                $0.contains("persistenceAdapters()")
+            })
+        XCTAssertTrue(generatedAdapters.contains("unrelatedString"))
+        XCTAssertFalse(generatedAdapters.contains("destination"))
+        XCTAssertFalse(generatedAdapters.contains("explicitlyMarked"))
+        XCTAssertFalse(generatedAdapters.contains("explicitlyMarkedWithEmptyArguments"))
+        XCTAssertTrue(generatedAdapters.contains("payload"))
+    }
+
+    func testArbitrarySupportedScalarTypeIsNotMisclassifiedByItsName() throws {
+        let declaration = try parseClass(
+            """
+            final class TripMeter {
+                var destinationCode: String
+                var stopCount: Int
+            }
+            """)
+
+        let adapters = try XCTUnwrap(
+            CodeGen.memberSources(declaration).first {
+                $0.contains("persistenceAdapters()")
+            })
+        XCTAssertTrue(adapters.contains("PersistentValue.encode(model.destinationCode)"))
+        XCTAssertTrue(adapters.contains("PersistentValue.encode(model.stopCount)"))
     }
 
     func testAccessorAndPeerSourcesMatchVariantAExactly() {

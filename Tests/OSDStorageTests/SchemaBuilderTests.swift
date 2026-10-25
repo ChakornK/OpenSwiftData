@@ -47,6 +47,21 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertFalse(built.statements.contains { $0.contains("Z_METADATA") })
     }
 
+    func testTransformableAttributesUseBlobColumns() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Item",
+                attributes: [
+                    Schema.Attribute(
+                        name: "payload", type: "CodablePayload", options: [.transformable(by: "Codec")])
+                ])
+        ])
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE TABLE ZITEM (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZPAYLOAD BLOB);"))
+    }
+
     func testSupportedTypesAndUnsupportedTypeError() throws {
         let types = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Bool"]
         for type in types {
@@ -60,6 +75,10 @@ final class SchemaBuilderTests: XCTestCase {
         for type in ["UUID", "Data"] {
             XCTAssertEqual(try SQLColumnType.resolve(type, property: "Item.value"), .blob)
         }
+        XCTAssertEqual(
+            try SQLColumnType.resolve(
+                "CodablePayload", property: "Item.payload", options: [.transformable(by: "Codec")]),
+            .blob)
         for type in ["Decimal", "URL", "Opaque", "[String]", "Int??", "Int? ?", "Int ? ?"] {
             XCTAssertThrowsError(try SQLColumnType.resolve(type, property: "Item.value")) { error in
                 guard case SwiftDataError.unsupportedSchemaProperty = error else {

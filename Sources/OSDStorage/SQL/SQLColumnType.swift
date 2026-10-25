@@ -8,7 +8,14 @@ package enum SQLColumnType: String, Sendable {
     case varchar = "VARCHAR"
     case blob = "BLOB"
 
-    package static func resolve(_ typeName: String, property: String) throws -> SQLColumnType {
+    package static func resolve(
+        _ typeName: String,
+        property: String,
+        options: Set<Schema.Attribute.Option> = []
+    ) throws -> SQLColumnType {
+        if options.contains(where: { if case .transformable = $0 { true } else { false } }) {
+            return .blob
+        }
         let trimmed = typeName.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized: Substring
         if trimmed.hasSuffix("?") {

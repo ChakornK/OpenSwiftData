@@ -69,6 +69,34 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(try PersistentValue.decode([String: Int].self, from: stored), dictionary)
     }
 
+    func testOptionalScalarValuesUseUnderlyingStorage() throws {
+        XCTAssertEqual(try PersistentValue.encode(Optional<String>.none), .null)
+        XCTAssertEqual(try PersistentValue.encode(Optional<String>.some("value")), .text("value"))
+        XCTAssertEqual(try PersistentValue.encode(Optional<Int>.none), .null)
+        XCTAssertEqual(try PersistentValue.encode(Optional<Int>.some(42)), .int(42))
+        XCTAssertEqual(try PersistentValue.encode(Optional<Bool>.some(true)), .int(1))
+        XCTAssertEqual(try PersistentValue.encode(Optional<Double>.some(1.5)), .double(1.5))
+        let uuid = UUID(uuidString: "00112233-4455-6677-8899-aabbccddeeff")!
+        let uuidBytes: [UInt8] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ]
+        XCTAssertEqual(try PersistentValue.encode(Optional<UUID>.some(uuid)), .blob(uuidBytes))
+    }
+
+    func testOptionalScalarValuesDecodeNullAndUnderlyingStorage() throws {
+        let nilString: String? = try PersistentValue.decode(String?.self, from: .null)
+        XCTAssertNil(nilString)
+        XCTAssertEqual(try PersistentValue.decode(String?.self, from: .text("value")), "value")
+        let nilInteger: Int? = try PersistentValue.decode(Int?.self, from: .null)
+        XCTAssertNil(nilInteger)
+        XCTAssertEqual(try PersistentValue.decode(Int?.self, from: .int(42)), 42)
+        XCTAssertEqual(try PersistentValue.decode(Bool?.self, from: .int(1)), true)
+        XCTAssertEqual(try PersistentValue.decode(Double?.self, from: .double(1.5)), 1.5)
+        XCTAssertThrowsError(try PersistentValue.decode(String?.self, from: .int(42)))
+        XCTAssertThrowsError(try PersistentValue.decode(Int?.self, from: .text("42")))
+    }
+
     func testSignedAndUnsignedIntegerRoundTrips() throws {
         XCTAssertEqual(try PersistentValue.encode(Int.min), .int(Int64(Int.min)))
         XCTAssertEqual(try PersistentValue.encode(Int8.min), .int(Int64(Int8.min)))

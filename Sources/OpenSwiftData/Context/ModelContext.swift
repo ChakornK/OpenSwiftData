@@ -1,4 +1,5 @@
 import Foundation
+import OSDCore
 
 /// A synchronous unit of work for inserting, fetching, and saving persistent models.
 @MainActor
@@ -31,6 +32,9 @@ public final class ModelContext {
     private var baselineSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
     private var transactionFrames: [TransactionFrame] = []
     private let testSaveHook: (() throws -> Void)?
+    private var allowsSave = true
+    private let identityMap = IdentityMap()
+    private var temporaryIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:]
 
     /// Creates a context not associated with a model container.
     public convenience init() {
@@ -40,12 +44,14 @@ public final class ModelContext {
     package init(container: ModelContainer?, autosaveEnabled: Bool) {
         self.container = container
         self.autosaveEnabled = autosaveEnabled
+        allowsSave = container?.configurations.first?.allowsSave ?? true
         testSaveHook = nil
     }
 
     internal init(testSave hook: @escaping () throws -> Void) {
         container = nil
         autosaveEnabled = false
+        allowsSave = true
         testSaveHook = hook
     }
 
@@ -80,6 +86,7 @@ public final class ModelContext {
             transactionFrames[index].modelSnapshots[identifier] = (model, snapshot)
         }
         model.persistentBackingData.attach(to: self, model: model)
+        model.setInsertionChanged()
         snapshots[identifier] = (model, snapshot)
         appendUnique(model, to: &insertedModelsStorage)
     }
@@ -114,8 +121,28 @@ public final class ModelContext {
 
     /// Fetches models matching a descriptor, which requires a persistent store.
     public func fetch<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
+        guard let store = container?.store else { throw unsupportedStore("Fetch") }
         _ = descriptor
-        throw unsupportedStore("Fetch")
+        guard let entity = container?.schema.entity(forName: String(describing: Model.self)) else { return [] }
+        let attributes = canonicalAttributes(for: entity)
+        let columns = attributes.map { "Z\($0.name.uppercased())" }
+        let selectColumns = (["Z_PK", "Z_OPT"] + columns).joined(separator: ", ")
+        let rows = try store.read { connection in
+            try connection.rows(
+                "SELECT \(selectColumns) FROM Z\(entity.name.uppercased()) ORDER BY Z_PK ASC", arguments: [])
+        }
+        var models: [Model] = []
+        for row in rows {
+            guard row.count >= 2, case let .int(pk) = row[0], case let .int(version) = row[1] else { continue }
+            let key = EntityPrimaryKey(entityName: entity.name, primaryKey: pk)
+            if let existing = identityMap.model(for: key, as: Model.self) { models.append(existing); continue }
+            let model = try materialize(
+                Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: storeIdentifier,
+                primaryKey: pk, version: Int(version))
+            identityMap.register(model, for: key)
+            models.append(model)
+        }
+        return models
     }
 
     /// Counts models matching a descriptor, which requires a persistent store.
@@ -145,22 +172,59 @@ public final class ModelContext {
 
     /// Finds a model by its persistent identifier, which requires a persistent store.
     public func model<Model: PersistentModel>(for identifier: PersistentIdentifier) throws -> Model? {
-        _ = identifier
-        throw unsupportedStore("Model lookup")
+        guard let key = identifier.primaryKey else {
+            guard let permanent = temporaryIdentifiers[identifier] else { throw unsupportedStore("Model lookup") }
+            return try model(for: permanent)
+        }
+        guard let container,
+            identifier.storeIdentifier == storeIdentifier,
+            let entity = container.schema.entity(forName: identifier.entityName),
+            identifier.entityName == String(describing: Model.self),
+            let modelEntity = container.schema.entity(forName: String(describing: Model.self)),
+            modelEntity.name == entity.name
+        else { throw unsupportedStore("Model lookup") }
+        guard let store = container.store else { throw unsupportedStore("Model lookup") }
+        if let registered: Model = registeredModel(for: identifier) { return registered }
+        let attributes = canonicalAttributes(for: entity)
+        let columns = attributes.map { "Z\($0.name.uppercased())" }.joined(separator: ", ")
+        let rows = try store.read {
+            try $0.rows(
+                "SELECT Z_PK, Z_OPT, \(columns) FROM Z\(entity.name.uppercased()) WHERE Z_PK = ?",
+                arguments: [.int(key)])
+        }
+        guard let row = rows.first else { return nil }
+        let model = try materialize(
+            Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: identifier.storeIdentifier,
+            primaryKey: key, version: row.count > 1 ? runtimeInt(row[1]) : 0)
+        identityMap.register(model, for: EntityPrimaryKey(entityName: entity.name, primaryKey: key))
+        return model
     }
 
     /// Returns a registered model by its persistent identifier, if present.
     public func registeredModel<Model: PersistentModel>(for identifier: PersistentIdentifier) -> Model? {
-        _ = identifier
-        return nil
+        guard let container,
+            identifier.primaryKey != nil,
+            identifier.storeIdentifier == storeIdentifier,
+            identifier.entityName == String(describing: Model.self),
+            container.schema.entity(forName: identifier.entityName) != nil
+        else { return nil }
+        guard let key = identifier.primaryKey else { return nil }
+        return identityMap.model(
+            for: EntityPrimaryKey(entityName: identifier.entityName, primaryKey: key), as: Model.self)
     }
 
     /// Saves pending changes when a supported store is available.
     public func save() throws {
         guard transactionFrames.isEmpty else { return }
-        guard let testSaveHook else { throw unsupportedStore("Saving") }
-        try testSaveHook()
-        finalizePendingChanges()
+        if !allowsSave { throw unsupportedStore("Saving is disabled") }
+        if let testSaveHook {
+            try testSaveHook()
+            finalizePendingChanges()
+            return
+        }
+        guard let store = container?.store else { throw unsupportedStore("Saving") }
+        guard allowsSave else { throw unsupportedStore("Saving is disabled") }
+        try persistPendingChanges(to: store)
     }
 
     /// Discards pending changes and restores values to their prior saved state.
@@ -200,9 +264,13 @@ public final class ModelContext {
         do {
             let result = try block()
             if transactionFrames.count == 1 {
-                guard let testSaveHook else { throw unsupportedStore("Saving") }
-                try testSaveHook()
-                finalizePendingChanges()
+                if let testSaveHook {
+                    try testSaveHook()
+                    finalizePendingChanges()
+                } else {
+                    guard let store = container?.store else { throw unsupportedStore("Saving") }
+                    try persistPendingChanges(to: store)
+                }
             }
             transactionFrames.removeLast()
             return result
@@ -225,6 +293,140 @@ public final class ModelContext {
             !contains(model, in: deletedModelsStorage)
         else { return }
         appendUnique(model, to: &changedModelsStorage)
+    }
+
+    private var storeIdentifier: String { container?.configurations.first?.name ?? "default" }
+
+    private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
+        entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+    }
+
+    private func materialize<Model: PersistentModel>(
+        _ type: Model.Type, entity: Schema.Entity, attributes: [Schema.Attribute], row: [RuntimeValue],
+        storeIdentifier: String, primaryKey: Int64, version: Int
+    ) throws -> Model {
+        let backing = ManagedBackingData<Model>(
+            metadata: Model.schemaMetadata(), values: [:], context: self,
+            storeIdentifier: storeIdentifier, entityID: entityID(for: entity.name), primaryKey: primaryKey,
+            version: version,
+            identifier: PersistentIdentifier(
+                storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
+        let model = Model(backingData: backing)
+        let adapters = Model.persistenceAdapters()
+        for (index, attribute) in attributes.enumerated() {
+            guard index + 2 < row.count,
+                let adapter = adapters.first(where: { $0.name == attribute.name })
+            else { continue }
+            let stored = storedValue(row[index + 2])
+            try adapter.decode(stored, into: model)
+        }
+        backing.markSaved()
+        backing.attach(to: self, model: model)
+        return model
+    }
+
+    private func runtimeInt(_ value: RuntimeValue) -> Int {
+        if case let .int(number) = value { return Int(number) }
+        return 0
+    }
+
+    private func storedValue(_ value: RuntimeValue) -> StoredValue {
+        switch value {
+        case .null: .null
+        case let .int(value): .int(value)
+        case let .double(value): .double(value)
+        case let .text(value): .text(value)
+        case let .blob(value): .blob(value)
+        }
+    }
+
+    private func runtimeValue(_ value: StoredValue) -> RuntimeValue {
+        switch value {
+        case .null: .null
+        case let .int(value): .int(value)
+        case let .double(value): .double(value)
+        case let .text(value): .text(value)
+        case let .blob(value): .blob(value)
+        }
+    }
+
+    private func entityID(for name: String) -> Int {
+        (container?.schema.entities.firstIndex(where: { $0.name == name }) ?? 0) + 1
+    }
+
+    private func persistPendingChanges(to store: any RuntimeStore) throws {
+        let models = insertedModelsStorage + changedModelsStorage
+        let insertedIDs = Set(insertedModelsStorage.map(ObjectIdentifier.init))
+        let persisted: [(any PersistentModel, Int64)] = try store.write { connection in
+            var results: [(any PersistentModel, Int64)] = []
+            for model in models {
+                try persistModel(
+                    model, inserted: insertedIDs.contains(ObjectIdentifier(model)), connection: connection,
+                    append: &results)
+            }
+            for model in deletedModelsStorage {
+                guard let pk = model.persistentModelID.primaryKey else { continue }
+                try connection.execute(
+                    "DELETE FROM Z\(model.persistentModelID.entityName.uppercased()) WHERE Z_PK = ?",
+                    arguments: [.int(pk)])
+                guard connection.changesCount() == 1 else {
+                    throw SwiftDataError.unsupportedStore("Delete did not affect exactly one row.")
+                }
+            }
+            return results
+        }
+        for model in deletedModelsStorage {
+            if let pk = model.persistentModelID.primaryKey {
+                identityMap.remove(EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: pk))
+            }
+        }
+        for (model, pk) in persisted {
+            let entityName = model.persistentModelID.entityName
+            model.markPersistedLifecycle(
+                storeIdentifier: storeIdentifier, entityID: entityID(for: entityName), primaryKey: pk, version: 1)
+            identityMap.register(model, for: EntityPrimaryKey(entityName: entityName, primaryKey: pk))
+            if let old = snapshots[ObjectIdentifier(model)]?.1.identifier, old.isTemporary {
+                temporaryIdentifiers[old] = model.persistentModelID
+            }
+        }
+        finalizePendingChanges()
+    }
+
+    private func persistModel(
+        _ model: any PersistentModel, inserted: Bool, connection: any RuntimeConnection,
+        append: inout [(any PersistentModel, Int64)]
+    ) throws {
+        func typed<Model: PersistentModel>(_ model: Model) throws {
+            guard let entity = container?.schema.entity(forName: String(describing: Model.self)) else { return }
+            let adapters = Model.persistenceAdapters()
+            var columns: [String] = []
+            var values: [RuntimeValue] = []
+            for attribute in canonicalAttributes(for: entity) {
+                guard let adapter = adapters.first(where: { $0.name == attribute.name }) else { continue }
+                columns.append("Z\(attribute.name.uppercased())")
+                values.append(runtimeValue(try adapter.encoded(model)))
+            }
+            let table = "Z\(entity.name.uppercased())"
+            if inserted {
+                let names = (["Z_ENT", "Z_OPT"] + columns).joined(separator: ", ")
+                let placeholders = Array(repeating: "?", count: columns.count + 2).joined(separator: ", ")
+                try connection.execute(
+                    "INSERT INTO \(table) (\(names)) VALUES (\(placeholders))",
+                    arguments: [.int(Int64(entityID(for: entity.name))), .int(1)] + values)
+                append.append((model, connection.lastInsertRowID()))
+            } else if let pk = model.persistentModelID.primaryKey, !columns.isEmpty {
+                let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
+                try connection.execute(
+                    "UPDATE \(table) SET \(assignments), Z_OPT = Z_OPT + 1 WHERE Z_PK = ?",
+                    arguments: values + [.int(pk)])
+                guard connection.changesCount() == 1 else {
+                    throw SwiftDataError.unsupportedStore("Update did not affect exactly one row.")
+                }
+                append.append((model, pk))
+            }
+        }
+        func dispatch<Model: PersistentModel>(_ model: Model) throws { try typed(model) }
+        try dispatch(model)
     }
 
     private func unsupportedStore(_ operation: String) -> SwiftDataError {

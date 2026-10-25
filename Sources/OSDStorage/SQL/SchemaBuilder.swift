@@ -80,7 +80,8 @@ package enum SchemaBuilder {
             var columns = ["Z_PK INTEGER PRIMARY KEY", "Z_ENT INTEGER", "Z_OPT INTEGER"]
             let attributes = entity.attributes.sorted { bytewiseLess($0.name, $1.name) }
             for attribute in attributes {
-                let type = try SQLColumnType.resolve(attribute.type, property: "\(entity.name).\(attribute.name)")
+                let type = try SQLColumnType.resolve(
+                    attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
                 columns.append("Z\(attribute.name.uppercased()) \(type.rawValue)")
             }
             let relationships = entity.relationships.sorted { bytewiseLess($0.name, $1.name) }

@@ -10,6 +10,7 @@ let package = Package(
     ],
     products: [
         .library(name: "OpenSwiftData", targets: ["OpenSwiftData"]),
+        .library(name: "OpenSwiftDataSQLite", targets: ["OpenSwiftDataSQLite"]),
         .library(name: "OSDStorage", targets: ["OSDStorage"]),
         .library(name: "OSDQuery", targets: ["OSDQuery"]),
     ],
@@ -30,6 +31,10 @@ let package = Package(
         .target(
             name: "OSDStorage",
             dependencies: ["OSDCore", .product(name: "GRDB", package: "GRDB.swift")]
+        ),
+        .target(
+            name: "OpenSwiftDataSQLite",
+            dependencies: ["OpenSwiftData", "OSDStorage"]
         ),
         .target(
             name: "OSDQuery",
@@ -61,6 +66,10 @@ let package = Package(
         .testTarget(
             name: "OSDStorageTests",
             dependencies: ["OSDStorage"]
+        ),
+        .testTarget(
+            name: "OpenSwiftDataSQLiteTests",
+            dependencies: ["OpenSwiftData", "OpenSwiftDataSQLite", "OSDStorage"]
         ),
         .testTarget(
             name: "OpenSwiftDataTests",

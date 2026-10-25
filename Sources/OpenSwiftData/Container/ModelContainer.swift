@@ -9,6 +9,7 @@ public final class ModelContainer: Sendable {
     public lazy var mainContext = ModelContext(container: self, autosaveEnabled: true)
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
+    package let store: (any RuntimeStore)?
 
     /// Creates a container for the schema inferred from model types.
     public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
@@ -236,12 +237,14 @@ public final class ModelContainer: Sendable {
         }
         schema = Schema(inferredEntities)
         self.configurations = configurations
+        store = try Self.openStore(schema: schema, configurations: configurations)
     }
 
     /// Creates a container for an existing schema.
     public init(for schema: Schema, configurations: [ModelConfiguration] = []) throws {
         self.schema = schema
         self.configurations = configurations
+        store = try Self.openStore(schema: schema, configurations: configurations)
     }
 
     /// Creates a container using a migration plan.
@@ -262,12 +265,54 @@ public final class ModelContainer: Sendable {
 
     /// Deletes all persistent data owned by this container.
     public func deleteAllData() throws {
-        throw SwiftDataError.unsupportedStore("Deleting all data is unavailable without a persistent store.")
+        guard store != nil else {
+            throw SwiftDataError.unsupportedStore("Deleting all data is unavailable without a persistent store.")
+        }
+        throw SwiftDataError.unsupportedStore("Deleting all data is not implemented.")
     }
 
     /// Erases this container's store.
     public func erase() throws {
-        throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
+        guard store != nil else {
+            throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
+        }
+        throw SwiftDataError.unsupportedStore("Erasing the store is not implemented.")
+    }
+
+    private static func openStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any RuntimeStore)? {
+        guard !configurations.isEmpty else { return nil }
+        guard configurations.count == 1, let configuration = configurations.first else {
+            throw SwiftDataError.unsupportedStore("Exactly one store configuration is supported.")
+        }
+        guard configuration.cloudKitDatabase == .none else {
+            throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
+        }
+        guard case .none = configuration.groupContainer else {
+            throw SwiftDataError.unsupportedStore("App-group store locations are not supported.")
+        }
+        guard let factory = configuration.storeFactory else {
+            throw SwiftDataError.unsupportedStore("The configured store backend/provider is unavailable.")
+        }
+        let location: RuntimeStoreLocation
+        if configuration.isStoredInMemoryOnly {
+            location = .memory(name: configuration.name)
+        } else if let url = configuration.url {
+            location = .file(url)
+        } else {
+            guard Self.isSafeStoreName(configuration.name) else {
+                throw SwiftDataError.unsupportedStore("The store name must be a single safe path component.")
+            }
+            let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("\(configuration.name).sqlite")
+            location = .file(url)
+        }
+        return try factory(location, schema)
+    }
+
+    private static func isSafeStoreName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".."
+            && !name.contains("/") && !name.contains("\\")
+            && !name.contains(":")
     }
 
     private static func unqualifiedTypeName(_ type: String) -> String {

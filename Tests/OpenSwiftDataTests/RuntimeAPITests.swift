@@ -313,13 +313,9 @@ final class RuntimeAPITests: XCTestCase {
         ]
 
         for configuration in configurations {
-            let container = try ModelContainer(for: [TransactionFixture.self], configurations: [configuration])
-            XCTAssertThrowsError(try container.deleteAllData()) { error in
-                guard case SwiftDataError.unsupportedStore = error else {
-                    return XCTFail("Expected unsupportedStore, got \\(error)")
-                }
-            }
-            XCTAssertThrowsError(try container.erase()) { error in
+            XCTAssertThrowsError(
+                try ModelContainer(for: [TransactionFixture.self], configurations: [configuration])
+            ) { error in
                 guard case SwiftDataError.unsupportedStore = error else {
                     return XCTFail("Expected unsupportedStore, got \\(error)")
                 }

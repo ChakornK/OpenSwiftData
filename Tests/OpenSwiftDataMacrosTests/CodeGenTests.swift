@@ -15,18 +15,30 @@ final class CodeGenTests: XCTestCase {
             }
             """)
         XCTAssertEqual(
-            CodeGen.memberSources(declaration),
+            CodeGen.memberSources(declaration).filter { !$0.contains("inferredRelationshipAdapterCandidates()") },
             [
                 "@Transient\nprivate var _$backingData: any BackingData<Trip> = Trip.createBackingData()",
                 "public var persistentBackingData: any BackingData<Trip> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
                 "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n    return [\n        Schema.PropertyMetadata(name: \"name\", keypath: \\Trip.name, defaultValue: nil, metadata: nil),\n        Schema.PropertyMetadata(name: \"days\", keypath: \\Trip.days, defaultValue: 1, metadata: nil),\n        Schema.PropertyMetadata(name: \"notes\", keypath: \\Trip.notes, defaultValue: nil, metadata: nil),\n        Schema.PropertyMetadata(name: \"stops\", keypath: \\Trip.stops, defaultValue: [], metadata: Schema.Relationship(deleteRule: .cascade, inverse: \\Stop.trip))\n    ]\n}",
                 "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Trip>] {\n    [\n        TypedPropertyAdapter<Trip, String>(\"name\", keyPath: \\Trip.name, encode: { model in try PersistentValue.encode(model.name) }, decode: { value, model in model.name = try PersistentValue.decode(String.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, Int>(\"days\", keyPath: \\Trip.days, encode: { model in try PersistentValue.encode(model.days) }, decode: { value, model in model.days = try PersistentValue.decode(Int.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(Int.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, String?>(\"notes\", keyPath: \\Trip.notes, encode: { model in try PersistentValue.encode(model.notes) }, decode: { value, model in model.notes = try PersistentValue.decode(String?.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String?.self, from: value)) as Any })\n    ]\n}",
+                "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverse: \\Stop.trip), read: { model in model.stops }, endpoints: { value in value }, isToMany: true))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
                 "internal nonisolated func access<_M>(keyPath: KeyPath<Trip, _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
                 "internal nonisolated func withMutation<_M, _MR>(keyPath: KeyPath<Trip, _M>, _ mutation: () throws -> _MR) rethrows -> _MR {\n    try _$observationRegistrar.withMutation(of: self, keyPath: keyPath, mutation)\n}",
                 "struct _SwiftDataNoType {}",
             ])
+    }
+
+    func testRelationshipCandidateMethodIsOmittedWhenThereAreNoExplicitRelationships() throws {
+        let declaration = try parseClass(
+            """
+            final class Person {
+                var name: String
+            }
+            """)
+
+        XCTAssertFalse(CodeGen.memberSources(declaration).contains { $0.contains("relationshipAdapterCandidates()") })
     }
 
     func testMetadataUsesAttributeAndRelationshipSourceArguments() throws {
@@ -144,7 +156,7 @@ final class CodeGenTests: XCTestCase {
             }
             """)
         XCTAssertEqual(
-            CodeGen.memberSources(declaration, variant: .b)[4],
+            CodeGen.memberSources(declaration, variant: .b).first { $0.contains("public init(backingData:") } ?? "",
             """
             public init(backingData: any BackingData<Trip>) {
                 _$backingData = backingData
@@ -205,6 +217,60 @@ final class CodeGenTests: XCTestCase {
         XCTAssertTrue(generatedAdapters.contains("payload"))
     }
 
+    func testRelationshipAdaptersGenerateOnlyExplicitBareArraysAndSets() throws {
+        let declaration = try parseClass(
+            """
+            final class Household {
+                @Relationship var pets: [Pet]
+                @Relationship var favorites: Set<Pet> = []
+                var inferredPets = [Pet]()
+                var strings = [String]()
+                var stringSet = Set<String>()
+            }
+            """)
+
+        let generated =
+            CodeGen.memberSources(declaration).first(where: {
+                $0.contains("relationshipAdapterCandidates()")
+            }) ?? ""
+        XCTAssertTrue(
+            generated.contains(
+                "RelationshipAdapterBox<Household>(TypedRelationshipPropertyAdapter<Household, [Pet], Pet>"))
+        XCTAssertTrue(
+            generated.contains(
+                "RelationshipAdapterBox<Household>(TypedRelationshipPropertyAdapter<Household, Set<Pet>, Pet>"))
+        let inferred =
+            CodeGen.memberSources(declaration).first(where: {
+                $0.contains("inferredRelationshipAdapterCandidates()")
+            }) ?? ""
+        XCTAssertTrue(inferred.isEmpty)
+        XCTAssertFalse(
+            CodeGen.memberSources(declaration).contains {
+                $0.contains("inferredRelationshipAdapterCandidates()")
+            })
+        XCTAssertTrue(generated.contains("pets"))
+        XCTAssertTrue(generated.contains("favorites"))
+        XCTAssertFalse(generated.contains("inferredPets"))
+        XCTAssertFalse(generated.contains("strings"))
+        XCTAssertFalse(generated.contains("stringSet"))
+        XCTAssertFalse(inferred.contains("strings"))
+        XCTAssertFalse(inferred.contains("stringSet"))
+    }
+
+    func testUnsupportedScalarRelationshipHasNoGeneratedAdapterCandidate() throws {
+        let declaration = try parseClass(
+            """
+            final class Parcel {
+                @Relationship var code: String
+            }
+            """)
+        let generated =
+            CodeGen.memberSources(declaration).first {
+                $0.contains("relationshipAdapterCandidates()")
+            } ?? ""
+        XCTAssertFalse(generated.contains("code"))
+    }
+
     func testArbitrarySupportedScalarTypeIsNotMisclassifiedByItsName() throws {
         let declaration = try parseClass(
             """
@@ -253,6 +319,7 @@ final class CodeGenTests: XCTestCase {
             CodeGen.extensionSources(declaration),
             [
                 "extension Trip: PersistentModel {}",
+                "extension Trip: RelationshipModel {}",
                 "extension Trip: Observation.Observable {}",
                 "extension Trip: @unchecked Sendable {}",
             ])

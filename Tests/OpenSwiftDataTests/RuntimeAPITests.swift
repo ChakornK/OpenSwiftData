@@ -98,6 +98,18 @@ final class ExplicitInverseDestinationFixture: PersistentModel {
     static func createBackingData() -> DetachedBackingData<ExplicitInverseDestinationFixture> {
         DetachedBackingData(metadata: schemaMetadata())
     }
+
+    static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {
+        [
+            RelationshipAdapterBox<ExplicitInverseDestinationFixture>(
+                TypedRelationshipPropertyAdapter<
+                    ExplicitInverseDestinationFixture, ExplicitInverseSourceFixture?, ExplicitInverseSourceFixture
+                >(
+                    "source", keyPath: \.source, metadata: Schema.Relationship(inverseName: "destination"),
+                    read: { $0.source }, endpoints: { $0.map { [$0] } ?? [] }, isToMany: false)
+            )
+        ]
+    }
 }
 
 @Model

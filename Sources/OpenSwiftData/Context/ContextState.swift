@@ -6,6 +6,7 @@ package final class ContextState: @unchecked Sendable {
         var changed: [any PersistentModel]
         var deleted: [any PersistentModel]
         var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
+        var relationshipMutationEvents: [RelationshipMutationEvent]
     }
 
     struct TransactionFrame {
@@ -15,6 +16,16 @@ package final class ContextState: @unchecked Sendable {
         var modelSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
     }
 
+    package struct RelationshipMutationEvent {
+        package let owner: any PersistentModel
+        package let property: String
+        package let relationship: Schema.Relationship
+        package let oldEndpointIDs: [PersistentIdentifier]
+        package let oldEndpoints: [any PersistentModel]
+        package let newEndpointIDs: [PersistentIdentifier]
+        package let newEndpoints: [any PersistentModel]
+    }
+
     private let lock = NSRecursiveLock()
     private var inserted: [any PersistentModel] = []
     private var changed: [any PersistentModel] = []
@@ -22,14 +33,17 @@ package final class ContextState: @unchecked Sendable {
     private var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
     private var baselineSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
     private var transactionFrames: [TransactionFrame] = []
+    private var relationshipMutationEvents: [RelationshipMutationEvent] = []
 
     var insertedModels: [any PersistentModel] { locked { inserted } }
     var changedModels: [any PersistentModel] { locked { changed } }
     var deletedModels: [any PersistentModel] { locked { deleted } }
-    var hasChanges: Bool { locked { !inserted.isEmpty || !changed.isEmpty || !deleted.isEmpty } }
+    var hasChanges: Bool {
+        locked { !inserted.isEmpty || !changed.isEmpty || !deleted.isEmpty || !relationshipMutationEvents.isEmpty }
+    }
     var hasTransaction: Bool { locked { !transactionFrames.isEmpty } }
     var transactionDepth: Int { locked { transactionFrames.count } }
-
+    package var relationshipMutations: [RelationshipMutationEvent] { locked { relationshipMutationEvents } }
     func withExclusiveOperation<T>(_ body: () throws -> T) rethrows -> T {
         try locked(body)
     }
@@ -83,6 +97,30 @@ package final class ContextState: @unchecked Sendable {
         locked { capture(model, current: snapshot) }
     }
 
+    func recordRelationshipMutation(
+        owner: any PersistentModel,
+        property: String,
+        relationship: Schema.Relationship,
+        oldValues: [any PersistentModel],
+        newValues: [any PersistentModel]
+    ) {
+        locked {
+            capture(owner, current: owner.snapshotLifecycle())
+            if !contains(owner, in: inserted), !contains(owner, in: deleted) {
+                appendUnique(owner, to: &changed)
+            }
+            relationshipMutationEvents.append(
+                RelationshipMutationEvent(
+                    owner: owner,
+                    property: property,
+                    relationship: relationship,
+                    oldEndpointIDs: oldValues.map(\.persistentModelID),
+                    oldEndpoints: oldValues,
+                    newEndpointIDs: newValues.map(\.persistentModelID),
+                    newEndpoints: newValues))
+        }
+    }
+
     func recordMutation(_ model: any PersistentModel) {
         locked {
             guard !contains(model, in: inserted), !contains(model, in: deleted) else { return }
@@ -96,7 +134,9 @@ package final class ContextState: @unchecked Sendable {
 
     func beginTransaction(entrySnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]) {
         locked {
-            let pending = PendingState(inserted: inserted, changed: changed, deleted: deleted, snapshots: snapshots)
+            let pending = PendingState(
+                inserted: inserted, changed: changed, deleted: deleted, snapshots: snapshots,
+                relationshipMutationEvents: relationshipMutationEvents)
             transactionFrames.append(
                 TransactionFrame(
                     pending: pending, snapshots: [:], baselineSnapshots: baselineSnapshots,
@@ -113,7 +153,11 @@ package final class ContextState: @unchecked Sendable {
     func popTransactionSnapshot() -> TransactionFrame? { locked { transactionFrames.popLast() } }
 
     func pendingState() -> PendingState {
-        locked { PendingState(inserted: inserted, changed: changed, deleted: deleted, snapshots: snapshots) }
+        locked {
+            PendingState(
+                inserted: inserted, changed: changed, deleted: deleted, snapshots: snapshots,
+                relationshipMutationEvents: relationshipMutationEvents)
+        }
     }
 
     func baselineSnapshotState() -> [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] {
@@ -143,6 +187,7 @@ package final class ContextState: @unchecked Sendable {
             changed = state.changed
             deleted = state.deleted
             snapshots = state.snapshots
+            relationshipMutationEvents = state.relationshipMutationEvents
         }
     }
 

@@ -92,6 +92,81 @@ enum CodeGen {
             adapterRows.isEmpty
             ? nil
             : "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
+        let relationshipRows = properties.compactMap { property -> String? in
+            guard let type = propertyType(property.name, in: declaration) else { return nil }
+            let relationshipMetadata =
+                property.metadata?.hasPrefix("Schema.Relationship") == true
+                ? property.metadata : nil
+            let explicitRelationship = property.hasExplicitRelationship
+            let explicitAttribute = property.hasExplicitAttribute
+            guard !property.isTransient, !property.isComputed, !property.isStatic, !property.isLazy else { return nil }
+            let optional = type.as(OptionalTypeSyntax.self)
+            let relationshipType = optional?.wrappedType ?? type
+            let isOptional = optional != nil
+            let destination: TypeSyntax
+            let isCollection: Bool
+            if let array = relationshipType.as(ArrayTypeSyntax.self) {
+                destination = array.element
+                isCollection = true
+            } else if let set = relationshipType.as(IdentifierTypeSyntax.self), set.name.text == "Set",
+                let argument = set.genericArgumentClause?.arguments.first?.argument,
+                case let .type(element) = argument
+            {
+                destination = element
+                isCollection = true
+            } else if let identifier = relationshipType.as(IdentifierTypeSyntax.self),
+                identifier.genericArgumentClause == nil
+            {
+                destination = relationshipType
+                isCollection = false
+            } else if let member = relationshipType.as(MemberTypeSyntax.self) {
+                destination = TypeSyntax(member)
+                isCollection = false
+            } else {
+                return nil
+            }
+            let isSimpleModelType: Bool
+            if let destinationIdentifier = destination.as(IdentifierTypeSyntax.self) {
+                isSimpleModelType = destinationIdentifier.genericArgumentClause == nil
+            } else {
+                isSimpleModelType = destination.is(MemberTypeSyntax.self)
+            }
+            guard isSimpleModelType, !isSupportedScalarType(destination), explicitRelationship || !explicitAttribute
+            else { return nil }
+            let endpointClosure =
+                isCollection
+                ? (isOptional ? "{ value in value.map { Array($0) } ?? [] }" : "{ value in value }")
+                : (isOptional ? "{ value in value.map { [$0] } ?? [] }" : "{ value in [value] }")
+            let metadataArgument = relationshipMetadata.map { "metadata: \($0), " } ?? ""
+            let inverseArgument = ""
+            let adapterTail = (isCollection ? ", isToMany: true" : ", isToMany: false") + inverseArgument
+            let adapter =
+                "TypedRelationshipPropertyAdapter<\(modelName), \(type.trimmedDescription), \(destination.trimmedDescription)>"
+            let row =
+                "        \(adapter)(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), \(metadataArgument)read: { model in model.\(property.name) }, endpoints: \(endpointClosure)\(adapterTail))"
+            if explicitRelationship { return "explicit|\(row)" }
+            return explicitAttribute ? nil : "inferred|\(row)"
+        }
+        let explicitRelationshipRows = relationshipRows.compactMap {
+            $0.hasPrefix("explicit|") ? String($0.dropFirst(9)) : nil
+        }
+        let inferredRelationshipRows = relationshipRows.compactMap {
+            $0.hasPrefix("inferred|") ? String($0.dropFirst(9)) : nil
+        }
+        let explicitBoxRows = explicitRelationshipRows.map {
+            "        RelationshipAdapterBox<\(modelName)>(\($0.trimmingWhitespace()))"
+        }
+        let inferredBoxRows = inferredRelationshipRows.map {
+            "        RelationshipAdapterBox<\(modelName)>(\($0.trimmingWhitespace()))"
+        }
+        let relationshipAdapterSource: String? =
+            explicitBoxRows.isEmpty
+            ? nil
+            : "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]\n}"
+        let inferredRelationshipAdapterSource: String? =
+            inferredBoxRows.isEmpty
+            ? nil
+            : "public static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]\n}"
         let metadataRows = properties.map { property in
             "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.name), defaultValue: \(property.initializer ?? "nil"), metadata: \(property.metadata ?? "nil"))"
         }
@@ -113,6 +188,8 @@ enum CodeGen {
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
             "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
             adapterSource,
+            relationshipAdapterSource,
+            inferredRelationshipAdapterSource,
             backingInitializer,
             "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
             "internal nonisolated func access<_M>(keyPath: KeyPath<\(modelName), _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
@@ -185,6 +262,7 @@ enum CodeGen {
         }
         return [
             "extension \(modelName): PersistentModel {}",
+            "extension \(modelName): RelationshipModel {}",
             "extension \(modelName): Observation.Observable {}",
             "extension \(modelName): @unchecked Sendable {}",
         ]
@@ -193,6 +271,7 @@ enum CodeGen {
     static func extensionSources(modelName: String) -> [String] {
         [
             "extension \(modelName): PersistentModel {}",
+            "extension \(modelName): RelationshipModel {}",
             "extension \(modelName): Observation.Observable {}",
             "extension \(modelName): @unchecked Sendable {}",
         ]
@@ -220,6 +299,14 @@ enum InitializationVariant {
 }
 
 private extension String {
+    func firstRange(of text: String) -> Range<String.Index>? {
+        guard let lower = firstIndex(of: text.first ?? " ") else { return nil }
+        guard let match = self[lower...].firstIndex(of: text.first ?? " "),
+            self[match...].hasPrefix(text)
+        else { return nil }
+        return match..<index(match, offsetBy: text.count)
+    }
+
     func trimmingWhitespace() -> String {
         var start = startIndex
         var end = endIndex

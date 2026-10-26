@@ -9,10 +9,11 @@ public macro _PersistedProperty() = #externalMacro(module: "OpenSwiftDataMacros"
 @attached(
     member,
     names: arbitrary, named(createBackingData), named(persistentBackingData), named(schemaMetadata),
-    named(_$backingData), named(_$observationRegistrar), named(_SwiftDataNoType)
+    named(_$backingData), named(_$observationRegistrar), named(_SwiftDataNoType),
+    named(persistenceAdapters), named(relationshipAdapterCandidates), named(inferredRelationshipAdapterCandidates)
 )
 @attached(memberAttribute)
-@attached(extension, conformances: PersistentModel, Observation.Observable, Sendable)
+@attached(extension, conformances: PersistentModel, RelationshipModel, Observation.Observable, Sendable)
 public macro Model() = #externalMacro(module: "OpenSwiftDataMacros", type: "ModelMacro")
 
 /// Describes options for a persisted attribute.

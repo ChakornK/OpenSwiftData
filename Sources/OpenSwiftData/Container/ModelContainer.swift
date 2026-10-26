@@ -10,6 +10,7 @@ public final class ModelContainer: Sendable {
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
     package let store: (any RuntimeStore)?
+    private let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
 
     /// Creates a container for the schema inferred from model types.
     public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
@@ -238,6 +239,14 @@ public final class ModelContainer: Sendable {
         schema = Schema(inferredEntities)
         self.configurations = configurations
         store = try Self.openStore(schema: schema, configurations: configurations)
+        var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
+        for modelType in types {
+            adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
+                for: modelType,
+                schema: schema
+            )
+        }
+        relationshipAdapterTable = adaptersByModel
     }
 
     /// Creates a container for an existing schema.
@@ -245,6 +254,26 @@ public final class ModelContainer: Sendable {
         self.schema = schema
         self.configurations = configurations
         store = try Self.openStore(schema: schema, configurations: configurations)
+        relationshipAdapterTable = [:]
+    }
+
+    /// Creates a container for a manually supplied schema and typed model implementations.
+    package init(
+        for types: [any PersistentModel.Type],
+        schema: Schema,
+        configurations: [ModelConfiguration] = []
+    ) throws {
+        self.schema = schema
+        self.configurations = configurations
+        store = try Self.openStore(schema: schema, configurations: configurations)
+        var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
+        for modelType in types {
+            adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
+                for: modelType,
+                schema: schema
+            )
+        }
+        relationshipAdapterTable = adaptersByModel
     }
 
     /// Creates a container using a migration plan.
@@ -255,6 +284,64 @@ public final class ModelContainer: Sendable {
     ) throws {
         _ = migrationPlan
         try self.init(for: types, configurations: configurations)
+    }
+
+    /// Returns the resolved relationship adapters registered for a model type.
+    func relationshipAdapters<Model: PersistentModel>(for modelType: Model.Type)
+        -> [any AnyRelationshipAdapterBox]
+    {
+        relationshipAdapterTable[ObjectIdentifier(modelType)] ?? []
+    }
+
+    private static func bindRelationshipAdapters<Model: PersistentModel>(
+        for modelType: Model.Type,
+        schema: Schema
+    ) throws -> [any AnyRelationshipAdapterBox] {
+        let entityName = unqualifiedTypeName(String(describing: modelType))
+        let relationships = schema.entity(forName: entityName)?.relationships ?? []
+        let candidates: [any AnyRelationshipAdapterBox]
+        if let relationshipModelType = modelType as? any RelationshipModel.Type {
+            candidates =
+                relationshipModelType.relationshipAdapterCandidates()
+                + relationshipModelType.inferredRelationshipAdapterCandidates()
+        } else {
+            candidates = []
+        }
+        let metadata = Model.schemaMetadata()
+        var resolvedNames = Set<String>()
+        var adapters: [any AnyRelationshipAdapterBox] = []
+        for relationship in relationships {
+            guard !candidates.isEmpty else { continue }
+            let matches = candidates.filter {
+                $0.ownerType == ObjectIdentifier(modelType)
+                    && $0.name == relationship.name
+                    && unqualifiedTypeName(String(describing: $0.destinationType)) == relationship.destination
+                    && $0.isToMany == relationship.isToMany
+            }
+            guard matches.count == 1, let candidate = matches.first else {
+                let detail =
+                    matches.isEmpty ? "no compatible typed adapter exists" : "multiple compatible typed adapters exist"
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(entityName).\(relationship.name)' targets '\(relationship.destination)' "
+                        + "with \(relationship.isToMany ? "to-many" : "to-one") cardinality, but \(detail)."
+                )
+            }
+            resolvedNames.insert(relationship.name)
+            adapters.append(candidate.resolved(with: relationship))
+        }
+        for property in metadata {
+            guard let keyPath = property.keypath else { continue }
+            let rawType = String(reflecting: type(of: keyPath).valueType)
+            let destination = Self.relationshipDestination(rawType)
+            guard property.isRelationship || property.metadata?.base is Schema.Relationship else { continue }
+            guard let destination else { continue }
+            guard !resolvedNames.contains(property.name) else { continue }
+            let destinationName = unqualifiedTypeName(destination)
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Explicit relationship '\(entityName).\(property.name)' targets missing model '\(destinationName)' or is absent from the supplied schema."
+            )
+        }
+        return adapters
     }
 
     /// Creates a context associated with this container.
@@ -307,6 +394,18 @@ public final class ModelContainer: Sendable {
             location = .file(url)
         }
         return try factory(location, schema)
+    }
+
+    private static func relationshipDestination(_ type: String) -> String? {
+        let normalized = type.replacingOccurrences(of: "Swift.", with: "")
+            .replacingOccurrences(of: "?", with: "")
+        guard let opening = normalized.firstIndex(of: "<"), normalized.last == ">" else {
+            return unqualifiedTypeName(normalized)
+        }
+        let container = unqualifiedTypeName(String(normalized[..<opening]))
+        guard container == "Array" || container == "Set" else { return nil }
+        let argument = normalized[normalized.index(after: opening)..<normalized.index(before: normalized.endIndex)]
+        return unqualifiedTypeName(String(argument).replacingOccurrences(of: "?", with: ""))
     }
 
     private static func isSafeStoreName(_ name: String) -> Bool {

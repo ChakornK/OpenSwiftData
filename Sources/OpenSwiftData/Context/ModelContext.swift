@@ -326,6 +326,11 @@ public final class ModelContext {
 
     private func persistPendingChanges(to store: any RuntimeStore) throws {
         let pending = state.pendingState()
+        guard pending.relationshipMutationEvents.isEmpty else {
+            throw SwiftDataError.unsupportedStore(
+                "Saving relationship mutations is unavailable until relationship persistence is implemented."
+            )
+        }
         let models = pending.inserted + pending.changed
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
         let persisted: [(any PersistentModel, Int64)] = try store.write { connection in

@@ -14,4 +14,6 @@ public enum SwiftDataError: Error, Sendable, Equatable {
     case unsupportedSchemaProperty(String)
     /// A relationship collection contains optional model elements.
     case unsupportedRelationshipElement(String)
+    /// A relationship adapter received a value with an incompatible type.
+    case relationshipValueTypeMismatch(property: String, expected: String, actual: String)
 }

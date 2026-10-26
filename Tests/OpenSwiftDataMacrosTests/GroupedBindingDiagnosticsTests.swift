@@ -51,6 +51,9 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                 extension Grouped: PersistentModel {
                 }
 
+                extension Grouped: RelationshipModel {
+                }
+
                 extension Grouped: Observation.Observable {
                 }
 

@@ -58,8 +58,8 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
     ) throws -> [ExtensionDeclSyntax] {
         return CodeGen.extensionSources(declaration)
             .filter {
-                $0.contains("PersistentModel") || $0.contains("Observation.Observable")
-                    || $0.contains("@unchecked Sendable")
+                $0.contains("PersistentModel") || $0.contains("RelationshipModel")
+                    || $0.contains("Observation.Observable") || $0.contains("@unchecked Sendable")
             }
             .compactMap { DeclSyntax(stringLiteral: $0).as(ExtensionDeclSyntax.self) }
     }

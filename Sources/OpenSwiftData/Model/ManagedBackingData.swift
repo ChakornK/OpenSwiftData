@@ -8,6 +8,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     private var baseline: [AnyKeyPath: Any]
     private var overlay: [AnyKeyPath: Any] = [:]
     private var context: ModelContext?
+    private var contextState: ContextState?
     private weak var model: Model?
     private var identifier: PersistentIdentifier
     private var deleted = false
@@ -17,7 +18,6 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     private var entityID: Int
     private var primaryKey: Int64?
     private var version: Int
-
     /// Creates managed storage for a row snapshot.
     public init(
         metadata: [Schema.PropertyMetadata],
@@ -32,6 +32,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         self.metadata = metadata
         baseline = values
         self.context = context
+        contextState = context.state
         self.storeIdentifier = storeIdentifier
         self.entityID = entityID
         self.primaryKey = primaryKey
@@ -66,8 +67,20 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
 
     /// Captures the model before a mutation.
     public func willMutate() {
-        guard let context, let model else { return }
-        MainActor.assumeIsolated { context.willMutate(model) }
+        guard let state = locked({ contextState }), let model = locked({ model }) else { return }
+        state.willMutate(model, snapshot: snapshot())
+    }
+
+    /// Performs a value write atomically with context mutation tracking.
+    public func withMutation(_ write: () -> Void) {
+        guard let state = locked({ contextState }), let model = locked({ model }) else { write(); return }
+        let didMutate = state.mutate(
+            model,
+            snapshot: { [weak self] in
+                guard let self, self.modelContext?.state === state else { return nil }
+                return self.snapshot()
+            }, write: write)
+        if !didMutate { write() }
     }
 
     /// Writes a value into the dirty overlay.
@@ -84,8 +97,8 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
 
     /// Records the mutation in the owning context.
     public func recordMutation() {
-        guard let context, let model else { return }
-        MainActor.assumeIsolated { context.recordMutation(model) }
+        guard let state = locked({ contextState }), let model = locked({ model }) else { return }
+        state.recordMutation(model)
     }
 
     /// Captures the current values and lifecycle state.
@@ -105,6 +118,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             baseline = snapshot.savedValues ?? snapshot.values
             overlay = snapshot.savedValues == nil ? [:] : Self.difference(snapshot.values, baseline)
             context = snapshot.context
+            contextState = snapshot.context?.state
             identifier = snapshot.identifier
             deleted = snapshot.isDeleted
             changed = snapshot.hasChanges
@@ -129,6 +143,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             baseline = snapshot.values
             overlay.removeAll()
             context = nil
+            contextState = nil
             identifier = detachedIdentifier
             deleted = false
             changed = false
@@ -159,6 +174,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     public func attach(to context: ModelContext, model: Model) {
         locked {
             self.context = context
+            contextState = context.state
             self.model = model
             identifier = PersistentIdentifier(
                 storeIdentifier: storeIdentifier, entityName: String(describing: Model.self),
@@ -190,6 +206,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     public func detach() {
         locked {
             context = nil
+            contextState = nil
             identifier = detachedIdentifier
             deleted = false
             changed = false
@@ -202,7 +219,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Detaches a deleted model while retaining its identity, values, and deletion state.
     public func detachDeleted() {
         locked {
-            context = nil; deleted = true; changed = false
+            context = nil; contextState = nil; deleted = true; changed = false
         }
     }
 

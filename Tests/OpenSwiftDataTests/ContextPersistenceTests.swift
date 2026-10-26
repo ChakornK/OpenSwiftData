@@ -127,6 +127,25 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testRollbackKeepsSavedBaselineAcrossMultipleMutations() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("rollback-saved-baseline"))
+        let context = container.mainContext
+        let model = PersistenceTestModel(title: "A")
+        context.insert(model)
+        try context.save()
+
+        model.title = "B"
+        context.rollback()
+        XCTAssertEqual(model.title, "A")
+
+        model.title = "C"
+        context.rollback()
+        XCTAssertEqual(model.title, "A")
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
     func testUpdateOfExternallyDeletedRowFailsAndRetainsPendingState() throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("missing-update-row"))

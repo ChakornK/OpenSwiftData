@@ -27,9 +27,9 @@ public extension PersistentModel {
     }
 
     func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value) {
-        persistentBackingData.willMutate()
-        persistentBackingData.setValue(forKey: keyPath, to: value)
-        persistentBackingData.recordMutation()
+        persistentBackingData.withMutation {
+            persistentBackingData.setValue(forKey: keyPath, to: value)
+        }
     }
 
     func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }

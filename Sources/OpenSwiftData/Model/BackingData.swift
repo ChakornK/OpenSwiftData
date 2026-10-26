@@ -50,6 +50,10 @@ public protocol BackingData<Model>: AnyObject {
     ///
     /// Detached models receive no context notification.
     func willMutate()
+    /// Performs a value write atomically with context mutation tracking.
+    ///
+    /// - Parameter write: The value write to perform.
+    func withMutation(_ write: () -> Void)
     /// Notifies the managing context that a model mutation has occurred.
     ///
     /// Detached models receive no context notification.
@@ -108,6 +112,15 @@ public protocol BackingData<Model>: AnyObject {
     func detachDeleted()
 }
 
+public extension BackingData {
+    /// Performs a property write with mutation notifications for conformers without atomic support.
+    func withMutation(_ write: () -> Void) {
+        willMutate()
+        write()
+        recordMutation()
+    }
+}
+
 /// Creates and owns the initial values for a model that is not in a context.
 public final class DetachedBackingData<Model: PersistentModel>: BackingData, @unchecked Sendable {
     private var values: [AnyKeyPath: Any] = [:]
@@ -117,6 +130,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     private let metadata: [Schema.PropertyMetadata]
     private weak var context: ModelContext?
     private weak var model: Model?
+    private var contextState: ContextState?
     private var deleted = false
     private var changed = false
     private var onChange: (() -> Void)?
@@ -151,9 +165,21 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Notifies the managing context before mutation; detached models receive no notification.
     public func willMutate() {
-        lock.lock(); let context = self.context; let model = self.model; lock.unlock()
-        guard let context, let model else { return }
-        MainActor.assumeIsolated { context.willMutate(model) }
+        lock.lock(); let state = contextState; let model = self.model; lock.unlock()
+        guard let state, let model else { return }
+        state.willMutate(model, snapshot: snapshot())
+    }
+    /// Performs a value write atomically with context mutation tracking.
+    public func withMutation(_ write: () -> Void) {
+        lock.lock(); let state = contextState; let model = self.model; lock.unlock()
+        guard let state, let model else { write(); return }
+        let didMutate = state.mutate(
+            model,
+            snapshot: { [weak self] in
+                guard let self, self.modelContext?.state === state else { return nil }
+                return self.snapshot()
+            }, write: write)
+        if !didMutate { write() }
     }
     /// Stores a value and marks the model changed when attached to a context.
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
@@ -161,12 +187,15 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Notifies the managing context after mutation; detached models receive no notification.
     public func recordMutation() {
-        lock.lock(); let context = self.context; let model = self.model; lock.unlock()
-        guard let context, let model else { return }
-        MainActor.assumeIsolated { context.recordMutation(model) }
+        lock.lock(); let state = contextState; let model = self.model; lock.unlock()
+        guard let state, let model else { return }
+        state.recordMutation(model)
     }
     func setChangeHandler(_ handler: @escaping () -> Void) { lock.lock(); onChange = handler; lock.unlock() }
     func notifyChange() { lock.lock(); let handler = onChange; lock.unlock(); handler?() }
+    func setChangeHandlerForTesting(_ handler: @escaping () -> Void) {
+        lock.lock(); onChange = handler; lock.unlock()
+    }
 
     /// Captures property values and lifecycle state for later restoration.
     public func snapshot() -> BackingDataSnapshot {
@@ -177,14 +206,16 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Restores property values, context, identifier, and lifecycle flags from a snapshot.
     public func restore(_ snapshot: BackingDataSnapshot) {
-        lock.lock(); values = snapshot.values; context = snapshot.context; identifier = snapshot.identifier
+        lock.lock(); values = snapshot.values; context = snapshot.context; contextState = snapshot.context?.state;
+        identifier = snapshot.identifier
         deleted = snapshot.isDeleted; changed = snapshot.hasChanges; lock.unlock()
     }
     /// Restores property values without changing context or lifecycle state.
     public func restoreValues(_ snapshot: BackingDataSnapshot) { lock.lock(); values = snapshot.values; lock.unlock() }
     /// Restores snapshot values and detaches with detached lifecycle flags.
     public func restoreValuesAndDetach(_ snapshot: BackingDataSnapshot) {
-        lock.lock(); values = snapshot.values; context = nil; onChange = nil; identifier = detachedIdentifier;
+        lock.lock(); values = snapshot.values; context = nil; contextState = nil; onChange = nil;
+        identifier = detachedIdentifier;
         deleted = false; changed = false; lock.unlock()
     }
     /// Detaches while preserving current values and resets detached lifecycle flags.
@@ -202,7 +233,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Associates the model with a context and assigns its context-scoped identifier.
     public func attach(to context: ModelContext, model: Model) {
-        lock.lock(); self.context = context; self.model = model; onChange = nil
+        lock.lock(); self.context = context; self.model = model; contextState = context.state; onChange = nil
         identifier = PersistentIdentifier(
             storeIdentifier: "OSD.InMemory.\(ObjectIdentifier(context))", entityName: String(describing: Model.self),
             temporaryIdentifier: identifier.temporaryIdentifier ?? UUID())
@@ -218,11 +249,12 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     public func markSaved() { lock.lock(); if context != nil { deleted = false }; changed = false; lock.unlock() }
     /// Removes the context association and resets identifier and lifecycle flags.
     public func detach() {
-        lock.lock(); context = nil; onChange = nil; identifier = detachedIdentifier; changed = false; deleted = false;
+        lock.lock(); context = nil; contextState = nil; onChange = nil; identifier = detachedIdentifier;
+        changed = false; deleted = false;
         lock.unlock()
     }
     /// Removes the context association while retaining identifier, values, and deletion state.
-    public func detachDeleted() { lock.lock(); context = nil; onChange = nil; lock.unlock() }
+    public func detachDeleted() { lock.lock(); context = nil; contextState = nil; onChange = nil; lock.unlock() }
 
     private func unassignedValue<Value>(for keyPath: KeyPath<Model, Value>) -> Value {
         if let optional = Value.self as? any _OptionalType.Type, let nilValue = optional.nilValue as? Value {

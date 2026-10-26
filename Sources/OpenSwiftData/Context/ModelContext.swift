@@ -11,26 +11,7 @@ public final class ModelContext {
     /// The undo manager associated with this context.
     public var undoManager: UndoManager?
 
-    private struct PendingState {
-        var inserted: [any PersistentModel]
-        var changed: [any PersistentModel]
-        var deleted: [any PersistentModel]
-        var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
-    }
-
-    private struct TransactionFrame {
-        var pending: PendingState
-        var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
-        var baselineSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
-        var modelSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
-    }
-
-    private var insertedModelsStorage: [any PersistentModel] = []
-    private var changedModelsStorage: [any PersistentModel] = []
-    private var deletedModelsStorage: [any PersistentModel] = []
-    private var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
-    private var baselineSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
-    private var transactionFrames: [TransactionFrame] = []
+    package nonisolated let state = ContextState()
     private let testSaveHook: (() throws -> Void)?
     private var allowsSave = true
     private let identityMap = IdentityMap()
@@ -56,11 +37,11 @@ public final class ModelContext {
     }
 
     /// Models inserted into this context and not yet saved.
-    public var insertedModelsArray: [any PersistentModel] { insertedModelsStorage }
+    public var insertedModelsArray: [any PersistentModel] { state.insertedModels }
     /// Models changed in this context and not yet saved.
-    public var changedModelsArray: [any PersistentModel] { changedModelsStorage }
+    public var changedModelsArray: [any PersistentModel] { state.changedModels }
     /// Models deleted in this context and not yet saved.
-    public var deletedModelsArray: [any PersistentModel] { deletedModelsStorage }
+    public var deletedModelsArray: [any PersistentModel] { state.deletedModels }
     /// Compatibility alias for inserted models.
     public var insertedModels: [any PersistentModel] { insertedModelsArray }
     /// Compatibility alias for changed models.
@@ -69,44 +50,35 @@ public final class ModelContext {
     public var deletedModels: [any PersistentModel] { deletedModelsArray }
     /// Whether this context currently has unsaved changes.
     public var hasChanges: Bool {
-        !insertedModelsStorage.isEmpty || !changedModelsStorage.isEmpty || !deletedModelsStorage.isEmpty
+        state.hasChanges
     }
     /// Sort descriptors used by this context.
     public var sortDescriptors: [NSSortDescriptor] = []
 
     /// Inserts a detached model into this context.
     public func insert<Model: PersistentModel>(_ model: Model) {
-        guard model.modelContext == nil else { return }
-        let identifier = ObjectIdentifier(model)
-        let snapshot = model.snapshotLifecycle()
-        for index in transactionFrames.indices where transactionFrames[index].snapshots[identifier] == nil {
-            transactionFrames[index].snapshots[identifier] = (model, snapshot)
+        state.withExclusiveOperation {
+            guard model.modelContext == nil else { return }
+            let snapshot = model.snapshotLifecycle()
+            state.insert(model, snapshot: snapshot)
+            model.persistentBackingData.attach(to: self, model: model)
+            model.setInsertionChanged()
         }
-        for index in transactionFrames.indices where transactionFrames[index].modelSnapshots[identifier] == nil {
-            transactionFrames[index].modelSnapshots[identifier] = (model, snapshot)
-        }
-        model.persistentBackingData.attach(to: self, model: model)
-        model.setInsertionChanged()
-        snapshots[identifier] = (model, snapshot)
-        appendUnique(model, to: &insertedModelsStorage)
     }
 
     /// Deletes a model or cancels its pending insertion.
     public func delete<Model: PersistentModel>(_ model: Model) {
-        guard model.modelContext === self else { return }
-        let identifier = ObjectIdentifier(model)
-        if contains(model, in: insertedModelsStorage) {
-            model.restoreValuesAndDetachLifecycle(snapshots[identifier]?.1 ?? model.snapshotLifecycle())
-            remove(model, from: &insertedModelsStorage)
-            remove(model, from: &changedModelsStorage)
-            snapshots.removeValue(forKey: identifier)
-            return
+        state.withExclusiveOperation {
+            guard model.modelContext === self else { return }
+            if state.containsInserted(model) {
+                model.restoreValuesAndDetachLifecycle(state.cancelInsertion(model) ?? model.snapshotLifecycle())
+                return
+            }
+            guard !state.containsDeleted(model) else { return }
+            capture(model)
+            model.persistentBackingData.markDeleted()
+            state.markDeleted(model)
         }
-        guard !contains(model, in: deletedModelsStorage) else { return }
-        capture(model)
-        model.persistentBackingData.markDeleted()
-        remove(model, from: &changedModelsStorage)
-        appendUnique(model, to: &deletedModelsStorage)
     }
 
     /// Deletes models matching a predicate, which requires a persistent store.
@@ -215,84 +187,82 @@ public final class ModelContext {
 
     /// Saves pending changes when a supported store is available.
     public func save() throws {
-        guard transactionFrames.isEmpty else { return }
-        if !allowsSave { throw unsupportedStore("Saving is disabled") }
-        if let testSaveHook {
-            try testSaveHook()
-            finalizePendingChanges()
-            return
+        try state.withExclusiveOperation {
+            guard !state.hasTransaction else { return }
+            if !allowsSave { throw unsupportedStore("Saving is disabled") }
+            if let testSaveHook {
+                try testSaveHook()
+                finalizePendingChanges()
+                return
+            }
+            guard let store = container?.store else { throw unsupportedStore("Saving") }
+            guard allowsSave else { throw unsupportedStore("Saving is disabled") }
+            try persistPendingChanges(to: store)
         }
-        guard let store = container?.store else { throw unsupportedStore("Saving") }
-        guard allowsSave else { throw unsupportedStore("Saving is disabled") }
-        try persistPendingChanges(to: store)
     }
 
     /// Discards pending changes and restores values to their prior saved state.
     public func rollback() {
-        let pendingInsertions = insertedModelsStorage
-        for (model, snapshot) in snapshots.values {
-            if contains(model, in: pendingInsertions) {
-                model.restoreValuesAndDetachLifecycle(snapshot)
-            } else {
-                model.restoreLifecycle(snapshot)
+        state.withExclusiveOperation {
+            let pendingState = state.pendingState()
+            let pendingInsertions = pendingState.inserted
+            for (model, snapshot) in pendingState.snapshots.values {
+                if state.contains(model, in: pendingInsertions) {
+                    model.restoreValuesAndDetachLifecycle(snapshot)
+                } else {
+                    model.restoreLifecycle(snapshot)
+                }
+            }
+            for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
+                cancelInsertion(model)
+            }
+            state.clearPending()
+            for (model, snapshot) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
+                state.setBaseline(model, snapshot: snapshot)
             }
         }
-        for model in pendingInsertions where snapshots[ObjectIdentifier(model)] == nil {
-            cancelInsertion(model)
-        }
-        insertedModelsStorage.removeAll()
-        changedModelsStorage.removeAll()
-        deletedModelsStorage.removeAll()
-        snapshots.removeAll()
     }
 
     /// Runs a block as an atomic unit of context work and saves on success.
     public func transaction<T>(block: () throws -> T) throws -> T {
-        let pending = pendingState()
-        let entrySnapshots = Dictionary(
-            uniqueKeysWithValues: (pending.inserted + pending.changed + pending.deleted).map {
-                (ObjectIdentifier($0), ($0, snapshot(of: $0)))
-            }
-        )
-        transactionFrames.append(
-            TransactionFrame(
-                pending: pending,
-                snapshots: [:],
-                baselineSnapshots: baselineSnapshots,
-                modelSnapshots: entrySnapshots
-            ))
-        do {
-            let result = try block()
-            if transactionFrames.count == 1 {
-                if let testSaveHook {
-                    try testSaveHook()
-                    finalizePendingChanges()
-                } else {
-                    guard let store = container?.store else { throw unsupportedStore("Saving") }
-                    try persistPendingChanges(to: store)
+        try state.withExclusiveOperation {
+            let pending = state.pendingState()
+            let entrySnapshots = Dictionary(
+                uniqueKeysWithValues: (pending.inserted + pending.changed + pending.deleted).map {
+                    (ObjectIdentifier($0), ($0, snapshot(of: $0)))
                 }
+            )
+            state.beginTransaction(entrySnapshots: entrySnapshots)
+            do {
+                let result = try block()
+                if state.transactionDepth == 1 {
+                    if let testSaveHook {
+                        try testSaveHook()
+                        finalizePendingChanges()
+                    } else {
+                        guard let store = container?.store else { throw unsupportedStore("Saving") }
+                        try persistPendingChanges(to: store)
+                    }
+                }
+                state.popTransaction()
+                return result
+            } catch {
+                rollbackCurrentTransaction()
+                throw error
             }
-            transactionFrames.removeLast()
-            return result
-        } catch {
-            rollbackCurrentTransaction()
-            throw error
         }
     }
 
     /// Captures a model before a property write so rollback can restore its prior values.
     package func willMutate<Model: PersistentModel>(_ model: Model) {
         guard model.modelContext === self else { return }
-        capture(model)
+        state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 
     /// Records a property write as a pending change.
     package func recordMutation<Model: PersistentModel>(_ model: Model) {
-        guard model.modelContext === self,
-            !contains(model, in: insertedModelsStorage),
-            !contains(model, in: deletedModelsStorage)
-        else { return }
-        appendUnique(model, to: &changedModelsStorage)
+        guard model.modelContext === self else { return }
+        state.recordMutation(model)
     }
 
     private var storeIdentifier: String { container?.configurations.first?.name ?? "default" }
@@ -355,8 +325,9 @@ public final class ModelContext {
     }
 
     private func persistPendingChanges(to store: any RuntimeStore) throws {
-        let models = insertedModelsStorage + changedModelsStorage
-        let insertedIDs = Set(insertedModelsStorage.map(ObjectIdentifier.init))
+        let pending = state.pendingState()
+        let models = pending.inserted + pending.changed
+        let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
         let persisted: [(any PersistentModel, Int64)] = try store.write { connection in
             var results: [(any PersistentModel, Int64)] = []
             for model in models {
@@ -364,7 +335,7 @@ public final class ModelContext {
                     model, inserted: insertedIDs.contains(ObjectIdentifier(model)), connection: connection,
                     append: &results)
             }
-            for model in deletedModelsStorage {
+            for model in pending.deleted {
                 guard let pk = model.persistentModelID.primaryKey else { continue }
                 try connection.execute(
                     "DELETE FROM Z\(model.persistentModelID.entityName.uppercased()) WHERE Z_PK = ?",
@@ -375,17 +346,18 @@ public final class ModelContext {
             }
             return results
         }
-        for model in deletedModelsStorage {
+        for model in pending.deleted {
             if let pk = model.persistentModelID.primaryKey {
                 identityMap.remove(EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: pk))
             }
         }
         for (model, pk) in persisted {
             let entityName = model.persistentModelID.entityName
+            let originalIdentifier = state.snapshotIdentifier(for: model)
             model.markPersistedLifecycle(
                 storeIdentifier: storeIdentifier, entityID: entityID(for: entityName), primaryKey: pk, version: 1)
             identityMap.register(model, for: EntityPrimaryKey(entityName: entityName, primaryKey: pk))
-            if let old = snapshots[ObjectIdentifier(model)]?.1.identifier, old.isTemporary {
+            if let old = originalIdentifier, old.isTemporary {
                 temporaryIdentifiers[old] = model.persistentModelID
             }
         }
@@ -441,53 +413,28 @@ public final class ModelContext {
     }
 
     private func capture<Model: PersistentModel>(_ model: Model) {
-        let identifier = ObjectIdentifier(model)
-        let current = model.snapshotLifecycle()
-        for index in transactionFrames.indices where transactionFrames[index].modelSnapshots[identifier] == nil {
-            transactionFrames[index].modelSnapshots[identifier] = (model, current)
-        }
-        if snapshots[identifier] == nil {
-            snapshots[identifier] = (model, baselineSnapshots[identifier]?.1 ?? current)
-        }
-        for index in transactionFrames.indices where transactionFrames[index].snapshots[identifier] == nil {
-            transactionFrames[index].snapshots[identifier] = (model, current)
-        }
-    }
-
-    private func pendingState() -> PendingState {
-        PendingState(
-            inserted: insertedModelsStorage,
-            changed: changedModelsStorage,
-            deleted: deletedModelsStorage,
-            snapshots: snapshots
-        )
-    }
-
-    private func restorePendingState(_ state: PendingState) {
-        insertedModelsStorage = state.inserted
-        changedModelsStorage = state.changed
-        deletedModelsStorage = state.deleted
-        snapshots = state.snapshots
+        state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 
     private func rollbackCurrentTransaction() {
-        guard let frame = transactionFrames.popLast() else { return }
-        let currentModels = insertedModelsStorage + changedModelsStorage + deletedModelsStorage
+        guard let frame = state.popTransactionSnapshot() else { return }
+        let pending = state.pendingState()
+        let currentModels = pending.inserted + pending.changed + pending.deleted
         let frameInsertions = frame.pending.inserted
         for (model, snapshot) in frame.modelSnapshots.values {
-            if contains(model, in: frameInsertions) {
+            if state.contains(model, in: frameInsertions) {
                 model.restoreLifecycle(snapshot)
             } else {
                 model.restoreValuesAndDetachLifecycle(snapshot)
             }
         }
         for model in currentModels
-        where !contains(model, in: frame.pending.inserted)
-            && !contains(model, in: frame.pending.changed)
-            && !contains(model, in: frame.pending.deleted)
+        where !state.contains(model, in: frame.pending.inserted)
+            && !state.contains(model, in: frame.pending.changed)
+            && !state.contains(model, in: frame.pending.deleted)
         {
             let identifier = ObjectIdentifier(model)
-            if contains(model, in: insertedModelsStorage), let insertionSnapshot = snapshots[identifier] {
+            if state.contains(model, in: pending.inserted), let insertionSnapshot = pending.snapshots[identifier] {
                 model.restoreValuesAndDetachLifecycle(insertionSnapshot.1)
             } else if let entry = frame.snapshots[identifier] {
                 model.restoreLifecycle(entry.1)
@@ -495,28 +442,29 @@ public final class ModelContext {
                 detachModel(model)
             }
         }
-        restorePendingState(frame.pending)
-        baselineSnapshots = frame.baselineSnapshots
+        state.restorePendingState(frame.pending)
+        state.restoreBaselineSnapshots(frame.baselineSnapshots)
     }
 
     private func finalizePendingChanges() {
-        for model in insertedModelsStorage + changedModelsStorage {
+        let pending = state.pendingState()
+        for model in pending.inserted + pending.changed {
             model.markSavedLifecycle()
-            baselineSnapshots[ObjectIdentifier(model)] = (model, model.snapshotLifecycle())
+            state.setBaseline(model, snapshot: model.snapshotLifecycle())
         }
-        for model in deletedModelsStorage {
+        for model in pending.deleted {
             model.detachDeletedLifecycle()
             model.markSavedLifecycle()
-            baselineSnapshots.removeValue(forKey: ObjectIdentifier(model))
+            state.removeBaseline(for: model)
         }
-        insertedModelsStorage.removeAll()
-        changedModelsStorage.removeAll()
-        deletedModelsStorage.removeAll()
-        snapshots.removeAll()
+        state.clearPending()
     }
 
-    private func cancelInsertion<Model: PersistentModel>(_ model: Model) {
-        model.persistentBackingData.cancelInsertion()
+    private func cancelInsertion(_ model: any PersistentModel) {
+        func cancelTyped<Model: PersistentModel>(_ model: Model) {
+            model.persistentBackingData.cancelInsertion()
+        }
+        cancelTyped(model)
     }
 
     private func detachModel(_ model: any PersistentModel) {
@@ -526,17 +474,6 @@ public final class ModelContext {
         detachTyped(model)
     }
 
-    private func contains<Model: PersistentModel>(_ model: Model, in models: [any PersistentModel]) -> Bool {
-        models.contains { $0 === model }
-    }
-
-    private func appendUnique<Model: PersistentModel>(_ model: Model, to models: inout [any PersistentModel]) {
-        if !contains(model, in: models) { models.append(model) }
-    }
-
-    private func remove<Model: PersistentModel>(_ model: Model, from models: inout [any PersistentModel]) {
-        models.removeAll { $0 === model }
-    }
 }
 
 /// Describes a model fetch request.

@@ -3,7 +3,8 @@ import OSDCore
 
 @attached(accessor, names: named(init), named(get), named(set))
 @attached(peer, names: prefixed(_))
-public macro _PersistedProperty() = #externalMacro(module: "OpenSwiftDataMacros", type: "PersistedPropertyMacro")
+public macro _PersistedProperty(relationship: Bool = false) =
+    #externalMacro(module: "OpenSwiftDataMacros", type: "PersistedPropertyMacro")
 
 /// Marks a class as a persistent model.
 @attached(

@@ -6,6 +6,7 @@ public protocol RelationshipModel: PersistentModel {
     static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox]
     /// Returns candidates for relationships inferred from model property types.
     static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox]
+    static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox]
 }
 
 public extension RelationshipModel {
@@ -13,4 +14,7 @@ public extension RelationshipModel {
     static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { [] }
     /// Returns candidates for relationships inferred from model property types.
     static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { [] }
+    static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] {
+        relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates()
+    }
 }

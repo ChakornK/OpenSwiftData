@@ -46,7 +46,14 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
                 return attribute.attributeName.trimmedDescription == "Transient"
             })
         else { return [] }
-        return [AttributeSyntax(stringLiteral: "@_PersistedProperty")]
+        let isRelationship = variable.attributes.contains { element in
+            guard case let .attribute(attribute) = element else { return false }
+            return attribute.attributeName.trimmedDescription == "Relationship"
+        }
+        return [
+            AttributeSyntax(
+                stringLiteral: isRelationship ? "@_PersistedProperty(relationship: true)" : "@_PersistedProperty")
+        ]
     }
 
     static func expansion(
@@ -151,9 +158,18 @@ struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
     ) throws -> [AccessorDeclSyntax] {
         guard let variable = declaration.as(VariableDeclSyntax.self), variable.bindings.count == 1,
             let binding = variable.bindings.first,
-            let property = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+            let propertyName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
         else { return [] }
-        return CodeGen.accessorSources(property: property).map(AccessorDeclSyntax.init(stringLiteral:))
+        let isRelationship: Bool
+        if case let .argumentList(arguments)? = node.arguments,
+            let relationshipArgument = arguments.first(where: { $0.label?.text == "relationship" })
+        {
+            isRelationship = relationshipArgument.expression.trimmedDescription == "true"
+        } else {
+            isRelationship = false
+        }
+        return CodeGen.accessorSources(property: propertyName, isRelationship: isRelationship)
+            .map(AccessorDeclSyntax.init(stringLiteral:))
     }
 
     static func expansion(

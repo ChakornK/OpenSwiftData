@@ -182,6 +182,18 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             deleted = false
         }
     }
+
+    /// Routes a relationship write through the context's resolved adapter table.
+    public func mutateRelationship<Value>(
+        forKey keyPath: KeyPath<Model, Value>,
+        to value: Value,
+        adapters: [any AnyRelationshipAdapterBox]
+    ) -> Bool {
+        let model = locked { self.model }
+        guard let model else { return false }
+        guard let state = locked({ contextState }) else { return false }
+        return state.mutateRelationship(model: model, keyPath: keyPath, value: value)
+    }
     /// Marks this model as deleted.
     public func markDeleted() {
         locked {

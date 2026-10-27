@@ -307,6 +307,11 @@ final class RuntimeAPITests: XCTestCase {
                     ),
                 ]
             ))
+        XCTAssertEqual(
+            container.relationshipAdapters(for: SupportedOptionalCollectionFixture.self).map(\.name),
+            [],
+            "Unexpected adapters: \(container.relationshipAdapters(for: SupportedOptionalCollectionFixture.self).map(\.name))"
+        )
     }
 
     @MainActor

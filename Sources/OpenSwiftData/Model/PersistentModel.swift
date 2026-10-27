@@ -32,6 +32,26 @@ public extension PersistentModel {
         }
     }
 
+    static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { [] }
+
+    func setRelationshipValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value) {
+        guard let context = persistentBackingData.modelContext else {
+            guard let modelType = Self.self as? any RelationshipModel.Type,
+                let adapter =
+                    (modelType.relationshipAdapterCandidates() + modelType.inferredRelationshipAdapterCandidates())
+                    .first(where: { $0.keyPath == keyPath })
+            else {
+                setValue(forKey: keyPath, to: value)
+                return
+            }
+            try? adapter.write(value, to: self)
+            return
+        }
+        if !context.state.setRelationship(model: self, keyPath: keyPath, value: value, autoInsertDestinations: true) {
+            setValue(forKey: keyPath, to: value)
+        }
+    }
+
     func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }
     func setInsertionChanged() { persistentBackingData.restoreInsertionState() }
     func markPersistedLifecycle(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {

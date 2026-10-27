@@ -1,13 +1,16 @@
 import SwiftSyntax
 import SwiftSyntaxBuilder
+import Foundation
 
 enum CodeGen {
     struct Property {
         let name: String
         let initializer: String?
         let metadata: String?
+        let inverseKeyPath: String?
         let hasExplicitAttribute: Bool
         let hasExplicitRelationship: Bool
+        let isRelationship: Bool
         let isTransient: Bool
         let isComputed: Bool
         let isStatic: Bool
@@ -17,8 +20,10 @@ enum CodeGen {
             name: String,
             initializer: String? = nil,
             metadata: String? = nil,
+            inverseKeyPath: String? = nil,
             hasExplicitAttribute: Bool = false,
             hasExplicitRelationship: Bool = false,
+            isRelationship: Bool = false,
             isTransient: Bool = false,
             isComputed: Bool = false,
             isStatic: Bool = false,
@@ -27,8 +32,10 @@ enum CodeGen {
             self.name = name
             self.initializer = initializer
             self.metadata = metadata
+            self.inverseKeyPath = inverseKeyPath
             self.hasExplicitAttribute = hasExplicitAttribute
             self.hasExplicitRelationship = hasExplicitRelationship
+            self.isRelationship = isRelationship
             self.isTransient = isTransient
             self.isComputed = isComputed
             self.isStatic = isStatic
@@ -43,6 +50,7 @@ enum CodeGen {
             isLazy = modifiers.contains { $0.name.text == "lazy" }
 
             var resolvedMetadata: String?
+            var resolvedInverseKeyPath: String?
             var explicitAttribute = false
             var explicitRelationship = false
             var transient = false
@@ -54,33 +62,80 @@ enum CodeGen {
                 } else if attributeName == "Relationship" {
                     explicitRelationship = true
                 }
-                guard let arguments = attribute.arguments,
-                    case let .argumentList(argumentList) = arguments
-                else {
+                guard attributeName == "Attribute" || attributeName == "Relationship" else {
                     if attributeName == "Transient" { transient = true }
                     continue
                 }
-
-                guard attributeName == "Attribute" || attributeName == "Relationship" else { continue }
+                let argumentList: LabeledExprListSyntax
+                if let arguments = attribute.arguments,
+                    case let .argumentList(argumentsList) = arguments
+                {
+                    argumentList = argumentsList
+                } else {
+                    argumentList = []
+                }
+                if attributeName == "Relationship" {
+                    explicitRelationship = true
+                }
+                if attributeName == "Attribute" {
+                    explicitAttribute = true
+                }
                 let metadataArguments = argumentList.trimmedDescription.trimmingWhitespace()
-                resolvedMetadata = "Schema.\(attributeName)(\(metadataArguments))"
+                if attributeName == "Relationship", argumentList.isEmpty {
+                    resolvedMetadata = nil
+                } else {
+                    resolvedMetadata = "Schema.\(attributeName)(\(metadataArguments))"
+                }
+                // The inverse follows whichever attribute supplies the final metadata.
+                resolvedInverseKeyPath = nil
+                if attributeName == "Relationship",
+                    let inverse = argumentList.first(where: { $0.label?.text == "inverse" }),
+                    inverse.expression.trimmedDescription != "nil"
+                {
+                    resolvedInverseKeyPath = inverse.expression.trimmedDescription
+                    var typedArguments = Array(argumentList)
+                    if let index = typedArguments.firstIndex(where: { $0.label?.text == "inverse" }) {
+                        typedArguments.remove(at: index)
+                    }
+                    let labels = typedArguments.map { argument in
+                        let label = argument.label.map { "\($0.text): " } ?? ""
+                        return label + argument.expression.trimmedDescription
+                    }
+                    let inverseName = inversePropertyName(inverse.expression)
+                        .replacingOccurrences(of: "\\", with: "\\\\")
+                        .replacingOccurrences(of: "\"", with: "\\\"")
+                    resolvedMetadata =
+                        "Schema.Relationship(\((labels + ["inverseName: \"\(inverseName)\""]).joined(separator: ", ")))"
+                }
             }
             metadata = resolvedMetadata
+            inverseKeyPath = resolvedInverseKeyPath
             hasExplicitAttribute = explicitAttribute
             hasExplicitRelationship = explicitRelationship
+            isRelationship = explicitRelationship
             isTransient = transient
         }
+    }
+
+    private static func inversePropertyName(_ expression: ExprSyntax) -> String {
+        if let keyPath = expression.as(KeyPathExprSyntax.self), let component = keyPath.components.last,
+            let property = component.component.as(KeyPathPropertyComponentSyntax.self)
+        {
+            return property.declName.baseName.text
+        }
+        let name = expression.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
+        return name.first == "`" && name.last == "`" ? String(name.dropFirst().dropLast()) : name
     }
 
     static func memberSources(_ declaration: ClassDeclSyntax, variant: InitializationVariant = .a) -> [String] {
         let modelName = declaration.name.text
         let properties = persistedProperties(in: declaration)
         let adapterRows = properties.compactMap { property -> String? in
-            guard !property.hasExplicitRelationship,
-                property.metadata?.hasPrefix("Schema.Relationship") != true,
-                let type = propertyType(property.name, in: declaration)
-            else { return nil }
+            guard let type = propertyType(property.name, in: declaration) else { return nil }
             let isExplicitAttribute = property.hasExplicitAttribute
+            let isRelationshipProperty =
+                property.hasExplicitRelationship || property.metadata?.hasPrefix("Schema.Relationship") == true
+            guard !isRelationshipProperty else { return nil }
             let isOptionalScalar =
                 type.as(OptionalTypeSyntax.self).map { isSupportedScalarType($0.wrappedType) } ?? false
             guard isExplicitAttribute || isSupportedScalarType(type) || isOptionalScalar else { return nil }
@@ -137,13 +192,30 @@ enum CodeGen {
                 isCollection
                 ? (isOptional ? "{ value in value.map { Array($0) } ?? [] }" : "{ value in value }")
                 : (isOptional ? "{ value in value.map { [$0] } ?? [] }" : "{ value in [value] }")
+            let isSet = type.trimmedDescription.hasPrefix("Set<")
+            let builderClosure: String
+            if isCollection {
+                builderClosure = "{ endpoints in \(type.trimmedDescription)(endpoints) }"
+            } else if isOptional {
+                builderClosure = "{ endpoints in endpoints.first }"
+            } else {
+                builderClosure =
+                    "{ endpoints in guard let endpoint = endpoints.first else { throw SwiftDataError.unsupportedSchemaProperty(\"Cannot clear nonoptional relationship '\(property.name)'.\") }; return endpoint }"
+            }
+            let inverseBuilderClosure =
+                isCollection && isSet
+                ? "{ endpoints in Set(endpoints) }"
+                : (isCollection ? "{ endpoints in endpoints }" : builderClosure)
             let metadataArgument = relationshipMetadata.map { "metadata: \($0), " } ?? ""
-            let inverseArgument = ""
+            let inverseArgument =
+                property.inverseKeyPath
+                .map { ", explicitInverseKeyPath: " + $0 }
+                ?? ""
             let adapterTail = (isCollection ? ", isToMany: true" : ", isToMany: false") + inverseArgument
             let adapter =
                 "TypedRelationshipPropertyAdapter<\(modelName), \(type.trimmedDescription), \(destination.trimmedDescription)>"
             let row =
-                "        \(adapter)(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), \(metadataArgument)read: { model in model.\(property.name) }, endpoints: \(endpointClosure)\(adapterTail))"
+                "        \(adapter)(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), \(metadataArgument)read: { model in model.\(property.name) }, endpoints: \(endpointClosure), build: \(builderClosure), inverseBuild: \(inverseBuilderClosure)\(adapterTail))"
             if explicitRelationship { return "explicit|\(row)" }
             return explicitAttribute ? nil : "inferred|\(row)"
         }
@@ -168,7 +240,7 @@ enum CodeGen {
             ? nil
             : "public static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]\n}"
         let metadataRows = properties.map { property in
-            "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.name), defaultValue: \(property.initializer ?? "nil"), metadata: \(property.metadata ?? "nil"))"
+            "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.name), defaultValue: \(property.initializer ?? "nil"), metadata: \(property.metadata ?? "nil"), isExplicitRelationship: \(property.hasExplicitRelationship))"
         }
         let metadataBody =
             metadataRows.isEmpty
@@ -190,6 +262,7 @@ enum CodeGen {
             adapterSource,
             relationshipAdapterSource,
             inferredRelationshipAdapterSource,
+            "public static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates() }",
             backingInitializer,
             "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
             "internal nonisolated func access<_M>(keyPath: KeyPath<\(modelName), _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
@@ -219,7 +292,11 @@ enum CodeGen {
         }.first
     }
 
-    static func accessorSources(property: String, variant: InitializationVariant = .a) -> [String] {
+    static func accessorSources(
+        property: String,
+        isRelationship: Bool = false,
+        variant: InitializationVariant = .a
+    ) -> [String] {
         let storageRestriction =
             variant == .c
             ? "@storageRestrictions(accesses: _$backingData)"
@@ -231,15 +308,19 @@ enum CodeGen {
                 "init(initialValue) {",
                 "    _$backingData.setValue(forKey: \\.\(property), to: initialValue)",
             ] + initializationAssignment + ["}"]).joined(separator: "\n")
+        let setter =
+            isRelationship
+            ? "self.setRelationshipValue(forKey: \\.\(property), to: newValue)"
+            : "self.setValue(forKey: \\.\(property), to: newValue)"
         return [
             initializer,
             "get {\n    access(keyPath: \\.\(property))\n    return self.getValue(forKey: \\.\(property))\n}",
-            "set {\n    withMutation(keyPath: \\.\(property)) {\n        self.setValue(forKey: \\.\(property), to: newValue)\n    }\n}",
+            "set {\n    withMutation(keyPath: \\.\(property)) {\n        \(setter)\n    }\n}",
         ]
     }
 
     static func accessorSources(property: Property, variant: InitializationVariant = .a) -> [String] {
-        accessorSources(property: property.name, variant: variant)
+        accessorSources(property: property.name, isRelationship: property.isRelationship, variant: variant)
     }
 
     static func peerSources(property: String, variant: InitializationVariant = .a) -> [String] {

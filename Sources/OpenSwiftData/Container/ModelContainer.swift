@@ -10,7 +10,7 @@ public final class ModelContainer: Sendable {
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
     package let store: (any RuntimeStore)?
-    private let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
+    let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
 
     /// Creates a container for the schema inferred from model types.
     public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
@@ -27,6 +27,10 @@ public final class ModelContainer: Sendable {
             )
         }
         let modelNames = Set(entityNames)
+        let relationshipModelNames = Set(
+            zip(types, entityNames).compactMap { modelType, entityName in
+                (modelType is any RelationshipModel.Type) ? entityName : nil
+            })
         var propertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]] = [:]
         for (modelType, entityName) in zip(types, entityNames) {
             propertiesByEntity[entityName] = modelType.schemaMetadata().compactMap { metadata in
@@ -51,8 +55,17 @@ public final class ModelContainer: Sendable {
             }
             let attributes = schemaProperties.compactMap { metadata, propertyType, isOptional -> Schema.Attribute? in
                 let typedRelationship = metadata.metadata?.base as? Schema.Relationship
+                let parsedType = Self.parseType(propertyType)
+                let destinationType = Self.unqualifiedTypeName(parsedType.collectionElement ?? parsedType.name)
+                let isLegacyExplicitCollection =
+                    metadata.isExplicitRelationship && parsedType.collectionElement != nil
+                    && modelNames.contains(destinationType) && !relationshipModelNames.contains(destinationType)
                 let isModelType = modelNames.contains(Self.unqualifiedTypeName(propertyType))
-                guard !metadata.isRelationship, typedRelationship == nil, !isModelType else { return nil }
+                guard (!metadata.isRelationship || isLegacyExplicitCollection), typedRelationship == nil,
+                    !isModelType || isLegacyExplicitCollection
+                else {
+                    return nil
+                }
                 let typedAttribute = metadata.metadata?.base as? Schema.Attribute
                 let options = typedAttribute?.options ?? Set(metadata.options.compactMap(Self.attributeOption))
                 return Schema.Attribute(
@@ -71,11 +84,16 @@ public final class ModelContainer: Sendable {
                 let destination = parsedType.collectionElement ?? parsedType.name
                 let typedRelationship = metadata.metadata?.base as? Schema.Relationship
                 let destinationName = Self.unqualifiedTypeName(destination)
-                let isExplicitRelationship = metadata.isRelationship || typedRelationship != nil
-                guard isExplicitRelationship || modelNames.contains(destinationName) else {
+                let isInferredModelCollection =
+                    !metadata.isExplicitRelationship && isToMany
+                    && parsedType.collectionElement.map { modelNames.contains(Self.unqualifiedTypeName($0)) } == true
+                guard
+                    typedRelationship != nil || isInferredModelCollection
+                        || modelNames.contains(Self.unqualifiedTypeName(destination))
+                else {
                     return nil
                 }
-                if isExplicitRelationship {
+                if typedRelationship != nil {
                     guard modelNames.contains(destinationName) else {
                         throw SwiftDataError.unsupportedSchemaProperty(
                             "Relationship '\(Self.unqualifiedTypeName(String(describing: modelType))).\(metadata.name)' "
@@ -111,7 +129,15 @@ public final class ModelContainer: Sendable {
                                 + "declares inverse '\(destinationName).\(explicitInverseName)', but that property does not exist."
                         )
                     }
-                    guard inverseMetadata.0.isRelationship
+                    let inversePropertyRawType =
+                        inverseMetadata.0.keypath.map {
+                            String(reflecting: type(of: $0).valueType)
+                        } ?? ""
+                    guard
+                        inverseMetadata.0.isRelationship || inverseMetadata.0.metadata?.base is Schema.Relationship
+                            || (Self.relationshipDestination(inversePropertyRawType).map {
+                                modelNames.contains(Self.unqualifiedTypeName($0))
+                            } ?? false)
                     else {
                         throw SwiftDataError.unsupportedSchemaProperty(
                             "Relationship inverse '\(destinationName).\(explicitInverseName)' must be a relationship property."
@@ -153,10 +179,6 @@ public final class ModelContainer: Sendable {
                 let inferredInverse: String?
                 if !hasExplicitInverse, explicitReciprocals.count == 1 {
                     inferredInverse = explicitReciprocals[0].0.name
-                } else if !hasExplicitInverse, explicitReciprocals.isEmpty,
-                    destinationRelationships.count == 1, typedRelationship == nil
-                {
-                    inferredInverse = destinationRelationships[0].0.name
                 } else {
                     inferredInverse = nil
                 }
@@ -188,53 +210,46 @@ public final class ModelContainer: Sendable {
                     return "\(entityName).\(metadata.name)"
                 }
             })
-        let inferredEntities = entities.map { entity in
-            Schema.Entity(
-                name: entity.name,
-                attributes: entity.attributes,
-                relationships: entity.relationships.map { relationship in
-                    guard relationship.inverse == nil,
-                        !explicitInverseDeclarations.contains("\(entity.name).\(relationship.name)")
-                    else { return relationship }
-                    let explicitReciprocalCount =
-                        propertiesByEntity[relationship.destination]?.filter { candidate, _ in
-                            (candidate.metadata?.base as? Schema.Relationship)?.inverse == relationship.name
-                        }.count ?? 0
-                    guard explicitReciprocalCount <= 1 else { return relationship }
-                    let destinationRelationships =
-                        propertiesByEntity[relationship.destination]?.filter {
-                            $0.0.metadata?.base is Schema.Relationship
-                        } ?? []
-                    let inverseCandidates = destinationRelationships.filter { metadata, _ in
-                        guard let inverseRelationship = metadata.metadata?.base as? Schema.Relationship else {
-                            return false
-                        }
-                        return inverseRelationship.inverse == relationship.name
-                            || (relationship.inverse == metadata.name && inverseRelationship.inverse == nil)
-                    }
-                    let matchingInverse: String
-                    if inverseCandidates.count == 1 {
-                        matchingInverse = inverseCandidates[0].0.name
-                    } else if inverseCandidates.isEmpty,
-                        destinationRelationships.count == 1,
-                        relationship.inverse == nil
-                    {
-                        matchingInverse = destinationRelationships[0].0.name
-                    } else {
-                        return relationship
-                    }
-                    return Schema.Relationship(
-                        name: relationship.name,
-                        destination: relationship.destination,
-                        isToMany: relationship.isToMany,
-                        inverse: matchingInverse,
-                        deleteRule: relationship.deleteRule,
-                        minimumModelCount: relationship.minimumModelCount,
-                        maximumModelCount: relationship.maximumModelCount,
-                        originalName: relationship.originalName
-                    )
+        let inferredEntities = try entities.map { entity in
+            let relationships = try entity.relationships.map { relationship in
+                guard relationship.inverse == nil,
+                    !explicitInverseDeclarations.contains("\(entity.name).\(relationship.name)")
+                else { return relationship }
+                let explicitReciprocalCount =
+                    propertiesByEntity[relationship.destination]?.filter { candidate, _ in
+                        (candidate.metadata?.base as? Schema.Relationship)?.inverse == relationship.name
+                    }.count ?? 0
+                guard explicitReciprocalCount <= 1 else { return relationship }
+                let destinationRelationships =
+                    entities.first(where: { $0.name == relationship.destination })?.relationships ?? []
+                let reciprocalCandidates = destinationRelationships.filter { inverseRelationship in
+                    inverseRelationship.destination == entity.name
+                        && inverseRelationship.inverse == relationship.name
                 }
-            )
+                let inverseCandidates = reciprocalCandidates
+                let matchingInverse: String?
+                if inverseCandidates.count == 1 {
+                    matchingInverse = inverseCandidates[0].name
+                } else if inverseCandidates.count > 1 {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Relationship '\(entity.name).\(relationship.name)' has ambiguous inverse candidates."
+                    )
+                } else {
+                    matchingInverse = nil
+                }
+                guard let matchingInverse else { return relationship }
+                return Schema.Relationship(
+                    name: relationship.name,
+                    destination: relationship.destination,
+                    isToMany: relationship.isToMany,
+                    inverse: matchingInverse,
+                    deleteRule: relationship.deleteRule,
+                    minimumModelCount: relationship.minimumModelCount,
+                    maximumModelCount: relationship.maximumModelCount,
+                    originalName: relationship.originalName
+                )
+            }
+            return Schema.Entity(name: entity.name, attributes: entity.attributes, relationships: relationships)
         }
         schema = Schema(inferredEntities)
         self.configurations = configurations
@@ -270,7 +285,8 @@ public final class ModelContainer: Sendable {
         for modelType in types {
             adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
                 for: modelType,
-                schema: schema
+                schema: schema,
+                requiresCompatibleCandidates: true
             )
         }
         relationshipAdapterTable = adaptersByModel
@@ -295,7 +311,8 @@ public final class ModelContainer: Sendable {
 
     private static func bindRelationshipAdapters<Model: PersistentModel>(
         for modelType: Model.Type,
-        schema: Schema
+        schema: Schema,
+        requiresCompatibleCandidates: Bool = false
     ) throws -> [any AnyRelationshipAdapterBox] {
         let entityName = unqualifiedTypeName(String(describing: modelType))
         let relationships = schema.entity(forName: entityName)?.relationships ?? []
@@ -307,11 +324,33 @@ public final class ModelContainer: Sendable {
         } else {
             candidates = []
         }
-        let metadata = Model.schemaMetadata()
+        let metadata = modelType.schemaMetadata()
         var resolvedNames = Set<String>()
         var adapters: [any AnyRelationshipAdapterBox] = []
-        for relationship in relationships {
+        var schemaRelationshipsByName = Dictionary(uniqueKeysWithValues: relationships.map { ($0.name, $0) })
+        for property in metadata where property.metadata?.base is Schema.Relationship {
+            guard schemaRelationshipsByName[property.name] == nil,
+                let keyPath = property.keypath
+            else { continue }
+            let rawType = String(reflecting: type(of: keyPath).valueType)
+            guard let destination = Self.relationshipDestination(rawType) else { continue }
+            schemaRelationshipsByName[property.name] = Schema.Relationship(
+                name: property.name,
+                destination: unqualifiedTypeName(destination),
+                isToMany: rawType.contains("Array<") || rawType.contains("Set<"),
+                inverse: (property.metadata?.base as? Schema.Relationship)?.inverse)
+        }
+        let bindingRelationships = Array(schemaRelationshipsByName.values).sorted { $0.name < $1.name }
+        for relationship in bindingRelationships {
             guard !candidates.isEmpty else { continue }
+            let propertyMetadata = metadata.first(where: { $0.name == relationship.name })
+            if propertyMetadata?.isExplicitRelationship == true,
+                !(propertyMetadata?.metadata?.base is Schema.Relationship),
+                let destinationType = candidates.first(where: { $0.name == relationship.name })?.destinationType,
+                !(destinationType is any RelationshipModel.Type)
+            {
+                continue
+            }
             let matches = candidates.filter {
                 $0.ownerType == ObjectIdentifier(modelType)
                     && $0.name == relationship.name
@@ -319,6 +358,13 @@ public final class ModelContainer: Sendable {
                     && $0.isToMany == relationship.isToMany
             }
             guard matches.count == 1, let candidate = matches.first else {
+                let hasTypedSchemaMetadata = propertyMetadata?.metadata?.base is Schema.Relationship
+                let hasRelationshipRefinement = modelType is any RelationshipModel.Type
+                if matches.isEmpty, !hasTypedSchemaMetadata,
+                    !requiresCompatibleCandidates, !hasRelationshipRefinement
+                {
+                    continue
+                }
                 let detail =
                     matches.isEmpty ? "no compatible typed adapter exists" : "multiple compatible typed adapters exist"
                 throw SwiftDataError.unsupportedSchemaProperty(
@@ -327,13 +373,29 @@ public final class ModelContainer: Sendable {
                 )
             }
             resolvedNames.insert(relationship.name)
-            adapters.append(candidate.resolved(with: relationship))
+            let resolved: any AnyRelationshipAdapterBox
+            if let inverse = relationship.inverse,
+                candidate.explicitInverseKeyPath == nil,
+                metadata.first(where: { $0.name == relationship.name })?.metadata?.base is Schema.Relationship
+            {
+                resolved = candidate.resolved(
+                    with: Schema.Relationship(
+                        name: relationship.name, destination: relationship.destination,
+                        isToMany: relationship.isToMany, inverse: inverse,
+                        deleteRule: relationship.deleteRule,
+                        minimumModelCount: relationship.minimumModelCount,
+                        maximumModelCount: relationship.maximumModelCount,
+                        originalName: relationship.originalName))
+            } else {
+                resolved = candidate.resolved(with: relationship)
+            }
+            adapters.append(resolved)
         }
         for property in metadata {
             guard let keyPath = property.keypath else { continue }
             let rawType = String(reflecting: type(of: keyPath).valueType)
             let destination = Self.relationshipDestination(rawType)
-            guard property.isRelationship || property.metadata?.base is Schema.Relationship else { continue }
+            guard property.metadata?.base is Schema.Relationship else { continue }
             guard let destination else { continue }
             guard !resolvedNames.contains(property.name) else { continue }
             let destinationName = unqualifiedTypeName(destination)

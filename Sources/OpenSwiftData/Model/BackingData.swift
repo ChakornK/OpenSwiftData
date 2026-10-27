@@ -185,6 +185,27 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
         lock.lock(); values[keyPath] = value; if context != nil { changed = true }; lock.unlock()
     }
+    /// Routes a relationship write through the context's resolved adapter table.
+    public func mutateRelationship<Value>(
+        forKey keyPath: KeyPath<Model, Value>,
+        to value: Value,
+        adapters: [any AnyRelationshipAdapterBox]
+    ) -> Bool {
+        lock.lock(); let state = contextState; let model = self.model; lock.unlock()
+        guard let model else { return false }
+        guard let state else {
+            guard model.modelContext == nil else { return false }
+            let adapter = adapters.first { $0.ownerType == ObjectIdentifier(Model.self) && $0.keyPath == keyPath }
+            guard let adapter else { return false }
+            do {
+                try adapter.write(value, to: model)
+            } catch {
+                return true
+            }
+            return true
+        }
+        return state.mutateRelationship(model: model, keyPath: keyPath, value: value)
+    }
     /// Notifies the managing context after mutation; detached models receive no notification.
     public func recordMutation() {
         lock.lock(); let state = contextState; let model = self.model; lock.unlock()
@@ -239,6 +260,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
             temporaryIdentifier: identifier.temporaryIdentifier ?? UUID())
         deleted = false; lock.unlock()
     }
+
     /// Marks the model deleted and changed.
     public func markDeleted() { lock.lock(); deleted = true; changed = true; lock.unlock() }
     /// Clears deletion and marks the model changed after restoring an insertion.

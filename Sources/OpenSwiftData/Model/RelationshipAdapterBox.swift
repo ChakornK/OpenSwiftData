@@ -17,12 +17,40 @@ public protocol AnyRelationshipAdapterBox: Sendable {
     var explicitInverseKeyPath: AnyKeyPath? { get }
     /// The resolved schema relationship metadata, when available.
     var metadata: Schema.Relationship? { get }
+    /// Mutates the relationship through its resolved graph when the key path matches.
+    func mutate(
+        _ value: Any,
+        on owner: AnyObject,
+        keyPath: AnyKeyPath,
+        using mutation: (AnyObject, AnyRelationshipAdapterBox, Any) throws -> Void
+    ) -> Bool
+
     /// Reads endpoints when the supplied owner has the expected type.
     func read(_ owner: AnyObject) -> [any PersistentModel]?
     /// Writes a value after validating the supplied owner's type.
     func write(_ value: Any, to owner: AnyObject) throws
+    /// Builds a typed relationship value containing the supplied endpoints.
+    func makeValue(_ endpoints: [any PersistentModel]) throws -> Any
+    /// Builds a typed inverse relationship value.
+    func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any
+    /// Reads endpoints from a supplied relationship value.
+    func endpoints(in value: Any) throws -> [any PersistentModel]
+    /// Assigns a typed relationship value without dispatching through a model property setter.
+    func assign(_ value: Any, to owner: AnyObject) throws
     /// Returns a box carrying resolved schema relationship metadata.
     func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox
+}
+
+public extension AnyRelationshipAdapterBox {
+    func mutate(
+        _ value: Any,
+        on owner: AnyObject,
+        keyPath: AnyKeyPath,
+        using mutation: (AnyObject, AnyRelationshipAdapterBox, Any) throws -> Void
+    ) -> Bool {
+        _ = (value, owner, keyPath, mutation)
+        return false
+    }
 }
 
 /// Retains a typed relationship adapter while exposing checked owner-erased operations.
@@ -45,6 +73,24 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
     /// The resolved schema relationship metadata, when available.
     public var metadata: Schema.Relationship? { resolvedMetadata }
 
+    /// Mutates the relationship through its resolved graph when the key path matches.
+    public func mutate(
+        _ value: Any,
+        on owner: AnyObject,
+        keyPath: AnyKeyPath,
+        using mutation: (AnyObject, AnyRelationshipAdapterBox, Any) throws -> Void
+    ) -> Bool {
+        guard keyPath == candidate.keyPath, let typedOwner = owner as? Owner else { return false }
+        do {
+            try candidate.mutate(value, on: typedOwner) { model, _, typedValue in
+                try mutation(model, self, typedValue)
+            }
+        } catch {
+            return true
+        }
+        return true
+    }
+
     /// Creates an unresolved box retaining the typed adapter.
     public init(_ candidate: any RelationshipPropertyAdapter<Owner>) {
         self.candidate = candidate
@@ -53,13 +99,14 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
 
     /// Creates a box with resolved schema metadata.
     public init(_ candidate: any RelationshipPropertyAdapter<Owner>, resolved relationship: Schema.Relationship) {
-        self.candidate = candidate.resolved(with: relationship)
+        self.candidate = candidate
         resolvedMetadata = relationship
     }
 
     /// Returns a new box with the supplied resolved relationship.
     public func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox {
-        RelationshipAdapterBox(candidate, resolved: relationship)
+        let resolvedCandidate = candidate.resolved(with: relationship)
+        return RelationshipAdapterBox(resolvedCandidate, resolved: relationship)
     }
 
     /// Reads relationship endpoints after validating the owner type.
@@ -75,5 +122,29 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
                 "Relationship adapter '\(name)' cannot operate on owner type '\(String(reflecting: type(of: owner)))'.")
         }
         try candidate.write(value, to: owner)
+    }
+
+    /// Builds a typed relationship value after validating every endpoint type.
+    public func makeValue(_ endpoints: [any PersistentModel]) throws -> Any {
+        try candidate.makeValue(endpoints)
+    }
+
+    /// Builds a typed inverse relationship value.
+    public func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any {
+        try candidate.makeInverseValue(endpoints)
+    }
+
+    /// Reads endpoints from a relationship value after validating its type.
+    public func endpoints(in value: Any) throws -> [any PersistentModel] {
+        try candidate.endpoints(in: value)
+    }
+
+    /// Assigns a typed relationship value without dispatching through a model property setter.
+    public func assign(_ value: Any, to owner: AnyObject) throws {
+        guard let owner = owner as? Owner else {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Relationship adapter '\(name)' received an incompatible owner.")
+        }
+        try candidate.assign(value, to: owner)
     }
 }

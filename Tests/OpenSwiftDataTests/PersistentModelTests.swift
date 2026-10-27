@@ -125,4 +125,18 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(model.title, "replacement")
         XCTAssertTrue(model.persistentBackingData === replacement)
     }
+
+    @MainActor
+    func testGeneratedScalarSetterTracksManagedMutation() throws {
+        let model = MacroBackedFixture(title: "before")
+        let container = try ModelContainer(
+            for: MacroBackedFixture.self, configurations: .sqliteMemory("scalar-setter"))
+        container.mainContext.insert(model)
+        try container.mainContext.save()
+
+        model.title = "after"
+
+        XCTAssertEqual(model.title, "after")
+        XCTAssertTrue(container.mainContext.changedModelsArray.contains { $0 === model })
+    }
 }

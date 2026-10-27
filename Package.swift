@@ -73,7 +73,8 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenSwiftDataTests",
-            dependencies: ["OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDConformance"]
+            dependencies: ["OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDConformance", "OSDCore"],
+            path: "Tests/OpenSwiftDataTests"
         ),
         .testTarget(
             name: "OSDConformanceTests",

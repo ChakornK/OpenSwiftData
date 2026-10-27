@@ -20,6 +20,16 @@ public protocol RelationshipPropertyAdapter<Model> {
     func read(_ model: Model) -> [any PersistentModel]
     /// Writes a typed relationship value and reports old and new values synchronously.
     func write(_ value: Any, to model: Model) throws
+    /// Builds a relationship value from endpoints of the statically known destination type.
+    func makeValue(_ endpoints: [any PersistentModel]) throws -> Any
+    /// Builds a typed inverse value from endpoints.
+    func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any
+    /// Returns a relationship's endpoint values from a supplied model value.
+    func endpoints(in value: Any) throws -> [any PersistentModel]
+    /// Assigns a relationship value without dispatching through the property setter.
+    func assign(_ value: Any, to model: Model) throws
+    /// Routes a generated property write through the context relationship graph.
+    func mutate(_ value: Any, on model: Model, using mutation: (Model, Any, Any) throws -> Void) throws
 }
 
 public extension RelationshipPropertyAdapter {
@@ -27,6 +37,23 @@ public extension RelationshipPropertyAdapter {
     func write(_ value: Any, to model: Model) throws {
         _ = (value, model)
         throw SwiftDataError.unsupportedSchemaProperty("This relationship adapter does not implement writes.")
+    }
+
+    func makeValue(_ endpoints: [any PersistentModel]) throws -> Any {
+        _ = endpoints
+        throw SwiftDataError.unsupportedSchemaProperty("This relationship adapter cannot build values.")
+    }
+    func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any { try makeValue(endpoints) }
+    func endpoints(in value: Any) throws -> [any PersistentModel] {
+        _ = value
+        throw SwiftDataError.unsupportedSchemaProperty("This relationship adapter cannot inspect values.")
+    }
+    func assign(_ value: Any, to model: Model) throws {
+        try write(value, to: model)
+    }
+    func mutate(_ value: Any, on model: Model, using mutation: (Model, Any, Any) throws -> Void) throws {
+        _ = (value, model, mutation)
+        throw SwiftDataError.unsupportedSchemaProperty("This relationship adapter cannot dispatch property writes.")
     }
 }
 
@@ -50,6 +77,8 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     private let readOwnerValue: (Owner) -> Value
     private let endpointValues: (Value) -> [Destination]
     private let assignValue: (Owner, Value) -> Void
+    private let buildValue: ([Destination]) throws -> Value
+    private let buildInverseValue: ([Destination]) throws -> Value
 
     /// Creates a statically typed relationship adapter.
     public init(
@@ -58,6 +87,8 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
         metadata: Schema.Relationship? = nil,
         read: @escaping (Owner) -> Value,
         endpoints: @escaping (Value) -> [Destination],
+        build: @escaping ([Destination]) throws -> Value,
+        inverseBuild: (([Destination]) throws -> Value)? = nil,
         isToMany: Bool = true,
         explicitInverseKeyPath: AnyKeyPath? = nil
     ) {
@@ -70,14 +101,46 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
         self.readOwnerValue = read
         readValue = { owner in endpoints(read(owner)).map { $0 as any PersistentModel } }
         endpointValues = endpoints
-        assignValue = { owner, value in owner.setValue(forKey: keyPath, to: value) }
+        buildValue = build
+        buildInverseValue = inverseBuild ?? build
+        assignValue = { owner, value in
+            owner.persistentBackingData.withMutation {
+                owner.persistentBackingData.setValue(forKey: keyPath, to: value)
+            }
+        }
+    }
+
+    /// Creates a legacy adapter that can read and write only through its existing property value.
+    public init(
+        _ name: String,
+        keyPath: KeyPath<Owner, Value>,
+        metadata: Schema.Relationship? = nil,
+        read: @escaping (Owner) -> Value,
+        endpoints: @escaping (Value) -> [Destination],
+        isToMany: Bool = true,
+        explicitInverseKeyPath: AnyKeyPath? = nil
+    ) {
+        self.init(
+            name,
+            keyPath: keyPath,
+            metadata: metadata,
+            read: read,
+            endpoints: endpoints,
+            build: { _ in
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Legacy relationship adapter '\(name)' cannot build a value from endpoints.")
+            },
+            isToMany: isToMany,
+            explicitInverseKeyPath: explicitInverseKeyPath)
     }
 
     /// Creates a copy carrying the resolved schema relationship metadata.
     public func resolved(with relationship: Schema.Relationship) -> any RelationshipPropertyAdapter<Owner> {
-        Self(
+        let copy = Self(
             name, keyPath: typedKeyPath, metadata: relationship, read: readOwnerValue, endpoints: endpointValues,
+            build: buildValue, inverseBuild: buildInverseValue,
             isToMany: relationship.isToMany, explicitInverseKeyPath: explicitInverseKeyPath)
+        return copy
     }
 
     private var typedKeyPath: KeyPath<Owner, Value> { storedKeyPath }
@@ -86,9 +149,49 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     /// Reads the current related endpoint values.
     public func read(_ model: Owner) -> [any PersistentModel] { readValue(model) }
 
+    /// Builds a typed value from compatible destination models.
+    public func makeValue(_ endpoints: [any PersistentModel]) throws -> Any {
+        let typedEndpoints = try endpoints.map { endpoint -> Destination in
+            guard let endpoint = endpoint as? Destination else {
+                throw SwiftDataError.relationshipValueTypeMismatch(
+                    property: name,
+                    expected: String(reflecting: Destination.self),
+                    actual: String(reflecting: type(of: endpoint)))
+            }
+            return endpoint
+        }
+        return try buildValue(typedEndpoints)
+    }
+
+    /// Builds a typed inverse value from compatible destination models.
+    public func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any {
+        let typedEndpoints = try endpoints.map { endpoint -> Destination in
+            guard let endpoint = endpoint as? Destination else {
+                throw SwiftDataError.relationshipValueTypeMismatch(
+                    property: name, expected: String(reflecting: Destination.self),
+                    actual: String(reflecting: type(of: endpoint)))
+            }
+            return endpoint
+        }
+        return try buildInverseValue(typedEndpoints)
+    }
+
+    /// Reads endpoints from a relationship value after validating its type.
+    public func endpoints(in value: Any) throws -> [any PersistentModel] {
+        guard let typedValue = value as? Value else {
+            throw SwiftDataError.relationshipValueTypeMismatch(
+                property: name, expected: String(reflecting: Value.self), actual: String(reflecting: type(of: value)))
+        }
+        return readValue(from: typedValue)
+    }
+
+    private func readValue(from value: Value) -> [any PersistentModel] {
+        endpointValues(value).map { $0 as any PersistentModel }
+    }
+
     /// Validates and assigns a typed relationship value, then journals its endpoint change.
     public func write(_ value: Any, to model: Owner) throws {
-        guard let metadata else {
+        guard metadata != nil else {
             throw SwiftDataError.unsupportedSchemaProperty(
                 "Relationship adapter '\(name)' is not bound to resolved schema metadata.")
         }
@@ -98,19 +201,40 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
                 expected: String(reflecting: Value.self),
                 actual: String(reflecting: Swift.type(of: value)))
         }
-        let oldEndpoints = readValue(model)
-        let newEndpoints = endpointValues(typedValue).map { $0 as any PersistentModel }
         if let context = model.persistentBackingData.modelContext {
-            _ = context.state.mutate(model, snapshot: { model.snapshotLifecycle() }) {
-                context.state.recordRelationshipMutation(
-                    owner: model, property: name, relationship: metadata, oldValues: oldEndpoints,
-                    newValues: newEndpoints)
-                assignValue(model, typedValue)
+            guard let metadata else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship adapter '\(name)' is not bound to resolved schema metadata.")
             }
+            try context.state.mutateRelationship(
+                owner: model, adapter: RelationshipAdapterBox(self, resolved: metadata), value: typedValue)
         } else {
             model.persistentBackingData.withMutation {
                 assignValue(model, typedValue)
             }
         }
     }
+
+    /// Assigns a validated relationship value without dispatching through its setter.
+    public func assign(_ value: Any, to model: Owner) throws {
+        guard let typedValue = value as? Value else {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Relationship adapter '\(name)' received an incompatible owner or value.")
+        }
+        assignValue(model, typedValue)
+    }
+
+    /// Routes a generated property write through the context relationship graph.
+    public func mutate(
+        _ value: Any,
+        on model: Owner,
+        using mutation: (Owner, Any, Any) throws -> Void
+    ) throws {
+        guard let typedValue = value as? Value else {
+            throw SwiftDataError.relationshipValueTypeMismatch(
+                property: name, expected: String(reflecting: Value.self), actual: String(reflecting: type(of: value)))
+        }
+        try mutation(model, self, typedValue)
+    }
+
 }

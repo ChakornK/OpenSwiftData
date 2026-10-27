@@ -16,4 +16,8 @@ public enum SwiftDataError: Error, Sendable, Equatable {
     case unsupportedRelationshipElement(String)
     /// A relationship adapter received a value with an incompatible type.
     case relationshipValueTypeMismatch(property: String, expected: String, actual: String)
+    /// A relationship endpoint belongs to a different model context.
+    case relationshipContextMismatch
+    /// A relationship mutation would leave the object graph in a conflicting state.
+    case relationshipGraphConflict(String)
 }

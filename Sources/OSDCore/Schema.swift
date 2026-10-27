@@ -188,6 +188,8 @@ public struct Schema: Sendable {
         public let metadata: AnyHashable?
         /// Whether the property is a relationship.
         public let isRelationship: Bool
+        /// Whether the relationship annotation was explicitly declared.
+        public let isExplicitRelationship: Bool
         /// A textual default value, if provided.
         public let defaultValue: String?
         /// Property-specific options.
@@ -197,7 +199,9 @@ public struct Schema: Sendable {
         /// Compares schema-facing metadata, excluding the runtime default value.
         public static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.name == rhs.name && lhs.keypath == rhs.keypath && lhs.metadata == rhs.metadata
-                && lhs.isRelationship == rhs.isRelationship && lhs.defaultValue == rhs.defaultValue
+                && lhs.isRelationship == rhs.isRelationship
+                && lhs.isExplicitRelationship == rhs.isExplicitRelationship
+                && lhs.defaultValue == rhs.defaultValue
                 && lhs.options == rhs.options
         }
 
@@ -207,6 +211,7 @@ public struct Schema: Sendable {
             hasher.combine(keypath)
             hasher.combine(metadata)
             hasher.combine(isRelationship)
+            hasher.combine(isExplicitRelationship)
             hasher.combine(defaultValue)
             hasher.combine(options)
         }
@@ -216,12 +221,14 @@ public struct Schema: Sendable {
             name: String,
             keypath: KeyPath<some Any, Value>,
             defaultValue: Value? = nil,
-            metadata: AnyHashable? = nil
+            metadata: AnyHashable? = nil,
+            isExplicitRelationship: Bool = false
         ) {
             self.name = name
             self.keypath = keypath
             self.metadata = metadata
-            self.isRelationship = metadata?.base is Schema.Relationship
+            self.isRelationship = metadata?.base is Schema.Relationship || isExplicitRelationship
+            self.isExplicitRelationship = isExplicitRelationship
             self.defaultValue = defaultValue.map { String(describing: $0) }
             self.options = []
             if let defaultValue {
@@ -237,6 +244,7 @@ public struct Schema: Sendable {
             self.keypath = nil
             self.metadata = nil
             self.isRelationship = isRelationship
+            self.isExplicitRelationship = isRelationship
             self.defaultValue = defaultValue
             self.options = options
             self.runtimeDefaultValue = nil

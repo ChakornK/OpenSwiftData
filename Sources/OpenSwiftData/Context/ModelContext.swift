@@ -11,7 +11,7 @@ public final class ModelContext {
     /// The undo manager associated with this context.
     public var undoManager: UndoManager?
 
-    package nonisolated let state = ContextState()
+    package nonisolated let state: ContextState
     private let testSaveHook: (() throws -> Void)?
     private var allowsSave = true
     private let identityMap = IdentityMap()
@@ -24,13 +24,15 @@ public final class ModelContext {
 
     package init(container: ModelContainer?, autosaveEnabled: Bool) {
         self.container = container
+        state = ContextState(relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:])
         self.autosaveEnabled = autosaveEnabled
         allowsSave = container?.configurations.first?.allowsSave ?? true
         testSaveHook = nil
     }
 
-    internal init(testSave hook: @escaping () throws -> Void) {
-        container = nil
+    internal init(testSave hook: @escaping () throws -> Void, container: ModelContainer? = nil) {
+        self.container = container
+        state = ContextState(relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:])
         autosaveEnabled = false
         allowsSave = true
         testSaveHook = hook
@@ -59,11 +61,19 @@ public final class ModelContext {
     public func insert<Model: PersistentModel>(_ model: Model) {
         state.withExclusiveOperation {
             guard model.modelContext == nil else { return }
-            let snapshot = model.snapshotLifecycle()
-            state.insert(model, snapshot: snapshot)
+            insertRelationshipDestination(model, snapshot: model.snapshotLifecycle())
+        }
+    }
+
+    func insertRelationshipDestination(_ model: any PersistentModel, snapshot: BackingDataSnapshot) {
+        guard model.modelContext == nil else { return }
+        state.insert(model, snapshot: snapshot)
+        func attach<Model: PersistentModel>(_ model: Model) {
             model.persistentBackingData.attach(to: self, model: model)
             model.setInsertionChanged()
+            state.setBaseline(model, snapshot: model.snapshotLifecycle())
         }
+        attach(model)
     }
 
     /// Deletes a model or cancels its pending insertion.
@@ -72,13 +82,246 @@ public final class ModelContext {
             guard model.modelContext === self else { return }
             if state.containsInserted(model) {
                 model.restoreValuesAndDetachLifecycle(state.cancelInsertion(model) ?? model.snapshotLifecycle())
+                state.removeBaseline(for: model)
                 return
             }
             guard !state.containsDeleted(model) else { return }
+            do {
+                try validateDeleteRules(for: model)
+            } catch {
+                OSDLog.debug("Delete rejected: \(error)")
+                return
+            }
             capture(model)
-            model.persistentBackingData.markDeleted()
+            markDeletedTyped(model)
             state.markDeleted(model)
         }
+    }
+
+    private func planAndApplyDelete(roots: [any PersistentModel]) throws {
+        var relationshipSnapshots: [ObjectIdentifier: [(any AnyRelationshipAdapterBox, [any PersistentModel])]] = [:]
+        let roots = roots.filter { state.containsDeleted($0) }
+        guard !roots.isEmpty else { return }
+        for root in roots {
+            relationshipSnapshots[ObjectIdentifier(root)] = state.relationships(ownedBy: root)
+        }
+
+        var scheduled = roots
+        var scheduledIDs = Set(scheduled.map(ObjectIdentifier.init))
+        var cascadeScheduled: [any PersistentModel] = []
+        var denyEdges = Set<String>()
+        while let source = scheduled.first {
+            scheduled.removeFirst()
+            let outgoing = relationshipSnapshots[ObjectIdentifier(source)] ?? state.relationships(ownedBy: source)
+            relationshipSnapshots[ObjectIdentifier(source)] = outgoing
+            for (adapter, endpoints) in outgoing {
+                guard let metadata = adapter.metadata else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
+                }
+                switch metadata.deleteRule {
+                case .deny:
+                    for endpoint in endpoints where !scheduledIDs.contains(ObjectIdentifier(endpoint)) {
+                        let edge = "\(ObjectIdentifier(source)):\(adapter.name):\(ObjectIdentifier(endpoint))"
+                        guard denyEdges.insert(edge).inserted else { continue }
+                        throw SwiftDataError.relationshipGraphConflict(
+                            "Cannot delete model while relationship '\(adapter.name)' has related models.")
+                    }
+                case .cascade:
+                    for endpoint in endpoints where scheduledIDs.insert(ObjectIdentifier(endpoint)).inserted {
+                        cascadeScheduled.append(endpoint)
+                        scheduled.append(endpoint)
+                        relationshipSnapshots[ObjectIdentifier(endpoint)] = state.relationships(ownedBy: endpoint)
+                    }
+                case .nullify, .noAction:
+                    break
+                }
+            }
+        }
+        try applyDeletePlan(
+            roots: scheduled, cascadeScheduled: cascadeScheduled,
+            relationshipSnapshots: relationshipSnapshots)
+    }
+
+    private func validateDeleteRules(for model: any PersistentModel) throws {
+        for (adapter, endpoints) in state.relationships(ownedBy: model) {
+            guard let metadata = adapter.metadata else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
+            }
+            if metadata.deleteRule == .deny, !endpoints.isEmpty {
+                throw SwiftDataError.relationshipGraphConflict(
+                    "Cannot delete model while relationship '\(adapter.name)' has related models.")
+            }
+        }
+    }
+
+    private func applyDeletePlan(
+        roots: [any PersistentModel],
+        cascadeScheduled: [any PersistentModel],
+        relationshipSnapshots: [ObjectIdentifier: [(any AnyRelationshipAdapterBox, [any PersistentModel])]]
+    ) throws {
+        let before = state.pendingState()
+        let pendingDeletesBeforePlan = before.deleted
+        let deletes = (roots + cascadeScheduled).reduce(into: [any PersistentModel]()) { result, model in
+            if !result.contains(where: { $0 === model }) {
+                result.append(model)
+            }
+        }
+        let nullifications = try planNullifications(for: deletes, relationships: relationshipSnapshots)
+        var snapshotsByID: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
+        for model in deletes {
+            let snapshot = model.snapshotLifecycle()
+            snapshotsByID[ObjectIdentifier(model)] = (model, snapshot)
+        }
+        for nullification in nullifications where snapshotsByID[ObjectIdentifier(nullification.owner)] == nil {
+            snapshotsByID[ObjectIdentifier(nullification.owner)] = (nullification.owner, nullification.snapshot)
+        }
+        for nullification in nullifications {
+            capture(nullification.owner)
+        }
+        let pendingBeforeNullifications = state.pendingState()
+        do {
+            for nullification in nullifications {
+                try nullification.adapter.assign(nullification.value, to: nullification.owner)
+            }
+        } catch {
+            for (model, snapshot) in snapshotsByID.values {
+                if snapshot.context === self {
+                    model.restoreLifecycle(snapshot)
+                } else {
+                    model.restoreValuesAndDetachLifecycle(snapshot)
+                }
+            }
+            state.restorePendingState(pendingBeforeNullifications)
+            throw error
+        }
+        for nullification in nullifications {
+            state.recordRelationshipMutation(
+                owner: nullification.owner,
+                property: nullification.adapter.name,
+                relationship: nullification.adapter.metadata
+                    ?? Schema.Relationship(
+                        name: nullification.adapter.name,
+                        destination: String(describing: nullification.adapter.destinationType),
+                        isToMany: nullification.adapter.isToMany),
+                oldValues: nullification.oldEndpoints,
+                newValues: nullification.newEndpoints)
+        }
+        let newlyDeleted = deletes.filter { deleted in
+            deleted.modelContext === self && !pendingDeletesBeforePlan.contains(where: { $0 === deleted })
+        }
+        for deleted in newlyDeleted {
+            capture(deleted)
+            markDeletedTyped(deleted)
+            state.markDeleted(deleted)
+        }
+    }
+
+    private struct PlannedNullification {
+        let owner: any PersistentModel
+        let adapter: any AnyRelationshipAdapterBox
+        let value: Any
+        let oldEndpoints: [any PersistentModel]
+        let newEndpoints: [any PersistentModel]
+        let snapshot: BackingDataSnapshot
+    }
+
+    private func planNullifications(
+        for deleting: [any PersistentModel],
+        relationships: [ObjectIdentifier: [(any AnyRelationshipAdapterBox, [any PersistentModel])]]
+    ) throws -> [PlannedNullification] {
+        var planned: [PlannedNullification] = []
+        var seen = Set<String>()
+        for deleted in deleting {
+            for (adapter, endpoints) in relationships[ObjectIdentifier(deleted)] ?? [] {
+                guard let metadata = adapter.metadata else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
+                }
+                guard metadata.deleteRule == .nullify, let inverseName = metadata.inverse else { continue }
+                for endpoint in endpoints {
+                    guard let inverse = state.relationshipAdapter(for: endpoint, property: inverseName) else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Nullify inverse '\(inverseName)' has no typed relationship adapter.")
+                    }
+                    let key = "\(ObjectIdentifier(endpoint)):\(inverse.name):\(ObjectIdentifier(deleted))"
+                    guard seen.insert(key).inserted else { continue }
+                    guard let current = inverse.read(endpoint) else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Nullify inverse '\(inverse.name)' cannot read its endpoint.")
+                    }
+                    try state.validateRelationshipCardinality(current, using: inverse)
+                    let remaining = current.filter { relatedEndpoint in
+                        !deleting.contains(where: { $0 === relatedEndpoint })
+                    }
+                    let value: Any
+                    do {
+                        value = try inverse.makeInverseValue(remaining)
+                    } catch {
+                        if !inverse.isToMany && remaining.isEmpty {
+                            throw SwiftDataError.relationshipGraphConflict(
+                                "Cannot nullify nonoptional relationship '\(inverse.name)'.")
+                        }
+                        throw error
+                    }
+                    planned.append(
+                        PlannedNullification(
+                            owner: endpoint, adapter: inverse, value: value,
+                            oldEndpoints: current, newEndpoints: remaining,
+                            snapshot: endpoint.snapshotLifecycle()))
+                }
+            }
+        }
+        return planned
+    }
+
+    /// Processes pending relationship ownership and delete rules synchronously.
+    public func processPendingChanges() throws {
+        try state.withExclusiveOperation { try processPendingChangesLocked() }
+    }
+
+    private func processPendingChangesLocked() throws {
+        let pending = state.pendingState()
+        let roots = pending.deleted
+        guard !roots.isEmpty else { return }
+        let rootSnapshots = roots.compactMap { root -> (any PersistentModel, BackingDataSnapshot)? in
+            guard let snapshot = pending.snapshots[ObjectIdentifier(root)]?.1 else { return nil }
+            return (root, snapshot)
+        }
+        let baselineBefore = state.baselineSnapshotState()
+        do {
+            try planAndApplyDelete(roots: roots)
+        } catch {
+            restoreRejectedDeletes(rootSnapshots, roots: roots, pending: pending)
+            state.restoreBaselineSnapshots(baselineBefore)
+            throw error
+        }
+    }
+
+    private func restoreRejectedDeletes(
+        _ snapshotsForRoots: [(any PersistentModel, BackingDataSnapshot)],
+        roots: [any PersistentModel],
+        pending: ContextState.PendingState
+    ) {
+        let current = state.pendingState()
+        var snapshots = pending.snapshots
+        for (identifier, value) in current.snapshots {
+            snapshots[identifier] = value
+        }
+        for (root, snapshot) in snapshotsForRoots {
+            snapshots[ObjectIdentifier(root)] = (root, snapshot)
+        }
+        for (model, snapshot) in snapshots.values {
+            model.restoreLifecycle(snapshot)
+        }
+        state.restorePendingState(
+            ContextState.PendingState(
+                inserted: pending.inserted,
+                changed: pending.changed,
+                deleted: pending.deleted.filter { deleted in !roots.contains(where: { $0 === deleted }) },
+                snapshots: pending.snapshots,
+                relationshipMutationEvents: pending.relationshipMutationEvents))
     }
 
     /// Deletes models matching a predicate, which requires a persistent store.
@@ -188,6 +431,7 @@ public final class ModelContext {
     /// Saves pending changes when a supported store is available.
     public func save() throws {
         try state.withExclusiveOperation {
+            try processPendingChangesLocked()
             guard !state.hasTransaction else { return }
             if !allowsSave { throw unsupportedStore("Saving is disabled") }
             if let testSaveHook {
@@ -220,6 +464,9 @@ public final class ModelContext {
             for (model, snapshot) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
                 state.setBaseline(model, snapshot: snapshot)
             }
+            for model in pendingState.deleted {
+                state.removeBaseline(for: model)
+            }
         }
     }
 
@@ -235,6 +482,7 @@ public final class ModelContext {
             state.beginTransaction(entrySnapshots: entrySnapshots)
             do {
                 let result = try block()
+                try processPendingChangesLocked()
                 if state.transactionDepth == 1 {
                     if let testSaveHook {
                         try testSaveHook()
@@ -355,6 +603,8 @@ public final class ModelContext {
             if let pk = model.persistentModelID.primaryKey {
                 identityMap.remove(EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: pk))
             }
+            state.removeBaseline(for: model)
+            model.detachDeletedLifecycle()
         }
         for (model, pk) in persisted {
             let entityName = model.persistentModelID.entityName
@@ -427,7 +677,7 @@ public final class ModelContext {
         let currentModels = pending.inserted + pending.changed + pending.deleted
         let frameInsertions = frame.pending.inserted
         for (model, snapshot) in frame.modelSnapshots.values {
-            if state.contains(model, in: frameInsertions) {
+            if state.contains(model, in: frameInsertions) || snapshot.context === self {
                 model.restoreLifecycle(snapshot)
             } else {
                 model.restoreValuesAndDetachLifecycle(snapshot)
@@ -458,9 +708,9 @@ public final class ModelContext {
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
         }
         for model in pending.deleted {
+            state.removeBaseline(for: model)
             model.detachDeletedLifecycle()
             model.markSavedLifecycle()
-            state.removeBaseline(for: model)
         }
         state.clearPending()
     }
@@ -477,6 +727,10 @@ public final class ModelContext {
             model.detachLifecycle()
         }
         detachTyped(model)
+    }
+
+    private func markDeletedTyped<Model: PersistentModel>(_ model: Model) {
+        model.persistentBackingData.markDeleted()
     }
 
 }

@@ -630,6 +630,26 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
+    func testDetachedGeneratedRelationshipAssignmentSurvivesInsertion() throws {
+        let owner = RetentionPerson(name: "Ada")
+        let pet = RetentionPet(name: "Milo")
+        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+
+        owner.pets = [pet]
+
+        XCTAssertEqual(owner.pets.map(ObjectIdentifier.init), [ObjectIdentifier(pet)])
+        XCTAssertNil(owner.modelContext)
+        XCTAssertNil(pet.modelContext)
+        XCTAssertTrue(container.mainContext.state.relationshipMutations.isEmpty)
+
+        container.mainContext.insert(owner)
+        container.mainContext.insert(pet)
+
+        XCTAssertEqual(owner.pets.map(ObjectIdentifier.init), [ObjectIdentifier(pet)])
+        XCTAssertEqual(container.mainContext.state.relationshipMutations.count, 0)
+    }
+
+    @MainActor
     func testAutoInsertedRelationshipDestinationRollsBackWithTransaction() throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")

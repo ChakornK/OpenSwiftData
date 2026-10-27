@@ -44,7 +44,13 @@ public extension PersistentModel {
                 setValue(forKey: keyPath, to: value)
                 return
             }
-            try? adapter.write(value, to: self)
+            do {
+                let endpoints = try adapter.endpoints(in: value)
+                let typedValue = try adapter.makeValue(endpoints)
+                try adapter.assign(typedValue, to: self)
+            } catch {
+                return
+            }
             return
         }
         if !context.state.setRelationship(model: self, keyPath: keyPath, value: value, autoInsertDestinations: true) {

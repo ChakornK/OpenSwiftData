@@ -114,9 +114,7 @@ final class SQLiteDriverTests: XCTestCase {
             XCTAssertEqual(try connection.rows("PRAGMA synchronous").first, [.int(1)])
             XCTAssertEqual(try connection.rows("PRAGMA foreign_keys").first, [.int(0)])
             XCTAssertEqual(try connection.rows("PRAGMA busy_timeout").first, [.int(5000)])
-            #if !os(WASI)
-                XCTAssertEqual(try connection.rows("PRAGMA mmap_size").first, [.int(268435456)])
-            #endif
+            XCTAssertEqual(try connection.rows("PRAGMA mmap_size").first, [.int(268435456)])
         }
 
         try driver.read { connection in

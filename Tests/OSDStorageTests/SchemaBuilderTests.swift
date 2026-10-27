@@ -62,6 +62,24 @@ final class SchemaBuilderTests: XCTestCase {
                 "CREATE TABLE ZITEM (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZPAYLOAD BLOB);"))
     }
 
+    func testDecimalAndURLUseVarcharColumns() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Item",
+                attributes: [
+                    Schema.Attribute(name: "amount", type: "Decimal"),
+                    Schema.Attribute(name: "url", type: "URL"),
+                ])
+        ])
+
+        let built = try SchemaBuilder.build(schema)
+
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE TABLE ZITEM (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZAMOUNT VARCHAR, ZURL VARCHAR);"
+            ))
+    }
+
     func testSupportedTypesAndUnsupportedTypeError() throws {
         let types = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Bool"]
         for type in types {
@@ -72,6 +90,8 @@ final class SchemaBuilderTests: XCTestCase {
         }
         XCTAssertEqual(try SQLColumnType.resolve("Date", property: "Item.value"), .timestamp)
         XCTAssertEqual(try SQLColumnType.resolve("String?", property: "Item.value"), .varchar)
+        XCTAssertEqual(try SQLColumnType.resolve("Decimal", property: "Item.value"), .varchar)
+        XCTAssertEqual(try SQLColumnType.resolve("URL", property: "Item.value"), .varchar)
         for type in ["UUID", "Data"] {
             XCTAssertEqual(try SQLColumnType.resolve(type, property: "Item.value"), .blob)
         }
@@ -79,7 +99,7 @@ final class SchemaBuilderTests: XCTestCase {
             try SQLColumnType.resolve(
                 "CodablePayload", property: "Item.payload", options: [.transformable(by: "Codec")]),
             .blob)
-        for type in ["Decimal", "URL", "Opaque", "[String]", "Int??", "Int? ?", "Int ? ?"] {
+        for type in ["Opaque", "[String]", "Int??", "Int? ?", "Int ? ?"] {
             XCTAssertThrowsError(try SQLColumnType.resolve(type, property: "Item.value")) { error in
                 guard case SwiftDataError.unsupportedSchemaProperty = error else {
                     return XCTFail("Unexpected error: \\(error)")
@@ -127,10 +147,238 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertTrue(
             built.statements.contains(
                 "CREATE TABLE ZSTOP (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZTRIP INTEGER);"))
-        XCTAssertFalse(built.statements.contains { $0.contains("CREATE TABLE ZTRIP") && $0.contains("ZSTOPS") })
+        XCTAssertTrue(
+            built.statements.contains("CREATE INDEX ZSTOP_ZTRIP_INDEX ON ZSTOP (ZTRIP);"))
+        XCTAssertFalse(
+            built.statements.contains { $0.contains("CREATE TABLE ZTRIP") && $0.contains("ZSTOPS") })
     }
 
-    func testRejectsCollidingIdentifiers() throws {
+    func testAcceptsAllSupportedInverseCardinalityPairs() throws {
+        let schemas: [Schema] = [
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    relationships: [Schema.Relationship(name: "b", destination: "B", inverse: "a")]
+                ),
+                Schema.Entity(
+                    name: "B",
+                    relationships: [Schema.Relationship(name: "a", destination: "A", inverse: "b")]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    relationships: [Schema.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "a")]
+                ),
+                Schema.Entity(
+                    name: "B",
+                    relationships: [Schema.Relationship(name: "a", destination: "A", inverse: "bs")]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    relationships: [Schema.Relationship(name: "b", destination: "B", inverse: "as")]
+                ),
+                Schema.Entity(
+                    name: "B",
+                    relationships: [Schema.Relationship(name: "as", destination: "A", isToMany: true, inverse: "b")]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    relationships: [Schema.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "as")]
+                ),
+                Schema.Entity(
+                    name: "B",
+                    relationships: [Schema.Relationship(name: "as", destination: "A", isToMany: true, inverse: "bs")]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "ZParent",
+                    relationships: [
+                        Schema.Relationship(name: "children", destination: "AChild", isToMany: true, inverse: "parent")
+                    ]
+                ),
+                Schema.Entity(
+                    name: "AChild",
+                    relationships: [Schema.Relationship(name: "parent", destination: "ZParent", inverse: "children")]
+                ),
+            ]),
+        ]
+
+        for schema in schemas {
+            let built = try SchemaBuilder.build(schema)
+            if schema.entities.contains(where: { $0.relationships.contains(where: \.isToMany) }) {
+                XCTAssertTrue(built.statements.contains { $0.contains("CREATE TABLE Z_") })
+            }
+        }
+    }
+
+    func testRejectsMismatchedReciprocalMetadata() {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Parent",
+                relationships: [
+                    Schema.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
+                ]
+            ),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(name: "parent", destination: "Parent", isToMany: true, inverse: "wrongName")
+                ]
+            ),
+        ])
+
+        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Unexpected error: \\(error)")
+            }
+        }
+    }
+
+    func testToManyWithoutInverseUsesOwnerJoinTable() throws {
+        let entity = Schema.Entity(
+            name: "Owner",
+            relationships: [Schema.Relationship(name: "items", destination: "Item", isToMany: true)]
+        )
+        let item = Schema.Entity(name: "Item")
+
+        let built = try SchemaBuilder.build(Schema([item, entity]))
+        XCTAssertEqual(
+            built.statements.suffix(3),
+            [
+                "CREATE TABLE Z_OWNER_ITEMS_ITEM (Z_A INTEGER, Z_B INTEGER);",
+                "CREATE UNIQUE INDEX Z_OWNER_ITEMS_ITEM_UNIQUE_INDEX ON Z_OWNER_ITEMS_ITEM (Z_A, Z_B);",
+                "CREATE INDEX Z_OWNER_ITEMS_ITEM_Z_B_INDEX ON Z_OWNER_ITEMS_ITEM (Z_B);",
+            ]
+        )
+    }
+
+    func testRejectsMalformedRelationshipMetadata() throws {
+        var invalidSchemas: [Schema] = [
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [Schema.Relationship(name: "owner", destination: "Missing")])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
+                Schema.Entity(name: "Owner"),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
+                Schema.Entity(
+                    name: "Owner",
+                    relationships: [
+                        Schema.Relationship(
+                            name: "items", destination: "Other", isToMany: true, inverse: "owner")
+                    ]
+                ),
+                Schema.Entity(name: "Other"),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [
+                        Schema.Relationship(
+                            name: "items", destination: "ItemDestination", isToMany: true, inverse: "other")
+                    ]
+                ),
+                Schema.Entity(
+                    name: "ItemDestination",
+                    relationships: [
+                        Schema.Relationship(
+                            name: "other", destination: "Item", isToMany: true, inverse: "missing")
+                    ]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [
+                        Schema.Relationship(
+                            name: "items", destination: "Item", minimumModelCount: 2, maximumModelCount: 1)
+                    ]
+                )
+            ]),
+        ]
+
+        invalidSchemas.append(
+            Schema([
+                Schema.Entity(
+                    name: "Item",
+                    relationships: [
+                        Schema.Relationship(name: "self", destination: "Item", inverse: "self")
+                    ]
+                )
+            ])
+        )
+
+        for (index, schema) in invalidSchemas.enumerated() {
+            XCTAssertThrowsError(try SchemaBuilder.build(schema), "invalid relationship case \(index)") { error in
+                guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                    return XCTFail("Unexpected error: \\(error)")
+                }
+            }
+        }
+    }
+
+    func testManyToManyEmitsCanonicalJoinAfterSideAEntity() throws {
+        let owner = Schema.Entity(
+            name: "Owner",
+            relationships: [Schema.Relationship(name: "items", destination: "Item", isToMany: true, inverse: "owners")]
+        )
+        let item = Schema.Entity(
+            name: "Item",
+            relationships: [Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "items")]
+        )
+
+        let built = try SchemaBuilder.build(Schema([item, owner]))
+        XCTAssertEqual(
+            built.statements,
+            [
+                "CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER PRIMARY KEY, Z_NAME VARCHAR, Z_SUPER INTEGER, Z_MAX INTEGER);",
+                "CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);",
+                "CREATE TABLE ZITEM (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER);",
+                "CREATE TABLE ZOWNER (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER);",
+                "CREATE TABLE Z_ITEM_OWNERS_OWNER_ITEMS (Z_A INTEGER, Z_B INTEGER);",
+                "CREATE UNIQUE INDEX Z_ITEM_OWNERS_OWNER_ITEMS_UNIQUE_INDEX ON Z_ITEM_OWNERS_OWNER_ITEMS (Z_A, Z_B);",
+                "CREATE INDEX Z_ITEM_OWNERS_OWNER_ITEMS_Z_B_INDEX ON Z_ITEM_OWNERS_OWNER_ITEMS (Z_B);",
+            ]
+        )
+    }
+
+    func testIndexNamesAreUniqueAcrossEntityAndJoinIndexes() {
+        let entities = [
+            Schema.Entity(
+                name: "A",
+                attributes: [Schema.Attribute(name: "B_C", type: "Int", options: [.unique])],
+                relationships: [Schema.Relationship(name: "b_c", destination: "A")]
+            ),
+            Schema.Entity(
+                name: "A_B",
+                relationships: [Schema.Relationship(name: "C_D", destination: "D", isToMany: true)]
+            ),
+            Schema.Entity(name: "C", relationships: [Schema.Relationship(name: "D", destination: "A_B")]),
+            Schema.Entity(name: "D"),
+        ]
+
+        XCTAssertThrowsError(try SchemaBuilder.build(Schema(entities))) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Unexpected error: \\(error)")
+            }
+        }
+    }
+
+    func testRejectsCollidingIdentifiers() {
         let collisions: [Schema] = [
             Schema([Schema.Entity(name: "Thing"), Schema.Entity(name: "thing")]),
             Schema([Schema.Entity(name: "_osd_meta", attributes: [Schema.Attribute(name: "value", type: "Int")])]),
@@ -146,17 +394,25 @@ final class SchemaBuilderTests: XCTestCase {
             Schema([
                 Schema.Entity(
                     name: "Item",
-                    relationships: [
-                        Schema.Relationship(name: "owner", destination: "Item"),
-                        Schema.Relationship(name: "OWNER", destination: "Item"),
-                    ])
-            ]),
-            Schema([
-                Schema.Entity(
-                    name: "Item",
                     attributes: [Schema.Attribute(name: "id", type: "Int")],
                     relationships: [Schema.Relationship(name: "ID", destination: "Item")]
                 )
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    attributes: [Schema.Attribute(name: "index", type: "Int", options: [.unique])],
+                    relationships: [Schema.Relationship(name: "index", destination: "B")]
+                ),
+                Schema.Entity(name: "B"),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "A",
+                    relationships: [Schema.Relationship(name: "items", destination: "B", isToMany: true)]
+                ),
+                Schema.Entity(name: "_A_ITEMS_B"),
+                Schema.Entity(name: "B"),
             ]),
         ]
         for (index, schema) in collisions.enumerated() {

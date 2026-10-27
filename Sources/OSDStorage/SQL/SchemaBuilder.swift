@@ -39,6 +39,58 @@ package enum SchemaBuilder {
         }
     }
 
+    private static func validateRelationships(
+        _ relationships: [Schema.Relationship],
+        in entity: Schema.Entity,
+        entities: [Schema.Entity]
+    ) throws {
+        for relationship in relationships {
+            let property = "\(entity.name).\(relationship.name)"
+            guard entities.contains(where: { $0.name == relationship.destination }) else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' targets missing entity '\(relationship.destination)'."
+                )
+            }
+            if let minimum = relationship.minimumModelCount, minimum < 0 {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' has a negative minimum model count."
+                )
+            }
+            if let maximum = relationship.maximumModelCount, maximum < 0 {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' has a negative maximum model count."
+                )
+            }
+            if let minimum = relationship.minimumModelCount, let maximum = relationship.maximumModelCount,
+                minimum > maximum
+            {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' has a minimum model count greater than its maximum."
+                )
+            }
+            guard let inverseName = relationship.inverse else {
+                continue
+            }
+            guard relationship.destination != entity.name || inverseName != relationship.name else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' cannot be its own inverse."
+                )
+            }
+            guard let destination = entities.first(where: { $0.name == relationship.destination }),
+                let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' references missing inverse '\(relationship.destination).\(inverseName)'."
+                )
+            }
+            guard inverse.destination == entity.name, inverse.inverse == relationship.name else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship '\(property)' has incompatible inverse '\(relationship.destination).\(inverseName)'."
+                )
+            }
+        }
+    }
+
     package static func build(_ schema: Schema) throws -> BuiltSchema {
         let entities = schema.entities.sorted { bytewiseLess($0.name, $1.name) }
         try validateUniqueNames(entities.map(\.name), scope: "entity")
@@ -54,7 +106,38 @@ package enum SchemaBuilder {
             "CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER PRIMARY KEY, Z_NAME VARCHAR, Z_SUPER INTEGER, Z_MAX INTEGER);",
             "CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);",
         ]
-        let entityNames = Set(entities.map(\.name))
+        for entity in entities {
+            try validateRelationships(entity.relationships, in: entity, entities: entities)
+        }
+
+        var allIndexNames: [String] = []
+        for entity in entities {
+            allIndexNames.append(
+                contentsOf: entity.relationships.filter {
+                    !$0.isToMany && !isNonOwner(entity, $0, entities)
+                }.map {
+                    "Z\(entity.name.uppercased())_Z\($0.name.uppercased())_INDEX"
+                })
+            allIndexNames.append(
+                contentsOf: entity.attributes.filter { $0.options.contains(.unique) }.map {
+                    "Z\(entity.name.uppercased())_Z\($0.name.uppercased())_UNIQUE_INDEX"
+                })
+            for relationship in entity.relationships where relationship.isToMany {
+                if let table = joinTableName(for: entity, relationship: relationship, entities: entities) {
+                    allIndexNames.append("\(table)_UNIQUE_INDEX")
+                    allIndexNames.append("\(table)_Z_B_INDEX")
+                }
+            }
+        }
+        let joinTableNames = entities.flatMap { entity in
+            entity.relationships.compactMap { relationship in
+                relationship.isToMany
+                    ? joinTableName(for: entity, relationship: relationship, entities: entities)
+                    : nil
+            }
+        }
+        try validateUniqueNames(tableNames + joinTableNames, scope: "table")
+        try validateUniqueNames(allIndexNames, scope: "index")
 
         for entity in entities {
             let propertyNames = entity.attributes.map(\.name) + entity.relationships.map(\.name)
@@ -85,13 +168,8 @@ package enum SchemaBuilder {
                 columns.append("Z\(attribute.name.uppercased()) \(type.rawValue)")
             }
             let relationships = entity.relationships.sorted { bytewiseLess($0.name, $1.name) }
-            let toOne = relationships.filter { !$0.isToMany && !isOneToOneNonOwner(entity, $0, entities) }
+            let toOne = relationships.filter { !$0.isToMany && !isNonOwner(entity, $0, entities) }
             for relationship in toOne {
-                guard entityNames.contains(relationship.destination) else {
-                    throw SwiftDataError.unsupportedSchemaProperty(
-                        "Relationship '\(entity.name).\(relationship.name)' targets missing entity '\(relationship.destination)'."
-                    )
-                }
                 columns.append("Z\(relationship.name.uppercased()) INTEGER")
             }
             statements.append("CREATE TABLE Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));")
@@ -106,10 +184,17 @@ package enum SchemaBuilder {
                     "CREATE UNIQUE INDEX Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX ON Z\(entity.name.uppercased()) (Z\(attribute.name.uppercased()));"
                 )
             }
-            for relationship in relationships where relationship.isToMany && relationship.inverse == nil {
-                throw SwiftDataError.unsupportedSchemaProperty(
-                    "Join-table DDL for relationship '\(entity.name).\(relationship.name)' is not specified canonically."
-                )
+        }
+
+        for entity in entities {
+            for relationship in entity.relationships.sorted(by: { bytewiseLess($0.name, $1.name) })
+            where relationship.isToMany {
+                guard let joinTable = joinTableName(for: entity, relationship: relationship, entities: entities) else {
+                    continue
+                }
+                statements.append("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
+                statements.append("CREATE UNIQUE INDEX \(joinTable)_UNIQUE_INDEX ON \(joinTable) (Z_A, Z_B);")
+                statements.append("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B);")
             }
         }
 
@@ -119,7 +204,7 @@ package enum SchemaBuilder {
         return BuiltSchema(statements: statements, bootstrapRows: rows)
     }
 
-    private static func isOneToOneNonOwner(
+    private static func isNonOwner(
         _ entity: Schema.Entity,
         _ relationship: Schema.Relationship,
         _ entities: [Schema.Entity]
@@ -127,14 +212,39 @@ package enum SchemaBuilder {
         guard let inverseName = relationship.inverse,
             let destination = entities.first(where: { $0.name == relationship.destination }),
             let inverse = destination.relationships.first(where: { $0.name == inverseName }),
-            !inverse.isToMany,
             inverse.destination == entity.name,
             inverse.inverse == relationship.name
-        else {
-            return false
+        else { return false }
+        if relationship.isToMany, inverse.isToMany {
+            let current = "\(entity.name).\(relationship.name)"
+            let other = "\(destination.name).\(inverse.name)"
+            return !bytewiseLess(current, other)
         }
+        if relationship.isToMany, !inverse.isToMany { return true }
+        guard !relationship.isToMany, !inverse.isToMany else { return false }
         let current = "\(entity.name).\(relationship.name)"
         let other = "\(destination.name).\(inverse.name)"
         return bytewiseLess(other, current)
+    }
+
+    private static func joinTableName(
+        for entity: Schema.Entity,
+        relationship: Schema.Relationship,
+        entities: [Schema.Entity]
+    ) -> String? {
+        guard relationship.isToMany else { return nil }
+        let owner = "\(entity.name).\(relationship.name)"
+        if let inverseName = relationship.inverse,
+            let destination = entities.first(where: { $0.name == relationship.destination }),
+            let inverse = destination.relationships.first(where: { $0.name == inverseName }), inverse.isToMany
+        {
+            let other = "\(destination.name).\(inverse.name)"
+            guard bytewiseLess(owner, other) else { return nil }
+            return
+                "Z_\(entity.name.uppercased())_\(relationship.name.uppercased())_\(destination.name.uppercased())_\(inverse.name.uppercased())"
+        }
+        guard relationship.inverse == nil else { return nil }
+        return
+            "Z_\(entity.name.uppercased())_\(relationship.name.uppercased())_\(relationship.destination.uppercased())"
     }
 }

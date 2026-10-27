@@ -40,6 +40,8 @@ package enum SQLColumnType: String, Sendable {
             return .timestamp
         case "String":
             return .varchar
+        case "URL", "Decimal":
+            return .varchar
         case "UUID", "Data":
             return .blob
         default:

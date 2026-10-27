@@ -1,22 +1,22 @@
 #if canImport(ObjectiveC)
-    /// Uses Foundation's undo manager on platforms with Objective-C.
+    /// Uses Foundation's undo manager on supported Apple platforms.
     public typealias UndoManager = Foundation.UndoManager
 #else
-    /// Provides a portable undo-manager interface on platforms without Objective-C.
+    /// Keeps Linux-host builds type-checkable while Apple clients use Foundation's implementation.
     public final class UndoManager {
         /// Whether the manager has actions available to undo.
         public private(set) var canUndo = false
         /// Whether the manager has actions available to redo.
         public private(set) var canRedo = false
 
-        /// Creates a portable undo manager.
+        /// Creates a host-only undo manager placeholder.
         public init() {}
 
-        /// Does nothing because undo operations are unavailable on this platform.
+        /// Does nothing because undo operations are unavailable on the Linux build host.
         public func undo() {}
-        /// Does nothing because redo operations are unavailable on this platform.
+        /// Does nothing because redo operations are unavailable on the Linux build host.
         public func redo() {}
-        /// Clears the manager's undo and redo state.
+        /// Clears the undo and redo state.
         public func removeAllActions() {
             canUndo = false
             canRedo = false

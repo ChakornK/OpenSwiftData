@@ -68,9 +68,7 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
-            #if !os(WASI)
-                try database.execute(sql: "PRAGMA mmap_size = 268435456")
-            #endif
+            try database.execute(sql: "PRAGMA mmap_size = 268435456")
         }
         return configuration
     }

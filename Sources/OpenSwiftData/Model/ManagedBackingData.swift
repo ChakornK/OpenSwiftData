@@ -91,8 +91,14 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         }
     }
 
-    func setInitialValue(forKey keyPath: AnyKeyPath, to value: Any) {
-        locked { baseline[keyPath] = value }
+    func setMaterializedValue(forKey keyPath: AnyKeyPath, to value: Any) {
+        locked {
+            if overlay[keyPath] != nil {
+                overlay[keyPath] = value
+            } else {
+                baseline[keyPath] = value
+            }
+        }
     }
 
     /// Records the mutation in the owning context.
@@ -176,9 +182,11 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             self.context = context
             contextState = context.state
             self.model = model
-            identifier = PersistentIdentifier(
-                storeIdentifier: storeIdentifier, entityName: String(describing: Model.self),
-                temporaryIdentifier: identifier.temporaryIdentifier ?? UUID())
+            if identifier.primaryKey == nil {
+                identifier = PersistentIdentifier(
+                    storeIdentifier: storeIdentifier, entityName: String(describing: Model.self),
+                    temporaryIdentifier: identifier.temporaryIdentifier ?? UUID())
+            }
             deleted = false
         }
     }

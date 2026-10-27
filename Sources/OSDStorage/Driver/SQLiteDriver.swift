@@ -23,9 +23,14 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
     package init(location: StoreLocation) throws {
         switch location {
         case let .memory(name):
-            storage = .queue(try DatabaseQueue(path: ":memory:", configuration: Self.configuration(name: name)))
+            var configuration = Self.configuration(name: name)
+            configuration.journalMode = .default
+            storage = .queue(try DatabaseQueue(path: ":memory:", configuration: configuration))
         case let .file(url):
-            storage = .pool(try DatabasePool(path: url.path, configuration: Self.configuration(name: nil)))
+            var configuration = Self.configuration(name: nil)
+            configuration.maximumReaderCount = max(1, min(ProcessInfo.processInfo.activeProcessorCount, 4))
+            configuration.journalMode = .wal
+            storage = .pool(try DatabasePool(path: url.path, configuration: configuration))
         }
     }
 
@@ -63,7 +68,9 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
-            try database.execute(sql: "PRAGMA mmap_size = 268435456")
+            #if !os(WASI)
+                try database.execute(sql: "PRAGMA mmap_size = 268435456")
+            #endif
         }
         return configuration
     }

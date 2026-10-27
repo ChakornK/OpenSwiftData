@@ -14,7 +14,7 @@ package struct SQLConnection {
     }
 
     package func rows(_ sql: String, _ args: [StoredValue] = []) throws -> [[StoredValue]] {
-        let statement = try database.makeStatement(sql: sql)
+        let statement = try database.cachedStatement(sql: sql)
         try statement.setArguments(StatementArguments(args.map(Self.databaseValue)))
         return try Row.fetchAll(statement).map { row in
             row.map { Self.storedValue($0.1) }

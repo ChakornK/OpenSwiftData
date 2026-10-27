@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import OSDCore
+import GRDB
 @testable import OSDStorage
 
 final class SQLiteDriverTests: XCTestCase {
@@ -97,6 +98,79 @@ final class SQLiteDriverTests: XCTestCase {
         defer { try? reopened.close() }
         let rows = try reopened.read { try $0.rows("SELECT value FROM items") }
         XCTAssertEqual(rows, [[.text("persisted")]])
+    }
+
+    func testFileDriverConfiguresWALAndConnectionPragmas() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OSDStorageTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let driver = try GRDBSQLiteDriver(location: .file(directory.appendingPathComponent("store.sqlite")))
+        defer { try? driver.close() }
+
+        try driver.write { connection in
+            XCTAssertEqual(try connection.rows("PRAGMA journal_mode").first, [.text("wal")])
+            XCTAssertEqual(try connection.rows("PRAGMA synchronous").first, [.int(1)])
+            XCTAssertEqual(try connection.rows("PRAGMA foreign_keys").first, [.int(0)])
+            XCTAssertEqual(try connection.rows("PRAGMA busy_timeout").first, [.int(5000)])
+            #if !os(WASI)
+                XCTAssertEqual(try connection.rows("PRAGMA mmap_size").first, [.int(268435456)])
+            #endif
+        }
+
+        try driver.read { connection in
+            XCTAssertThrowsError(try connection.execute("CREATE TABLE read_only_probe (value INTEGER)"))
+        }
+
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE writable_probe (value INTEGER)")
+            try connection.execute("INSERT INTO writable_probe VALUES (1)")
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT value FROM writable_probe") }, [[.int(1)]])
+    }
+
+    func testMemoryDriverUsesSingleQueueWithoutWAL() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "configuration"))
+        defer { try? driver.close() }
+
+        try driver.write { connection in
+            XCTAssertEqual(try connection.rows("PRAGMA journal_mode").first, [.text("memory")])
+            XCTAssertEqual(try connection.rows("PRAGMA synchronous").first, [.int(1)])
+            XCTAssertEqual(try connection.rows("PRAGMA foreign_keys").first, [.int(0)])
+            XCTAssertEqual(try connection.rows("PRAGMA busy_timeout").first, [.int(5000)])
+        }
+
+        try driver.read { connection in
+            XCTAssertThrowsError(try connection.execute("CREATE TABLE read_only_probe (value INTEGER)"))
+        }
+
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE writable_probe (value INTEGER)")
+            try connection.execute("INSERT INTO writable_probe VALUES (1)")
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT value FROM writable_probe") }, [[.int(1)]])
+    }
+
+    func testRowsRebindArgumentsThroughCachedQueryPath() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "statement-cache"))
+        defer { try? driver.close() }
+
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE items (value INTEGER)")
+            try connection.execute("INSERT INTO items VALUES (1), (2)")
+        }
+
+        let results = try driver.read { connection in
+            let first = try connection.rows("SELECT value FROM items WHERE value = ?", [.int(1)])
+            let second = try connection.rows("SELECT value FROM items WHERE value = ?", [.int(2)])
+            let missing = try connection.rows("SELECT value FROM items WHERE value = ?", [.int(3)])
+            return (first, second, missing)
+        }
+
+        XCTAssertEqual(results.0, [[.int(1)]])
+        XCTAssertEqual(results.1, [[.int(2)]])
+        XCTAssertEqual(results.2, [])
     }
 }
 

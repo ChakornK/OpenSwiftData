@@ -99,4 +99,46 @@ final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
         XCTAssertTrue(built.statements.contains("CREATE INDEX ZPARENT_ZCHILD_INDEX ON ZPARENT (ZCHILD);"))
         XCTAssertFalse(built.statements.contains { $0.hasPrefix("CREATE TABLE Z_CHILD_PARENTS") })
     }
+
+    func testRejectsMismatchedInverseNameAndDestination() {
+        let schemas = [
+            Schema([
+                Schema.Entity(
+                    name: "First",
+                    relationships: [
+                        Schema.Relationship(name: "second", destination: "Second", inverse: "first")
+                    ]
+                ),
+                Schema.Entity(
+                    name: "Second",
+                    relationships: [
+                        Schema.Relationship(name: "first", destination: "First", inverse: "wrongName")
+                    ]
+                ),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "First",
+                    relationships: [
+                        Schema.Relationship(name: "second", destination: "Second", inverse: "first")
+                    ]
+                ),
+                Schema.Entity(
+                    name: "Second",
+                    relationships: [
+                        Schema.Relationship(name: "first", destination: "Other", inverse: "second")
+                    ]
+                ),
+                Schema.Entity(name: "Other"),
+            ]),
+        ]
+
+        for schema in schemas {
+            XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+                guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                    return XCTFail("Unexpected error: \\(error)")
+                }
+            }
+        }
+    }
 }

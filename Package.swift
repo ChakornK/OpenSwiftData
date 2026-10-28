@@ -70,6 +70,10 @@ let package = Package(
             dependencies: ["OSDStorage"]
         ),
         .testTarget(
+            name: "OSDStoragePredicateCatalogTests",
+            dependencies: ["OSDStorage"]
+        ),
+        .testTarget(
             name: "OpenSwiftDataSQLiteTests",
             dependencies: ["OpenSwiftData", "OpenSwiftDataSQLite", "OSDStorage"]
         ),

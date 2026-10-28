@@ -10,6 +10,11 @@ public protocol PersistentModel: AnyObject {
     var persistentBackingData: any BackingData<Self> { get set }
     init(backingData: any BackingData<Self>)
     static func schemaMetadata() -> [Schema.PropertyMetadata]
+    static func schemaIndexes() -> [Schema.Index]
+    static func createManagedBackingData(
+        values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
+        entityID: Int, identifier: PersistentIdentifier
+    ) -> any BackingData<Self>
     static func createBackingData() -> DetachedBackingData<Self>
     static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>]
     func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value
@@ -17,6 +22,16 @@ public protocol PersistentModel: AnyObject {
 }
 
 public extension PersistentModel {
+    static func schemaIndexes() -> [Schema.Index] { [] }
+    static func createManagedBackingData(
+        values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
+        entityID: Int, identifier: PersistentIdentifier
+    ) -> any BackingData<Self> {
+        ManagedBackingData<Self>(
+            metadata: schemaMetadata(), values: values, context: context,
+            storeIdentifier: storeIdentifier, entityID: entityID,
+            identifier: identifier)
+    }
     static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>] { [] }
     var persistentModelID: PersistentIdentifier { persistentBackingData.persistentModelID }
     var modelContext: ModelContext? { persistentBackingData.modelContext }

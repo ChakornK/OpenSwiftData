@@ -50,10 +50,10 @@ public macro Relationship(
 ) = #externalMacro(module: "OpenSwiftDataMacros", type: "RelationshipMacro")
 @attached(peer)
 public macro Transient() = #externalMacro(module: "OpenSwiftDataMacros", type: "TransientMacro")
-@freestanding(declaration, names: named(Unique))
+@freestanding(declaration, names: arbitrary)
 public macro Unique<Model>(_ keyPaths: PartialKeyPath<Model>...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "UniqueMacro")
-@freestanding(declaration, names: named(Index))
+@freestanding(declaration, names: arbitrary)
 public macro Index<Model>(_ keyPaths: PartialKeyPath<Model>...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "IndexMacro")
 @attached(member, names: arbitrary)

@@ -18,6 +18,13 @@ public final class ModelContext {
     private var temporaryIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:]
     private var relationshipLoadVisited = Set<EntityPrimaryKey>()
 
+    private struct PersistedModel {
+        let model: any PersistentModel
+        let primaryKey: Int64
+        let version: Int
+        let replacedModel: (any PersistentModel)?
+    }
+
     /// Creates a context not associated with a model container.
     public convenience init() {
         self.init(container: nil, autosaveEnabled: false)
@@ -88,12 +95,23 @@ public final class ModelContext {
                 entityID: insertionSnapshot.entityID,
                 optimisticLockVersion: insertionSnapshot.optimisticLockVersion)
         }
-        state.insert(model, snapshot: insertionSnapshot)
         func attach<Model: PersistentModel>(_ model: Model) {
+            guard container?.store != nil else {
+                model.persistentBackingData.attach(to: self, model: model)
+                model.setInsertionChanged()
+                state.setBaseline(model, snapshot: model.snapshotLifecycle())
+                return
+            }
+            let managed = Model.createManagedBackingData(
+                values: insertionSnapshot.values, context: self,
+                storeIdentifier: storeIdentifier, entityID: entityID(for: String(describing: Model.self)),
+                identifier: insertionSnapshot.identifier)
+            model.persistentBackingData = managed
             model.persistentBackingData.attach(to: self, model: model)
             model.setInsertionChanged()
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
         }
+        state.insert(model, snapshot: insertionSnapshot)
         attach(model)
     }
 
@@ -498,6 +516,7 @@ public final class ModelContext {
             if let testSaveHook {
                 try testSaveHook()
                 finalizePendingChanges()
+                state.clearRelationshipMutationEvents()
                 return
             }
             guard let store = container?.store else { throw unsupportedStore("Saving") }
@@ -548,6 +567,7 @@ public final class ModelContext {
                     if let testSaveHook {
                         try testSaveHook()
                         finalizePendingChanges()
+                        state.clearRelationshipMutationEvents()
                     } else {
                         guard let store = container?.store else { throw unsupportedStore("Saving") }
                         try persistPendingChanges(to: store)
@@ -1059,16 +1079,18 @@ public final class ModelContext {
         let pending = state.pendingState()
         let models = pending.inserted + pending.changed
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
-        let persisted: [(any PersistentModel, Int64)] = try store.write { connection in
-            var results: [(any PersistentModel, Int64)] = []
+        let persisted: [PersistedModel] = try store.write { connection in
+            var results: [PersistedModel] = []
             let entitiesToPersist = relationshipOrderedEntities(models)
             for model in entitiesToPersist {
+                let snapshot = model.snapshotLifecycle()
                 try persistModel(
                     model, inserted: insertedIDs.contains(ObjectIdentifier(model)),
-                    connection: connection, append: &results)
+                    connection: connection, snapshot: snapshot, append: &results)
             }
-            let assignedIDs = Dictionary(uniqueKeysWithValues: results.map { (ObjectIdentifier($0.0), $0.1) })
-            for owner in pending.inserted {
+            let assignedIDs = Dictionary(
+                uniqueKeysWithValues: results.map { (ObjectIdentifier($0.model), $0.primaryKey) })
+            for owner in models {
                 guard let entity = container?.schema.entity(forName: String(describing: type(of: owner))),
                     let adapters = container?.relationshipAdapterTable[ObjectIdentifier(type(of: owner))],
                     let ownerPK = assignedIDs[ObjectIdentifier(owner)]
@@ -1076,12 +1098,13 @@ public final class ModelContext {
                 for relationship in canonicalRelationships(for: entity)
                 where !relationship.isToMany && isToOneStorageOwner(entity, relationship) {
                     guard let adapter = adapters.first(where: { $0.name == relationship.name }) else { continue }
-                    let destinationPK = adapter.read(owner)?.first.flatMap { endpoint in
-                        endpoint.persistentModelID.primaryKey ?? assignedIDs[ObjectIdentifier(endpoint)]
-                    }
+                    guard let endpoint = adapter.read(owner)?.first,
+                        endpoint.persistentModelID.primaryKey == nil,
+                        let destinationPK = assignedIDs[ObjectIdentifier(endpoint)]
+                    else { continue }
                     try connection.execute(
                         "UPDATE Z\(entity.name.uppercased()) SET Z\(relationship.name.uppercased()) = ? WHERE Z_PK = ?",
-                        arguments: [destinationPK.map(RuntimeValue.int) ?? .null, .int(ownerPK)])
+                        arguments: [.int(destinationPK), .int(ownerPK)])
                 }
             }
             for event in pending.relationshipMutationEvents where !insertedIDs.contains(ObjectIdentifier(event.owner)) {
@@ -1123,30 +1146,47 @@ public final class ModelContext {
             state.removeBaseline(for: model)
             model.detachDeletedLifecycle()
         }
-        for (model, pk) in persisted {
+        for result in persisted {
+            let model = result.model
             let entityName = model.persistentModelID.entityName
             let originalIdentifier = state.snapshotIdentifier(for: model)
+            if let replacedModel = result.replacedModel {
+                identityMap.remove(EntityPrimaryKey(entityName: entityName, primaryKey: result.primaryKey))
+                detachModel(replacedModel)
+            }
             model.markPersistedLifecycle(
-                storeIdentifier: storeIdentifier, entityID: entityID(for: entityName), primaryKey: pk, version: 1)
-            identityMap.register(model, for: EntityPrimaryKey(entityName: entityName, primaryKey: pk))
+                storeIdentifier: storeIdentifier, entityID: entityID(for: entityName),
+                primaryKey: result.primaryKey, version: result.version)
+            state.setBaseline(model, snapshot: model.snapshotLifecycle())
+            identityMap.register(
+                model, for: EntityPrimaryKey(entityName: entityName, primaryKey: result.primaryKey))
             if let old = originalIdentifier, old.isTemporary {
                 temporaryIdentifiers[old] = model.persistentModelID
             }
         }
         finalizePendingChanges()
+        state.clearRelationshipMutationEvents()
     }
 
     private func persistModel(
         _ model: any PersistentModel, inserted: Bool, connection: any RuntimeConnection,
-        append: inout [(any PersistentModel, Int64)]
+        snapshot: BackingDataSnapshot, append: inout [PersistedModel]
     ) throws {
         func typed<Model: PersistentModel>(_ model: Model) throws {
             guard let entity = container?.schema.entity(forName: String(describing: Model.self)) else { return }
             let adapters = Model.persistenceAdapters()
             var columns: [String] = []
             var values: [RuntimeValue] = []
+            let savedValues = snapshot.savedValues
+            let metadata = Model.schemaMetadata()
             for attribute in canonicalAttributes(for: entity) {
                 guard let adapter = adapters.first(where: { $0.name == attribute.name }) else { continue }
+                if !inserted {
+                    guard let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath,
+                        let current = snapshot.values[keyPath],
+                        let saved = savedValues?[keyPath], !Self.persistenceValuesEqual(current, saved)
+                    else { continue }
+                }
                 columns.append("Z\(attribute.name.uppercased())")
                 values.append(runtimeValue(try adapter.encoded(model)))
             }
@@ -1157,6 +1197,12 @@ public final class ModelContext {
                     let relationshipAdapter = container?.relationshipAdapterTable[ObjectIdentifier(Model.self)]?
                         .first(where: { $0.name == relationship.name })
                 else { continue }
+                if !inserted {
+                    guard let keyPath = metadata.first(where: { $0.name == relationship.name })?.keypath,
+                        let current = snapshot.values[keyPath],
+                        let saved = savedValues?[keyPath], !Self.persistenceValuesEqual(current, saved)
+                    else { continue }
+                }
                 columns.append("Z\(relationship.name.uppercased())")
                 values.append(
                     relationshipAdapter.read(model)?.first?.persistentModelID.primaryKey
@@ -1164,25 +1210,106 @@ public final class ModelContext {
             }
             let table = "Z\(entity.name.uppercased())"
             if inserted {
+                if let match = try uniqueMatch(
+                    entity: entity, columns: columns, values: values, connection: connection)
+                {
+                    let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
+                    let version = match.version + 1
+                    if columns.isEmpty {
+                        try connection.execute(
+                            "UPDATE \(table) SET Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
+                            arguments: [.int(Int64(version)), .int(match.primaryKey), .int(Int64(match.version))])
+                    } else {
+                        try connection.execute(
+                            "UPDATE \(table) SET \(assignments), Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
+                            arguments: values + [
+                                .int(Int64(version)), .int(match.primaryKey), .int(Int64(match.version)),
+                            ])
+                    }
+                    guard connection.changesCount() == 1 else { throw SwiftDataError.optimisticLockConflict }
+                    let replaced = identityMap.model(
+                        for: EntityPrimaryKey(entityName: entity.name, primaryKey: match.primaryKey),
+                        as: type(of: model))
+                    append.append(
+                        PersistedModel(
+                            model: model, primaryKey: match.primaryKey, version: version,
+                            replacedModel: replaced === model ? nil : replaced))
+                    return
+                }
                 let names = (["Z_ENT", "Z_OPT"] + columns).joined(separator: ", ")
                 let placeholders = Array(repeating: "?", count: columns.count + 2).joined(separator: ", ")
                 try connection.execute(
                     "INSERT INTO \(table) (\(names)) VALUES (\(placeholders))",
                     arguments: [.int(Int64(entityID(for: entity.name))), .int(1)] + values)
-                append.append((model, connection.lastInsertRowID()))
-            } else if let pk = model.persistentModelID.primaryKey, !columns.isEmpty {
+                append.append(
+                    PersistedModel(
+                        model: model, primaryKey: connection.lastInsertRowID(), version: 1,
+                        replacedModel: nil))
+            } else if let pk = model.persistentModelID.primaryKey {
+                let expectedVersion = snapshot.optimisticLockVersion
+                let version = expectedVersion + 1
                 let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
-                try connection.execute(
-                    "UPDATE \(table) SET \(assignments), Z_OPT = Z_OPT + 1 WHERE Z_PK = ?",
-                    arguments: values + [.int(pk)])
-                guard connection.changesCount() == 1 else {
-                    throw SwiftDataError.unsupportedStore("Update did not affect exactly one row.")
+                if columns.isEmpty {
+                    try connection.execute(
+                        "UPDATE \(table) SET Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
+                        arguments: [.int(Int64(version)), .int(pk), .int(Int64(expectedVersion))])
+                } else {
+                    try connection.execute(
+                        "UPDATE \(table) SET \(assignments), Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
+                        arguments: values + [.int(Int64(version)), .int(pk), .int(Int64(expectedVersion))])
                 }
-                append.append((model, pk))
+                guard connection.changesCount() == 1 else {
+                    throw SwiftDataError.optimisticLockConflict
+                }
+                append.append(PersistedModel(model: model, primaryKey: pk, version: version, replacedModel: nil))
             }
         }
         func dispatch<Model: PersistentModel>(_ model: Model) throws { try typed(model) }
         try dispatch(model)
+    }
+
+    private func uniqueMatch(
+        entity: Schema.Entity, columns: [String], values: [RuntimeValue], connection: any RuntimeConnection
+    ) throws -> (primaryKey: Int64, version: Int)? {
+        let attributes = canonicalAttributes(for: entity)
+        let constraints =
+            attributes.filter { $0.options.contains(.unique) }.map { [$0.name] }
+            + entity.indexes.filter(\.isUnique).map(\.properties)
+        var match: (primaryKey: Int64, version: Int)?
+        for properties in constraints {
+            guard !properties.isEmpty else { continue }
+            var predicates: [String] = []
+            var arguments: [RuntimeValue] = []
+            for property in properties {
+                let column = "Z\(property.uppercased())"
+                guard let index = columns.firstIndex(of: column) else { continue }
+                let value = values[index]
+                guard value != .null else { continue }
+                predicates.append("\(column) = ?")
+                arguments.append(value)
+            }
+            guard predicates.count == properties.count else { continue }
+            let sql =
+                "SELECT Z_PK, Z_OPT FROM Z\(entity.name.uppercased()) WHERE \(predicates.joined(separator: " AND ")) ORDER BY Z_PK LIMIT 1"
+            if let row = try connection.rows(sql, arguments: arguments).first, row.count >= 2 {
+                guard case let .int(primaryKey) = row[0] else { continue }
+                let current = (primaryKey, runtimeInt(row[1]))
+                if let match, match.primaryKey != current.0 {
+                    throw SwiftDataError.unsupportedStore(
+                        "Unique constraints matched different rows for entity '\(entity.name)'.")
+                }
+                match = current
+            }
+        }
+        return match
+    }
+
+    private static func persistenceValuesEqual(_ lhs: Any, _ rhs: Any) -> Bool {
+        if let lhs = lhs as? AnyHashable, let rhs = rhs as? AnyHashable {
+            return lhs == rhs
+        }
+        return String(reflecting: type(of: lhs)) == String(reflecting: type(of: rhs))
+            && String(describing: lhs) == String(describing: rhs)
     }
 
     private func persistRelationships(

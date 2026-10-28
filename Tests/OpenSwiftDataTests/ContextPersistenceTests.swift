@@ -43,6 +43,32 @@ final class FailedWritePersistenceFixture {
 }
 
 @Model
+final class ConflictingUniqueKeysFixture {
+    @Attribute(.unique) var email: String
+    @Attribute(.unique) var username: String
+
+    init(email: String, username: String) {
+        self.email = email
+        self.username = username
+    }
+}
+
+@Model
+final class UpsertRelationshipOwnerFixture {
+    @Attribute(.unique) var key: String
+    @Relationship(inverse: nil) var destination: UpsertRelationshipDestinationFixture?
+
+    init(key: String) { self.key = key }
+}
+
+@Model
+final class UpsertRelationshipDestinationFixture {
+    var name: String
+
+    init(name: String) { self.name = name }
+}
+
+@Model
 final class PersistentRelationshipOwner {
     var title: String
     @Relationship(deleteRule: .nullify, inverse: \PersistentRelationshipChild.owner)
@@ -102,9 +128,184 @@ final class ContextPersistenceTests: XCTestCase {
 
         XCTAssertFalse(model.persistentModelID.isTemporary)
         XCTAssertNotEqual(model.persistentModelID, temporaryID)
+        XCTAssertEqual(model.persistentModelID.storeIdentifier, "context-test")
         let fetched = try context.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertTrue(fetched.first === model)
         XCTAssertTrue(try context.model(for: model.persistentModelID) as PersistenceTestModel? === model)
+    }
+
+    @MainActor
+    func testUniqueInsertUpsertsAndRebindsIdentityMap() throws {
+        let container = try ModelContainer(
+            for: FailedWritePersistenceFixture.self, configurations: .sqliteMemory("unique-upsert"))
+        let context = container.mainContext
+        let original = FailedWritePersistenceFixture(key: "same-key")
+        context.insert(original)
+        try context.save()
+        let originalID = original.persistentModelID
+        XCTAssertTrue(try context.model(for: originalID) as FailedWritePersistenceFixture? === original)
+
+        let replacement = FailedWritePersistenceFixture(key: "same-key")
+        context.insert(replacement)
+        try context.save()
+
+        XCTAssertEqual(replacement.persistentModelID, originalID)
+        XCTAssertNil(original.modelContext)
+        XCTAssertTrue(try context.model(for: originalID) as FailedWritePersistenceFixture? === replacement)
+        let reader = container.makeContext()
+        let fetched = try reader.fetch(FetchDescriptor<FailedWritePersistenceFixture>())
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched[0].key, "same-key")
+    }
+
+    @MainActor
+    func testUniqueUpsertPersistsRelationshipToDestinationInsertedInSameSave() throws {
+        let container = try ModelContainer(
+            for: UpsertRelationshipOwnerFixture.self, UpsertRelationshipDestinationFixture.self,
+            configurations: .sqliteMemory("unique-upsert-relationship"))
+        let context = container.mainContext
+        let original = UpsertRelationshipOwnerFixture(key: "same-owner")
+        context.insert(original)
+        try context.save()
+
+        let replacement = UpsertRelationshipOwnerFixture(key: "same-owner")
+        let destination = UpsertRelationshipDestinationFixture(name: "new destination")
+        context.insert(replacement)
+        replacement.destination = destination
+        try context.save()
+
+        let ownerPK = try XCTUnwrap(replacement.persistentModelID.primaryKey)
+        let destinationPK = try XCTUnwrap(destination.persistentModelID.primaryKey)
+        try container.store?.read { connection in
+            let rows = try connection.rows(
+                "SELECT Z_OPT, ZDESTINATION FROM ZUPSERTRELATIONSHIPOWNERFIXTURE WHERE Z_PK = ?",
+                arguments: [.int(ownerPK)])
+            XCTAssertEqual(rows.first, [.int(2), .int(destinationPK)])
+        }
+    }
+
+    @MainActor
+    func testConflictingUniqueMatchesFailAtomicallyAndRetainPendingInsert() throws {
+        let container = try ModelContainer(
+            for: ConflictingUniqueKeysFixture.self, configurations: .sqliteMemory("conflicting-unique-upsert"))
+        let context = container.mainContext
+        let first = ConflictingUniqueKeysFixture(email: "first@example.com", username: "first")
+        let second = ConflictingUniqueKeysFixture(email: "second@example.com", username: "second")
+        context.insert(first)
+        context.insert(second)
+        try context.save()
+
+        let incoming = ConflictingUniqueKeysFixture(email: first.email, username: second.username)
+        context.insert(incoming)
+        XCTAssertThrowsError(try context.save()) { error in
+            guard case SwiftDataError.unsupportedStore = error else {
+                return XCTFail("Expected conflicting unique matches, got \(error)")
+            }
+        }
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertTrue(incoming.hasChanges)
+        XCTAssertTrue(incoming.persistentModelID.isTemporary)
+        let reader = container.makeContext()
+        let rows = try reader.fetch(FetchDescriptor<ConflictingUniqueKeysFixture>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(Set(rows.map(\.email)), ["first@example.com", "second@example.com"])
+        XCTAssertEqual(Set(rows.map(\.username)), ["first", "second"])
+    }
+
+    @MainActor
+    func testDirtyUpdatePreservesExternalChangeToUntouchedColumn() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("dirty-column-update"))
+        let context = container.mainContext
+        let model = PersistenceTestModel(title: "original")
+        context.insert(model)
+        try context.save()
+        let pk = try XCTUnwrap(model.persistentModelID.primaryKey)
+
+        try container.store?.write { connection in
+            try connection.execute(
+                "UPDATE ZPERSISTENCETESTMODEL SET ZCOUNT = ?, Z_OPT = Z_OPT + 1 WHERE Z_PK = ?",
+                arguments: [.int(41), .int(pk)])
+        }
+        let reader = container.makeContext()
+        let externallyRefreshed = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistenceTestModel>()).first)
+        XCTAssertEqual(externallyRefreshed.count, 41)
+        externallyRefreshed.title = "local edit"
+        try reader.save()
+
+        let stored = try container.store?.read { connection in
+            try connection.rows(
+                "SELECT ZTITLE, ZCOUNT, Z_OPT FROM ZPERSISTENCETESTMODEL WHERE Z_PK = ?",
+                arguments: [.int(pk)])
+        }
+        XCTAssertEqual(stored?.first, [.text("local edit"), .int(41), .int(3)])
+    }
+
+    @MainActor
+    func testOptimisticLockConflictRollsBackAllRowsAndRetainsPendingChanges() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("optimistic-conflict"))
+        let writer = container.mainContext
+        let original = PersistenceTestModel(title: "initial")
+        writer.insert(original)
+        try writer.save()
+
+        let firstContext = container.makeContext()
+        let secondContext = container.makeContext()
+        let first = try XCTUnwrap(firstContext.fetch(FetchDescriptor<PersistenceTestModel>()).first)
+        let second = try XCTUnwrap(secondContext.fetch(FetchDescriptor<PersistenceTestModel>()).first)
+        first.title = "first writer"
+        try firstContext.save()
+        second.title = "stale writer"
+        let earlierInsert = PersistenceTestModel(title: "must roll back")
+        secondContext.insert(earlierInsert)
+
+        XCTAssertThrowsError(try secondContext.save()) { error in
+            XCTAssertEqual(error as? SwiftDataError, .optimisticLockConflict)
+        }
+        XCTAssertTrue(secondContext.hasChanges)
+        XCTAssertTrue(second.hasChanges)
+        XCTAssertTrue(earlierInsert.persistentModelID.isTemporary)
+
+        let reader = container.makeContext()
+        let rows = try reader.fetch(FetchDescriptor<PersistenceTestModel>())
+        XCTAssertEqual(rows.map(\.title), ["first writer"])
+    }
+
+    @MainActor
+    func testOptimisticLockConflictRejectsStaleRelationshipOnlyWrite() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("stale-relationship-write"))
+        let setup = container.mainContext
+        let owner = PersistentRelationshipOwner(title: "owner")
+        let child = PersistentRelationshipChild(title: "child")
+        setup.insert(owner)
+        setup.insert(child)
+        try setup.save()
+
+        let firstContext = container.makeContext()
+        let staleContext = container.makeContext()
+        let firstOwner = try XCTUnwrap(firstContext.fetch(FetchDescriptor<PersistentRelationshipOwner>()).first)
+        let firstChild = try XCTUnwrap(firstContext.fetch(FetchDescriptor<PersistentRelationshipChild>()).first)
+        let staleOwner = try XCTUnwrap(staleContext.fetch(FetchDescriptor<PersistentRelationshipOwner>()).first)
+        let staleChild = try XCTUnwrap(staleContext.fetch(FetchDescriptor<PersistentRelationshipChild>()).first)
+
+        firstOwner.children = [firstChild]
+        try firstContext.save()
+        staleOwner.favorite = staleChild
+
+        XCTAssertThrowsError(try staleContext.save()) { error in
+            XCTAssertEqual(error as? SwiftDataError, .optimisticLockConflict)
+        }
+        XCTAssertTrue(staleContext.hasChanges)
+        XCTAssertTrue(staleOwner.hasChanges)
+        XCTAssertTrue(staleOwner.favorite === staleChild)
+
+        let reader = container.makeContext()
+        let persisted = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistentRelationshipOwner>()).first)
+        XCTAssertEqual(persisted.children.map(\.title), ["child"])
+        XCTAssertNil(persisted.favorite)
     }
 
     @MainActor
@@ -265,10 +466,13 @@ final class ContextPersistenceTests: XCTestCase {
         try context.save()
 
         let valid = PersistenceTestModel(title: "partial")
-        let conflicting = FailedWritePersistenceFixture(key: "duplicate")
         context.insert(valid)
-        context.insert(conflicting)
         let identifier = valid.persistentModelID
+        try container.store?.write { connection in
+            try connection.execute(
+                "CREATE TRIGGER fail_atomic_insert BEFORE INSERT ON ZPERSISTENCETESTMODEL "
+                    + "BEGIN SELECT RAISE(ABORT, 'atomic failure'); END;", arguments: [])
+        }
 
         XCTAssertThrowsError(try context.save())
         XCTAssertEqual(valid.persistentModelID, identifier)
@@ -279,6 +483,9 @@ final class ContextPersistenceTests: XCTestCase {
         let reader = container.makeContext()
         XCTAssertTrue(try reader.fetch(FetchDescriptor<PersistenceTestModel>()).isEmpty)
         XCTAssertEqual(try reader.fetch(FetchDescriptor<FailedWritePersistenceFixture>()).count, 1)
+        try container.store?.write { connection in
+            try connection.execute("DROP TRIGGER fail_atomic_insert", arguments: [])
+        }
     }
 
     @MainActor

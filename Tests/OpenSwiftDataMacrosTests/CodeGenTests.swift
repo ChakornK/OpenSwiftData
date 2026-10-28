@@ -4,6 +4,26 @@ import SwiftSyntax
 import XCTest
 
 final class CodeGenTests: XCTestCase {
+    func testUniqueAndIndexDirectiveSourcesPreserveColumnOrder() throws {
+        let unique = try parseDirective("#Unique(\\Model.second, \\Model.first)")
+        let index = try parseDirective("#Index(\\Model.first, \\Model.second)")
+
+        XCTAssertEqual(
+            try CodeGen.schemaDirectiveSources(unique, kind: .unique, uniqueName: "uniqueConstraint"),
+            ["let uniqueConstraint = Schema.Index(properties: [\"second\", \"first\"], isUnique: true)"])
+        XCTAssertEqual(
+            try CodeGen.schemaDirectiveSources(index, kind: .index, uniqueName: "ordinaryIndex"),
+            ["let ordinaryIndex = Schema.Index(properties: [\"first\", \"second\"], isUnique: false)"])
+    }
+
+    func testSchemaDirectiveSourcesRejectNestedAndRepeatedKeyPaths() throws {
+        let nested = try parseDirective("#Unique(\\Model.child.value)")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveSources(nested, kind: .unique, uniqueName: "unique"))
+
+        let repeated = try parseDirective("#Index(\\Model.value, \\Model.value)")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveSources(repeated, kind: .index, uniqueName: "index"))
+    }
+
     func testTripMemberSourcesMatchVariantAExactly() throws {
         let declaration = try parseClass(
             """
@@ -397,5 +417,10 @@ final class CodeGenTests: XCTestCase {
 
     private enum ParseFailure: Error {
         case expectedClass
+    }
+
+    private func parseDirective(_ source: String) throws -> MacroExpansionExprSyntax {
+        let file = Parser.parse(source: source)
+        return try XCTUnwrap(file.statements.first?.item.as(ExprSyntax.self)?.as(MacroExpansionExprSyntax.self))
     }
 }

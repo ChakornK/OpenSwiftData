@@ -145,9 +145,10 @@ package final class ContextState: @unchecked Sendable {
     }
 
     private func attachRelationshipDestination<Model: PersistentModel>(_ model: Model, to context: ModelContext) {
+        let snapshot = model.snapshotLifecycle()
         model.persistentBackingData.attach(to: context, model: model)
         model.setInsertionChanged()
-        appendUnique(model, to: &inserted)
+        insert(model, snapshot: snapshot)
     }
 
     private func validateCardinality(
@@ -216,7 +217,7 @@ package final class ContextState: @unchecked Sendable {
             for index in transactionFrames.indices {
                 transactionFrames[index].modelSnapshots[identifier] = (model, snapshot)
             }
-            snapshots[identifier] = (model, snapshot)
+            if snapshots[identifier] == nil { snapshots[identifier] = (model, snapshot) }
             appendUnique(model, to: &inserted)
         }
     }
@@ -655,6 +656,10 @@ package final class ContextState: @unchecked Sendable {
         }
     }
 
+    func clearRelationshipMutationEvents() {
+        locked { relationshipMutationEvents.removeAll() }
+    }
+
     func restorePendingState(_ state: PendingState) {
         locked {
             inserted = state.inserted
@@ -680,7 +685,9 @@ package final class ContextState: @unchecked Sendable {
             }
         }
         if snapshots[identifier] == nil {
-            snapshots[identifier] = (model, baselineSnapshots[identifier]?.1 ?? current)
+            let baseline = baselineSnapshots[identifier]?.1
+            let original = baseline?.identifier == current.identifier ? baseline : current
+            snapshots[identifier] = (model, original ?? current)
         }
         for index in transactionFrames.indices where transactionFrames[index].snapshots[identifier] == nil {
             transactionFrames[index].snapshots[identifier] = (model, current)

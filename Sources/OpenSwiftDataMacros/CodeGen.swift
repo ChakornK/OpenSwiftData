@@ -1,8 +1,64 @@
 import SwiftSyntax
 import SwiftSyntaxBuilder
 import Foundation
+import SwiftDiagnostics
 
 enum CodeGen {
+    enum SchemaDirectiveKind {
+        case unique
+        case index
+
+        var name: String {
+            switch self {
+            case .unique: "Unique"
+            case .index: "Index"
+            }
+        }
+
+        var isUnique: Bool {
+            switch self {
+            case .unique: true
+            case .index: false
+            }
+        }
+    }
+
+    static func schemaDirectiveSources(
+        _ node: some FreestandingMacroExpansionSyntax,
+        kind: SchemaDirectiveKind,
+        uniqueName: String
+    ) throws -> [String] {
+        let arguments = node.arguments
+        guard !arguments.isEmpty else {
+            throw SchemaDirectiveDiagnostic("#\(kind.name) requires at least one direct property key path.")
+        }
+        var properties: [String] = []
+        for argument in arguments {
+            guard let keyPath = argument.expression.as(KeyPathExprSyntax.self),
+                keyPath.components.count == 1,
+                let component = keyPath.components.first?.component.as(KeyPathPropertyComponentSyntax.self)
+            else {
+                throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be direct property key paths.")
+            }
+            properties.append(component.declName.baseName.text.trimmingCharacters(in: CharacterSet(charactersIn: "`")))
+        }
+        guard Set(properties).count == properties.count else {
+            throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path.")
+        }
+        let quoted = properties.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", ")
+        let unique = kind.name == "Unique"
+        return [
+            "let \(uniqueName) = Schema.Index(properties: [\(quoted)], isUnique: \(unique))"
+        ]
+    }
+
+    private static func escapeSwiftString(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
     struct Property {
         let name: String
         let initializer: String?
@@ -377,6 +433,14 @@ enum InitializationVariant {
     case a
     case b
     case c
+}
+
+private struct SchemaDirectiveDiagnostic: Error, DiagnosticMessage {
+    let message: String
+    var diagnosticID: MessageID { MessageID(domain: "OpenSwiftDataMacros", id: "schema-directive") }
+    var severity: DiagnosticSeverity { .error }
+
+    init(_ message: String) { self.message = message }
 }
 
 private extension String {

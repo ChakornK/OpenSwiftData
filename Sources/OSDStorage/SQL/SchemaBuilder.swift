@@ -94,6 +94,18 @@ package enum SchemaBuilder {
     package static func build(_ schema: Schema) throws -> BuiltSchema {
         let entities = schema.entities.sorted { bytewiseLess($0.name, $1.name) }
         try validateUniqueNames(entities.map(\.name), scope: "entity")
+        for entity in entities {
+            for index in entity.indexes {
+                guard !index.properties.isEmpty, Set(index.properties).count == index.properties.count else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Index on entity '\(entity.name)' must contain distinct properties.")
+                }
+                for property in index.properties where !entity.attributes.contains(where: { $0.name == property }) {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Index on entity '\(entity.name)' references missing attribute '\(property)'.")
+                }
+            }
+        }
         let tableNames = entities.map { "Z\($0.name)" }
         try validateUniqueNames(["Z_PRIMARYKEY", "_osd_meta"] + tableNames, scope: "table")
         let reservedColumns = Set(["Z_PK", "Z_ENT", "Z_OPT", "Z_PRIMARYKEY", "Z_OSD_META"].map(identifierKey))
@@ -122,6 +134,14 @@ package enum SchemaBuilder {
                 contentsOf: entity.attributes.filter { $0.options.contains(.unique) }.map {
                     "Z\(entity.name.uppercased())_Z\($0.name.uppercased())_UNIQUE_INDEX"
                 })
+            allIndexNames.append(
+                contentsOf: entity.indexes.compactMap { index in
+                    let duplicatesAttributeUnique =
+                        index.isUnique && index.properties.count == 1
+                        && entity.attributes.first(where: { $0.name == index.properties[0] })?.options.contains(.unique)
+                            == true
+                    return duplicatesAttributeUnique ? nil : indexName(entity: entity, index: index)
+                })
             for relationship in entity.relationships where relationship.isToMany {
                 if let table = joinTableName(for: entity, relationship: relationship, entities: entities) {
                     allIndexNames.append("\(table)_UNIQUE_INDEX")
@@ -137,7 +157,13 @@ package enum SchemaBuilder {
             }
         }
         try validateUniqueNames(tableNames + joinTableNames, scope: "table")
-        try validateUniqueNames(allIndexNames, scope: "index")
+        var generatedIndexNames = Set<String>()
+        for name in allIndexNames {
+            guard generatedIndexNames.insert(identifierKey(name)).inserted else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Duplicate or colliding index identifier '\(name)'.")
+            }
+        }
 
         for entity in entities {
             let propertyNames = entity.attributes.map(\.name) + entity.relationships.map(\.name)
@@ -159,6 +185,16 @@ package enum SchemaBuilder {
                 ["Z_PK", "Z_ENT", "Z_OPT"] + generatedProperties,
                 scope: "column in entity '\(entity.name)'"
             )
+            for index in entity.indexes {
+                guard !index.properties.isEmpty, Set(index.properties).count == index.properties.count else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Index on entity '\(entity.name)' must contain distinct properties.")
+                }
+                for property in index.properties where !entity.attributes.contains(where: { $0.name == property }) {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Index on entity '\(entity.name)' references missing attribute '\(property)'.")
+                }
+            }
 
             var columns = ["Z_PK INTEGER PRIMARY KEY", "Z_ENT INTEGER", "Z_OPT INTEGER"]
             let attributes = entity.attributes.sorted { bytewiseLess($0.name, $1.name) }
@@ -184,6 +220,13 @@ package enum SchemaBuilder {
                     "CREATE UNIQUE INDEX Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX ON Z\(entity.name.uppercased()) (Z\(attribute.name.uppercased()));"
                 )
             }
+            for index in entity.indexes {
+                let duplicatesAttributeUnique =
+                    index.isUnique && index.properties.count == 1
+                    && attributes.first(where: { $0.name == index.properties[0] })?.options.contains(.unique) == true
+                if duplicatesAttributeUnique { continue }
+                statements.append(indexStatement(entity: entity, properties: index.properties, unique: index.isUnique))
+            }
         }
 
         for entity in entities {
@@ -202,6 +245,22 @@ package enum SchemaBuilder {
             SchemaBootstrapRow(entityID: Int64(offset + 1), name: entity.name)
         }
         return BuiltSchema(statements: statements, bootstrapRows: rows)
+    }
+
+    private static func indexStatement(entity: Schema.Entity, properties: [String], unique: Bool) -> String {
+        let columns = properties.map { "Z\($0.uppercased())" }
+        let indexName = indexName(entity: entity, properties: properties, unique: unique)
+        return
+            "CREATE \(unique ? "UNIQUE " : "")INDEX \(indexName) ON Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));"
+    }
+
+    private static func indexName(entity: Schema.Entity, index: Schema.Index) -> String {
+        indexName(entity: entity, properties: index.properties, unique: index.isUnique)
+    }
+
+    private static func indexName(entity: Schema.Entity, properties: [String], unique: Bool) -> String {
+        let columns = properties.map { "Z\($0.uppercased())" }
+        return "Z\(entity.name.uppercased())_\(columns.joined(separator: "_"))\(unique ? "_UNIQUE" : "")_INDEX"
     }
 
     private static func isNonOwner(

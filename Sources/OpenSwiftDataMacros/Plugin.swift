@@ -123,14 +123,22 @@ struct UniqueMacro: DeclarationMacro {
     static func expansion(
         of node: some FreestandingMacroExpansionSyntax,
         in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] { [] }
+    ) throws -> [DeclSyntax] {
+        let name = context.makeUniqueName("_osdUnique").text
+        return try CodeGen.schemaDirectiveSources(node, kind: .unique, uniqueName: name)
+            .map(DeclSyntax.init(stringLiteral:))
+    }
 }
 
 struct IndexMacro: DeclarationMacro {
     static func expansion(
         of node: some FreestandingMacroExpansionSyntax,
         in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] { [] }
+    ) throws -> [DeclSyntax] {
+        let name = context.makeUniqueName("_osdIndex").text
+        return try CodeGen.schemaDirectiveSources(node, kind: .index, uniqueName: name)
+            .map(DeclSyntax.init(stringLiteral:))
+    }
 }
 
 struct ModelActorMacro: MemberMacro, ExtensionMacro {

@@ -1,5 +1,19 @@
 /// Describes the entities and version metadata in a persistent store.
 public struct Schema: Sendable {
+    /// An ordered index over entity attributes.
+    public struct Index: Sendable, Hashable {
+        /// The indexed properties in SQL column order.
+        public let properties: [String]
+        /// Whether the index enforces uniqueness.
+        public let isUnique: Bool
+
+        /// Creates index metadata.
+        public init(properties: [String], isUnique: Bool = false) {
+            self.properties = properties
+            self.isUnique = isUnique
+        }
+    }
+
     /// Describes a persisted model entity.
     public struct Entity: Hashable, Sendable {
         /// The entity's stable model type name.
@@ -8,12 +22,17 @@ public struct Schema: Sendable {
         public let attributes: [Attribute]
         /// The entity's persisted relationships.
         public let relationships: [Relationship]
+        /// Entity-level indexes.
+        public let indexes: [Index]
 
         /// Creates an entity and preserves property declaration order.
-        public init(name: String, attributes: [Attribute] = [], relationships: [Relationship] = []) {
+        public init(
+            name: String, attributes: [Attribute] = [], relationships: [Relationship] = [], indexes: [Index] = []
+        ) {
             self.name = name
             self.attributes = attributes
             self.relationships = relationships
+            self.indexes = indexes
         }
     }
 

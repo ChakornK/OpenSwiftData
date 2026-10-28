@@ -3,6 +3,66 @@ import OSDCore
 @testable import OSDStorage
 
 final class SchemaBuilderTests: XCTestCase {
+    func testCompoundUniqueAndIndexDDLPreserveDeclaredColumnOrder() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Pair",
+                attributes: [
+                    Schema.Attribute(name: "left", type: "String"),
+                    Schema.Attribute(name: "right", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["right", "left"], isUnique: true),
+                    Schema.Index(properties: ["left", "right"]),
+                ])
+        ])
+        let statements = try SchemaBuilder.build(schema).statements
+        XCTAssertEqual(
+            statements.suffix(2),
+            [
+                "CREATE UNIQUE INDEX ZPAIR_ZRIGHT_ZLEFT_UNIQUE_INDEX ON ZPAIR (ZRIGHT, ZLEFT);",
+                "CREATE INDEX ZPAIR_ZLEFT_ZRIGHT_INDEX ON ZPAIR (ZLEFT, ZRIGHT);",
+            ])
+    }
+
+    func testIndexRejectsMissingPropertiesAndCollidingGeneratedNames() {
+        let missing = Schema([
+            Schema.Entity(
+                name: "Item", attributes: [Schema.Attribute(name: "value", type: "Int")],
+                indexes: [Schema.Index(properties: ["absent"])])
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(missing))
+
+        let collision = Schema([
+            Schema.Entity(
+                name: "A",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int")
+                ],
+                relationships: [Schema.Relationship(name: "child", destination: "B")],
+                indexes: [
+                    Schema.Index(properties: ["child"])
+                ]),
+            Schema.Entity(name: "B"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(collision))
+
+        let ambiguousEncoding = Schema([
+            Schema.Entity(
+                name: "Pair",
+                attributes: [
+                    Schema.Attribute(name: "a_Zb", type: "Int"),
+                    Schema.Attribute(name: "a", type: "Int"),
+                    Schema.Attribute(name: "b", type: "Int"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["a_Zb"]),
+                    Schema.Index(properties: ["a", "b"]),
+                ])
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(ambiguousEncoding))
+    }
+
     func testExactDDLForDocumentedSupportedShapeAndRows() throws {
         let schema = Schema([
             Schema.Entity(

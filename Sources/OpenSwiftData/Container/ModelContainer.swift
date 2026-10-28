@@ -194,10 +194,18 @@ public final class ModelContainer: Sendable {
                     originalName: typedRelationship?.originalName
                 )
             }
+            let indexes =
+                modelType.schemaIndexes()
+                + attributes.compactMap { attribute in
+                    attribute.options.contains(.unique)
+                        ? Schema.Index(properties: [attribute.name], isUnique: true) : nil
+                }
+            var seenIndexes = Set<Schema.Index>()
             return Schema.Entity(
                 name: Self.unqualifiedTypeName(String(describing: modelType)),
                 attributes: attributes,
-                relationships: relationships
+                relationships: relationships,
+                indexes: indexes.filter { seenIndexes.insert($0).inserted }
             )
         }
         let explicitInverseDeclarations = Set(
@@ -249,7 +257,9 @@ public final class ModelContainer: Sendable {
                     originalName: relationship.originalName
                 )
             }
-            return Schema.Entity(name: entity.name, attributes: entity.attributes, relationships: relationships)
+            return Schema.Entity(
+                name: entity.name, attributes: entity.attributes, relationships: relationships,
+                indexes: entity.indexes)
         }
         schema = Schema(inferredEntities)
         self.configurations = configurations

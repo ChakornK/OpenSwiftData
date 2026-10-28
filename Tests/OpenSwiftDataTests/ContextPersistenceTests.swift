@@ -135,6 +135,46 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testFetchDescriptorLimitOffsetSortAndConvenienceQueries() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("fetch-descriptor"))
+        let context = container.mainContext
+        for title in ["c", "a", "b"] {
+            context.insert(PersistenceTestModel(title: title))
+        }
+        try context.save()
+
+        let descriptor = FetchDescriptor<PersistenceTestModel>(
+            sortBy: [SortDescriptor(\.title)], fetchLimit: 1, fetchOffset: 1)
+        let fetched = try context.fetch(descriptor)
+
+        XCTAssertEqual(fetched.map(\.title), ["b"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+        let countDescriptor = FetchDescriptor<PersistenceTestModel>(includePendingChanges: false)
+        XCTAssertEqual(try context.fetchCount(countDescriptor), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(countDescriptor).count, 3)
+        var enumerated: [String] = []
+        try context.enumerate(descriptor, batchSize: 1) { enumerated.append($0.title) }
+        XCTAssertEqual(enumerated, ["b"])
+    }
+
+    @MainActor
+    func testPredicateFetchFailsExplicitlyUntilStorageCompositionSupportsQueries() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("unsupported-fetch-predicate"))
+        let predicate = #Predicate<PersistenceTestModel> { $0.count > 0 }
+        let descriptor = FetchDescriptor<PersistenceTestModel>(predicate: predicate)
+
+        XCTAssertThrowsError(try container.mainContext.fetch(descriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                XCTFail("Expected unsupportedPredicate, got \(error)")
+                return
+            }
+        }
+    }
+
+    @MainActor
     func testUniqueInsertUpsertsAndRebindsIdentityMap() throws {
         let container = try ModelContainer(
             for: FailedWritePersistenceFixture.self, configurations: .sqliteMemory("unique-upsert"))

@@ -17,7 +17,9 @@ package enum PredicateNodeCatalog {
             Entry(name: "Disjunction", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "Negation", requiredChildren: ["expression"]),
             Entry(name: "Comparison", requiredChildren: ["op", "lhs", "rhs"]),
+            Entry(name: "Equal", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "KeyPath", requiredChildren: ["root", "keyPath"]),
+            Entry(name: "Swift.KeyPath", requiredChildren: []),
             Entry(name: "Variable", requiredChildren: ["key"]),
             Entry(name: "VariableID", requiredChildren: ["id"]),
             Entry(name: "Value", requiredChildren: ["value"]),
@@ -27,6 +29,9 @@ package enum PredicateNodeCatalog {
         ].map { ($0.name, $0) })
 
     package static func entry(for typeName: String) -> Entry? {
+        if typeName.hasPrefix("Swift.KeyPath<") {
+            return entries["Swift.KeyPath"]
+        }
         let outerTypeName = typeName.split(separator: "<", maxSplits: 1, omittingEmptySubsequences: false)[0]
         guard let nodeName = outerTypeName.split(separator: ".").last else {
             return nil

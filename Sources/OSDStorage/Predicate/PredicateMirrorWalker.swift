@@ -28,17 +28,21 @@ package enum PredicateMirrorWalker {
             throw PredicateCatalogError.unsupportedNode(typeName)
         }
         let children = Array(mirror.children)
+        let labels = Set(children.compactMap(\.label))
+        if entry.name == "Swift.KeyPath", children.isEmpty {
+            return .capture(typeName: typeName, description: String(describing: value))
+        }
         if entry.name == "KeyPath", children.isEmpty {
             return .expression(
                 name: entry.name,
                 children: [
                     (
-                        "keyPath",
-                        .capture(typeName: typeName, description: String(describing: value))
-                    )
+                        "root",
+                        .expression(name: "Variable", children: [("key", .capture(typeName: "", description: ""))])
+                    ),
+                    ("keyPath", .capture(typeName: "Swift.KeyPath", description: String(describing: value))),
                 ])
         }
-        let labels = Set(children.compactMap(\.label))
         let missing = entry.requiredChildren.subtracting(labels).sorted()
         guard missing.isEmpty else {
             throw PredicateCatalogError.malformedNode(entry.name, missingChildren: missing)

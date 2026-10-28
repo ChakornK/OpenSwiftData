@@ -376,14 +376,29 @@ public final class ModelContext {
     /// Fetches models matching a descriptor, which requires a persistent store.
     public func fetch<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
         guard let store = container?.store else { throw unsupportedStore("Fetch") }
-        _ = descriptor
         guard let entity = container?.schema.entity(forName: String(describing: Model.self)) else { return [] }
-        let attributes = canonicalAttributes(for: entity)
-        let columns = attributes.map { "Z\($0.name.uppercased())" }
+        let allAttributes = canonicalAttributes(for: entity)
+        let requestedProperties = try selectedAttributes(descriptor.propertiesToFetch, entity: entity, type: Model.self)
+        let selectedAttributesForMaterialization = allAttributes.filter { requestedProperties.contains($0.name) }
+        let fetchedLimit = descriptor.fetchLimit.map { $0 + max(0, descriptor.fetchOffset ?? 0) }
+        let orderSQL = try sortSQL(descriptor.sortBy, entity: entity, type: Model.self)
+        let columns = requestedProperties.map { "Z\($0.uppercased())" }
         let selectColumns = (["Z_PK", "Z_OPT"] + columns).joined(separator: ", ")
+        var sql = "SELECT \(selectColumns) FROM Z\(entity.name.uppercased()) AS t0"
+        if descriptor.predicate != nil {
+            throw SwiftDataError.unsupportedPredicate("Predicate SQL compilation requires storage composition")
+        }
+        sql += " ORDER BY \(orderSQL), t0.Z_PK ASC"
+        if let limit = fetchedLimit {
+            guard limit >= 0 else { throw SwiftDataError.unsupportedPredicate("Negative fetch limit") }
+            sql += " LIMIT \(limit)"
+        }
+        if let offset = descriptor.fetchOffset, fetchedLimit != nil, !descriptor.includePendingChanges {
+            guard offset >= 0 else { throw SwiftDataError.unsupportedPredicate("Negative fetch offset") }
+            sql += " OFFSET \(offset)"
+        }
         let rows = try store.read { connection in
-            try connection.rows(
-                "SELECT \(selectColumns) FROM Z\(entity.name.uppercased()) ORDER BY Z_PK ASC", arguments: [])
+            try connection.rows(sql, arguments: [])
         }
         var models: [Model] = []
         var primaryKeys: [Int64] = []
@@ -394,12 +409,14 @@ public final class ModelContext {
             if let existing = identityMap.model(for: key, as: Model.self) {
                 model = existing
                 if !existing.hasChanges {
-                    try refreshAttributes(existing, entity: entity, attributes: attributes, row: row)
+                    try refreshAttributes(
+                        existing, entity: entity, attributes: selectedAttributesForMaterialization, row: row)
                 }
                 refreshVersion(existing, version: Int(version))
             } else {
                 model = try materialize(
-                    Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: storeIdentifier,
+                    Model.self, entity: entity, attributes: selectedAttributesForMaterialization, row: row,
+                    storeIdentifier: storeIdentifier,
                     primaryKey: pk, version: Int(version))
                 identityMap.register(model, for: key)
             }
@@ -410,21 +427,87 @@ public final class ModelContext {
         var visited = relationshipLoadVisited
         try materializeRelationships(models, entity: entity, primaryKeys: primaryKeys, store: store, visited: &visited)
         relationshipLoadVisited = visited
-        return models
+        return try mergePending(models, descriptor: descriptor)
     }
 
     /// Counts models matching a descriptor, which requires a persistent store.
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
-        _ = descriptor
-        throw unsupportedStore("Fetch count")
+        guard let store = container?.store,
+            let entity = container?.schema.entity(forName: String(describing: Model.self))
+        else { throw unsupportedStore("Fetch count") }
+        if let fetchLimit = descriptor.fetchLimit, fetchLimit < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
+        }
+        if let fetchOffset = descriptor.fetchOffset, fetchOffset < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
+        }
+        let orderSQL = try sortSQL(descriptor.sortBy, entity: entity, type: Model.self)
+        var sql = "SELECT t0.Z_PK FROM Z\(entity.name.uppercased()) AS t0 ORDER BY \(orderSQL), t0.Z_PK ASC"
+        if let limit = descriptor.fetchLimit { sql += " LIMIT \(max(0, limit) + max(0, descriptor.fetchOffset ?? 0))" }
+        if let offset = descriptor.fetchOffset {
+            if descriptor.fetchLimit == nil { sql += " LIMIT -1" }
+            if !descriptor.includePendingChanges { sql += " OFFSET \(max(0, offset))" }
+        }
+        let rows = try store.read { try $0.rows(sql, arguments: []) }
+        let count = rows.count
+        if descriptor.includePendingChanges {
+            let pending = (state.insertedModels + state.changedModels).filter {
+                String(describing: type(of: $0)) == entity.name && !$0.isDeleted
+            }.count
+            let deleted = state.deletedModels.filter { String(describing: type(of: $0)) == entity.name }.count
+            let adjusted = max(0, count + pending - deleted)
+            let offset = max(0, descriptor.fetchOffset ?? 0)
+            let afterOffset = max(0, adjusted - offset)
+            return min(afterOffset, descriptor.fetchLimit ?? Int.max)
+        }
+        return count
     }
 
     /// Fetches identifiers matching a descriptor, which requires a persistent store.
     public func fetchIdentifiers<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>
     ) throws -> [PersistentIdentifier] {
-        _ = descriptor
-        throw unsupportedStore("Identifier fetch")
+        guard descriptor.predicate == nil else {
+            throw SwiftDataError.unsupportedPredicate("Predicate SQL compilation requires storage composition")
+        }
+        guard let store = container?.store,
+            let entity = container?.schema.entity(forName: String(describing: Model.self))
+        else { throw unsupportedStore("Identifier fetch") }
+        if let fetchLimit = descriptor.fetchLimit, fetchLimit < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
+        }
+        if let fetchOffset = descriptor.fetchOffset, fetchOffset < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
+        }
+        let orderSQL = try sortSQL(descriptor.sortBy, entity: entity, type: Model.self)
+        var sql = "SELECT t0.Z_PK FROM Z\(entity.name.uppercased()) AS t0 ORDER BY \(orderSQL), t0.Z_PK ASC"
+        let fetchLimit = descriptor.fetchLimit.map { max(0, $0) + max(0, descriptor.fetchOffset ?? 0) }
+        if let fetchLimit { sql += " LIMIT \(fetchLimit)" }
+        if let offset = descriptor.fetchOffset, fetchLimit != nil, !descriptor.includePendingChanges {
+            sql += " OFFSET \(max(0, offset))"
+        }
+        let rows = try store.read { try $0.rows(sql, arguments: []) }
+        var identifiers = rows.compactMap { row -> PersistentIdentifier? in
+            guard case let .int(primaryKey)? = row.first else { return nil }
+            return PersistentIdentifier(
+                storeIdentifier: storeIdentifier, entityName: String(describing: Model.self), primaryKey: primaryKey)
+        }
+        if descriptor.includePendingChanges {
+            let pending = (state.insertedModels + state.changedModels).compactMap { model -> (any PersistentModel)? in
+                guard model is Model, !model.isDeleted else { return nil }
+                return model
+            }
+            let pendingIDs = Set(pending.map(\.persistentModelID))
+            identifiers.removeAll { pendingIDs.contains($0) }
+            identifiers.append(contentsOf: pending.map(\.persistentModelID))
+            let deletedIDs = Set(state.deletedModels.map(\.persistentModelID))
+            identifiers.removeAll { deletedIDs.contains($0) }
+        }
+        let offset = max(0, descriptor.fetchOffset ?? 0)
+        guard offset < identifiers.count else { return [] }
+        identifiers = Array(identifiers.dropFirst(offset))
+        if let limit = descriptor.fetchLimit { identifiers = Array(identifiers.prefix(max(0, limit))) }
+        return identifiers
     }
 
     /// Enumerates models matching a descriptor, which requires a persistent store.
@@ -434,8 +517,32 @@ public final class ModelContext {
         allowEscapingMutations: Bool = false,
         block: (Model) throws -> Void
     ) throws {
-        _ = (descriptor, batchSize, allowEscapingMutations, block)
-        throw unsupportedStore("Enumeration")
+        guard batchSize > 0 else { throw SwiftDataError.unsupportedPredicate("Batch size must be positive") }
+        if descriptor.predicate != nil {
+            throw SwiftDataError.unsupportedPredicate("Predicate SQL compilation requires storage composition")
+        }
+        let identifiers = try fetchIdentifiers(descriptor)
+        for start in stride(from: 0, to: identifiers.count, by: batchSize) {
+            let end = min(start + batchSize, identifiers.count)
+            for identifier in identifiers[start..<end] {
+                guard let model: Model = try model(for: identifier) else { continue }
+                if allowEscapingMutations {
+                    try block(model)
+                } else {
+                    let snapshot = model.snapshotLifecycle()
+                    do {
+                        try block(model)
+                    } catch {
+                        model.restoreLifecycle(snapshot)
+                        throw error
+                    }
+                    if model.hasChanges {
+                        model.restoreLifecycle(snapshot)
+                        throw SwiftDataError.unsupportedStore("Enumeration mutations are not allowed")
+                    }
+                }
+            }
+        }
     }
 
     /// Finds a model by its persistent identifier, which requires a persistent store.
@@ -598,6 +705,79 @@ public final class ModelContext {
 
     private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
         entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+    }
+
+    private func selectedAttributes<Model: PersistentModel>(
+        _ keyPaths: [PartialKeyPath<Model>]?,
+        entity: Schema.Entity,
+        type: Model.Type
+    ) throws -> [String] {
+        guard let keyPaths else { return canonicalAttributes(for: entity).map(\.name) }
+        let names = try keyPaths.map { keyPath in
+            guard let metadata = type.schemaMetadata().first(where: { $0.keypath == keyPath }),
+                !metadata.isRelationship,
+                entity.attributes.contains(where: { $0.name == metadata.name })
+            else {
+                throw SwiftDataError.unsupportedSchemaProperty("propertiesToFetch contains a non-attribute key path")
+            }
+            return metadata.name
+        }
+        let available = Set(names)
+        return canonicalAttributes(for: entity).map(\.name).filter { available.contains($0) }
+    }
+
+    private func sortSQL<Model: PersistentModel>(
+        _ descriptors: [SortDescriptor<Model>],
+        entity: Schema.Entity,
+        type: Model.Type
+    ) throws -> String {
+        let columns = try descriptors.map { descriptor -> String in
+            let property =
+                type.schemaMetadata().first(where: { $0.keypath == descriptor.keyPath })?.name
+                ?? descriptor.propertyName
+            guard let property,
+                entity.attributes.contains(where: { $0.name == property }),
+                property.utf8.allSatisfy({
+                    ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
+                })
+            else {
+                throw SwiftDataError.unsupportedPredicate("Sort key must be a direct persisted attribute")
+            }
+            return "t0.Z\(property.uppercased()) \(descriptor.isAscending ? "ASC" : "DESC")"
+        }
+        return columns.isEmpty ? "t0.Z_PK ASC" : columns.joined(separator: ", ")
+    }
+
+    private func mergePending<Model: PersistentModel>(
+        _ fetched: [Model],
+        descriptor: FetchDescriptor<Model>
+    ) throws -> [Model] {
+        guard descriptor.includePendingChanges else { return fetched }
+        var merged = fetched.filter { model in !state.containsDeleted(model) }
+        let present = Set(merged.map(ObjectIdentifier.init))
+        let pending = (state.insertedModels + state.changedModels).compactMap { $0 as? Model }
+        if descriptor.predicate != nil, !pending.isEmpty {
+            throw SwiftDataError.unsupportedPredicate("Pending predicate evaluation is not implemented")
+        }
+        for model in pending where !present.contains(ObjectIdentifier(model)) && !model.isDeleted {
+            merged.append(model)
+        }
+        if !descriptor.sortBy.isEmpty {
+            merged.sort { lhs, rhs in
+                for sort in descriptor.sortBy {
+                    let result = sort.compare(lhs, rhs)
+                    if result != .orderedSame { return result == .orderedAscending }
+                }
+                let lhsPK = lhs.persistentModelID.primaryKey ?? Int64.max
+                let rhsPK = rhs.persistentModelID.primaryKey ?? Int64.max
+                return lhsPK < rhsPK
+            }
+        }
+        let offset = max(0, descriptor.fetchOffset ?? 0)
+        guard offset < merged.count else { return [] }
+        merged = Array(merged.dropFirst(offset))
+        if let limit = descriptor.fetchLimit { merged = Array(merged.prefix(max(0, limit))) }
+        return merged
     }
 
     private func materialize<Model: PersistentModel>(

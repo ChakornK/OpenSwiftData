@@ -4,6 +4,21 @@ import SwiftSyntax
 import XCTest
 
 final class CodeGenTests: XCTestCase {
+    func testModelActorMemberSourcesMatchExecutorContract() {
+        XCTAssertEqual(
+            CodeGen.modelActorMemberSources(actorName: "StoreActor"),
+            [
+                "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+                "nonisolated let modelContainer: ModelContainer",
+                "init(modelContainer: ModelContainer) {\n"
+                    + "    self.modelContainer = modelContainer\n"
+                    + "    self.modelExecutor = DefaultSerialModelExecutor.make(container: modelContainer)\n"
+                    + "}",
+            ])
+        XCTAssertEqual(
+            CodeGen.modelActorExtensionSource(actorName: "StoreActor"), "extension StoreActor: ModelActor {}")
+    }
+
     func testUniqueAndIndexDirectiveSourcesPreserveColumnOrder() throws {
         let unique = try parseDirective("#Unique(\\Model.second, \\Model.first)")
         let index = try parseDirective("#Index(\\Model.first, \\Model.second)")

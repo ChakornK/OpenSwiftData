@@ -4,6 +4,18 @@ import Foundation
 import SwiftDiagnostics
 
 enum CodeGen {
+    static func modelActorMemberSources(actorName: String) -> [String] {
+        [
+            "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+            "nonisolated let modelContainer: ModelContainer",
+            "init(modelContainer: ModelContainer) {\n    self.modelContainer = modelContainer\n    self.modelExecutor = DefaultSerialModelExecutor.make(container: modelContainer)\n}",
+        ]
+    }
+
+    static func modelActorExtensionSource(actorName: String) -> String {
+        "extension \(actorName): ModelActor {}"
+    }
+
     enum SchemaDirectiveKind {
         case unique
         case index

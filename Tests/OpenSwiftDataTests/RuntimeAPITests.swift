@@ -1,9 +1,24 @@
 import Foundation
 import XCTest
 @testable import OpenSwiftData
+import OpenSwiftDataSQLite
 import OSDCore
 @testable import OSDTestSupport
 import OSDConformance
+
+@ModelActor
+actor PersistenceTestActor {
+    func insertAndSave(_ title: String) throws -> String {
+        let model = PersistenceTestModel(title: title)
+        modelContext.insert(model)
+        try modelContext.save()
+        return model.title
+    }
+
+    func checkContextAffinity() -> Bool {
+        modelContext.hasChanges == false
+    }
+}
 
 final class OptionalDestinationFixture: PersistentModel, Hashable {
     var persistentBackingData: any BackingData<OptionalDestinationFixture>
@@ -272,6 +287,23 @@ enum SecondNamespace {
 }
 
 final class RuntimeAPITests: XCTestCase {
+    @MainActor
+    func testModelActorExecutesContextOperationsOnItsSerialExecutor() async throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("model-actor-context"))
+        let actor = PersistenceTestActor(modelContainer: container)
+        let saved = try await actor.insertAndSave("actor-value")
+        XCTAssertEqual(saved, "actor-value")
+    }
+
+    @MainActor
+    func testModelContextAffinityDetectsWrongExecutor() async throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("context-affinity"))
+        let actor = PersistenceTestActor(modelContainer: container)
+        let isIsolated = await actor.checkContextAffinity()
+        XCTAssertTrue(isIsolated)
+    }
 
     @MainActor
     func testContainerPreservesOptionalCollectionRelationships() throws {

@@ -147,7 +147,10 @@ struct ModelActorMacro: MemberMacro, ExtensionMacro {
         providingMembersOf declaration: some DeclGroupSyntax,
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] { [] }
+    ) throws -> [DeclSyntax] {
+        guard let actor = declaration.as(ActorDeclSyntax.self) else { return [] }
+        return CodeGen.modelActorMemberSources(actorName: actor.name.text).map(DeclSyntax.init(stringLiteral:))
+    }
 
     static func expansion(
         of node: AttributeSyntax,
@@ -155,7 +158,11 @@ struct ModelActorMacro: MemberMacro, ExtensionMacro {
         providingExtensionsOf type: some TypeSyntaxProtocol,
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
-    ) throws -> [ExtensionDeclSyntax] { [] }
+    ) throws -> [ExtensionDeclSyntax] {
+        guard let actor = declaration.as(ActorDeclSyntax.self) else { return [] }
+        return [DeclSyntax(stringLiteral: CodeGen.modelActorExtensionSource(actorName: actor.name.text))]
+            .compactMap { $0.as(ExtensionDeclSyntax.self) }
+    }
 }
 
 struct PersistedPropertyMacro: AccessorMacro, PeerMacro {

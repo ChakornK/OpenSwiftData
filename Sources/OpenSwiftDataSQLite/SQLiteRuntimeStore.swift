@@ -61,35 +61,13 @@ private struct SQLiteRuntimeConnection: RuntimeConnection {
 /// SQLite store composition for OpenSwiftData containers.
 public enum OpenSwiftDataSQLite {
     static let sqliteFactory: RuntimeStoreFactory = { location, schema in
-        let driverLocation: StoreLocation
-        switch location {
-        case let .memory(name): driverLocation = .memory(name: name)
-        case let .file(url): driverLocation = .file(url)
-        }
-        let driver = try GRDBSQLiteDriver(location: driverLocation)
-        let store = SQLiteRuntimeStore(driver: driver)
-        do {
-            try store.write { connection in
-                let built = try SchemaBuilder.build(schema)
-                for statement in built.statements {
-                    try connection.execute(statement, arguments: [])
-                }
-                for row in built.bootstrapRows {
-                    try connection.execute(
-                        "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, ?, ?)",
-                        arguments: [
-                            .int(row.entityID),
-                            .text(row.name),
-                            .int(row.superEntityID),
-                            .int(row.maximumPrimaryKey),
-                        ]
-                    )
-                }
+        let driverLocation: StoreLocation =
+            switch location {
+            case let .memory(name): .memory(name: name)
+            case let .file(url): .file(url)
             }
-        } catch {
-            try? driver.close()
-            throw error
-        }
+        let driver = try LightweightMigration.openStore(location: driverLocation, schema: schema)
+        let store = SQLiteRuntimeStore(driver: driver)
         return store
     }
 }

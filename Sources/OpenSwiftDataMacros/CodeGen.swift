@@ -73,6 +73,7 @@ enum CodeGen {
 
     struct Property {
         let name: String
+        let escapedName: String
         let initializer: String?
         let metadata: String?
         let inverseKeyPath: String?
@@ -83,9 +84,12 @@ enum CodeGen {
         let isComputed: Bool
         let isStatic: Bool
         let isLazy: Bool
+        let isFlattened: Bool
+        let attributeOptionNames: [String]
 
         init(
             name: String,
+            escapedName: String? = nil,
             initializer: String? = nil,
             metadata: String? = nil,
             inverseKeyPath: String? = nil,
@@ -95,9 +99,12 @@ enum CodeGen {
             isTransient: Bool = false,
             isComputed: Bool = false,
             isStatic: Bool = false,
-            isLazy: Bool = false
+            isLazy: Bool = false,
+            isFlattened: Bool = false,
+            attributeOptionNames: [String] = []
         ) {
             self.name = name
+            self.escapedName = escapedName ?? name
             self.initializer = initializer
             self.metadata = metadata
             self.inverseKeyPath = inverseKeyPath
@@ -108,10 +115,14 @@ enum CodeGen {
             self.isComputed = isComputed
             self.isStatic = isStatic
             self.isLazy = isLazy
+            self.isFlattened = isFlattened
+            self.attributeOptionNames = attributeOptionNames
         }
 
         init(_ binding: PatternBindingSyntax, attributes: AttributeListSyntax, modifiers: DeclModifierListSyntax) {
-            name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""
+            let rawName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""
+            escapedName = rawName
+            name = rawName.first == "`" && rawName.last == "`" ? String(rawName.dropFirst().dropLast()) : rawName
             initializer = binding.initializer?.value.trimmedDescription
             isComputed = binding.accessorBlock != nil
             isStatic = modifiers.contains { ["static", "class"].contains($0.name.text) }
@@ -122,6 +133,8 @@ enum CodeGen {
             var explicitAttribute = false
             var explicitRelationship = false
             var transient = false
+            var flattened = false
+            var attributeOptionNames: [String] = []
             for element in attributes {
                 guard case let .attribute(attribute) = element else { continue }
                 let attributeName = attribute.attributeName.trimmedDescription
@@ -144,11 +157,23 @@ enum CodeGen {
                 }
                 if attributeName == "Relationship" {
                     explicitRelationship = true
+                    attributeOptionNames = []
                 }
                 if attributeName == "Attribute" {
                     explicitAttribute = true
                 }
                 let metadataArguments = argumentList.trimmedDescription.trimmingWhitespace()
+                if attributeName == "Attribute", metadataArguments.contains(".flattened") {
+                    flattened = true
+                }
+                if attributeName == "Attribute" {
+                    attributeOptionNames = argumentList.compactMap { argument in
+                        guard argument.label == nil,
+                            let member = argument.expression.as(MemberAccessExprSyntax.self)
+                        else { return nil }
+                        return member.declName.baseName.text
+                    }
+                }
                 if attributeName == "Relationship", argumentList.isEmpty {
                     resolvedMetadata = nil
                 } else {
@@ -182,6 +207,8 @@ enum CodeGen {
             hasExplicitRelationship = explicitRelationship
             isRelationship = explicitRelationship
             isTransient = transient
+            isFlattened = flattened
+            self.attributeOptionNames = attributeOptionNames
         }
     }
 
@@ -200,6 +227,7 @@ enum CodeGen {
         let properties = persistedProperties(in: declaration)
         let adapterRows = properties.compactMap { property -> String? in
             guard let type = propertyType(property.name, in: declaration) else { return nil }
+            if property.isFlattened { return nil }
             let isExplicitAttribute = property.hasExplicitAttribute
             let isRelationshipProperty =
                 property.hasExplicitRelationship || property.metadata?.hasPrefix("Schema.Relationship") == true
@@ -215,8 +243,22 @@ enum CodeGen {
             adapterRows.isEmpty
             ? nil
             : "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
+        let flattenedAdapterRows = properties.compactMap { property -> String? in
+            guard property.isFlattened, let type = propertyType(property.name, in: declaration) else { return nil }
+            guard type.as(OptionalTypeSyntax.self) == nil else { return nil }
+            let typeName = type.trimmedDescription
+            let memberName = property.escapedName
+            let propertyLiteral = escapeSwiftString(property.name)
+            return
+                "        \(typeName).flattenedComponents.map { $0.modelAdapter(propertyName: \"\(propertyLiteral)\", propertyKeyPath: \\\(modelName).\(memberName), setComposite: { value, model in model.\(memberName) = value }) }"
+        }
+        let flattenedAdapterSource =
+            flattenedAdapterRows.isEmpty
+            ? nil
+            : "public static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] {\n    [\n\(flattenedAdapterRows.joined(separator: ",\n"))\n    ].flatMap { $0 }\n}"
         let relationshipRows = properties.compactMap { property -> String? in
             guard let type = propertyType(property.name, in: declaration) else { return nil }
+            guard !property.hasExplicitAttribute else { return nil }
             let relationshipMetadata =
                 property.metadata?.hasPrefix("Schema.Relationship") == true
                 ? property.metadata : nil
@@ -254,7 +296,8 @@ enum CodeGen {
             } else {
                 isSimpleModelType = destination.is(MemberTypeSyntax.self)
             }
-            guard isSimpleModelType, !isSupportedScalarType(destination), explicitRelationship || !explicitAttribute
+            guard isSimpleModelType, !isSupportedScalarType(destination),
+                explicitRelationship || (isCollection && !explicitAttribute)
             else { return nil }
             let endpointClosure =
                 isCollection
@@ -308,7 +351,28 @@ enum CodeGen {
             ? nil
             : "public static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]\n}"
         let metadataRows = properties.map { property in
-            "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.name), defaultValue: \(property.initializer ?? "nil"), metadata: \(property.metadata ?? "nil"), isExplicitRelationship: \(property.hasExplicitRelationship))"
+            let components =
+                property.isFlattened && propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) == nil
+                ? ", flattenedComponents: \(propertyType(property.name, in: declaration)?.trimmedDescription ?? "")"
+                    + ".flattenedComponentsForSchema.map { component in Schema.Attribute.Component(name: component.0, columnName: \"\(escapeSwiftString(property.name))_\\(component.0)\", type: component.1) }"
+                : ""
+            let metadata = property.metadata ?? "nil"
+            let isOptional = propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) != nil
+            let codableMetadata =
+                !property.isFlattened && !property.hasExplicitRelationship
+                    && propertyType(property.name, in: declaration).map { type in
+                        !isSupportedScalarType(type)
+                            && !(isOptional
+                                && type.as(OptionalTypeSyntax.self).map {
+                                    isSupportedScalarType($0.wrappedType)
+                                } == true)
+                    } == true
+                ? "Schema.Attribute(.codable)" : metadata
+            let options =
+                property.attributeOptionNames.isEmpty
+                ? "" : ", options: [" + property.attributeOptionNames.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
+            return
+                "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(options)\(components))"
         }
         let metadataBody =
             metadataRows.isEmpty
@@ -328,6 +392,7 @@ enum CodeGen {
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
             "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
             adapterSource,
+            flattenedAdapterSource,
             relationshipAdapterSource,
             inferredRelationshipAdapterSource,
             "public static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates() }",
@@ -355,7 +420,9 @@ enum CodeGen {
         declaration.memberBlock.members.compactMap { member -> TypeSyntax? in
             guard let variable = member.decl.as(VariableDeclSyntax.self) else { return nil }
             return variable.bindings.first(where: {
-                $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == name
+                guard let raw = $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text else { return false }
+                let normalized = raw.first == "`" && raw.last == "`" ? String(raw.dropFirst().dropLast()) : raw
+                return normalized == name
             })?.typeAnnotation?.type
         }.first
     }

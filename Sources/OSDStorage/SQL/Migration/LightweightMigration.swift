@@ -47,8 +47,15 @@ package enum LightweightMigration {
         }
     }
 
-    package static func openStore(location: StoreLocation, schema: Schema) throws -> GRDBSQLiteDriver {
-        let driver = try GRDBSQLiteDriver(location: location)
+    package static func openStore(
+        location: StoreLocation,
+        schema: Schema,
+        externalColumns: Set<String> = [],
+        externalStorageOperations: ExternalStorageFileOperations = .live
+    ) throws -> GRDBSQLiteDriver {
+        let driver = try GRDBSQLiteDriver(
+            location: location, externalColumns: externalColumns,
+            externalStorageOperations: externalStorageOperations)
         do {
             try driver.write { connection in
                 try connection.execute("SAVEPOINT osd_schema_open")
@@ -59,6 +66,15 @@ package enum LightweightMigration {
                     try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_open")
                     try? connection.execute("RELEASE SAVEPOINT osd_schema_open")
                     throw error
+                }
+            }
+            try driver.write { connection in
+                connection.afterCommit { connection in
+                    do {
+                        try connection.reconcileExternalFiles()
+                    } catch {
+                        OSDLog.debug("External Data orphan cleanup failed: \(error)")
+                    }
                 }
             }
             return driver
@@ -105,9 +121,14 @@ package enum LightweightMigration {
                 throw SwiftDataError.migrationUnsupported(
                     "Physical schema is missing required columns for \(entity.name).")
             }
-            for attribute in entity.attributes where !columns.contains("Z\(attribute.name.uppercased())") {
-                throw SwiftDataError.migrationUnsupported(
-                    "Physical schema is missing attribute \(entity.name).\(attribute.name).")
+            for attribute in entity.attributes {
+                let expectedColumns =
+                    attribute.options.contains(.flattened)
+                    ? attribute.components.map(\.columnName) : [attribute.name]
+                for column in expectedColumns where !columns.contains("Z\(column.uppercased())") {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Physical schema is missing attribute column \(entity.name).\(column).")
+                }
             }
             for relationship in entity.relationships where !relationship.isToMany {
                 guard columns.contains("Z\(relationship.name.uppercased())") else {
@@ -221,13 +242,22 @@ package enum LightweightMigration {
         guard Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)) else {
             throw SwiftDataError.migrationUnsupported("Entity additions and removals require a versioned row mapping.")
         }
+        try validateDestinationIndexNames(destination)
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
+        var indexTransitions: [([IndexDefinition], [IndexDefinition])] = []
         for entity in destination.entities {
             guard let old = sourceEntities[entity.name] else {
                 throw SwiftDataError.migrationUnsupported("Missing source entity mapping for \(entity.name).")
             }
-            try migrate(entity: old, to: entity, connection: connection)
+            try migrate(
+                entity: old,
+                to: entity,
+                sourceEntities: source.entities,
+                destinationEntities: destination.entities,
+                indexTransitions: &indexTransitions,
+                connection: connection)
         }
+        try reconcileIndexes(indexTransitions, connection: connection)
     }
 
     private static func attributeMappings(
@@ -314,16 +344,34 @@ package enum LightweightMigration {
     private static func migrate(
         entity source: Schema.Entity,
         to destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        indexTransitions: inout [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
         let table = "Z\(source.name.uppercased())"
         let existing = try tableColumns(table, connection: connection)
         let mappings = try attributeMappings(source: source, destination: destination)
+        try validateAttributeColumns(mappings, destination: destination, existing: existing)
+        for mapping in mappings {
+            guard let old = mapping.source else { continue }
+            let oldIsFlattened = old.options.contains(.flattened)
+            let newIsFlattened = mapping.destination.options.contains(.flattened)
+            let oldUsesExternalStorage = old.options.contains(.externalStorage)
+            let newUsesExternalStorage = mapping.destination.options.contains(.externalStorage)
+            guard oldIsFlattened == newIsFlattened,
+                old.components == mapping.destination.components,
+                oldUsesExternalStorage == newUsesExternalStorage
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Changing storage layout for \(destination.name).\(mapping.destination.name) requires an explicit migration."
+                )
+            }
+        }
         let mappedSources = Set(mappings.compactMap { $0.source?.name })
         guard mappedSources.count == source.attributes.count else {
-            throw SwiftDataError.migrationUnsupported("Attribute removal requires an explicit dependent-index plan.")
+            throw SwiftDataError.migrationUnsupported("Attribute removal requires a table rebuild.")
         }
-        try validateAttributeColumns(mappings, destination: destination, existing: existing)
         let renamePlan = try orderedRenames(mappings)
         for (sourceName, destinationName) in renamePlan {
             try connection.execute(
@@ -335,37 +383,28 @@ package enum LightweightMigration {
             guard let old = mapping.source else {
                 guard attribute.isOptional else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Adding required attribute \(destination.name).\(attribute.name) requires a physical table rebuild."
-                    )
+                        "Adding required attribute \(destination.name).\(attribute.name) requires a table rebuild.")
                 }
                 let type = try SQLColumnType.resolve(
                     attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
-                let column = "Z\(attribute.name.uppercased())"
-                guard !existing.contains(column) else {
-                    throw SwiftDataError.migrationUnsupported(
-                        "Destination column \(column) exists without source metadata.")
-                }
-                try connection.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(type.rawValue)")
+                try connection.execute(
+                    "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)")
                 continue
             }
-            guard old.options.contains(.unique) == attribute.options.contains(.unique) else {
-                throw SwiftDataError.migrationUnsupported("Changing uniqueness requires a table rebuild.")
-            }
             guard old.isOptional == attribute.isOptional else {
-                throw SwiftDataError.migrationUnsupported("Optionality changes require a physical table rebuild.")
+                throw SwiftDataError.migrationUnsupported("Optionality changes require a table rebuild.")
             }
-            if old.type != attribute.type {
+            guard old.type == attribute.type else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Attribute type change requires a physical table rebuild for \(destination.name).\(attribute.name)."
-                )
-            }
-            if old.isOptional && !attribute.isOptional {
-                throw SwiftDataError.migrationUnsupported(
-                    "Making \(destination.name).\(attribute.name) required requires a physical table rebuild.")
+                    "Attribute type change requires a table rebuild for \(destination.name).\(attribute.name).")
             }
         }
-        try migrateIndexes(source: source, destination: destination, connection: connection)
         try migrateRelationships(source: source, destination: destination, connection: connection, existing: existing)
+        indexTransitions.append(
+            (
+                indexDefinitions(for: source, entities: sourceEntities),
+                indexDefinitions(for: destination, entities: destinationEntities)
+            ))
     }
 
     private static func migrateRelationships(
@@ -411,29 +450,77 @@ package enum LightweightMigration {
         }
     }
 
-    private static func migrateIndexes(
-        source: Schema.Entity,
-        destination: Schema.Entity,
+    private struct IndexDefinition: Equatable {
+        let name: String
+        let statement: String
+    }
+
+    private static func reconcileIndexes(
+        _ transitions: [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
-        let sourceIndexes = Set(source.indexes.map { indexKey($0) })
-        let destinationIndexes = Set(destination.indexes.map { indexKey($0) })
-        guard sourceIndexes == destinationIndexes else {
-            throw SwiftDataError.migrationUnsupported("Index additions and removals require a targeted index plan.")
+        var oldByName: [String: IndexDefinition] = [:]
+        var newByName: [String: IndexDefinition] = [:]
+        for (old, new) in transitions {
+            for definition in old { oldByName[definition.name.uppercased()] = definition }
+            for definition in new { newByName[definition.name.uppercased()] = definition }
         }
-        for attribute in destination.attributes {
-            let wasUnique =
-                source.attributes.first(where: { $0.name == attribute.name })?.options.contains(.unique) ?? false
-            let isUnique = attribute.options.contains(.unique)
-            guard wasUnique == isUnique else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Changing attribute uniqueness requires a targeted index plan.")
+        for (name, old) in oldByName where newByName[name] != old {
+            try connection.execute("DROP INDEX IF EXISTS \(old.name)")
+        }
+        for (name, new) in newByName where oldByName[name] != new {
+            try connection.execute(new.statement)
+        }
+    }
+
+    private static func validateDestinationIndexNames(_ schema: Schema) throws {
+        var seen: Set<String> = []
+        for entity in schema.entities {
+            for index in indexDefinitions(for: entity, entities: schema.entities) {
+                guard seen.insert(index.name.uppercased()).inserted else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Destination schema contains colliding index name '\(index.name)'.")
+                }
             }
         }
     }
 
-    private static func indexKey(_ index: Schema.Index) -> String {
-        "\(index.isUnique):\(index.properties.joined(separator: "\u{0}"))"
+    private static func indexDefinitions(for entity: Schema.Entity, entities: [Schema.Entity]) -> [IndexDefinition] {
+        var definitions: [IndexDefinition] = []
+        for relationship in entity.relationships where !relationship.isToMany {
+            guard !SchemaBuilder.isNonOwner(entity, relationship, entities) else { continue }
+            let name = "Z\(entity.name.uppercased())_Z\(relationship.name.uppercased())_INDEX"
+            definitions.append(
+                IndexDefinition(
+                    name: name,
+                    statement: "CREATE INDEX \(name) ON Z\(entity.name.uppercased()) "
+                        + "(Z\(relationship.name.uppercased()));"))
+        }
+        for attribute in entity.attributes where attribute.options.contains(.unique) {
+            let name = "Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX"
+            definitions.append(
+                IndexDefinition(
+                    name: name,
+                    statement: "CREATE UNIQUE INDEX \(name) ON Z\(entity.name.uppercased()) "
+                        + "(Z\(attribute.name.uppercased()));"))
+        }
+        for index in entity.indexes {
+            if index.isUnique, index.properties.count == 1,
+                entity.attributes.first(where: { $0.name == index.properties[0] })?.options.contains(.unique) == true
+            {
+                continue
+            }
+            let columns = index.properties.map { "Z\($0.uppercased())" }
+            let name =
+                "Z\(entity.name.uppercased())_\(columns.joined(separator: "_"))"
+                + "\(index.isUnique ? "_UNIQUE" : "")_INDEX"
+            definitions.append(
+                IndexDefinition(
+                    name: name,
+                    statement: "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(name) "
+                        + "ON Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));"))
+        }
+        return definitions
     }
 
     private static func tableColumns(_ table: String, connection: SQLConnection) throws -> Set<String> {

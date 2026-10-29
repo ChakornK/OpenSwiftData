@@ -29,6 +29,132 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(SchemaHash.digest(first), SchemaHash.digest(second))
     }
 
+    func testFlattenedComponentLayoutChangesSchemaHash() {
+        let blob = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "size", type: "Size")])
+        ])
+        let flattened = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                ])
+        ])
+        XCTAssertNotEqual(SchemaHash.digest(blob), SchemaHash.digest(flattened))
+    }
+
+    func testFlattenedComponentDeclarationOrderIsCanonicalizedByName() {
+        let first = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [
+                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                        ])
+                ])
+        ])
+        let second = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [
+                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                        ])
+                ])
+        ])
+        XCTAssertEqual(SchemaHash.digest(first), SchemaHash.digest(second))
+        XCTAssertEqual(first.entities.first?.attributes.first?.components.map(\.name), ["label", "width"])
+    }
+
+    func testExternalStorageOptionChangeRequiresExplicitMigration() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "external-storage-migration"))
+        let inline = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "payload", type: "Data")])
+        ])
+        let external = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+        ])
+        try bootstrap(inline, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.openOrMigrate(to: external, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        let columnNames = columns.compactMap { row -> String? in
+            guard row.count > 1, case let .text(name) = row[1] else { return nil }
+            return name
+        }
+        XCTAssertEqual(columnNames, ["Z_PK", "Z_ENT", "Z_OPT", "ZPAYLOAD"])
+        try driver.close()
+    }
+
+    func testBlobToFlattenedAttributeMigrationFailsClosedWithoutChangingStore() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "blob-to-flattened-migration"))
+        let blob = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "size", type: "Size", options: [.codable])])
+        ])
+        let flattened = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                ])
+        ])
+        try bootstrap(blob, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSIZE) VALUES (1, 1, ?)", [.blob([1, 2, 3])])
+        }
+
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.openOrMigrate(to: flattened, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZSIZE FROM ZRECORD", []) }, [[.blob([1, 2, 3])]])
+        try driver.close()
+    }
+
+    func testFlattenedComponentMetadataRoundTrips() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [
+                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                        ])
+                ])
+        ])
+        let encoded = SchemaHash.canonicalDescription(of: schema)
+        let decoded = try SchemaHash.decodeCanonicalDescription(encoded)
+        XCTAssertEqual(schema.entities, decoded.entities)
+    }
+
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {
         let base = Schema([
             Schema.Entity(
@@ -131,6 +257,176 @@ final class SchemaMigrationTests: XCTestCase {
         }
         let columns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
         XCTAssertFalse(columns.contains { $0.count > 1 && $0[1] == .text("ZPRIORITY") })
+        try driver.close()
+    }
+
+    func testIndexAddAndRemovalMigrateOnExistingRows() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-index-change"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        ])
+        let indexed = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE) VALUES (1, 1, ?)", [.text("kept")])
+            try LightweightMigration.migrate(source: source, destination: indexed, connection: connection)
+        }
+        let addedIndexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertTrue(addedIndexes.contains([.text("ZRECORD_ZTITLE_INDEX")]))
+
+        try driver.write { try LightweightMigration.migrate(source: indexed, destination: source, connection: $0) }
+        let removedIndexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertFalse(removedIndexes.contains([.text("ZRECORD_ZTITLE_INDEX")]))
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZTITLE FROM ZRECORD") }, [[.text("kept")]])
+        try driver.close()
+    }
+
+    func testUniqueAttributeAdditionCreatesIndexAndDuplicateFailureRollsBack() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-unique-toggle"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "email", type: "String")])
+        ])
+        let unique = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("same")])
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("same")])
+        }
+
+        XCTAssertThrowsError(
+            try driver.write { try LightweightMigration.migrate(source: source, destination: unique, connection: $0) })
+        let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertFalse(indexes.contains([.text("ZRECORD_ZEMAIL_UNIQUE_INDEX")]))
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
+
+        try driver.write { connection in
+            try connection.execute("DELETE FROM ZRECORD WHERE Z_PK = 2")
+            try LightweightMigration.migrate(source: source, destination: unique, connection: connection)
+        }
+        let migratedIndexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertTrue(migratedIndexes.contains([.text("ZRECORD_ZEMAIL_UNIQUE_INDEX")]))
+        try driver.close()
+    }
+
+    func testRenamedUniqueAttributeReconcilesGeneratedIndexName() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-unique-index"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
+                ])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("a")])
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertTrue(indexes.contains([.text("ZRECORD_ZADDRESS_UNIQUE_INDEX")]))
+        XCTAssertFalse(indexes.contains([.text("ZRECORD_ZEMAIL_UNIQUE_INDEX")]))
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZADDRESS FROM ZRECORD") }, [[.text("a")]])
+        try driver.close()
+    }
+
+    func testRenamedToOneRelationshipReconcilesForeignKeyIndexOnReopen() throws {
+        let location = StoreLocation.memory(name: "migration-rename-relationship-index")
+        let driver = try GRDBSQLiteDriver(location: location)
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "child", destination: "Child")]),
+            Schema.Entity(name: "Child"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "offspring", destination: "Child", originalName: "child")
+                ]),
+            Schema.Entity(name: "Child"),
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZCHILD) VALUES (1, 1, NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertTrue(indexes.contains([.text("ZOWNER_ZOFFSPRING_INDEX")]))
+        XCTAssertFalse(indexes.contains([.text("ZOWNER_ZCHILD_INDEX")]))
+        try driver.close()
+
+        let reopened = try GRDBSQLiteDriver(location: location)
+        try reopened.write { try LightweightMigration.openOrMigrate(to: destination, connection: $0) }
+        try reopened.close()
+    }
+
+    func testIndexMigrationDoesNotCreateForeignKeyIndexForNonOwningToOne() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-nonowner-fk-index"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Alpha",
+                relationships: [Schema.Relationship(name: "beta", destination: "Beta", inverse: "alpha")]),
+            Schema.Entity(
+                name: "Beta",
+                relationships: [Schema.Relationship(name: "alpha", destination: "Alpha", inverse: "beta")]),
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")]),
+        ])
+        let destination = Schema([
+            source.entities[0],
+            source.entities[1],
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")],
+                indexes: [Schema.Index(properties: ["title"])]),
+        ])
+        try bootstrap(source, driver: driver)
+
+        try driver.write { try LightweightMigration.migrate(source: source, destination: destination, connection: $0) }
+        let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertTrue(indexes.contains([.text("ZALPHA_ZBETA_INDEX")]))
+        XCTAssertFalse(indexes.contains([.text("ZBETA_ZALPHA_INDEX")]))
+        XCTAssertTrue(indexes.contains([.text("ZRECORD_ZTITLE_INDEX")]))
+        try driver.close()
+    }
+
+    func testIndexRenameAcrossEntitiesDropsBeforeCreatingReusedName() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-global-index-transition"))
+        let source = Schema([
+            Schema.Entity(
+                name: "A", attributes: [Schema.Attribute(name: "old", type: "String")],
+                indexes: [Schema.Index(properties: ["old"])]),
+            Schema.Entity(
+                name: "B", attributes: [Schema.Attribute(name: "value", type: "String")],
+                indexes: [Schema.Index(properties: ["value"])]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "A",
+                attributes: [Schema.Attribute(name: "value", type: "String", originalName: "old")],
+                indexes: [Schema.Index(properties: ["value"])]),
+            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZA (Z_ENT, Z_OPT, ZOLD) VALUES (1, 1, ?)", [.text("a")])
+            try connection.execute("INSERT INTO ZB (Z_ENT, Z_OPT, ZVALUE) VALUES (2, 1, ?)", [.text("b")])
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
+        XCTAssertEqual(indexes.filter { $0.first == .text("ZA_ZVALUE_INDEX") }.count, 1)
+        XCTAssertFalse(indexes.contains([.text("ZA_ZOLD_INDEX")]))
+        XCTAssertFalse(indexes.contains([.text("ZB_ZVALUE_INDEX")]))
         try driver.close()
     }
 

@@ -263,6 +263,30 @@ final class CodeGenTests: XCTestCase {
         XCTAssertTrue(adapters.contains("PersistentValue.encode(model.count)"))
     }
 
+    func testFlattenedKeywordPropertyUsesEscapedIdentifierInGeneratedAdapter() throws {
+        let declaration = try parseClass(
+            """
+            final class Model {
+                @Attribute(.flattened) var `class`: Composite
+            }
+            """)
+        let generated = CodeGen.memberSources(declaration).joined(separator: "\n")
+        XCTAssertTrue(generated.contains("propertyName: \"class\""), generated)
+        XCTAssertTrue(generated.contains("propertyKeyPath: \\Model.`class`"), generated)
+        XCTAssertTrue(generated.contains("model.`class` = value"), generated)
+    }
+
+    func testAttributeOptionNamesArePreservedInSchemaMetadata() throws {
+        let declaration = try parseClass(
+            """
+            final class Model {
+                @Attribute(.externalStorage) var payload: Data
+            }
+            """)
+        let generated = CodeGen.memberSources(declaration).joined(separator: "\n")
+        XCTAssertTrue(generated.contains("isExplicitRelationship: false, options: [\"externalStorage\"]"), generated)
+    }
+
     func testExplicitAttributeCustomTypesGetAdaptersAndRelationshipsDoNot() throws {
         let declaration = try parseClass(
             """

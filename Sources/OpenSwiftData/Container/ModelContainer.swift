@@ -6,11 +6,22 @@ public final class ModelContainer: Sendable {
     public let schema: Schema
     /// The main context associated with this container.
     @MainActor
-    public lazy var mainContext = ModelContext(container: self, autosaveEnabled: true)
+    public lazy var mainContext = ModelContext(
+        container: self, autosaveEnabled: true, affinity: .mainActor)
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
     package let store: (any RuntimeStore)?
+    let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
+    let modelTypesByEntityName: [String: ModelTypeRegistration]
+
+    func modelType(forEntityName name: String) -> (any PersistentModel.Type)? {
+        modelTypesByEntityName[name]?.type
+    }
+
+    func modelRegistration(forEntityName name: String) -> ModelTypeRegistration? {
+        modelTypesByEntityName[name]
+    }
 
     /// Creates a container for the schema inferred from model types.
     public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
@@ -40,7 +51,7 @@ public final class ModelContainer: Sendable {
         let entities = try types.map { modelType in
             let properties = propertiesByEntity[Self.unqualifiedTypeName(String(describing: modelType))] ?? []
             let schemaProperties = try properties.map {
-                metadata, keypath -> (Schema.PropertyMetadata, String, Bool) in
+                metadata, keypath -> (Schema.PropertyMetadata, String, Bool, Any.Type) in
                 let rawType = String(reflecting: type(of: keypath).valueType)
                 let (normalizedType, isOptional) = Self.normalizedPropertyType(rawType)
                 let parsedType = Self.parseType(normalizedType)
@@ -51,9 +62,10 @@ public final class ModelContainer: Sendable {
                             + "uses a relationship collection with optional model elements."
                     )
                 }
-                return (metadata, normalizedType, isOptional)
+                return (metadata, normalizedType, isOptional, type(of: keypath).valueType)
             }
-            let attributes = schemaProperties.compactMap { metadata, propertyType, isOptional -> Schema.Attribute? in
+            let attributes = try schemaProperties.compactMap {
+                metadata, propertyType, isOptional, valueType -> Schema.Attribute? in
                 let typedRelationship = metadata.metadata?.base as? Schema.Relationship
                 let parsedType = Self.parseType(propertyType)
                 let destinationType = Self.unqualifiedTypeName(parsedType.collectionElement ?? parsedType.name)
@@ -67,18 +79,79 @@ public final class ModelContainer: Sendable {
                     return nil
                 }
                 let typedAttribute = metadata.metadata?.base as? Schema.Attribute
-                let options = typedAttribute?.options ?? Set(metadata.options.compactMap(Self.attributeOption))
+                let options = (typedAttribute?.options ?? []).union(
+                    metadata.options.compactMap(Self.attributeOption))
+                if options.contains(.externalStorage), Self.unqualifiedTypeName(parsedType.name) != "Data" {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "External storage is supported only for Data properties ('\(metadata.name)').")
+                }
+                let flattenedComponents: [Schema.Attribute.Component]
+                if options.contains(.flattened) {
+                    guard !isOptional else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Flattened composite '\(metadata.name)' cannot be optional.")
+                    }
+                    guard valueType is any FlattenableComposite.Type else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "A property marked `.flattened` must conform to FlattenableComposite.")
+                    }
+                    guard let compositeType = valueType as? any FlattenedCompositeMetadataProviding.Type,
+                        compositeType.flattenedComponentsForSchema.map({ ($0.0, $0.1) })
+                            .elementsEqual(metadata.flattenedComponents.map({ ($0.name, $0.type) }), by: ==)
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Flattened schema metadata for '\(metadata.name)' does not match its component adapters.")
+                    }
+                    flattenedComponents = try metadata.flattenedComponents.map { component in
+                        guard
+                            component.name.utf8.allSatisfy({
+                                ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
+                            })
+                        else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Flattened component '\(component.name)' is not a valid property identifier.")
+                        }
+                        let componentType = component.type.split(separator: ".").last.map(String.init) ?? component.type
+                        guard
+                            [
+                                "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
+                                "UInt64", "Float", "Double", "Bool", "String", "Date", "UUID", "URL", "Data",
+                                "Decimal",
+                            ].contains(componentType)
+                        else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Unsupported flattened scalar type '\(component.type)' for '\(metadata.name).\(component.name)'."
+                            )
+                        }
+                        return Schema.Attribute.Component(
+                            name: component.name,
+                            columnName: "\(metadata.name)_\(component.name)",
+                            type: componentType)
+                    }
+                    guard Set(flattenedComponents.map { $0.name.uppercased() }).count == flattenedComponents.count
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Flattened composite '\(metadata.name)' declares colliding component names.")
+                    }
+                    guard !flattenedComponents.isEmpty else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Flattened composite '\(metadata.name)' must declare at least one scalar component.")
+                    }
+                } else {
+                    flattenedComponents = []
+                }
                 return Schema.Attribute(
                     name: metadata.name,
                     type: propertyType,
                     isOptional: isOptional,
                     defaultValue: metadata.defaultValue,
                     options: options,
-                    originalName: typedAttribute?.originalName
+                    originalName: typedAttribute?.originalName,
+                    components: flattenedComponents
                 )
             }
             let relationships = try schemaProperties.compactMap {
-                metadata, propertyType, isOptional -> Schema.Relationship? in
+                metadata, propertyType, isOptional, _ -> Schema.Relationship? in
                 let parsedType = Self.parseType(propertyType)
                 let isToMany = parsedType.collectionElement != nil
                 let destination = parsedType.collectionElement ?? parsedType.name
@@ -264,6 +337,11 @@ public final class ModelContainer: Sendable {
         schema = Schema(inferredEntities)
         self.configurations = configurations
         store = try Self.openStore(schema: schema, configurations: configurations)
+        var registrations: [String: ModelTypeRegistration] = [:]
+        for (modelType, entityName) in zip(types, entityNames) {
+            registrations[entityName] = ModelTypeRegistration(type: modelType)
+        }
+        modelTypesByEntityName = registrations
         var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
         for modelType in types {
             adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
@@ -279,6 +357,7 @@ public final class ModelContainer: Sendable {
         self.schema = schema
         self.configurations = configurations
         store = try Self.openStore(schema: schema, configurations: configurations)
+        modelTypesByEntityName = [:]
         relationshipAdapterTable = [:]
     }
 
@@ -291,6 +370,14 @@ public final class ModelContainer: Sendable {
         self.schema = schema
         self.configurations = configurations
         store = try Self.openStore(schema: schema, configurations: configurations)
+        var registrations: [String: ModelTypeRegistration] = [:]
+        for modelType in types {
+            let entityName = Self.unqualifiedTypeName(String(describing: modelType))
+            if schema.entities.contains(where: { $0.name == entityName }) {
+                registrations[entityName] = ModelTypeRegistration(type: modelType)
+            }
+        }
+        modelTypesByEntityName = registrations
         var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
         for modelType in types {
             adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
@@ -566,7 +653,10 @@ public final class ModelContainer: Sendable {
         case "spotlight": .spotlight
         case "allowsCloudEncryption": .allowsCloudEncryption
         case "ephemeral": .ephemeral
+        case "codable": .codable
+        case "flattened": .flattened
         default: nil
         }
     }
+
 }

@@ -56,6 +56,27 @@ public struct Schema: Sendable {
             case allowsCloudEncryption
             /// Stores values ephemerally.
             case ephemeral
+            /// Stores a non-scalar Codable value as a JSON blob.
+            case codable
+            /// Stores a required Codable composite using declared scalar columns.
+            case flattened
+        }
+
+        /// A scalar leaf persisted as a separate SQL column.
+        public struct Component: Codable, Sendable, Hashable {
+            /// The leaf name inside the composite value.
+            public let name: String
+            /// The physical column name that stores the leaf.
+            public let columnName: String
+            /// The Swift scalar type name for the leaf.
+            public let type: String
+
+            /// Creates flattened component metadata.
+            public init(name: String, columnName: String, type: String) {
+                self.name = name
+                self.columnName = columnName
+                self.type = type
+            }
         }
 
         /// The property name.
@@ -70,6 +91,8 @@ public struct Schema: Sendable {
         public let options: Set<Option>
         /// The original property name used for renaming.
         public let originalName: String?
+        /// Flattened scalar components, when `.flattened` is enabled.
+        public let components: [Component]
 
         /// Creates metadata describing attribute options without property details.
         public init(_ options: Option...) {
@@ -79,6 +102,7 @@ public struct Schema: Sendable {
             self.defaultValue = nil
             self.options = Set(options)
             self.originalName = nil
+            components = []
         }
 
         /// Creates attribute metadata.
@@ -88,7 +112,8 @@ public struct Schema: Sendable {
             isOptional: Bool = false,
             defaultValue: String? = nil,
             options: Set<Option> = [],
-            originalName: String? = nil
+            originalName: String? = nil,
+            components: [Component] = []
         ) {
             self.name = name
             self.type = type
@@ -96,6 +121,7 @@ public struct Schema: Sendable {
             self.defaultValue = defaultValue
             self.options = options
             self.originalName = originalName
+            self.components = components.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         }
     }
 
@@ -213,6 +239,8 @@ public struct Schema: Sendable {
         public let defaultValue: String?
         /// Property-specific options.
         public let options: [String]
+        /// Flattened components declared by the property value type.
+        public let flattenedComponents: [Schema.Attribute.Component]
         package let runtimeDefaultValue: Any?
 
         /// Compares schema-facing metadata, excluding the runtime default value.
@@ -222,6 +250,7 @@ public struct Schema: Sendable {
                 && lhs.isExplicitRelationship == rhs.isExplicitRelationship
                 && lhs.defaultValue == rhs.defaultValue
                 && lhs.options == rhs.options
+                && lhs.flattenedComponents == rhs.flattenedComponents
         }
 
         /// Hashes schema-facing metadata, excluding the runtime default value.
@@ -233,6 +262,7 @@ public struct Schema: Sendable {
             hasher.combine(isExplicitRelationship)
             hasher.combine(defaultValue)
             hasher.combine(options)
+            hasher.combine(flattenedComponents)
         }
 
         /// Creates property metadata using the model macro contract.
@@ -241,7 +271,9 @@ public struct Schema: Sendable {
             keypath: KeyPath<some Any, Value>,
             defaultValue: Value? = nil,
             metadata: AnyHashable? = nil,
-            isExplicitRelationship: Bool = false
+            isExplicitRelationship: Bool = false,
+            options: [String] = [],
+            flattenedComponents: [Schema.Attribute.Component] = []
         ) {
             self.name = name
             self.keypath = keypath
@@ -249,7 +281,8 @@ public struct Schema: Sendable {
             self.isRelationship = metadata?.base is Schema.Relationship || isExplicitRelationship
             self.isExplicitRelationship = isExplicitRelationship
             self.defaultValue = defaultValue.map { String(describing: $0) }
-            self.options = []
+            self.options = options
+            self.flattenedComponents = flattenedComponents
             if let defaultValue {
                 runtimeDefaultValue = defaultValue
             } else {
@@ -266,6 +299,7 @@ public struct Schema: Sendable {
             self.isExplicitRelationship = isRelationship
             self.defaultValue = defaultValue
             self.options = options
+            flattenedComponents = []
             self.runtimeDefaultValue = nil
         }
     }

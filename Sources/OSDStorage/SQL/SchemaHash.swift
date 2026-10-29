@@ -32,6 +32,13 @@ package enum SchemaHash {
                         encoder.append(attribute.defaultValue)
                         encoder.append(attribute.originalName)
                         encoder.append(
+                            attribute.components,
+                            element: { encoder, component in
+                                encoder.append(component.name)
+                                encoder.append(component.columnName)
+                                encoder.append(component.type)
+                            })
+                        encoder.append(
                             attribute.options.map(\.canonicalName).sorted(),
                             element: { encoder, option in
                                 encoder.append(option)
@@ -196,6 +203,22 @@ package enum SchemaHash {
         var defaultValue: String?
         var originalName: String?
         var options: [DescriptionOption]
+        var components: [Schema.Attribute.Component]
+
+        private enum CodingKeys: String, CodingKey {
+            case name, type, isOptional, defaultValue, originalName, options, components
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            type = try container.decode(String.self, forKey: .type)
+            isOptional = try container.decode(Bool.self, forKey: .isOptional)
+            defaultValue = try container.decodeIfPresent(String.self, forKey: .defaultValue)
+            originalName = try container.decodeIfPresent(String.self, forKey: .originalName)
+            options = try container.decode([DescriptionOption].self, forKey: .options)
+            components = try container.decodeIfPresent([Schema.Attribute.Component].self, forKey: .components) ?? []
+        }
 
         init(_ attribute: Schema.Attribute) {
             name = attribute.name
@@ -203,6 +226,7 @@ package enum SchemaHash {
             isOptional = attribute.isOptional
             defaultValue = attribute.defaultValue
             originalName = attribute.originalName
+            components = attribute.components
             options = attribute.options.map(DescriptionOption.init)
                 .sorted { ($0.kind, $0.transformer ?? "") < ($1.kind, $1.transformer ?? "") }
         }
@@ -210,7 +234,8 @@ package enum SchemaHash {
         func schemaAttribute() throws -> Schema.Attribute {
             Schema.Attribute(
                 name: name, type: type, isOptional: isOptional, defaultValue: defaultValue,
-                options: Set(try options.map { try $0.schemaOption() }), originalName: originalName)
+                options: Set(try options.map { try $0.schemaOption() }), originalName: originalName,
+                components: components)
         }
     }
 
@@ -231,6 +256,8 @@ package enum SchemaHash {
                 transformer = by
             case .allowsCloudEncryption: kind = "allowsCloudEncryption"
             case .ephemeral: kind = "ephemeral"
+            case .codable: kind = "codable"
+            case .flattened: kind = "flattened"
             }
         }
 
@@ -252,6 +279,8 @@ package enum SchemaHash {
             case "spotlight": return .spotlight
             case "allowsCloudEncryption": return .allowsCloudEncryption
             case "ephemeral": return .ephemeral
+            case "codable": return .codable
+            case "flattened": return .flattened
             default: throw SwiftDataError.migrationUnsupported("Unknown schema option.")
             }
         }
@@ -311,6 +340,8 @@ private extension Schema.Attribute.Option {
         case let .transformable(by): "transformable:\(by)"
         case .allowsCloudEncryption: "allowsCloudEncryption"
         case .ephemeral: "ephemeral"
+        case .codable: "codable"
+        case .flattened: "flattened"
         }
     }
 }
@@ -338,7 +369,7 @@ private extension Schema.Relationship.DeleteRule {
     }
 }
 
-private enum SHA256 {
+package enum SHA256 {
     private static let initial: [UInt32] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -354,7 +385,7 @@ private enum SHA256 {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     ]
 
-    static func hash(_ input: [UInt8]) -> [UInt8] {
+    package static func hash(_ input: [UInt8]) -> [UInt8] {
         var message = input
         let bitLength = UInt64(message.count) &* 8
         message.append(0x80)

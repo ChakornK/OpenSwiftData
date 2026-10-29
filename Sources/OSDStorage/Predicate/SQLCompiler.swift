@@ -36,6 +36,9 @@ package enum PredicatePlanBuilder {
             }
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .comparison(runtimeOperator(op), lhs, rhs)
+        case let .arithmetic(op, lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
         case let .keyPath(path):
             guard path.count == 1, let name = path.first else { return nil }
             return .property(name)
@@ -70,6 +73,18 @@ package enum PredicatePlanBuilder {
         case .lessThanOrEqual: .lessThanOrEqual
         case .greaterThan: .greaterThan
         case .greaterThanOrEqual: .greaterThanOrEqual
+        }
+    }
+
+    private static func runtimeArithmeticOperator(_ value: PredicateIR.ArithmeticOperator)
+        -> PredicateArithmeticOperator
+    {
+        switch value {
+        case .add: .add
+        case .subtract: .subtract
+        case .multiply: .multiply
+        case .divide: .divide
+        case .remainder: .remainder
         }
     }
 }
@@ -128,6 +143,16 @@ package enum SQLCompiler {
             case .greaterThanOrEqual: symbol = ">="
             }
             return "(\(lhsSQL) \(symbol) \(rhsSQL))"
+        case let .arithmetic(op, lhs, rhs):
+            let function =
+                switch op {
+                case .add: "osd_int_add"
+                case .subtract: "osd_int_subtract"
+                case .multiply: "osd_int_multiply"
+                case .divide: "osd_int_divide"
+                case .remainder: "osd_int_remainder"
+                }
+            return "\(function)(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
         case let .keyPath(path):
             guard let property = path.last, Self.validIdentifier(property) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid key path")
@@ -166,6 +191,7 @@ package enum SQLCompiler {
         case let .disjunction(lhs, rhs): "or(\(structure(lhs)),\(structure(rhs)))"
         case let .negation(value): "not(\(structure(value)))"
         case let .comparison(op, lhs, rhs): "compare(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
         case let .value(value):
             if case .null = value { "value(NULL)" } else { "value(?)" }

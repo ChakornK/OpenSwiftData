@@ -14,6 +14,7 @@ package enum RuntimePredicateEvaluator {
     package static func referencedProperties(in plan: PredicatePlan) -> Set<String> {
         switch plan {
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
+            let .arithmetic(_, lhs, rhs),
             let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             referencedProperties(in: lhs).union(referencedProperties(in: rhs))
@@ -61,6 +62,8 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("Pending evaluation cannot compare these stored value types")
             }
             return result ? .yes : .no
+        case .arithmetic:
+            throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
         case let .isNull(value, negated):
             let isNull = try evaluateValue(value, values: values) == .null
             return isNull != negated ? .yes : .no
@@ -77,6 +80,36 @@ package enum RuntimePredicateEvaluator {
             }
             return integer == 0 ? .no : .yes
         }
+    }
+
+    private static func evaluateArithmetic(
+        _ operation: PredicateArithmeticOperator,
+        lhs: PredicatePlan,
+        rhs: PredicatePlan,
+        values: [String: RuntimeValue]
+    ) throws -> RuntimeValue {
+        let lhsValue = try evaluateValue(lhs, values: values)
+        let rhsValue = try evaluateValue(rhs, values: values)
+        guard case let .int(left) = lhsValue, case let .int(right) = rhsValue else {
+            throw SwiftDataError.unsupportedPredicate("Checked integer arithmetic requires integer operands")
+        }
+        let result: Int64?
+        switch operation {
+        case .add:
+            let (value, overflow) = left.addingReportingOverflow(right)
+            result = overflow ? nil : value
+        case .subtract:
+            let (value, overflow) = left.subtractingReportingOverflow(right)
+            result = overflow ? nil : value
+        case .multiply:
+            let (value, overflow) = left.multipliedReportingOverflow(by: right)
+            result = overflow ? nil : value
+        case .divide:
+            result = right == 0 || (left == .min && right == -1) ? nil : left / right
+        case .remainder:
+            result = right == 0 || (left == .min && right == -1) ? nil : left % right
+        }
+        return result.map(RuntimeValue.int) ?? .null
     }
 
     private static func evaluateStringPredicate(
@@ -127,6 +160,8 @@ package enum RuntimePredicateEvaluator {
         case let .coalesce(lhs, rhs):
             let lhsValue = try evaluateValue(lhs, values: values)
             return lhsValue == .null ? try evaluateValue(rhs, values: values) : lhsValue
+        case let .arithmetic(op, lhs, rhs):
+            return try evaluateArithmetic(op, lhs: lhs, rhs: rhs, values: values)
         case let .conditional(test, trueBranch, falseBranch):
             switch try evaluateTruth(test, values: values) {
             case .yes: return try evaluateValue(trueBranch, values: values)

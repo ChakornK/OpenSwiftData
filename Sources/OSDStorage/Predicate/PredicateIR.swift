@@ -6,6 +6,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case disjunction(PredicateIR, PredicateIR)
     case negation(PredicateIR)
     case comparison(ComparisonOperator, PredicateIR, PredicateIR)
+    case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
     case value(StoredValue)
     case nilCoalesce(PredicateIR, PredicateIR)
@@ -22,6 +23,14 @@ package indirect enum PredicateIR: Sendable, Equatable {
         case lessThanOrEqual
         case greaterThan
         case greaterThanOrEqual
+    }
+
+    package enum ArithmeticOperator: Sendable, Equatable {
+        case add
+        case subtract
+        case multiply
+        case divide
+        case remainder
     }
 }
 
@@ -62,6 +71,13 @@ package enum PredicateIRBuilder {
                 try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
                 return .comparison(
                     op, lhs, rhs)
+            case "Arithmetic":
+                let op = try arithmeticOperator(try fieldNode("op", from: fields))
+                return .arithmetic(op, try field("lhs", from: fields), try field("rhs", from: fields))
+            case "IntDivision":
+                return .arithmetic(.divide, try field("lhs", from: fields), try field("rhs", from: fields))
+            case "IntRemainder":
+                return .arithmetic(.remainder, try field("lhs", from: fields), try field("rhs", from: fields))
             case "Equal":
                 let lhs = try field("lhs", from: fields)
                 let rhs = try field("rhs", from: fields)
@@ -199,6 +215,8 @@ package enum PredicateIRBuilder {
         case "Conditional": ["test", "trueBranch", "falseBranch"]
         case "Negation": ["wrapped"]
         case "Comparison": ["op", "lhs", "rhs"]
+        case "Arithmetic": ["op", "lhs", "rhs"]
+        case "IntDivision", "IntRemainder": ["lhs", "rhs"]
         case "KeyPath": ["root", "keyPath"]
         case "Value": ["value"]
         case "StringLocalizedStandardContains", "OSDLocalizedStandardContains": ["root", "other"]
@@ -275,6 +293,32 @@ package enum PredicateIRBuilder {
         case "greaterThan": return .greaterThan
         case "greaterThanOrEqual": return .greaterThanOrEqual
         default: throw SwiftDataError.unsupportedPredicate("ComparisonOperator.\(value)")
+        }
+    }
+
+    private static func fieldNode(
+        _ name: String, from fields: [String: PredicateMirrorWalker.Node]
+    ) throws -> PredicateMirrorWalker.Node {
+        guard let node = fields[name] else {
+            throw PredicateCatalogError.malformedNode("PredicateIR", missingChildren: [name])
+        }
+        return node
+    }
+
+    private static func arithmeticOperator(
+        _ node: PredicateMirrorWalker.Node
+    ) throws -> PredicateIR.ArithmeticOperator {
+        guard case let .capture(_, description) = node else {
+            throw SwiftDataError.unsupportedPredicate("ArithmeticOperator")
+        }
+        let value = description.split(separator: ".").last.map(String.init) ?? description
+        switch value {
+        case "add": return .add
+        case "subtract": return .subtract
+        case "multiply": return .multiply
+        case "divide": return .divide
+        case "remainder": return .remainder
+        default: throw SwiftDataError.unsupportedPredicate("ArithmeticOperator.\(value)")
         }
     }
 

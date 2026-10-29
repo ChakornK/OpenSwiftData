@@ -515,6 +515,46 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertFalse(try RuntimePredicateEvaluator.matches(plan, values: ["count": .null, "title": .text("yes")]))
     }
 
+    func testPendingCheckedIntegerArithmeticMatchesSQLNullSemantics() throws {
+        let multiplied = PredicatePlan.comparison(
+            .greaterThan,
+            .arithmetic(.multiply, .property("count"), .value(.int(2))),
+            .value(.int(10)))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(multiplied, values: ["count": .int(6)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(multiplied, values: ["count": .int(5)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(multiplied, values: ["count": .int(.max)]))
+
+        let divided = PredicatePlan.comparison(
+            .equal,
+            .arithmetic(.divide, .property("count"), .value(.int(2))),
+            .value(.int(-3)))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(divided, values: ["count": .int(-7)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(divided, values: ["count": .int(7)]))
+
+        let zeroDivisor = PredicatePlan.comparison(
+            .equal,
+            .arithmetic(.divide, .property("count"), .value(.int(0))),
+            .value(.int(0)))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(zeroDivisor, values: ["count": .int(7)]))
+
+        let invalidDivision = PredicatePlan.comparison(
+            .equal,
+            .arithmetic(.divide, .property("count"), .value(.int(0))),
+            .value(.int(1)))
+        XCTAssertFalse(
+            try RuntimePredicateEvaluator.matches(.negation(invalidDivision), values: ["count": .int(7)]))
+        XCTAssertTrue(
+            try RuntimePredicateEvaluator.matches(
+                .disjunction(invalidDivision, .comparison(.equal, .value(.int(1)), .value(.int(1)))),
+                values: ["count": .int(7)]))
+
+        let divisionOverflow = PredicatePlan.comparison(
+            .equal,
+            .arithmetic(.divide, .property("count"), .value(.int(-1))),
+            .value(.int(.min)))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(divisionOverflow, values: ["count": .int(.min)]))
+    }
+
     @MainActor
     func testOptionalCapturedPredicateValuesCompileForNilAndSome() throws {
         let container = try ModelContainer(
@@ -549,6 +589,184 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(compiled.sql, "(t0.ZOPTIONALVALUE = ?)")
         XCTAssertEqual(compiled.arguments, [.text("value")])
         XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: somePredicate)).map(\.alpha), [2])
+    }
+
+    func testExpressionEvaluateIsInlinedIntoRuntimePredicateTreeAndSQL() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-evaluate-inline"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let expression: Foundation.Expression<Int, Int> = #Expression<Int, Int> { value in value * 2 }
+        let input = PredicateExpressions.build_KeyPath(
+            root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
+        let evaluated = PredicateExpressions.build_evaluate(PredicateExpressions.Value(expression), input)
+        let comparison = PredicateExpressions.build_Comparison(
+            lhs: evaluated,
+            rhs: PredicateExpressions.Value(10),
+            op: PredicateExpressions.ComparisonOperator.greaterThan)
+
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            comparison, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(compiled.sql, "(osd_int_multiply(t0.ZCOUNT, ?) > ?)")
+        XCTAssertEqual(compiled.arguments, [.int(2), .int(10)])
+    }
+
+    func testExpressionEvaluateSupportsMultipleInputBindings() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-multiple-inputs"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let expression: Foundation.Expression<Int, Int, Int> = #Expression<Int, Int, Int> { lhs, rhs in lhs + rhs }
+        let lhs = PredicateExpressions.build_KeyPath(
+            root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
+        let rhs = PredicateExpressions.Value(3)
+        let evaluated = PredicateExpressions.build_evaluate(PredicateExpressions.Value(expression), lhs, rhs)
+        let comparison = PredicateExpressions.build_Comparison(
+            lhs: evaluated,
+            rhs: PredicateExpressions.Value(10),
+            op: PredicateExpressions.ComparisonOperator.greaterThan)
+
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            comparison, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(compiled.sql, "(osd_int_add(t0.ZCOUNT, ?) > ?)")
+        XCTAssertEqual(compiled.arguments, [.int(3), .int(10)])
+    }
+
+    func testZeroInputExpressionEvaluateCompilesWithoutCaptures() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-zero-input"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let expression: Foundation.Expression<Int> = #Expression<Int> { 42 }
+        let evaluated = PredicateExpressions.build_evaluate(PredicateExpressions.Value(expression))
+        let comparison = PredicateExpressions.build_Comparison(
+            lhs: evaluated,
+            rhs: PredicateExpressions.Value(40),
+            op: PredicateExpressions.ComparisonOperator.greaterThan)
+
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            comparison, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(compiled.sql, "(? > ?)")
+        XCTAssertEqual(compiled.arguments, [.int(42), .int(40)])
+    }
+
+    func testExpressionEvaluateSupportsDivisionRemainderAndRepeatedInputs() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-integer-operators"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let input = PredicateExpressions.build_KeyPath(
+            root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
+        let division: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 / 2 }
+        let remainder: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 % 3 }
+        let divided = PredicateExpressions.build_evaluate(PredicateExpressions.Value(division), input)
+        let remainderValue = PredicateExpressions.build_evaluate(PredicateExpressions.Value(remainder), input)
+        let combined = PredicateExpressions.build_Comparison(
+            lhs: PredicateExpressions.build_Arithmetic(
+                lhs: divided,
+                rhs: remainderValue,
+                op: PredicateExpressions.ArithmeticOperator.add),
+            rhs: PredicateExpressions.Value(5),
+            op: PredicateExpressions.ComparisonOperator.greaterThan)
+
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            combined, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(
+            compiled.sql,
+            "(osd_int_add(osd_int_divide(t0.ZCOUNT, ?), osd_int_remainder(t0.ZCOUNT, ?)) > ?)")
+        XCTAssertEqual(compiled.arguments, [.int(2), .int(3), .int(5)])
+    }
+
+    func testNestedExpressionEvaluateRebasesCapturesAndPreservesOrder() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("nested-expression-evaluate"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let inner: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 * 2 }
+        let outer: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 + 1 }
+        let input = PredicateExpressions.build_KeyPath(
+            root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
+        let innerEvaluation = PredicateExpressions.build_evaluate(PredicateExpressions.Value(inner), input)
+        let outerEvaluation = PredicateExpressions.build_evaluate(PredicateExpressions.Value(outer), innerEvaluation)
+        let comparison = PredicateExpressions.build_Comparison(
+            lhs: outerEvaluation,
+            rhs: PredicateExpressions.Value(10),
+            op: PredicateExpressions.ComparisonOperator.greaterThan)
+
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            comparison, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(compiled.sql, "(osd_int_add(osd_int_multiply(t0.ZCOUNT, ?), ?) > ?)")
+        XCTAssertEqual(compiled.arguments, [.int(2), .int(1), .int(10)])
     }
 
     @MainActor

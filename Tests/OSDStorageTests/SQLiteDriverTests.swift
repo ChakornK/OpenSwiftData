@@ -30,6 +30,24 @@ final class SQLiteDriverTests: XCTestCase {
         XCTAssertEqual(actual, expected)
     }
 
+    func testCheckedIntegerArithmeticFunctionsMatchSwiftSemantics() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "checked-integer-arithmetic"))
+        defer { try? driver.close() }
+
+        let rows = try driver.read { connection in
+            try connection.rows(
+                "SELECT osd_int_add(7, 3), osd_int_subtract(7, 10), osd_int_multiply(7, 3), "
+                    + "osd_int_divide(-7, 2), osd_int_remainder(-7, 2), osd_int_remainder(7, -3), "
+                    + "osd_int_divide(7, 0), osd_int_multiply(9223372036854775807, 2), "
+                    + "osd_int_add(9223372036854775807, 1), osd_int_subtract(-9223372036854775808, 1), "
+                    + "osd_int_divide(-9223372036854775808, -1), "
+                    + "osd_int_remainder(-9223372036854775808, -1)")
+        }
+        XCTAssertEqual(
+            rows,
+            [[.int(10), .int(-3), .int(21), .int(-3), .int(-1), .int(1), .null, .null, .null, .null, .null, .null]])
+    }
+
     func testReadWriteReturnValuesAndErrors() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "results"))
         defer { try? driver.close() }

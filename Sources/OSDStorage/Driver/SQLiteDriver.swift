@@ -161,11 +161,53 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     else { return nil }
                     return OSDStringMatch.startsWith(value, prefix) ? 1 : 0
                 })
+            for (name, operation) in [
+                ("osd_int_add", IntegerOperation.add),
+                ("osd_int_subtract", IntegerOperation.subtract),
+                ("osd_int_multiply", IntegerOperation.multiply),
+                ("osd_int_divide", IntegerOperation.divide),
+                ("osd_int_remainder", IntegerOperation.remainder),
+            ] {
+                database.add(
+                    function: DatabaseFunction(name, argumentCount: 2, pure: true) { values in
+                        checkedIntegerArithmetic(values, operation: operation)
+                    })
+            }
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
             try database.execute(sql: "PRAGMA mmap_size = 268435456")
         }
         return configuration
+    }
+
+    private enum IntegerOperation {
+        case add, subtract, multiply, divide, remainder
+    }
+
+    private static func checkedIntegerArithmetic(
+        _ values: [DatabaseValue], operation: IntegerOperation
+    ) -> Int64? {
+        guard values.count == 2,
+            let lhs = Int64.fromDatabaseValue(values[0]),
+            let rhs = Int64.fromDatabaseValue(values[1])
+        else { return nil }
+        let result: Int64?
+        switch operation {
+        case .add:
+            let (value, overflow) = lhs.addingReportingOverflow(rhs)
+            result = overflow ? nil : value
+        case .subtract:
+            let (value, overflow) = lhs.subtractingReportingOverflow(rhs)
+            result = overflow ? nil : value
+        case .multiply:
+            let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+            result = overflow ? nil : value
+        case .divide:
+            result = rhs == 0 || (lhs == .min && rhs == -1) ? nil : lhs / rhs
+        case .remainder:
+            result = rhs == 0 || (lhs == .min && rhs == -1) ? nil : lhs % rhs
+        }
+        return result
     }
 }

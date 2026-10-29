@@ -4,6 +4,7 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case disjunction(PredicatePlan, PredicatePlan)
     case negation(PredicatePlan)
     case comparison(PredicateComparisonOperator, PredicatePlan, PredicatePlan)
+    case arithmetic(PredicateArithmeticOperator, PredicatePlan, PredicatePlan)
     case isNull(PredicatePlan, negated: Bool)
     case property(String)
     case value(StoredValue)
@@ -12,6 +13,15 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case localizedStandardContains(PredicatePlan, PredicatePlan)
     case stringContains(PredicatePlan, PredicatePlan)
     case stringStartsWith(PredicatePlan, PredicatePlan)
+}
+
+/// A checked numeric operation supported by SQL and pending predicate evaluation.
+public enum PredicateArithmeticOperator: Sendable, Equatable {
+    case add
+    case subtract
+    case multiply
+    case divide
+    case remainder
 }
 
 /// A scalar comparison supported by predicate execution.

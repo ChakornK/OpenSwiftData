@@ -25,6 +25,20 @@ final class SchemaBuilderTests: XCTestCase {
         }
     }
 
+    func testInheritanceLayoutFailsClosedUntilSingleTableSQLExists() {
+        let schema = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child", attributes: [Schema.Attribute(name: "age", type: "Int")], superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+            guard case let SwiftDataError.unsupportedSchemaProperty(message) = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Single-table inheritance"))
+        }
+    }
+
     func testFlattenedAttributeEmitsScalarLeafColumns() throws {
         let schema = Schema([
             Schema.Entity(

@@ -110,6 +110,10 @@ package enum SchemaBuilder {
                 current = entitiesByName[name]?.superentityName
             }
         }
+        if let inheritedEntity = entities.first(where: { $0.superentityName != nil }) {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Single-table inheritance SQL generation is not implemented for '\(inheritedEntity.name)'.")
+        }
         for entity in entities {
             for index in entity.indexes {
                 guard !index.properties.isEmpty, Set(index.properties).count == index.properties.count else {

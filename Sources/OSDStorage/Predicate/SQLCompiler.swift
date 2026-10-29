@@ -13,15 +13,72 @@ package struct CompiledPredicate: Sendable, Equatable {
     }
 }
 
+package enum PredicatePlanBuilder {
+    package static func build(_ ir: PredicateIR) -> PredicatePlan? {
+        switch ir {
+        case let .conjunction(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .conjunction(lhs, rhs)
+        case let .disjunction(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .disjunction(lhs, rhs)
+        case let .negation(value):
+            guard let value = build(value) else { return nil }
+            return .negation(value)
+        case let .comparison(op, lhs, rhs):
+            if (op == .equal || op == .notEqual), case .value(.null) = rhs {
+                guard let lhsPlan = build(lhs) else { return nil }
+                return .isNull(lhsPlan, negated: op == .notEqual)
+            }
+            if (op == .equal || op == .notEqual), case .value(.null) = lhs {
+                guard let rhsPlan = build(rhs) else { return nil }
+                return .isNull(rhsPlan, negated: op == .notEqual)
+            }
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .comparison(runtimeOperator(op), lhs, rhs)
+        case let .keyPath(path):
+            guard path.count == 1, let name = path.first else { return nil }
+            return .property(name)
+        case let .value(value):
+            return .value(value)
+        case let .nilCoalesce(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .coalesce(lhs, rhs)
+        case let .conditional(test, trueBranch, falseBranch):
+            guard let test = build(test), let trueBranch = build(trueBranch), let falseBranch = build(falseBranch)
+            else { return nil }
+            return .conditional(test, trueBranch, falseBranch)
+        case let .localizedStandardContains(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .localizedStandardContains(lhs, rhs)
+        case let .stringContains(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .stringContains(lhs, rhs)
+        case let .stringStartsWith(lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .stringStartsWith(lhs, rhs)
+        case .sequenceContains:
+            return nil
+        }
+    }
+
+    private static func runtimeOperator(_ value: PredicateIR.ComparisonOperator) -> PredicateComparisonOperator {
+        switch value {
+        case .equal: .equal
+        case .notEqual: .notEqual
+        case .lessThan: .lessThan
+        case .lessThanOrEqual: .lessThanOrEqual
+        case .greaterThan: .greaterThan
+        case .greaterThanOrEqual: .greaterThanOrEqual
+        }
+    }
+}
+
 package enum SQLCompiler {
     private static let cache = PredicatePlanCache()
 
-    package static func compile(
-        _ node: PredicateMirrorWalker.Node,
-        entity: String,
-        ordering: [String] = []
-    ) throws -> CompiledPredicate {
-        let ir = try PredicateIRBuilder.build(node)
+    package static func compile(_ ir: PredicateIR, entity: String, ordering: [String] = []) throws -> CompiledPredicate
+    {
         let key = structuralKey(ir, entity: entity, ordering: ordering)
         if let cached = cache.value(for: key) {
             var arguments: [StoredValue] = []
@@ -34,6 +91,14 @@ package enum SQLCompiler {
         return CompiledPredicate(sql: sql, arguments: arguments, cacheKey: key)
     }
 
+    package static func compile(
+        _ node: PredicateMirrorWalker.Node,
+        entity: String,
+        ordering: [String] = []
+    ) throws -> CompiledPredicate {
+        try compile(PredicateIRBuilder.build(node), entity: entity, ordering: ordering)
+    }
+
     private static func render(_ ir: PredicateIR, arguments: inout [StoredValue]) throws -> String {
         switch ir {
         case let .conjunction(lhs, rhs):
@@ -43,6 +108,14 @@ package enum SQLCompiler {
         case let .negation(value):
             return "(NOT \(try render(value, arguments: &arguments)))"
         case let .comparison(op, lhs, rhs):
+            if case .value(.null) = rhs, op == .equal || op == .notEqual {
+                let lhsSQL = try render(lhs, arguments: &arguments)
+                return "(\(lhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
+            }
+            if case .value(.null) = lhs, op == .equal || op == .notEqual {
+                let rhsSQL = try render(rhs, arguments: &arguments)
+                return "(\(rhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
+            }
             let lhsSQL = try render(lhs, arguments: &arguments)
             let rhsSQL = try render(rhs, arguments: &arguments)
             let symbol: String
@@ -65,6 +138,18 @@ package enum SQLCompiler {
             return "?"
         case let .nilCoalesce(lhs, rhs):
             return "COALESCE(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+        case let .conditional(test, trueBranch, falseBranch):
+            return
+                "(CASE WHEN \(try render(test, arguments: &arguments)) THEN \(try render(trueBranch, arguments: &arguments)) ELSE \(try render(falseBranch, arguments: &arguments)) END)"
+        case let .localizedStandardContains(lhs, rhs):
+            return
+                "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+        case let .stringContains(lhs, rhs):
+            return
+                "osd_string_contains(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+        case let .stringStartsWith(lhs, rhs):
+            return
+                "osd_string_starts_with(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate(
                 "SequenceContains SQL compilation requires collection encoding metadata")
@@ -82,8 +167,14 @@ package enum SQLCompiler {
         case let .negation(value): "not(\(structure(value)))"
         case let .comparison(op, lhs, rhs): "compare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
-        case .value: "value(?)"
+        case let .value(value):
+            if case .null = value { "value(NULL)" } else { "value(?)" }
         case let .nilCoalesce(lhs, rhs): "coalesce(\(structure(lhs)),\(structure(rhs)))"
+        case let .conditional(test, trueBranch, falseBranch):
+            "conditional(\(structure(test)),\(structure(trueBranch)),\(structure(falseBranch)))"
+        case let .localizedStandardContains(lhs, rhs): "localizedContains(\(structure(lhs)),\(structure(rhs)))"
+        case let .stringContains(lhs, rhs): "stringContains(\(structure(lhs)),\(structure(rhs)))"
+        case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         }
     }

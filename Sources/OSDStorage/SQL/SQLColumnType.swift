@@ -16,6 +16,7 @@ package enum SQLColumnType: String, Sendable {
         if options.contains(where: { if case .transformable = $0 { true } else { false } }) {
             return .blob
         }
+        if options.contains(.codable) { return .blob }
         let trimmed = typeName.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized: Substring
         if trimmed.hasSuffix("?") {

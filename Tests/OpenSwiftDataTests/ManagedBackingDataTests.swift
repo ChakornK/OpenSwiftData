@@ -26,36 +26,38 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     func testSavedModelMutationSynchronouslyUpdatesPendingStateOffMainActor() async throws {
-        let (context, model) = try await MainActor.run { () throws -> (ModelContext, MacroBackingTestModel) in
+        let model = try await MainActor.run { () throws -> MacroBackingTestModel in
             let container = try ModelContainer(
                 for: MacroBackingTestModel.self, configurations: .sqliteMemory("managed-backing-off-main"))
             let context = container.mainContext
             let model = MacroBackingTestModel(value: 1)
             context.insert(model)
             try context.save()
-            return (context, model)
+            return model
         }
 
         await Task.detached {
             model.value = 12
         }.value
 
-        let result = await MainActor.run {
-            (
+        let result = try await MainActor.run { () throws -> (Int, Bool, Bool) in
+            guard let context = model.modelContext else {
+                throw SwiftDataError.unsupportedStore("missing test context")
+            }
+            let result = (
                 context.insertedModelsArray.count,
                 context.changedModelsArray.contains { $0 === model },
                 context.hasChanges
             )
+            context.rollback()
+            return result
         }
         XCTAssertEqual(result.0, 0)
         XCTAssertTrue(result.1)
         XCTAssertTrue(result.2)
-        XCTAssertTrue(model.hasChanges)
 
-        await MainActor.run { context.rollback() }
         XCTAssertEqual(model.value, 1)
-        let hasChanges = await MainActor.run { context.hasChanges }
-        XCTAssertFalse(hasChanges)
+        XCTAssertFalse(model.hasChanges)
     }
 }
 

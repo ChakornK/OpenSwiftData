@@ -183,7 +183,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Stores a value and marks the model changed when attached to a context.
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
-        lock.lock(); values[keyPath] = value; if context != nil { changed = true }; lock.unlock()
+        lock.lock(); values[keyPath] = value as Any; if context != nil { changed = true }; lock.unlock()
     }
     /// Routes a relationship write through the context's resolved adapter table.
     public func mutateRelationship<Value>(

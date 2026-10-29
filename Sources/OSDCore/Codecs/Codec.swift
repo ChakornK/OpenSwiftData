@@ -3,9 +3,14 @@ import Foundation
 private protocol OptionalCodable {
     static func encodeOptional(_ value: Any) throws -> StoredValue
     static func decodeOptional(from storedValue: StoredValue) throws -> Any
+    static func unwrapOptional(_ value: Any) throws -> StoredValue?
 }
 
-extension Optional: OptionalCodable where Wrapped: Codable {
+private protocol PredicateScalarCodable {
+    static func encodePredicateScalar(_ value: Any) throws -> StoredValue?
+}
+
+extension Optional: OptionalCodable, PredicateScalarCodable where Wrapped: Codable {
     static func encodeOptional(_ value: Any) throws -> StoredValue {
         guard let optional = value as? Self else { throw CodecError.invalidRepresentation }
         guard let wrapped = optional else { return .null }
@@ -18,6 +23,16 @@ extension Optional: OptionalCodable where Wrapped: Codable {
         }
         return Optional<Wrapped>.none as Any
     }
+
+    static func unwrapOptional(_ value: Any) throws -> StoredValue? {
+        guard let optional = value as? Self else { throw CodecError.invalidRepresentation }
+        guard let wrapped = optional else { return .null }
+        return try Codec.encodePredicateScalar(wrapped)
+    }
+
+    static func encodePredicateScalar(_ value: Any) throws -> StoredValue? {
+        try unwrapOptional(value)
+    }
 }
 
 internal enum Codec {
@@ -25,10 +40,18 @@ internal enum Codec {
         if let optionalType = T.self as? any OptionalCodable.Type {
             return try optionalType.encodeOptional(value)
         }
-        if let value = value as? Bool { return .int(value ? 1 : 0) }
-        if let value = value as? UUID {
-            return .blob(withUnsafeBytes(of: value.uuid) { Array($0) })
+        if let scalar = try encodePredicateScalar(value) { return scalar }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return .blob(Array(try encoder.encode(value)))
+    }
+
+    static func encodePredicateScalar<T: Encodable>(_ value: T) throws -> StoredValue? {
+        if let optionalType = T.self as? any OptionalCodable.Type {
+            return try optionalType.unwrapOptional(value)
         }
+        if let value = value as? Bool { return .int(value ? 1 : 0) }
+        if let value = value as? UUID { return .blob(withUnsafeBytes(of: value.uuid) { Array($0) }) }
         if let value = value as? Date { return .double(value.timeIntervalSinceReferenceDate) }
         if let value = value as? Float { return .double(Double(value)) }
         if let value = value as? Double { return .double(value) }
@@ -46,9 +69,17 @@ internal enum Codec {
         if let value = value as? UInt16 { return .int(Int64(value)) }
         if let value = value as? UInt32 { return .int(Int64(value)) }
         if let value = value as? UInt64 { return .int(try signedInteger(value)) }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return .blob(Array(try encoder.encode(value)))
+        return nil
+    }
+
+    static func encodePredicateScalar(_ value: Any, type: Any.Type) throws -> StoredValue? {
+        if let optionalType = type as? any PredicateScalarCodable.Type {
+            return try optionalType.encodePredicateScalar(value)
+        }
+        guard let encodable = value as? any Encodable else {
+            throw PredicateScalarEncodingError.unsupportedType(String(reflecting: type))
+        }
+        return try encodePredicateScalar(encodable)
     }
 
     static func decode<T: Decodable>(_ type: T.Type, from storedValue: StoredValue) throws -> T {

@@ -11,7 +11,8 @@ public macro _PersistedProperty(relationship: Bool = false) =
     member,
     names: arbitrary, named(createBackingData), named(persistentBackingData), named(schemaMetadata),
     named(_$backingData), named(_$observationRegistrar), named(_SwiftDataNoType),
-    named(persistenceAdapters), named(relationshipAdapterCandidates), named(inferredRelationshipAdapterCandidates)
+    named(persistenceAdapters), named(flattenedPropertyAdapters), named(relationshipAdapterCandidates),
+    named(inferredRelationshipAdapterCandidates)
 )
 @attached(memberAttribute)
 @attached(extension, conformances: PersistentModel, RelationshipModel, Observation.Observable, Sendable)
@@ -29,6 +30,8 @@ public enum Attribute {
         case transformable(by: String)
         case allowsCloudEncryption
         case ephemeral
+        case codable
+        case flattened
     }
 }
 @attached(peer)
@@ -57,5 +60,5 @@ public macro Unique<Model>(_ keyPaths: PartialKeyPath<Model>...) =
 public macro Index<Model>(_ keyPaths: PartialKeyPath<Model>...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "IndexMacro")
 @attached(member, names: arbitrary)
-@attached(extension, conformances: Sendable)
+@attached(extension, conformances: ModelActor)
 public macro ModelActor() = #externalMacro(module: "OpenSwiftDataMacros", type: "ModelActorMacro")

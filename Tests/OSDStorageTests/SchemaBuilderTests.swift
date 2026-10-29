@@ -3,6 +3,54 @@ import OSDCore
 @testable import OSDStorage
 
 final class SchemaBuilderTests: XCTestCase {
+    func testFlattenedAttributeEmitsScalarLeafColumns() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [
+                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                        ])
+                ])
+        ])
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE TABLE ZRECORD (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, "
+                    + "ZSIZE_LABEL VARCHAR, ZSIZE_WIDTH INTEGER);"))
+    }
+
+    func testFlattenedComponentColumnCollisionFailsSchemaValidation() {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "size_width", type: "Int"),
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")]),
+                ])
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(schema))
+    }
+
+    func testFlattenedCompositeCannotBeIndexedAsWholeAttribute() {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "size", type: "Size", options: [.flattened],
+                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                ],
+                indexes: [Schema.Index(properties: ["size"])])
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(schema))
+    }
+
     func testCompoundUniqueAndIndexDDLPreserveDeclaredColumnOrder() throws {
         let schema = Schema([
             Schema.Entity(

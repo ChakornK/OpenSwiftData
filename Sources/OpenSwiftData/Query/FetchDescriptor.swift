@@ -59,6 +59,23 @@ public struct SortDescriptor<Model: PersistentModel> {
         }
     }
 
+    /// Creates an ascending or descending ordering for an optional model property.
+    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value?>, order: SortOrder = .forward) {
+        self.keyPath = keyPath
+        isAscending = order == .forward
+        propertyDescription = String(describing: keyPath)
+        compareValues = { lhs, rhs in
+            switch (lhs[keyPath: keyPath], rhs[keyPath: keyPath]) {
+            case (nil, nil): return .orderedSame
+            case (nil, _?): return .orderedAscending
+            case (_?, nil): return .orderedDescending
+            case let (left?, right?):
+                if left == right { return .orderedSame }
+                return left < right ? .orderedAscending : .orderedDescending
+            }
+        }
+    }
+
     func compare(_ lhs: Model, _ rhs: Model) -> ComparisonResult {
         let result = compareValues(lhs, rhs)
         return isAscending ? result : result.reversed

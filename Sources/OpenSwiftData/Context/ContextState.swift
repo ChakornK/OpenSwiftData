@@ -28,6 +28,10 @@ package final class ContextState: @unchecked Sendable {
 
     private let lock = NSRecursiveLock()
     private let relationshipAdaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
+    private let storeIdentifier: String
+    private let entityIDsByName: [String: Int]
+    private let entitiesByName: [String: Schema.Entity]
+    private let onLocalChange: (@Sendable () -> Void)?
     private var inserted: [any PersistentModel] = []
     private var changed: [any PersistentModel] = []
     private var deleted: [any PersistentModel] = []
@@ -37,9 +41,17 @@ package final class ContextState: @unchecked Sendable {
     private var relationshipMutationEvents: [RelationshipMutationEvent] = []
 
     init(
-        relationshipAdaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
+        relationshipAdaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:],
+        storeIdentifier: String = "default",
+        entityIDsByName: [String: Int] = [:],
+        entitiesByName: [String: Schema.Entity] = [:],
+        onLocalChange: (@Sendable () -> Void)? = nil
     ) {
         self.relationshipAdaptersByModel = relationshipAdaptersByModel
+        self.storeIdentifier = storeIdentifier
+        self.entityIDsByName = entityIDsByName
+        self.entitiesByName = entitiesByName
+        self.onLocalChange = onLocalChange
     }
 
     var insertedModels: [any PersistentModel] { locked { inserted } }
@@ -125,7 +137,7 @@ package final class ContextState: @unchecked Sendable {
             capture(model, current: snapshot)
         }
         for endpoint in detachedEndpoints {
-            attachRelationshipDestination(endpoint, to: context)
+            insertRelationshipDestination(endpoint, in: context)
         }
         do {
             try mutation(owner)
@@ -144,11 +156,37 @@ package final class ContextState: @unchecked Sendable {
         }
     }
 
-    private func attachRelationshipDestination<Model: PersistentModel>(_ model: Model, to context: ModelContext) {
+    private func insertRelationshipDestination<Model: PersistentModel>(_ model: Model, in context: ModelContext) {
         let snapshot = model.snapshotLifecycle()
-        model.persistentBackingData.attach(to: context, model: model)
-        model.setInsertionChanged()
+        let entityName = String(describing: type(of: model))
+        guard let entity = entitiesByName[entityName] else {
+            model.persistentBackingData.attach(to: context, model: model)
+            model.setInsertionChanged()
+            insert(model, snapshot: snapshot)
+            return
+        }
+        var values = snapshot.values
+        for adapter in relationshipAdaptersByModel[ObjectIdentifier(type(of: model))] ?? [] {
+            guard !values.keys.contains(adapter.keyPath),
+                let value = try? adapter.makeValue([])
+            else { continue }
+            values[adapter.keyPath] = value
+        }
+        let identifier = PersistentIdentifier(
+            storeIdentifier: storeIdentifier,
+            entityName: entity.name,
+            temporaryIdentifier: snapshot.identifier.temporaryIdentifier ?? UUID())
+        let backing = type(of: model).createManagedBackingData(
+            values: values,
+            context: context,
+            storeIdentifier: storeIdentifier,
+            entityID: entityIDsByName[entity.name] ?? 0,
+            identifier: identifier)
+        model.persistentBackingData = backing
+        backing.attach(to: context, model: model)
+        backing.restoreInsertionState()
         insert(model, snapshot: snapshot)
+        setBaseline(model, snapshot: model.snapshotLifecycle())
     }
 
     private func validateCardinality(
@@ -220,6 +258,7 @@ package final class ContextState: @unchecked Sendable {
             if snapshots[identifier] == nil { snapshots[identifier] = (model, snapshot) }
             appendUnique(model, to: &inserted)
         }
+        onLocalChange?()
     }
 
     func cancelInsertion(_ model: any PersistentModel) -> BackingDataSnapshot? {
@@ -239,10 +278,11 @@ package final class ContextState: @unchecked Sendable {
             remove(model, from: &changed)
             appendUnique(model, to: &deleted)
         }
+        onLocalChange?()
     }
 
     func mutate(_ model: any PersistentModel, snapshot: () -> BackingDataSnapshot?, write: () -> Void) -> Bool {
-        locked {
+        let didMutate = locked {
             guard let current = snapshot(), current.context?.state === self else { return false }
             capture(model, current: current)
             write()
@@ -250,6 +290,8 @@ package final class ContextState: @unchecked Sendable {
             appendUnique(model, to: &changed)
             return true
         }
+        if didMutate { onLocalChange?() }
+        return didMutate
     }
 
     func willMutate(_ model: any PersistentModel, snapshot: BackingDataSnapshot) {
@@ -278,6 +320,7 @@ package final class ContextState: @unchecked Sendable {
                     newEndpointIDs: newValues.map(\.persistentModelID),
                     newEndpoints: newValues))
         }
+        onLocalChange?()
     }
 
     func mutateRelationship<Owner: PersistentModel>(
@@ -333,6 +376,7 @@ package final class ContextState: @unchecked Sendable {
                         newEndpointIDs: mutation.newEndpoints.map(\.persistentModelID),
                         newEndpoints: mutation.newEndpoints))
             }
+            onLocalChange?()
         }
     }
 

@@ -104,6 +104,14 @@ package enum SchemaBuilder {
                     throw SwiftDataError.unsupportedSchemaProperty(
                         "Index on entity '\(entity.name)' references missing attribute '\(property)'.")
                 }
+                for property in index.properties
+                where
+                    entity.attributes.first(where: { $0.name == property })?.options.contains(.flattened) == true
+                {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Index on entity '\(entity.name)' cannot target flattened composite '\(property)'; index a scalar component instead."
+                    )
+                }
             }
         }
         let tableNames = entities.map { "Z\($0.name)" }
@@ -166,9 +174,61 @@ package enum SchemaBuilder {
         }
 
         for entity in entities {
-            let propertyNames = entity.attributes.map(\.name) + entity.relationships.map(\.name)
+            for attribute in entity.attributes {
+                let isFlattened = attribute.options.contains(.flattened)
+                guard isFlattened == !attribute.components.isEmpty else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Flattened attribute '\(entity.name).\(attribute.name)' must declare components, and ordinary attributes must not."
+                    )
+                }
+                if isFlattened {
+                    guard !attribute.isOptional,
+                        !attribute.options.contains(.unique),
+                        !attribute.options.contains(.externalStorage),
+                        !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Flattened attribute '\(entity.name).\(attribute.name)' cannot be optional, unique, external, or transformed."
+                        )
+                    }
+                    try validateUniqueNames(
+                        attribute.components.map(\.name),
+                        scope: "flattened component in \(entity.name).\(attribute.name)"
+                    )
+                    for component in attribute.components {
+                        guard component.columnName == "\(attribute.name)_\(component.name)" else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Flattened component column name is not canonical for '\(entity.name).\(attribute.name)'."
+                            )
+                        }
+                        guard
+                            component.name.utf8.allSatisfy({
+                                ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
+                            })
+                        else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Flattened component '\(component.name)' is not a valid property identifier.")
+                        }
+                        _ = try SQLColumnType.resolve(
+                            component.type, property: "\(entity.name).\(component.columnName)")
+                    }
+                }
+            }
+            let attributeColumns = entity.attributes.flatMap { attribute in
+                attribute.options.contains(.flattened)
+                    ? attribute.components.map(\.columnName) : [attribute.name]
+            }
+            let propertyNames = attributeColumns + entity.relationships.map(\.name)
             try validateUniqueNames(propertyNames, scope: "property in entity '\(entity.name)'")
             let generatedProperties = propertyNames.map { "Z\($0)" }
+            let logicalAndPhysicalNames =
+                entity.attributes.flatMap { attribute in
+                    [attribute.name] + attribute.components.map(\.columnName)
+                } + entity.relationships.map(\.name)
+            try validateUniqueNames(
+                logicalAndPhysicalNames,
+                scope: "attribute, flattened component, or relationship in entity '\(entity.name)'"
+            )
             let generatedColumnKeys = Set(generatedProperties.map(identifierKey))
             guard generatedColumnKeys.count == generatedProperties.count else {
                 throw SwiftDataError.unsupportedSchemaProperty(
@@ -199,6 +259,14 @@ package enum SchemaBuilder {
             var columns = ["Z_PK INTEGER PRIMARY KEY", "Z_ENT INTEGER", "Z_OPT INTEGER"]
             let attributes = entity.attributes.sorted { bytewiseLess($0.name, $1.name) }
             for attribute in attributes {
+                if attribute.options.contains(.flattened) {
+                    for component in attribute.components {
+                        let type = try SQLColumnType.resolve(
+                            component.type, property: "\(entity.name).\(component.columnName)")
+                        columns.append("Z\(component.columnName.uppercased()) \(type.rawValue)")
+                    }
+                    continue
+                }
                 let type = try SQLColumnType.resolve(
                     attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
                 columns.append("Z\(attribute.name.uppercased()) \(type.rawValue)")
@@ -263,7 +331,7 @@ package enum SchemaBuilder {
         return "Z\(entity.name.uppercased())_\(columns.joined(separator: "_"))\(unique ? "_UNIQUE" : "")_INDEX"
     }
 
-    private static func isNonOwner(
+    package static func isNonOwner(
         _ entity: Schema.Entity,
         _ relationship: Schema.Relationship,
         _ entities: [Schema.Entity]

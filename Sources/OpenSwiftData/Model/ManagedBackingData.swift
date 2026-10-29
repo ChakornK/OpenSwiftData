@@ -1,6 +1,12 @@
 import Foundation
 import OSDCore
 
+enum ManagedValueState {
+    case absent
+    case baseline(Any)
+    case overlay(Any)
+}
+
 /// An immutable database row snapshot with a copy-on-write overlay for edited attributes.
 public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unchecked Sendable {
     private let lock = NSRecursiveLock()
@@ -18,6 +24,11 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     private var entityID: Int
     private var primaryKey: Int64?
     private var version: Int
+    private var faultLoader: ((Set<AnyKeyPath>) throws -> [AnyKeyPath: Any])?
+    private var faultedProperties = Set<AnyKeyPath>()
+    private var relationshipFaultLoader: ((AnyKeyPath) throws -> Any)?
+    private var faultedRelationships = Set<AnyKeyPath>()
+    private let faultLock = NSRecursiveLock()
     /// Creates managed storage for a row snapshot.
     public init(
         metadata: [Schema.PropertyMetadata],
@@ -54,6 +65,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
 
     /// Reads the current value from the dirty overlay or immutable row snapshot.
     public func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value {
+        loadFaultIfNeeded(for: keyPath)
         lock.lock()
         let value = overlay[keyPath] ?? baseline[keyPath]
         lock.unlock()
@@ -63,6 +75,60 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         }
         let name = metadata.first { $0.keypath == keyPath }?.name ?? "unknown"
         fatalError("OSD: property '\(name)' of \(Model.self) was read before assignment")
+    }
+
+    private func loadFaultIfNeeded(for keyPath: AnyKeyPath) {
+        faultLock.lock()
+        defer { faultLock.unlock() }
+        let propertyName = locked { metadata.first(where: { $0.keypath == keyPath })?.name ?? "unknown" }
+        let modelIdentifier = persistentModelID
+        let relationshipLoader = locked { relationshipFaultLoader }
+        let relationshipNeedsFault = locked {
+            faultedRelationships.contains(keyPath) && !baseline.keys.contains(keyPath)
+                && !overlay.keys.contains(keyPath)
+        }
+        if relationshipNeedsFault {
+            guard let relationshipLoader else {
+                fatalError(
+                    "OSD: relationship fault loader unavailable for \(Model.self).\(propertyName) (\(modelIdentifier))")
+            }
+            do {
+                let value = try relationshipLoader(keyPath)
+                locked {
+                    guard !overlay.keys.contains(keyPath) && !baseline.keys.contains(keyPath) else { return }
+                    baseline[keyPath] = value
+                    faultedRelationships.remove(keyPath)
+                }
+            } catch {
+                fatalError(
+                    "OSD: failed to fault relationship \(Model.self).\(propertyName) (\(modelIdentifier)): \(error)")
+            }
+            return
+        }
+        let loader: ((Set<AnyKeyPath>) throws -> [AnyKeyPath: Any])?
+        let missing = locked { () -> Set<AnyKeyPath> in
+            guard faultedProperties.contains(keyPath), !baseline.keys.contains(keyPath), !overlay.keys.contains(keyPath)
+            else {
+                return []
+            }
+            return faultedProperties.filter { !baseline.keys.contains($0) && !overlay.keys.contains($0) }
+        }
+        guard !missing.isEmpty else { return }
+        loader = locked { faultLoader }
+        guard let loader else {
+            fatalError("OSD: property fault loader unavailable for \(Model.self).\(propertyName) (\(modelIdentifier))")
+        }
+        do {
+            let values = try loader(missing)
+            locked {
+                for (key, value) in values where !overlay.keys.contains(key) && !baseline.keys.contains(key) {
+                    baseline[key] = value
+                    faultedProperties.remove(key)
+                }
+            }
+        } catch {
+            fatalError("OSD: failed to fault \(Model.self).\(propertyName) (\(modelIdentifier)): \(error)")
+        }
     }
 
     /// Captures the model before a mutation.
@@ -86,18 +152,70 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Writes a value into the dirty overlay.
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
         locked {
-            overlay[keyPath] = value
+            overlay[keyPath] = value as Any
+            faultedProperties.remove(keyPath)
+            faultedRelationships.remove(keyPath)
             changed = true
         }
     }
 
     func setMaterializedValue(forKey keyPath: AnyKeyPath, to value: Any) {
         locked {
-            if overlay[keyPath] != nil {
+            if overlay.keys.contains(keyPath) {
                 overlay[keyPath] = value
             } else {
                 baseline[keyPath] = value
             }
+            faultedProperties.remove(keyPath)
+            faultedRelationships.remove(keyPath)
+        }
+    }
+
+    func valueState(forKey keyPath: AnyKeyPath) -> ManagedValueState {
+        locked {
+            if let value = overlay[keyPath] { return .overlay(value) }
+            if let value = baseline[keyPath] { return .baseline(value) }
+            return .absent
+        }
+    }
+
+    func setMaterializedValueIfNoOverlay(forKey keyPath: AnyKeyPath, to value: Any) {
+        locked {
+            guard !overlay.keys.contains(keyPath) else { return }
+            baseline[keyPath] = value
+            faultedProperties.remove(keyPath)
+            faultedRelationships.remove(keyPath)
+        }
+    }
+
+    func invalidateRelationshipValues(_ keyPaths: Set<AnyKeyPath>) {
+        locked {
+            for keyPath in keyPaths where !overlay.keys.contains(keyPath) {
+                baseline.removeValue(forKey: keyPath)
+                faultedRelationships.insert(keyPath)
+            }
+        }
+    }
+
+    func installFaultLoader(
+        faultedProperties: Set<AnyKeyPath>,
+        loader: @escaping (Set<AnyKeyPath>) throws -> [AnyKeyPath: Any]
+    ) {
+        locked {
+            faultLoader = loader
+            self.faultedProperties = faultedProperties.filter {
+                !baseline.keys.contains($0) && !overlay.keys.contains($0)
+            }
+        }
+    }
+
+    func installRelationshipFaults(
+        _ keyPaths: Set<AnyKeyPath>,
+        loader: @escaping (AnyKeyPath) throws -> Any
+    ) {
+        locked {
+            relationshipFaultLoader = loader
+            faultedRelationships = keyPaths.filter { !baseline.keys.contains($0) && !overlay.keys.contains($0) }
         }
     }
 
@@ -131,12 +249,22 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             primaryKey = snapshot.primaryKey
             entityID = snapshot.entityID ?? entityID
             version = snapshot.optimisticLockVersion
+            faultedProperties = faultedProperties.filter { !baseline.keys.contains($0) && !overlay.keys.contains($0) }
+            faultedRelationships = faultedRelationships.filter {
+                !baseline.keys.contains($0) && !overlay.keys.contains($0)
+            }
         }
     }
 
     /// Restores values without changing lifecycle flags.
     public func restoreValues(_ snapshot: BackingDataSnapshot) {
-        locked { overlay = Self.difference(snapshot.values, baseline) }
+        locked {
+            overlay = Self.difference(snapshot.values, baseline)
+            faultedProperties = faultedProperties.filter { !baseline.keys.contains($0) && !overlay.keys.contains($0) }
+            faultedRelationships = faultedRelationships.filter {
+                !baseline.keys.contains($0) && !overlay.keys.contains($0)
+            }
+        }
     }
 
     /// Restores values and detaches a canceled insertion.
@@ -146,6 +274,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Restores values and detaches this model.
     public func restoreLifecycleAndDetach(_ snapshot: BackingDataSnapshot) {
         locked {
+            faultLoader = nil
+            faultedProperties.removeAll()
+            relationshipFaultLoader = nil
+            faultedRelationships.removeAll()
             baseline = snapshot.values
             overlay.removeAll()
             context = nil
@@ -164,6 +296,12 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Replaces the temporary identity with the committed row identity.
     public func markPersisted(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
         locked {
+            if self.primaryKey != primaryKey || self.storeIdentifier != storeIdentifier {
+                faultLoader = nil
+                faultedProperties.removeAll()
+                relationshipFaultLoader = nil
+                faultedRelationships.removeAll()
+            }
             baseline = mergedValues()
             overlay.removeAll()
             self.storeIdentifier = storeIdentifier
@@ -225,6 +363,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Detaches the model and restores detached identity.
     public func detach() {
         locked {
+            faultLoader = nil
+            faultedProperties.removeAll()
+            relationshipFaultLoader = nil
+            faultedRelationships.removeAll()
             context = nil
             contextState = nil
             identifier = detachedIdentifier
@@ -239,6 +381,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Detaches a deleted model while retaining its identity, values, and deletion state.
     public func detachDeleted() {
         locked {
+            faultLoader = nil
+            faultedProperties.removeAll()
+            relationshipFaultLoader = nil
+            faultedRelationships.removeAll()
             context = nil; contextState = nil; deleted = true; changed = false
         }
     }

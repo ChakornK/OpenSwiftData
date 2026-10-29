@@ -11,6 +11,22 @@ public enum StoredValue: Sendable, Equatable, Codable {
     /// Represents binary data as bytes.
     case blob([UInt8])
 
+    /// Encodes a value using the scalar representation used by persisted model properties.
+    public init<T: Encodable>(predicateScalar value: T) throws {
+        guard let encoded = try Codec.encodePredicateScalar(value) else {
+            throw PredicateScalarEncodingError.unsupportedType(String(reflecting: T.self))
+        }
+        self = encoded
+    }
+
+    /// Encodes an erased scalar capture while preserving optional type metadata.
+    public init(predicateScalar value: Any, type: Any.Type) throws {
+        guard let encoded = try Codec.encodePredicateScalar(value, type: type) else {
+            throw PredicateScalarEncodingError.unsupportedType(String(reflecting: type))
+        }
+        self = encoded
+    }
+
     private enum CodingKeys: String, CodingKey {
         case kind
         case payload
@@ -134,4 +150,10 @@ public enum StoredValue: Sendable, Equatable, Codable {
             try blobPayload.encode(value, forKey: .value)
         }
     }
+}
+
+/// An unsupported type passed as a scalar predicate capture.
+public enum PredicateScalarEncodingError: Error, Sendable, Equatable {
+    /// The value is not encoded as a supported scalar by the persistence codec.
+    case unsupportedType(String)
 }

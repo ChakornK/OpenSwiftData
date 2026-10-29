@@ -102,6 +102,7 @@ package enum LightweightMigration {
                 try connection.execute("SAVEPOINT osd_schema_open")
                 do {
                     try openOrMigrate(to: schema, connection: connection)
+                    try createHistoryTables(connection)
                     try connection.execute("RELEASE SAVEPOINT osd_schema_open")
                 } catch {
                     try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_open")
@@ -123,6 +124,19 @@ package enum LightweightMigration {
             try? driver.close()
             throw error
         }
+    }
+
+    private static func createHistoryTables(_ connection: SQLConnection) throws {
+        try connection.execute(
+            "CREATE TABLE IF NOT EXISTS _osd_history_transactions "
+                + "(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL, author TEXT)")
+        try connection.execute(
+            "CREATE TABLE IF NOT EXISTS _osd_history_changes "
+                + "(transaction_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, "
+                + "entity TEXT NOT NULL, primary_key INTEGER NOT NULL, PRIMARY KEY(transaction_id, ordinal))")
+        try connection.execute(
+            "CREATE INDEX IF NOT EXISTS _osd_history_changes_transaction "
+                + "ON _osd_history_changes (transaction_id)")
     }
 
     package static func migrate(

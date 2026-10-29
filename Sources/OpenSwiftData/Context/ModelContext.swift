@@ -22,6 +22,7 @@ public final class ModelContext {
     }
     private var containerStorage: ModelContainer?
     private var autosaveEnabledStorage = false
+    private var historyAuthorStorage: String?
     /// Whether this context saves changes automatically after a coalesced delay.
     public var autosaveEnabled: Bool {
         get {
@@ -33,6 +34,11 @@ public final class ModelContext {
             autosaveEnabledStorage = newValue
             autosaveHandle.setEnabled(newValue)
         }
+    }
+    /// The optional author recorded with history transactions created by this context.
+    public var historyAuthor: String? {
+        get { assertAffinity(); return historyAuthorStorage }
+        set { assertAffinity(); historyAuthorStorage = newValue }
     }
     /// The undo manager associated with this context.
     public var undoManager: UndoManager? {
@@ -970,6 +976,25 @@ public final class ModelContext {
             guard !state.hasTransaction else { return }
             try saveChanges()
         }
+    }
+
+    /// Fetches committed store history after the requested token.
+    public func fetchHistory(_ descriptor: HistoryDescriptor = HistoryDescriptor()) throws -> [HistoryTransaction] {
+        assertAffinity()
+        guard let store = container?.store as? any RuntimeHistoryStore else {
+            throw unsupportedStore("History is unavailable for the configured store.")
+        }
+        return try store.fetchHistory(descriptor)
+    }
+
+    /// Deletes history transactions through the supplied token and returns the number deleted.
+    @discardableResult
+    public func deleteHistory(before token: HistoryToken) throws -> Int {
+        assertAffinity()
+        guard let store = container?.store as? any RuntimeHistoryStore else {
+            throw unsupportedStore("History is unavailable for the configured store.")
+        }
+        return try store.deleteHistory(before: token)
     }
 
     private func saveChanges() throws {
@@ -2093,6 +2118,11 @@ public final class ModelContext {
         (container?.schema.entities.firstIndex(where: { $0.name == name }) ?? 0) + 1
     }
 
+    private static func historyKeyLess(_ lhs: StoreEntityKey, _ rhs: StoreEntityKey) -> Bool {
+        if lhs.entityName != rhs.entityName { return lhs.entityName < rhs.entityName }
+        return lhs.primaryKey < rhs.primaryKey
+    }
+
     private func persistPendingChanges(to store: any RuntimeStore) throws {
         let pending = state.pendingState()
         guard let container = containerStorage else { throw unsupportedStore("Saving") }
@@ -2105,11 +2135,16 @@ public final class ModelContext {
                 guard let primaryKey = model.persistentModelID.primaryKey else { return nil }
                 return StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
             })
+        var relationshipAffectedInsertions = Set<ObjectIdentifier>()
         for event in pending.relationshipMutationEvents {
             let affectedModels = [event.owner] + event.oldEndpoints + event.newEndpoints
             for model in affectedModels {
-                guard !insertedIDs.contains(ObjectIdentifier(model)),
-                    let primaryKey = model.persistentModelID.primaryKey
+                let objectID = ObjectIdentifier(model)
+                if insertedIDs.contains(objectID) {
+                    relationshipAffectedInsertions.insert(objectID)
+                    continue
+                }
+                guard let primaryKey = model.persistentModelID.primaryKey
                 else { continue }
                 updatedKeys.insert(
                     StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey))
@@ -2182,6 +2217,31 @@ public final class ModelContext {
                 guard connection.changesCount() == 1 else {
                     throw SwiftDataError.unsupportedStore("Delete did not affect exactly one row.")
                 }
+            }
+            var historyChanges: [RuntimeHistoryChange] = []
+            var historyTypesByKey: [StoreEntityKey: HistoryChangeType] = [:]
+            for result in results where insertedIDs.contains(ObjectIdentifier(result.model)) {
+                let key = StoreEntityKey(
+                    entityName: result.model.persistentModelID.entityName, primaryKey: result.primaryKey)
+                historyTypesByKey[key] = result.replacedModel == nil ? .insert : .update
+            }
+            for result in results where relationshipAffectedInsertions.contains(ObjectIdentifier(result.model)) {
+                guard result.replacedModel != nil else { continue }
+                let key = StoreEntityKey(
+                    entityName: result.model.persistentModelID.entityName, primaryKey: result.primaryKey)
+                historyTypesByKey[key] = .update
+            }
+            for key in updatedKeys where !deletedKeys.contains(key) {
+                historyTypesByKey[key] = .update
+            }
+            for key in deletedKeys { historyTypesByKey[key] = .delete }
+            for key in historyTypesByKey.keys.sorted(by: Self.historyKeyLess) {
+                guard let type = historyTypesByKey[key] else { continue }
+                historyChanges.append(
+                    RuntimeHistoryChange(type: type, entityName: key.entityName, primaryKey: key.primaryKey))
+            }
+            if !historyChanges.isEmpty {
+                try connection.recordHistory(historyChanges, timestamp: Date(), author: historyAuthorStorage)
             }
             return results
         }

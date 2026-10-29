@@ -162,6 +162,37 @@ public protocol RuntimeConnection {
     func lastInsertRowID() -> Int64
     /// The number of rows affected by the last statement.
     func changesCount() -> Int
+    /// Records model changes inside the current atomic write, when history is supported.
+    func recordHistory(_ changes: [RuntimeHistoryChange], timestamp: Date, author: String?) throws
+}
+
+public extension RuntimeConnection {
+    func recordHistory(_ changes: [RuntimeHistoryChange], timestamp: Date, author: String?) throws {}
+}
+
+/// A store-neutral model row change written with its transaction.
+public struct RuntimeHistoryChange: Sendable, Hashable {
+    /// The history change kind.
+    public let type: HistoryChangeType
+    /// The stable schema entity name.
+    public let entityName: String
+    /// The changed row's primary key.
+    public let primaryKey: Int64
+
+    /// Creates a store-neutral row change.
+    public init(type: HistoryChangeType, entityName: String, primaryKey: Int64) {
+        self.type = type
+        self.entityName = entityName
+        self.primaryKey = primaryKey
+    }
+}
+
+/// A runtime store that supports durable history queries and pruning.
+public protocol RuntimeHistoryStore: RuntimeStore {
+    /// Fetches durable history transactions matching a descriptor.
+    func fetchHistory(_ descriptor: HistoryDescriptor) throws -> [HistoryTransaction]
+    /// Deletes history transactions through a token and returns the number of transactions removed.
+    func deleteHistory(before token: HistoryToken) throws -> Int
 }
 
 /// SQL values exchanged across the runtime-store boundary.

@@ -27,7 +27,20 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
     ) throws -> [DeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
         diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)
-        return CodeGen.memberSources(classDeclaration).map(DeclSyntax.init(stringLiteral:))
+        let schemaIndexes = try CodeGen.schemaIndexSourcesValidating(in: classDeclaration)
+        for member in classDeclaration.memberBlock.members {
+            guard let directive = member.decl.as(MacroExpansionDeclSyntax.self) else { continue }
+            let kind: CodeGen.SchemaDirectiveKind
+            switch directive.macroName.trimmedDescription {
+            case "Index": kind = .index
+            case "Unique": kind = .unique
+            default: continue
+            }
+            let properties = try CodeGen.schemaDirectiveProperties(directive, kind: kind)
+            try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
+        }
+        return CodeGen.memberSources(classDeclaration, schemaIndexes: schemaIndexes).map(
+            DeclSyntax.init(stringLiteral:))
     }
 
     static func expansion(
@@ -124,9 +137,11 @@ struct UniqueMacro: DeclarationMacro {
         of node: some FreestandingMacroExpansionSyntax,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let name = context.makeUniqueName("_osdUnique").text
-        return try CodeGen.schemaDirectiveSources(node, kind: .unique, uniqueName: name)
-            .map(DeclSyntax.init(stringLiteral:))
+        _ = try CodeGen.schemaDirectiveProperties(node, kind: .unique)
+        guard context.lexicalContext.contains(where: { $0.is(ClassDeclSyntax.self) }) else {
+            throw SchemaDirectiveDiagnostic("#Unique must be declared inside an @Model type.")
+        }
+        return []
     }
 }
 
@@ -135,9 +150,11 @@ struct IndexMacro: DeclarationMacro {
         of node: some FreestandingMacroExpansionSyntax,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let name = context.makeUniqueName("_osdIndex").text
-        return try CodeGen.schemaDirectiveSources(node, kind: .index, uniqueName: name)
-            .map(DeclSyntax.init(stringLiteral:))
+        _ = try CodeGen.schemaDirectiveProperties(node, kind: .index)
+        guard context.lexicalContext.contains(where: { $0.is(ClassDeclSyntax.self) }) else {
+            throw SchemaDirectiveDiagnostic("#Index must be declared inside an @Model type.")
+        }
+        return []
     }
 }
 

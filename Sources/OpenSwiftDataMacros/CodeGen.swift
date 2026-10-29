@@ -35,10 +35,9 @@ enum CodeGen {
         }
     }
 
-    static func schemaDirectiveSources(
+    static func schemaDirectiveProperties(
         _ node: some FreestandingMacroExpansionSyntax,
-        kind: SchemaDirectiveKind,
-        uniqueName: String
+        kind: SchemaDirectiveKind
     ) throws -> [String] {
         let arguments = node.arguments
         guard !arguments.isEmpty else {
@@ -57,11 +56,47 @@ enum CodeGen {
         guard Set(properties).count == properties.count else {
             throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path.")
         }
-        let quoted = properties.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", ")
-        let unique = kind.name == "Unique"
-        return [
-            "let \(uniqueName) = Schema.Index(properties: [\(quoted)], isUnique: \(unique))"
-        ]
+        return properties
+    }
+
+    static func validateSchemaDirectiveTargets(
+        _ properties: [String], kind: SchemaDirectiveKind, in declaration: ClassDeclSyntax
+    ) throws {
+        let stored = Set(persistedProperties(in: declaration).map(\.name))
+        for property in properties where !stored.contains(property) {
+            throw SchemaDirectiveDiagnostic(
+                "#\(kind.name) property '\(property)' must name a stored property of @Model '\(declaration.name.text)'."
+            )
+        }
+    }
+
+    static func schemaIndexSourcesValidating(in declaration: ClassDeclSyntax) throws -> String? {
+        var indexes: [[String]] = []
+        var uniqueIndexes: [[String]] = []
+        var seenIndexes: Set<String> = []
+        var seenUnique: Set<String> = []
+        for member in declaration.memberBlock.members {
+            guard let directive = member.decl.as(MacroExpansionDeclSyntax.self) else { continue }
+            let kind: SchemaDirectiveKind
+            switch directive.macroName.trimmedDescription {
+            case "Index": kind = .index
+            case "Unique": kind = .unique
+            default: continue
+            }
+            let properties = try schemaDirectiveProperties(directive, kind: kind)
+            try validateSchemaDirectiveTargets(properties, kind: kind, in: declaration)
+            let key = properties.joined(separator: "\u{0}")
+            if kind.isUnique {
+                if seenUnique.insert(key).inserted { uniqueIndexes.append(properties) }
+            } else if seenIndexes.insert(key).inserted {
+                indexes.append(properties)
+            }
+        }
+        let rows = (uniqueIndexes.map { ($0, true) } + indexes.map { ($0, false) }).map { properties, unique in
+            "Schema.Index(properties: [\(properties.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", "))], isUnique: \(unique))"
+        }
+        guard !rows.isEmpty else { return nil }
+        return "public static func schemaIndexes() -> [Schema.Index] { [\(rows.joined(separator: ", "))] }"
     }
 
     private static func escapeSwiftString(_ value: String) -> String {
@@ -222,7 +257,10 @@ enum CodeGen {
         return name.first == "`" && name.last == "`" ? String(name.dropFirst().dropLast()) : name
     }
 
-    static func memberSources(_ declaration: ClassDeclSyntax, variant: InitializationVariant = .a) -> [String] {
+    static func memberSources(
+        _ declaration: ClassDeclSyntax, variant: InitializationVariant = .a,
+        schemaIndexes: String? = nil
+    ) -> [String] {
         let modelName = declaration.name.text
         let properties = persistedProperties(in: declaration)
         let adapterRows = properties.compactMap { property -> String? in
@@ -377,6 +415,7 @@ enum CodeGen {
         let metadataBody =
             metadataRows.isEmpty
             ? "    return []" : "    return [\n        \(metadataRows.joined(separator: ",\n        "))\n    ]"
+        let schemaIndexes = schemaIndexes
         let initializerAssignments: [String] =
             variant == .b
             ? properties.map { "    _\($0.name) = _SwiftDataNoType()" }
@@ -391,6 +430,7 @@ enum CodeGen {
             "@Transient\nprivate var _$backingData: any BackingData<\(modelName)> = \(modelName).createBackingData()",
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
             "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            schemaIndexes,
             adapterSource,
             flattenedAdapterSource,
             relationshipAdapterSource,
@@ -514,7 +554,7 @@ enum InitializationVariant {
     case c
 }
 
-private struct SchemaDirectiveDiagnostic: Error, DiagnosticMessage {
+struct SchemaDirectiveDiagnostic: Error, DiagnosticMessage {
     let message: String
     var diagnosticID: MessageID { MessageID(domain: "OpenSwiftDataMacros", id: "schema-directive") }
     var severity: DiagnosticSeverity { .error }

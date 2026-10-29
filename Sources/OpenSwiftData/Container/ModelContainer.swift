@@ -268,7 +268,11 @@ public final class ModelContainer: Sendable {
                 )
             }
             let indexes =
-                modelType.schemaIndexes()
+                modelType.schemaIndexes().filter { index in
+                    !(index.isUnique && index.properties.count == 1
+                        && attributes.first(where: { $0.name == index.properties[0] })?.options.contains(.unique)
+                            == true)
+                }
                 + attributes.compactMap { attribute in
                     attribute.options.contains(.unique)
                         ? Schema.Index(properties: [attribute.name], isUnique: true) : nil

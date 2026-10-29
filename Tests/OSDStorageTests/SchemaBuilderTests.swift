@@ -73,6 +73,32 @@ final class SchemaBuilderTests: XCTestCase {
             ])
     }
 
+    func testExactDDLForSingleAndCompoundGeneratedIndexShapes() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["rank"]),
+                    Schema.Index(properties: ["label"], isUnique: true),
+                    Schema.Index(properties: ["rank", "label"]),
+                ])
+        ])
+        let indexes = try SchemaBuilder.build(schema).statements.filter {
+            $0.hasPrefix("CREATE ") && $0.contains("INDEX")
+        }
+        XCTAssertEqual(
+            indexes,
+            [
+                "CREATE INDEX ZRECORD_ZRANK_INDEX ON ZRECORD (ZRANK);",
+                "CREATE UNIQUE INDEX ZRECORD_ZLABEL_UNIQUE_INDEX ON ZRECORD (ZLABEL);",
+                "CREATE INDEX ZRECORD_ZRANK_ZLABEL_INDEX ON ZRECORD (ZRANK, ZLABEL);",
+            ])
+    }
+
     func testIndexRejectsMissingPropertiesAndCollidingGeneratedNames() {
         let missing = Schema([
             Schema.Entity(

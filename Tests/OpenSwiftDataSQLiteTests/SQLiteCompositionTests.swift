@@ -7,9 +7,20 @@ import XCTest
 
 @Model
 private final class IndexedPredicateFixture {
-    @Attribute(.unique) var rank: Int
+    var rank: Int
+    @Attribute(.unique) var identity: String
+    var label: String
 
-    init(rank: Int) { self.rank = rank }
+    #Index(\IndexedPredicateFixture.rank)
+    #Index(\IndexedPredicateFixture.rank)
+    #Unique(\IndexedPredicateFixture.label)
+    #Unique(\IndexedPredicateFixture.identity)
+
+    init(rank: Int, identity: String, label: String = "default") {
+        self.rank = rank
+        self.identity = identity
+        self.label = label
+    }
 }
 
 @Model
@@ -144,7 +155,8 @@ final class SQLiteCompositionTests: XCTestCase {
             return XCTFail("Expected a query-capable SQLite store")
         }
         for rank in 0..<1_000 {
-            container.mainContext.insert(IndexedPredicateFixture(rank: rank))
+            container.mainContext.insert(
+                IndexedPredicateFixture(rank: rank, identity: "identity-\(rank)", label: "label-\(rank)"))
         }
         try container.mainContext.save()
         let entity: Schema.Entity = try XCTUnwrap(
@@ -155,6 +167,17 @@ final class SQLiteCompositionTests: XCTestCase {
             predicate: predicate, sortBy: [SortDescriptor(\.rank)], includePendingChanges: false)
         let fetched: [IndexedPredicateFixture] = try container.mainContext.fetch(descriptor)
         XCTAssertEqual(fetched.map { $0.rank }, [42])
+        XCTAssertEqual(
+            Set(container.schema.entity(forName: entity.name)?.indexes ?? []),
+            Set([
+                Schema.Index(properties: ["label"], isUnique: true),
+                Schema.Index(properties: ["identity"], isUnique: true),
+                Schema.Index(properties: ["rank"]),
+            ]))
+        let indexes = try store.read { try $0.rows("PRAGMA index_list(ZINDEXEDPREDICATEFIXTURE)", arguments: []) }
+        XCTAssertTrue(
+            indexes.contains { $0.count > 1 && $0[1] == .text("ZINDEXEDPREDICATEFIXTURE_ZLABEL_UNIQUE_INDEX") },
+            "\(indexes)")
 
         let tree = try PredicateRuntimeTreeBuilder.build(
             predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity)
@@ -214,10 +237,18 @@ final class SQLiteCompositionTests: XCTestCase {
         }
 
         XCTAssertTrue(
-            details.contains(where: { $0.contains("SEARCH") && $0.contains("UNIQUE_INDEX") }),
+            details.contains(where: {
+                $0.contains("SEARCH") && $0.contains("USING INDEX ZINDEXEDPREDICATEFIXTURE_ZRANK_INDEX")
+            }),
             details.joined(separator: "\n"))
         XCTAssertFalse(
             details.contains(where: { $0 == "SCAN Z\(entity.name.uppercased())" }), details.joined(separator: "\n"))
+        XCTAssertThrowsError(
+            try store.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZINDEXEDPREDICATEFIXTURE (Z_ENT, Z_OPT, ZRANK, ZLABEL) VALUES (?, ?, ?, ?)",
+                    arguments: [.int(1), .int(1), .int(1_001), .text("label-42")])
+            })
     }
 
     func testLocalizedStandardContainsSQLiteFunctionMatchesFoundation() throws {

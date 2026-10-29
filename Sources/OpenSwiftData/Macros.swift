@@ -12,7 +12,7 @@ public macro _PersistedProperty(relationship: Bool = false) =
     names: arbitrary, named(createBackingData), named(persistentBackingData), named(schemaMetadata),
     named(_$backingData), named(_$observationRegistrar), named(_SwiftDataNoType),
     named(persistenceAdapters), named(flattenedPropertyAdapters), named(relationshipAdapterCandidates),
-    named(inferredRelationshipAdapterCandidates)
+    named(inferredRelationshipAdapterCandidates), named(schemaIndexes)
 )
 @attached(memberAttribute)
 @attached(extension, conformances: PersistentModel, RelationshipModel, Observation.Observable, Sendable)
@@ -53,10 +53,10 @@ public macro Relationship(
 ) = #externalMacro(module: "OpenSwiftDataMacros", type: "RelationshipMacro")
 @attached(peer)
 public macro Transient() = #externalMacro(module: "OpenSwiftDataMacros", type: "TransientMacro")
-@freestanding(declaration, names: arbitrary)
+@freestanding(declaration)
 public macro Unique<Model>(_ keyPaths: PartialKeyPath<Model>...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "UniqueMacro")
-@freestanding(declaration, names: arbitrary)
+@freestanding(declaration)
 public macro Index<Model>(_ keyPaths: PartialKeyPath<Model>...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "IndexMacro")
 @attached(member, names: arbitrary)

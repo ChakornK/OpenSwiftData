@@ -5,6 +5,31 @@ import SwiftSyntaxMacrosTestSupport
 import XCTest
 
 final class GroupedBindingDiagnosticsTests: XCTestCase {
+    func testModelRejectsClassInheritanceWithOneDiagnostic() {
+        assertMacroExpansion(
+            "@Model class Base { var value: Int }",
+            expandedSource: "class Base { var value: Int \n}",
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Model currently requires a final class without a superclass",
+                    line: 1,
+                    column: 14,
+                    severity: .error)
+            ],
+            macros: ["Model": ModelMacro.self])
+        assertMacroExpansion(
+            "@Model final class Child: Base { var childValue: Int }",
+            expandedSource: "final class Child: Base { var childValue: Int \n}",
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Model currently requires a final class without a superclass",
+                    line: 1,
+                    column: 20,
+                    severity: .error)
+            ],
+            macros: ["Model": ModelMacro.self])
+    }
+
     func testModelAccessorMarkerSeparatesScalarAndRelationshipProperties() {
         assertMacroExpansion(
             #"""

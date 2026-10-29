@@ -155,6 +155,30 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(schema.entities, decoded.entities)
     }
 
+    func testSchemaParentMetadataRoundTripsAndNilRemainsCanonical() throws {
+        let legacy = Schema([Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")])])
+        let explicitlyUninherited = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")], superentityName: nil)
+        ])
+        XCTAssertEqual(
+            SchemaHash.canonicalDescription(of: legacy), SchemaHash.canonicalDescription(of: explicitlyUninherited))
+        XCTAssertEqual(SchemaHash.digest(legacy), SchemaHash.digest(explicitlyUninherited))
+        XCTAssertFalse(SchemaHash.canonicalDescription(of: legacy).contains("superentityName"))
+        XCTAssertEqual(
+            try SchemaBuilder.build(legacy).statements,
+            try SchemaBuilder.build(explicitlyUninherited).statements)
+
+        let inherited = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child", attributes: [Schema.Attribute(name: "age", type: "Int")], superentityName: "Base"),
+        ])
+        let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: inherited))
+        XCTAssertEqual(decoded.entity(forName: "Child")?.superentityName, "Base")
+        XCTAssertNotEqual(SchemaHash.digest(inherited), SchemaHash.digest(legacy))
+    }
+
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {
         let base = Schema([
             Schema.Entity(

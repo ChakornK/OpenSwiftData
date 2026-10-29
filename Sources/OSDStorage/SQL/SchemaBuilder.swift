@@ -94,6 +94,22 @@ package enum SchemaBuilder {
     package static func build(_ schema: Schema) throws -> BuiltSchema {
         let entities = schema.entities.sorted { bytewiseLess($0.name, $1.name) }
         try validateUniqueNames(entities.map(\.name), scope: "entity")
+        let entitiesByName = Dictionary(uniqueKeysWithValues: entities.map { ($0.name, $0) })
+        for entity in entities {
+            guard let parent = entity.superentityName else { continue }
+            guard parent != entity.name, entitiesByName[parent] != nil else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Entity '\(entity.name)' references missing or self superentity '\(parent)'.")
+            }
+            var visited: Set<String> = [entity.name]
+            var current: String? = parent
+            while let name = current {
+                guard visited.insert(name).inserted else {
+                    throw SwiftDataError.unsupportedSchemaProperty("Schema inheritance contains a cycle.")
+                }
+                current = entitiesByName[name]?.superentityName
+            }
+        }
         for entity in entities {
             for index in entity.indexes {
                 guard !index.properties.isEmpty, Set(index.properties).count == index.properties.count else {

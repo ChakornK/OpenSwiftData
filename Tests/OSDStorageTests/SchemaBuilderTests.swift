@@ -3,6 +3,28 @@ import OSDCore
 @testable import OSDStorage
 
 final class SchemaBuilderTests: XCTestCase {
+    func testInheritanceRejectsMissingParentAndCycles() {
+        XCTAssertThrowsError(
+            try SchemaBuilder.build(
+                Schema([Schema.Entity(name: "Child", superentityName: "Missing")]))
+        ) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(
+            try SchemaBuilder.build(
+                Schema([
+                    Schema.Entity(name: "First", superentityName: "Second"),
+                    Schema.Entity(name: "Second", superentityName: "First"),
+                ]))
+        ) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
+    }
+
     func testFlattenedAttributeEmitsScalarLeafColumns() throws {
         let schema = Schema([
             Schema.Entity(

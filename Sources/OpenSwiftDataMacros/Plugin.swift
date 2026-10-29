@@ -26,6 +26,15 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
+        guard classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
+            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
+        else {
+            context.diagnose(
+                Diagnostic(
+                    node: Syntax(classDeclaration.name),
+                    message: UnsupportedModelInheritanceDiagnostic()))
+            return []
+        }
         diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)
         let schemaIndexes = try CodeGen.schemaIndexSourcesValidating(in: classDeclaration)
         for member in classDeclaration.memberBlock.members {
@@ -49,6 +58,10 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         providingAttributesFor member: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [AttributeSyntax] {
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self),
+            classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
+            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
+        else { return [] }
         guard let variable = member.as(VariableDeclSyntax.self),
             let binding = variable.bindings.first, variable.bindings.count == 1,
             binding.pattern.is(IdentifierPatternSyntax.self),
@@ -86,6 +99,10 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [ExtensionDeclSyntax] {
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self),
+            classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
+            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
+        else { return [] }
         return CodeGen.extensionSources(declaration)
             .filter {
                 $0.contains("PersistentModel") || $0.contains("RelationshipModel")
@@ -109,6 +126,12 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             context.diagnose(diagnostic)
         }
     }
+}
+
+private struct UnsupportedModelInheritanceDiagnostic: DiagnosticMessage {
+    let message = "@Model currently requires a final class without a superclass"
+    let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "unsupported-model-inheritance")
+    let severity = DiagnosticSeverity.error
 }
 
 private struct GroupedBindingDiagnostic: DiagnosticMessage {

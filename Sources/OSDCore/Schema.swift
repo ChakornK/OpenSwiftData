@@ -32,6 +32,8 @@ public struct Schema: Sendable {
     public struct Entity: Hashable, Sendable {
         /// The entity's stable model type name.
         public let name: String
+        /// The parent entity in a single-table inheritance hierarchy, when present.
+        public let superentityName: String?
         /// The entity's persisted attributes.
         public let attributes: [Attribute]
         /// The entity's persisted relationships.
@@ -41,12 +43,17 @@ public struct Schema: Sendable {
 
         /// Creates an entity and preserves property declaration order.
         public init(
-            name: String, attributes: [Attribute] = [], relationships: [Relationship] = [], indexes: [Index] = []
+            name: String,
+            attributes: [Attribute] = [],
+            relationships: [Relationship] = [],
+            indexes: [Index] = [],
+            superentityName: String? = nil
         ) {
             self.name = name
             self.attributes = attributes
             self.relationships = relationships
             self.indexes = indexes
+            self.superentityName = superentityName
         }
     }
 

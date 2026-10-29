@@ -22,6 +22,9 @@ package enum SchemaHash {
             element: {
                 encoder, entity in
                 encoder.append(entity.name)
+                if let superentityName = entity.superentityName {
+                    encoder.append(superentityName)
+                }
                 encoder.append(
                     entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) },
                     element: {
@@ -175,12 +178,27 @@ package enum SchemaHash {
 
     private struct DescriptionEntity: Codable {
         var name: String
+        var superentityName: String?
         var attributes: [DescriptionAttribute]
         var relationships: [DescriptionRelationship]
         var indexes: [DescriptionIndex]
 
+        private enum CodingKeys: String, CodingKey {
+            case name, superentityName, attributes, relationships, indexes
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            superentityName = try container.decodeIfPresent(String.self, forKey: .superentityName)
+            attributes = try container.decode([DescriptionAttribute].self, forKey: .attributes)
+            relationships = try container.decode([DescriptionRelationship].self, forKey: .relationships)
+            indexes = try container.decode([DescriptionIndex].self, forKey: .indexes)
+        }
+
         init(_ entity: Schema.Entity) {
             name = entity.name
+            superentityName = entity.superentityName
             attributes = entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
                 .map(DescriptionAttribute.init)
             relationships = entity.relationships.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
@@ -192,7 +210,8 @@ package enum SchemaHash {
             Schema.Entity(
                 name: name, attributes: try attributes.map { try $0.schemaAttribute() },
                 relationships: try relationships.map { try $0.schemaRelationship() },
-                indexes: indexes.map { Schema.Index(properties: $0.properties, isUnique: $0.isUnique) })
+                indexes: indexes.map { Schema.Index(properties: $0.properties, isUnique: $0.isUnique) },
+                superentityName: superentityName)
         }
     }
 

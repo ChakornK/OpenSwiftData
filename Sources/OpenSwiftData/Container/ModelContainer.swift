@@ -394,13 +394,151 @@ public final class ModelContainer: Sendable {
     }
 
     /// Creates a container using a migration plan.
-    public convenience init<Plan>(
+    public convenience init<Plan: SchemaMigrationPlan>(
         for types: any PersistentModel.Type...,
         migrationPlan: Plan.Type,
         configurations: ModelConfiguration...
     ) throws {
-        _ = migrationPlan
-        try self.init(for: types, configurations: configurations)
+        let descriptor = try MigrationPlanDescriptor(migrationPlan)
+        guard let destination = descriptor.schemas.last else {
+            throw SwiftDataError.migrationUnsupported("Migration plan contains no schemas.")
+        }
+        let requestedModels = Set(types.map { Self.unqualifiedTypeName(String(describing: $0)) })
+        let plannedModels = Set(destination.models.map { Self.unqualifiedTypeName(String(describing: $0)) })
+        guard requestedModels == plannedModels else {
+            throw SwiftDataError.migrationUnsupported(
+                "The container model types must match the latest migration-plan schema.")
+        }
+        let pendingMigration = try Self.runMigrationPlan(descriptor, configurations: configurations)
+        try self.init(for: destination.models, schema: destination.schema, configurations: configurations)
+        if pendingMigration != nil {
+            try Self.setPendingMigration(nil, store: self.store)
+        }
+    }
+
+    private static func runMigrationPlan(
+        _ plan: MigrationPlanDescriptor,
+        configurations: [ModelConfiguration]
+    ) throws -> String? {
+        guard !configurations.isEmpty else { return nil }
+        guard configurations.count == 1, let configuration = configurations.first else {
+            throw SwiftDataError.migrationUnsupported(
+                "Versioned migration plans require exactly one store configuration.")
+        }
+        guard !configuration.isStoredInMemoryOnly else { return nil }
+        guard let versionReader = configuration.schemaVersionReader else {
+            throw SwiftDataError.migrationUnsupported("The configured store cannot report its stored schema version.")
+        }
+        let versionState = try versionReader(Self.storeLocation(for: configuration))
+        var finalPendingMigration: String?
+        let startIndex: Int
+        switch versionState {
+        case let .pending(destinationIdentifier):
+            guard
+                let destinationIndex = plan.schemas.firstIndex(where: {
+                    $0.version.identifier == destinationIdentifier
+                }), destinationIndex > 0
+            else {
+                throw SwiftDataError.migrationUnsupported("Pending migration stage is not present in the plan.")
+            }
+            let destination = plan.schemas[destinationIndex]
+            let stage = plan.stages[destinationIndex - 1]
+            let destinationContainer = try ModelContainer(
+                for: destination.models, schema: destination.schema, configurations: configurations)
+            defer { try? destinationContainer.store?.close() }
+            if let didMigrate = stage.didMigrate {
+                let context = ModelContext(
+                    container: destinationContainer, autosaveEnabled: false, affinity: .unchecked)
+                try context.transaction { try didMigrate(context) }
+            }
+            startIndex = destinationIndex
+            if destinationIndex == plan.schemas.count - 1 {
+                finalPendingMigration = destinationIdentifier
+            } else {
+                try setPendingMigration(nil, store: destinationContainer.store)
+            }
+        default:
+            startIndex = try migrationStartIndex(for: versionState, in: plan)
+        }
+
+        guard startIndex < plan.schemas.count - 1 else { return finalPendingMigration }
+        if case .empty = versionState, let first = plan.schemas.first {
+            let initial = try ModelContainer(for: first.models, schema: first.schema, configurations: configurations)
+            try initial.store?.close()
+        }
+
+        for index in startIndex..<plan.schemas.count - 1 {
+            let source = plan.schemas[index]
+            let destination = plan.schemas[index + 1]
+            let stage = plan.stages[index]
+            let sourceContainer = try ModelContainer(
+                for: source.models, schema: source.schema, configurations: configurations)
+            defer { try? sourceContainer.store?.close() }
+            if let willMigrate = stage.willMigrate {
+                let context = ModelContext(container: sourceContainer, autosaveEnabled: false, affinity: .unchecked)
+                try context.transaction { try willMigrate(context) }
+            }
+            try setPendingMigration(destination.version.identifier, store: sourceContainer.store)
+
+            let destinationContainer = try ModelContainer(
+                for: destination.models, schema: destination.schema, configurations: configurations)
+            defer { try? destinationContainer.store?.close() }
+            if let didMigrate = stage.didMigrate {
+                let context = ModelContext(
+                    container: destinationContainer, autosaveEnabled: false, affinity: .unchecked)
+                try context.transaction { try didMigrate(context) }
+            }
+            if index + 1 == plan.schemas.count - 1 {
+                finalPendingMigration = destination.version.identifier
+            } else {
+                try setPendingMigration(nil, store: destinationContainer.store)
+            }
+        }
+        return finalPendingMigration
+    }
+
+    private static func migrationStartIndex(
+        for state: RuntimeSchemaVersionState, in plan: MigrationPlanDescriptor
+    ) throws -> Int {
+        switch state {
+        case let .version(version):
+            guard let index = plan.schemas.firstIndex(where: { $0.version == version }) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored schema version '\(version.identifier)' is not present in the migration plan.")
+            }
+            return index
+        case .empty:
+            return 0
+        case .unversioned:
+            throw SwiftDataError.migrationUnsupported(
+                "The existing store has no version identifier for the migration plan.")
+        case .pending:
+            throw SwiftDataError.migrationUnsupported("Pending migration state was not resolved.")
+        }
+    }
+
+    private static func setPendingMigration(_ identifier: String?, store: (any RuntimeStore)?) throws {
+        guard let store else {
+            throw SwiftDataError.migrationUnsupported("Migration stages require a persistent runtime store.")
+        }
+        try store.write { connection in
+            if identifier == nil {
+                try connection.execute(
+                    "DELETE FROM _osd_meta WHERE key = ?", arguments: [.text("schema.migration.pending.v1")])
+            } else if let identifier {
+                try connection.execute(
+                    "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    arguments: [.text("schema.migration.pending.v1"), .blob(Array(identifier.utf8))])
+            }
+        }
+    }
+
+    private static func storeLocation(for configuration: ModelConfiguration) -> RuntimeStoreLocation {
+        if configuration.isStoredInMemoryOnly { return .memory(name: configuration.name) }
+        if let url = configuration.url { return .file(url) }
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("\(configuration.name).sqlite")
+        return .file(url)
     }
 
     /// Returns the resolved relationship adapters registered for a model type.

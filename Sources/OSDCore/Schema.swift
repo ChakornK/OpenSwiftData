@@ -1,3 +1,17 @@
+import Foundation
+
+/// Describes schema version metadata without changing the runtime store.
+public enum RuntimeSchemaVersionState: Sendable {
+    /// The store does not yet contain a schema.
+    case empty
+    /// The store contains a recognized version.
+    case version(Schema.Version)
+    /// The store has schema data but no recognized version identifier.
+    case unversioned
+    /// A custom stage changed the schema but has not completed its destination callback.
+    case pending(destinationIdentifier: String)
+}
+
 /// Describes the entities and version metadata in a persistent store.
 public struct Schema: Sendable {
     /// An ordered index over entity attributes.
@@ -210,7 +224,7 @@ public struct Schema: Sendable {
     }
 
     /// Identifies a schema version for migration planning.
-    public struct Version: Sendable, Hashable {
+    public struct Version: Sendable, Hashable, Codable {
         /// The version's components.
         public let version: [Int]
         /// A stable identifier for the version.
@@ -220,6 +234,23 @@ public struct Schema: Sendable {
         public init(version: [Int], identifier: String) {
             self.version = version
             self.identifier = identifier
+        }
+
+        package func encoded() throws -> [UInt8] {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return Array(try encoder.encode(self))
+        }
+
+        package static func decode(_ identifier: String) throws -> Self {
+            guard let data = identifier.data(using: .utf8) else {
+                throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
+            }
+            do {
+                return try JSONDecoder().decode(Self.self, from: data)
+            } catch {
+                throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
+            }
         }
     }
 

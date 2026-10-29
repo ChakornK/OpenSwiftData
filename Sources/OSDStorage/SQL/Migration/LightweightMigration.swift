@@ -4,6 +4,44 @@ import OSDCore
 package enum LightweightMigration {
     package static let schemaHashKey = "schema.hash.v1"
     package static let schemaDescriptionKey = "schema.definition.v1"
+    package static let schemaVersionKey = "schema.version.v1"
+    package static let pendingMigrationKey = "schema.migration.pending.v1"
+
+    package static func storedSchemaVersion(connection: SQLConnection) throws -> RuntimeSchemaVersionState {
+        let metadataTable = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_osd_meta'")
+        guard !metadataTable.isEmpty else { return .empty }
+        if let row = try connection.rows(
+            "SELECT value FROM _osd_meta WHERE key = ?", [.text(pendingMigrationKey)]
+        ).first,
+            case let .blob(bytes)? = row.first,
+            let identifier = String(bytes: bytes, encoding: .utf8)
+        {
+            return .pending(destinationIdentifier: identifier)
+        }
+        guard try storedHash(connection) != nil else {
+            let userTables = try connection.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_osd_meta'"
+            )
+            return userTables.isEmpty ? .empty : .unversioned
+        }
+        guard
+            let row = try connection.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(schemaVersionKey)]).first,
+            case let .blob(bytes)? = row.first,
+            let identifier = String(bytes: bytes, encoding: .utf8)
+        else { return .unversioned }
+        return .version(try Schema.Version.decode(identifier))
+    }
+
+    package static func setPendingMigration(_ identifier: String?, connection: SQLConnection) throws {
+        guard let identifier else {
+            try connection.execute("DELETE FROM _osd_meta WHERE key = ?", [.text(pendingMigrationKey)])
+            return
+        }
+        try connection.execute(
+            "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [.text(pendingMigrationKey), .blob(Array(identifier.utf8))])
+    }
 
     private struct AttributeMapping {
         let source: Schema.Attribute?
@@ -34,7 +72,10 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("The stored schema hash does not match the source schema.")
         }
         try validatePhysicalSchema(sourceSchema, connection: connection)
-        if stored == destinationHash { return }
+        if stored == destinationHash {
+            try writeSchemaVersion(destination.version, connection: connection)
+            return
+        }
         try connection.execute("SAVEPOINT osd_schema_migration")
         do {
             try migrate(source: sourceSchema, destination: destination, connection: connection)
@@ -219,6 +260,17 @@ package enum LightweightMigration {
         try connection.execute(
             "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [.text(schemaDescriptionKey), .blob(Array(SchemaHash.canonicalDescription(of: schema).utf8))])
+        try writeSchemaVersion(schema.version, connection: connection)
+    }
+
+    private static func writeSchemaVersion(_ version: Schema.Version?, connection: SQLConnection) throws {
+        if let version {
+            try connection.execute(
+                "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [.text(schemaVersionKey), .blob(try version.encoded())])
+        } else {
+            try connection.execute("DELETE FROM _osd_meta WHERE key = ?", [.text(schemaVersionKey)])
+        }
     }
 
     private static func validateCardinality(source: Schema, destination: Schema) throws {

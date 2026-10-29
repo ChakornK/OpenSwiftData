@@ -15,6 +15,7 @@ public struct ModelConfiguration: Sendable {
     /// The CloudKit database selection, retained for API compatibility.
     public let cloudKitDatabase: CloudKitDatabase
     package let storeFactory: RuntimeStoreFactory?
+    package let schemaVersionReader: RuntimeSchemaVersionReader?
 
     /// Creates a store configuration.
     public init(
@@ -32,6 +33,7 @@ public struct ModelConfiguration: Sendable {
         self.groupContainer = groupContainer
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
+        schemaVersionReader = nil
         _ = schema
     }
 
@@ -42,7 +44,8 @@ public struct ModelConfiguration: Sendable {
         allowsSave: Bool = true,
         groupContainer: GroupContainer = .none,
         cloudKitDatabase: CloudKitDatabase = .none,
-        storeFactory: RuntimeStoreFactory?
+        storeFactory: RuntimeStoreFactory?,
+        schemaVersionReader: RuntimeSchemaVersionReader? = nil
     ) {
         self.name = name
         url = nil
@@ -51,6 +54,7 @@ public struct ModelConfiguration: Sendable {
         self.groupContainer = groupContainer
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
+        self.schemaVersionReader = schemaVersionReader
         _ = schema
     }
 
@@ -70,6 +74,7 @@ public struct ModelConfiguration: Sendable {
         self.groupContainer = groupContainer
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
+        schemaVersionReader = nil
         _ = schema
     }
 
@@ -80,7 +85,8 @@ public struct ModelConfiguration: Sendable {
         allowsSave: Bool = true,
         groupContainer: GroupContainer = .none,
         cloudKitDatabase: CloudKitDatabase = .none,
-        storeFactory: RuntimeStoreFactory?
+        storeFactory: RuntimeStoreFactory?,
+        schemaVersionReader: RuntimeSchemaVersionReader? = nil
     ) {
         self.name = name
         self.url = url
@@ -89,6 +95,7 @@ public struct ModelConfiguration: Sendable {
         self.groupContainer = groupContainer
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
+        self.schemaVersionReader = schemaVersionReader
         _ = schema
     }
 

@@ -203,3 +203,6 @@ public enum RuntimeStoreLocation: Sendable {
 
 /// Creates a runtime store for a location.
 public typealias RuntimeStoreFactory = @Sendable (RuntimeStoreLocation, Schema) throws -> any RuntimeStore
+
+/// Reads schema version metadata at a runtime store location without migrating it.
+public typealias RuntimeSchemaVersionReader = @Sendable (RuntimeStoreLocation) throws -> RuntimeSchemaVersionState

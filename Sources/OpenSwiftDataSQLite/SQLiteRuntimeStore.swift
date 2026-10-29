@@ -207,6 +207,17 @@ private enum SQLiteExternalColumnBinding {
 
 /// SQLite store composition for OpenSwiftData containers.
 public enum OpenSwiftDataSQLite {
+    static let sqliteVersionReader: RuntimeSchemaVersionReader = { location in
+        let driverLocation: StoreLocation =
+            switch location {
+            case let .memory(name): .memory(name: name)
+            case let .file(url): .file(url)
+            }
+        let driver = try GRDBSQLiteDriver(location: driverLocation)
+        defer { try? driver.close() }
+        return try driver.read { try LightweightMigration.storedSchemaVersion(connection: $0) }
+    }
+
     static let sqliteFactory: RuntimeStoreFactory = { location, schema in
         let driverLocation: StoreLocation =
             switch location {
@@ -230,7 +241,10 @@ public enum OpenSwiftDataSQLite {
 extension ModelConfiguration {
     /// Creates a SQLite-backed configuration for memory storage.
     public static func sqliteMemory(_ name: String = "default", allowsSave: Bool = true) -> Self {
-        Self(name, isStoredInMemoryOnly: true, allowsSave: allowsSave, storeFactory: OpenSwiftDataSQLite.sqliteFactory)
+        Self(
+            name, isStoredInMemoryOnly: true, allowsSave: allowsSave,
+            storeFactory: OpenSwiftDataSQLite.sqliteFactory,
+            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader)
     }
 
     /// Creates a SQLite-backed configuration at an explicit URL.
@@ -239,6 +253,9 @@ extension ModelConfiguration {
         url: URL,
         allowsSave: Bool = true
     ) -> Self {
-        Self(name, url: url, allowsSave: allowsSave, storeFactory: OpenSwiftDataSQLite.sqliteFactory)
+        Self(
+            name, url: url, allowsSave: allowsSave,
+            storeFactory: OpenSwiftDataSQLite.sqliteFactory,
+            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader)
     }
 }

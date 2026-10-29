@@ -171,11 +171,13 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Performs a value write atomically with context mutation tracking.
     public func withMutation(_ write: () -> Void) {
         guard let state = locked({ contextState }), let model = locked({ model }) else { write(); return }
+        let preMutationSnapshot = snapshot()
+        modelContext?.registerUndoIfNeeded(model, snapshot: preMutationSnapshot)
         let didMutate = state.mutate(
             model,
             snapshot: { [weak self] in
                 guard let self, self.modelContext?.state === state else { return nil }
-                return self.snapshot()
+                return preMutationSnapshot
             }, write: write)
         if !didMutate { write() }
     }

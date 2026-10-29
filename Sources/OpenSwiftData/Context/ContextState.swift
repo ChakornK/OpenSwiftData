@@ -364,6 +364,14 @@ package final class ContextState: @unchecked Sendable {
                 baselineSnapshots = baselineBefore
                 throw error
             }
+            for (model, snapshot) in snapshots.values {
+                context.registerUndoIfNeeded(model, snapshot: snapshot)
+                let relationships = Dictionary(
+                    uniqueKeysWithValues: mutations.filter { $0.owner === model }.map {
+                        ($0.adapter.name, $0.oldEndpoints)
+                    })
+                context.setUndoRelationshipEndpoints(for: model, relationships: relationships)
+            }
             for mutation in mutations {
                 if !contains(mutation.owner, in: inserted), !contains(mutation.owner, in: deleted) {
                     appendUnique(mutation.owner, to: &changed)
@@ -644,6 +652,29 @@ package final class ContextState: @unchecked Sendable {
         locked {
             guard !contains(model, in: inserted), !contains(model, in: deleted) else { return }
             appendUnique(model, to: &changed)
+        }
+    }
+
+    func recordRestoredRelationshipChanges(_ model: any PersistentModel, from snapshot: BackingDataSnapshot) {
+        locked {
+            for adapter in relationshipAdapters(for: model) {
+                guard let metadata = adapter.metadata, let newEndpoints = adapter.read(model) else { continue }
+                let storedOldValue = snapshot.values[adapter.keyPath] ?? snapshot.savedValues?[adapter.keyPath]
+                let oldEndpoints: [any PersistentModel]
+                if let storedOldValue, let decoded = try? adapter.endpoints(in: storedOldValue) {
+                    oldEndpoints = decoded
+                } else {
+                    oldEndpoints = []
+                }
+                let old = unique(oldEndpoints)
+                let new = unique(newEndpoints)
+                guard old.count != new.count || zip(old, new).contains(where: { $0 !== $1 }) else { continue }
+                relationshipMutationEvents.append(
+                    RelationshipMutationEvent(
+                        owner: model, property: adapter.name, relationship: metadata,
+                        oldEndpointIDs: old.map(\.persistentModelID), oldEndpoints: old,
+                        newEndpointIDs: new.map(\.persistentModelID), newEndpoints: new))
+            }
         }
     }
 

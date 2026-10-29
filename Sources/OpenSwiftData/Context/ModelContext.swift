@@ -49,10 +49,17 @@ public final class ModelContext {
         }
         set {
             assertAffinity()
+            guard undoManagerStorage !== newValue else { return }
             undoManagerStorage = newValue
+            undoRegisteredModels.removeAll()
+            currentUndoGroup = nil
+            undoManagerGeneration &+= 1
         }
     }
     private var undoManagerStorage: UndoManager?
+    private var undoRegisteredModels = Set<ObjectIdentifier>()
+    private var currentUndoGroup: UndoGroupOperation?
+    package private(set) var undoManagerGeneration: UInt64 = 0
 
     package nonisolated let state: ContextState
     private let affinity: ModelContextAffinity
@@ -1220,6 +1227,9 @@ public final class ModelContext {
             for model in pendingState.deleted {
                 state.removeBaseline(for: model)
             }
+            undoRegisteredModels.removeAll()
+            currentUndoGroup = nil
+            undoManagerGeneration &+= 1
         }
     }
 
@@ -1239,6 +1249,7 @@ public final class ModelContext {
                 try processPendingChangesLocked()
                 if state.transactionDepth == 1 {
                     try saveChanges()
+                    registerUndoGroup(from: entrySnapshots)
                 }
                 state.popTransaction()
                 return result
@@ -1261,6 +1272,115 @@ public final class ModelContext {
         assertAffinity()
         guard model.modelContext === self else { return }
         state.recordMutation(model)
+    }
+
+    package func registerUndoIfNeeded(_ model: any PersistentModel, snapshot: BackingDataSnapshot) {
+        guard undoManagerStorage != nil else { return }
+        assertAffinity()
+        guard !state.hasTransaction else { return }
+        guard
+            model.modelContext === self,
+            undoRegisteredModels.insert(ObjectIdentifier(model)).inserted
+        else { return }
+        let undoSnapshot = snapshotIncludingRelationshipValues(snapshot, for: model)
+        let group: UndoGroupOperation
+        if let currentUndoGroup {
+            group = currentUndoGroup
+        } else {
+            group = UndoGroupOperation(context: self, managerGeneration: undoManagerGeneration)
+            currentUndoGroup = group
+            registerUndoOperation(group)
+        }
+        group.append(model: model, snapshot: undoSnapshot)
+    }
+
+    private func registerUndoGroup(
+        from snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
+    ) {
+        guard undoManagerStorage != nil else { return }
+        for (model, snapshot) in snapshots.values {
+            registerUndoIfNeeded(model, snapshot: snapshot)
+        }
+    }
+
+    private func snapshotIncludingRelationshipValues(
+        _ snapshot: BackingDataSnapshot, for model: any PersistentModel
+    ) -> BackingDataSnapshot {
+        let adapters = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? []
+        guard !adapters.isEmpty else { return snapshot }
+        var values = snapshot.values
+        for adapter in adapters {
+            guard let endpoints = adapter.read(model),
+                let value = try? adapter.makeValue(endpoints)
+            else { continue }
+            values[adapter.keyPath] = value
+        }
+        return BackingDataSnapshot(
+            values: values, context: snapshot.context, identifier: snapshot.identifier,
+            isDeleted: snapshot.isDeleted, hasChanges: snapshot.hasChanges, savedValues: snapshot.savedValues,
+            primaryKey: snapshot.primaryKey, entityID: snapshot.entityID,
+            optimisticLockVersion: snapshot.optimisticLockVersion)
+    }
+
+    func registerUndoOperation(_ operation: UndoGroupOperation) {
+        guard let manager = undoManagerStorage else { return }
+        manager.registerUndo(withTarget: operation) { $0.perform() }
+    }
+
+    func endCurrentUndoGroup() {
+        currentUndoGroup = nil
+        undoRegisteredModels.removeAll()
+    }
+
+    func replaceUndoSnapshotIfRegistered(
+        for model: any PersistentModel,
+        with snapshot: BackingDataSnapshot,
+        relationships: [String: [any PersistentModel]] = [:]
+    ) {
+        currentUndoGroup?.replaceSnapshot(for: model, with: snapshot, relationships: relationships)
+    }
+
+    func setUndoRelationshipEndpoints(
+        for model: any PersistentModel, relationships: [String: [any PersistentModel]]
+    ) {
+        currentUndoGroup?.setRelationshipEndpoints(for: model, relationships: relationships)
+    }
+
+    func applyUndoGroup(_ members: [UndoGroupMember]) -> [UndoGroupMember] {
+        assertAffinity()
+        var inverse: [UndoGroupMember] = []
+        for member in members {
+            guard let model = member.model, model.modelContext === self else { continue }
+            let preUndoSnapshot = model.snapshotLifecycle()
+            inverse.append(
+                UndoGroupMember(model: model, snapshot: UndoGroupOperation.detachedSnapshot(preUndoSnapshot)))
+            undoRegisteredModels.remove(ObjectIdentifier(model))
+            model.restoreLifecycle(
+                BackingDataSnapshot(
+                    values: member.snapshot.values,
+                    context: self,
+                    identifier: preUndoSnapshot.identifier,
+                    isDeleted: member.snapshot.isDeleted,
+                    hasChanges: true,
+                    savedValues: preUndoSnapshot.values,
+                    primaryKey: preUndoSnapshot.primaryKey,
+                    entityID: preUndoSnapshot.entityID,
+                    optimisticLockVersion: preUndoSnapshot.optimisticLockVersion))
+            model.attachBackingData(to: self)
+            if let adapters = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] {
+                for adapter in adapters {
+                    guard let endpoints = member.relationshipEndpoints[adapter.name],
+                        let value = try? adapter.makeValue(endpoints)
+                    else { continue }
+                    try? adapter.assign(value, to: model)
+                }
+            }
+            model.setInsertionChanged()
+            state.recordMutation(model)
+            state.recordRestoredRelationshipChanges(model, from: preUndoSnapshot)
+        }
+        if !inverse.isEmpty { autosaveHandle.changed() }
+        return inverse
     }
 
     private var storeIdentifier: String {
@@ -3049,6 +3169,8 @@ public final class ModelContext {
             model.markSavedLifecycle()
         }
         state.clearPending()
+        undoRegisteredModels.removeAll()
+        currentUndoGroup = nil
         autosaveTrigger.cancel()
     }
 

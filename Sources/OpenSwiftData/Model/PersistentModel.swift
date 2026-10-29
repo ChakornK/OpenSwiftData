@@ -283,6 +283,7 @@ public extension PersistentModel {
             }
             return
         }
+        context.registerUndoIfNeeded(self, snapshot: snapshotLifecycle())
         if !context.state.setRelationship(model: self, keyPath: keyPath, value: value, autoInsertDestinations: true) {
             setValue(forKey: keyPath, to: value)
         }
@@ -296,6 +297,9 @@ public extension PersistentModel {
     }
     func markSavedLifecycle() { persistentBackingData.markSaved() }
     func restoreLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restore(snapshot) }
+    func attachBackingData(to context: ModelContext) {
+        persistentBackingData.attach(to: context, model: self)
+    }
     func restoreValuesLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restoreValues(snapshot) }
     func restoreValuesAndDetachLifecycle(_ snapshot: BackingDataSnapshot) {
         persistentBackingData.restoreValuesAndDetach(snapshot)

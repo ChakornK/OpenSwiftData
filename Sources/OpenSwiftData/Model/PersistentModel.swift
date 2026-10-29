@@ -194,6 +194,10 @@ public protocol PersistentModel: AnyObject {
     init(backingData: any BackingData<Self>)
     static func schemaMetadata() -> [Schema.PropertyMetadata]
     static func schemaIndexes() -> [Schema.Index]
+    /// The generated, declaration-ordered property descriptor table.
+    static var propertyDescriptors: [PropertyDescriptor] { get }
+    /// Returns the slot associated with a property key path, if one exists.
+    static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int?
     static func createManagedBackingData(
         values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
         entityID: Int, identifier: PersistentIdentifier
@@ -202,11 +206,17 @@ public protocol PersistentModel: AnyObject {
     static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>]
     static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter]
     func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>) -> Value
     func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value)
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>, to value: Value)
 }
 
 public extension PersistentModel {
     static func schemaIndexes() -> [Schema.Index] { [] }
+    static var propertyDescriptors: [PropertyDescriptor] { [] }
+    static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? {
+        propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot
+    }
     static func createManagedBackingData(
         values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
         entityID: Int, identifier: PersistentIdentifier
@@ -226,12 +236,29 @@ public extension PersistentModel {
     var isDeleted: Bool { persistentBackingData.isDeleted }
     var hasChanges: Bool { persistentBackingData.hasChanges }
     func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value {
-        persistentBackingData.getValue(forKey: keyPath)
+        if let slot = Self.propertySlot(forKeyPath: keyPath) {
+            return persistentBackingData.getValue(at: slot, forKey: keyPath)
+        }
+        return persistentBackingData.getValue(forKey: keyPath)
+    }
+
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>) -> Value {
+        persistentBackingData.getValue(at: slot, forKey: keyPath)
     }
 
     func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value) {
         persistentBackingData.withMutation {
-            persistentBackingData.setValue(forKey: keyPath, to: value)
+            if let slot = Self.propertySlot(forKeyPath: keyPath) {
+                persistentBackingData.setValue(at: slot, forKey: keyPath, to: value)
+            } else {
+                persistentBackingData.setValue(forKey: keyPath, to: value)
+            }
+        }
+    }
+
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>, to value: Value) {
+        persistentBackingData.withMutation {
+            persistentBackingData.setValue(at: slot, forKey: keyPath, to: value)
         }
     }
 

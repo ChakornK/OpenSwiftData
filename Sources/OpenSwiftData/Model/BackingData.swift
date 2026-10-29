@@ -40,12 +40,18 @@ public protocol BackingData<Model>: AnyObject {
     /// - Parameter keyPath: The property to read.
     /// - Returns: The stored or default property value.
     func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value
+    /// Reads a value through its generated property slot when supported.
+    /// Reads a property from its generated slot, falling back to its key path by default.
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value
     /// Stores a property value and marks it changed when attached to a context.
     ///
     /// - Parameters:
     ///   - keyPath: The property to update.
     ///   - value: The value to store.
     func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value)
+    /// Stores a value through its generated property slot when supported.
+    /// Stores a property in its generated slot, falling back to its key path by default.
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value)
     /// Notifies the managing context that a model mutation is about to occur.
     ///
     /// Detached models receive no context notification.
@@ -113,6 +119,14 @@ public protocol BackingData<Model>: AnyObject {
 }
 
 public extension BackingData {
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
+        getValue(forKey: keyPath)
+    }
+
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value) {
+        setValue(forKey: keyPath, to: value)
+    }
+
     /// Performs a property write with mutation notifications for conformers without atomic support.
     func withMutation(_ write: () -> Void) {
         willMutate()
@@ -124,6 +138,7 @@ public extension BackingData {
 /// Creates and owns the initial values for a model that is not in a context.
 public final class DetachedBackingData<Model: PersistentModel>: BackingData, @unchecked Sendable {
     private var values: [AnyKeyPath: Any] = [:]
+    private var slotValues: [Any?]
     private let lock = NSRecursiveLock()
     private var identifier: PersistentIdentifier
     private let detachedIdentifier: PersistentIdentifier
@@ -138,6 +153,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     /// Creates detached storage for a model's schema.
     public init(metadata: [Schema.PropertyMetadata]) {
         self.metadata = metadata
+        slotValues = Array(repeating: nil, count: Model.propertyDescriptors.count)
         let detachedID = PersistentIdentifier(
             storeIdentifier: "OSD.Detached", entityName: String(describing: Model.self), temporaryIdentifier: UUID())
         identifier = detachedID
@@ -145,6 +161,9 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
         for property in metadata {
             guard let keyPath = property.keypath, let defaultValue = property.runtimeDefaultValue else { continue }
             values[keyPath] = defaultValue
+            if let slot = Model.propertySlot(forKeyPath: keyPath), slotValues.indices.contains(slot) {
+                slotValues[slot] = defaultValue
+            }
         }
     }
 
@@ -159,7 +178,18 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
 
     /// Returns the stored value, or an unassigned default when supported.
     public func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value {
+        if let slot = Model.propertySlot(forKeyPath: keyPath) {
+            return getValue(at: slot, forKey: keyPath)
+        }
         lock.lock(); let stored = values[keyPath]; lock.unlock()
+        if let value = stored as? Value { return value }
+        return unassignedValue(for: keyPath)
+    }
+    /// Reads a stored value by its generated slot, or by key path when no slot exists.
+    public func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
+        lock.lock()
+        let stored = slotValues.indices.contains(slot) ? slotValues[slot] : values[keyPath]
+        lock.unlock()
         if let value = stored as? Value { return value }
         return unassignedValue(for: keyPath)
     }
@@ -183,7 +213,19 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     }
     /// Stores a value and marks the model changed when attached to a context.
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
+        if let slot = Model.propertySlot(forKeyPath: keyPath) {
+            setValue(at: slot, forKey: keyPath, to: value)
+            return
+        }
         lock.lock(); values[keyPath] = value as Any; if context != nil { changed = true }; lock.unlock()
+    }
+    /// Stores a value by its generated slot and keeps the key-path snapshot synchronized.
+    public func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value) {
+        lock.lock()
+        values[keyPath] = value as Any
+        if slotValues.indices.contains(slot) { slotValues[slot] = value as Any }
+        if context != nil { changed = true }
+        lock.unlock()
     }
     /// Routes a relationship write through the context's resolved adapter table.
     public func mutateRelationship<Value>(
@@ -228,14 +270,18 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     /// Restores property values, context, identifier, and lifecycle flags from a snapshot.
     public func restore(_ snapshot: BackingDataSnapshot) {
         lock.lock(); values = snapshot.values; context = snapshot.context; contextState = snapshot.context?.state;
+        synchronizeSlots()
         identifier = snapshot.identifier
         deleted = snapshot.isDeleted; changed = snapshot.hasChanges; lock.unlock()
     }
     /// Restores property values without changing context or lifecycle state.
-    public func restoreValues(_ snapshot: BackingDataSnapshot) { lock.lock(); values = snapshot.values; lock.unlock() }
+    public func restoreValues(_ snapshot: BackingDataSnapshot) {
+        lock.lock(); values = snapshot.values; synchronizeSlots(); lock.unlock()
+    }
     /// Restores snapshot values and detaches with detached lifecycle flags.
     public func restoreValuesAndDetach(_ snapshot: BackingDataSnapshot) {
         lock.lock(); values = snapshot.values; context = nil; contextState = nil; onChange = nil;
+        synchronizeSlots()
         identifier = detachedIdentifier;
         deleted = false; changed = false; lock.unlock()
     }
@@ -284,6 +330,12 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
         }
         let name = metadata.first { $0.keypath == keyPath }?.name ?? "unknown"
         fatalError("OSD: property '\(name)' of \(Model.self) was read before assignment")
+    }
+
+    private func synchronizeSlots() {
+        for descriptor in Model.propertyDescriptors where slotValues.indices.contains(descriptor.slot) {
+            slotValues[descriptor.slot] = values[descriptor.keyPath]
+        }
     }
 }
 

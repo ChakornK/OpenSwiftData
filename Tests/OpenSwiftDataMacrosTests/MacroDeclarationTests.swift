@@ -24,6 +24,28 @@ final class MacroDeclarationTests: XCTestCase {
         requiresPersistentModel(ExampleModel(title: "compiled"))
     }
 
+    func testModelGeneratesStableDescriptorsAndKeyPathSlots() {
+        XCTAssertEqual(ExampleModel.propertyDescriptors.map(\.slot), [0, 1])
+        XCTAssertEqual(ExampleModel.propertyDescriptors.map(\.name), ["title", "count"])
+        XCTAssertEqual(ExampleModel.propertyDescriptors.map(\.keyPath), [\ExampleModel.title, \ExampleModel.count])
+        XCTAssertEqual(ExampleModel.propertySlot(forKeyPath: \ExampleModel.title), 0)
+        XCTAssertEqual(ExampleModel.propertySlot(forKeyPath: \ExampleModel.count), 1)
+        XCTAssertNil(ExampleModel.propertySlot(forKeyPath: \OtherModel.value))
+    }
+
+    func testGeneratedSlotAccessWorksWithDetachedBackingSnapshots() {
+        let model = ExampleModel(title: "before")
+        model.count = 7
+        let snapshot = model.snapshotLifecycle()
+        model.title = "after"
+        model.count = 9
+        XCTAssertEqual(model.title, "after")
+        XCTAssertEqual(model.count, 9)
+        model.restoreLifecycle(snapshot)
+        XCTAssertEqual(model.title, "before")
+        XCTAssertEqual(model.count, 7)
+    }
+
     @MainActor
     func testModelActorMacroCreatesExecutorAndContext() async throws {
         let container = try ModelContainer(for: ExampleModel.self)
@@ -31,4 +53,9 @@ final class MacroDeclarationTests: XCTestCase {
         let usesContainer = await actor.uses(container)
         XCTAssertTrue(usesContainer)
     }
+}
+
+@Model
+final class OtherModel {
+    var value: Int
 }

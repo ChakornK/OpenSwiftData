@@ -25,6 +25,38 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertFalse(model.hasChanges)
     }
 
+    func testManagedSlotAccessPreservesOptionalNilAndRestoresOverlay() {
+        let context = ModelContext()
+        let backing = ManagedBackingData<MacroBackingTestModel>(
+            metadata: MacroBackingTestModel.schemaMetadata(),
+            values: [\MacroBackingTestModel.value: 10, \MacroBackingTestModel.note: "baseline" as Any],
+            context: context, storeIdentifier: "memory", entityID: 1,
+            identifier: PersistentIdentifier(
+                storeIdentifier: "memory", entityName: "MacroBackingTestModel", temporaryIdentifier: UUID()))
+        let model = MacroBackingTestModel(backingData: backing)
+        backing.attach(to: context, model: model)
+        let snapshot = backing.snapshot()
+
+        backing.setValue(at: 1, forKey: \MacroBackingTestModel.note, to: nil as String?)
+        XCTAssertNil(backing.getValue(at: 1, forKey: \MacroBackingTestModel.note) as String?)
+        backing.restore(snapshot)
+        XCTAssertEqual(backing.getValue(at: 1, forKey: \MacroBackingTestModel.note), "baseline")
+    }
+
+    @MainActor
+    func testManagedSlotAccessObservesValuesLoadedByPropertyFaults() {
+        let context = ModelContext()
+        let backing = ManagedBackingData<MacroBackingTestModel>(
+            metadata: MacroBackingTestModel.schemaMetadata(), values: [:], context: context,
+            storeIdentifier: "memory", entityID: 1,
+            identifier: PersistentIdentifier(
+                storeIdentifier: "memory", entityName: "MacroBackingTestModel", temporaryIdentifier: UUID()))
+        backing.installFaultLoader(faultedProperties: [\MacroBackingTestModel.value]) { _ in
+            [\MacroBackingTestModel.value: 21]
+        }
+        XCTAssertEqual(backing.getValue(at: 0, forKey: \MacroBackingTestModel.value), 21)
+    }
+
     func testSavedModelMutationSynchronouslyUpdatesPendingStateOffMainActor() async throws {
         let model = try await MainActor.run { () throws -> MacroBackingTestModel in
             let container = try ModelContainer(
@@ -64,5 +96,9 @@ final class ManagedBackingDataTests: XCTestCase {
 @Model
 final class MacroBackingTestModel {
     var value: Int
-    init(value: Int) { self.value = value }
+    var note: String?
+    init(value: Int, note: String? = nil) {
+        self.value = value
+        self.note = note
+    }
 }

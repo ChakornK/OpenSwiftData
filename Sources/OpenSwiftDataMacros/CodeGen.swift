@@ -263,6 +263,26 @@ enum CodeGen {
     ) -> [String] {
         let modelName = declaration.name.text
         let properties = persistedProperties(in: declaration)
+        let descriptorRows = properties.enumerated().map { slot, property in
+            let typeName = propertyType(property.name, in: declaration)?.trimmedDescription ?? "Any"
+            let propertyType = propertyType(property.name, in: declaration)
+            let inferredRelationship =
+                propertyType.map {
+                    !property.hasExplicitAttribute && !property.isFlattened && !isSupportedScalarType($0)
+                } ?? false
+            let kind = property.isRelationship || inferredRelationship ? ".relationship" : ".attribute"
+            let options = property.attributeOptionNames.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", ")
+            return
+                "PropertyDescriptor(slot: \(slot), name: \"\(escapeSwiftString(property.name))\", keyPath: \\\((modelName)).\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
+        }
+        let descriptorSource: String? =
+            descriptorRows.isEmpty
+            ? nil
+            : "public static let propertyDescriptors: [PropertyDescriptor] = [\(descriptorRows.joined(separator: ", "))]"
+        let slotLookupSource: String? =
+            descriptorRows.isEmpty
+            ? nil
+            : "public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }"
         let adapterRows = properties.compactMap { property -> String? in
             guard let type = propertyType(property.name, in: declaration) else { return nil }
             if property.isFlattened { return nil }
@@ -430,6 +450,8 @@ enum CodeGen {
             "@Transient\nprivate var _$backingData: any BackingData<\(modelName)> = \(modelName).createBackingData()",
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
             "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            descriptorSource,
+            slotLookupSource,
             schemaIndexes,
             adapterSource,
             flattenedAdapterSource,
@@ -469,6 +491,7 @@ enum CodeGen {
 
     static func accessorSources(
         property: String,
+        slot: Int? = nil,
         isRelationship: Bool = false,
         variant: InitializationVariant = .a
     ) -> [String] {
@@ -477,19 +500,27 @@ enum CodeGen {
             ? "@storageRestrictions(accesses: _$backingData)"
             : "@storageRestrictions(accesses: _$backingData, initializes: _\(property))"
         let initializationAssignment = variant == .c ? [] : ["    _\(property) = _SwiftDataNoType()"]
+        let initialValueWrite =
+            slot.map {
+                "    _$backingData.setValue(at: \($0), forKey: \\.\(property), to: initialValue)"
+            } ?? "    _$backingData.setValue(forKey: \\.\(property), to: initialValue)"
         let initializer =
             ([
                 "\(storageRestriction)",
                 "init(initialValue) {",
-                "    _$backingData.setValue(forKey: \\.\(property), to: initialValue)",
+                initialValueWrite,
             ] + initializationAssignment + ["}"]).joined(separator: "\n")
         let setter =
             isRelationship
             ? "self.setRelationshipValue(forKey: \\.\(property), to: newValue)"
-            : "self.setValue(forKey: \\.\(property), to: newValue)"
+            : slot.map { "self.setValue(at: \($0), forKey: \\.\(property), to: newValue)" }
+                ?? "self.setValue(forKey: \\.\(property), to: newValue)"
+        let getter =
+            slot.map { "self.getValue(at: \($0), forKey: \\.\(property))" }
+            ?? "self.getValue(forKey: \\.\(property))"
         return [
             initializer,
-            "get {\n    access(keyPath: \\.\(property))\n    return self.getValue(forKey: \\.\(property))\n}",
+            "get {\n    access(keyPath: \\.\(property))\n    return \(getter)\n}",
             "set {\n    withMutation(keyPath: \\.\(property)) {\n        \(setter)\n    }\n}",
         ]
     }

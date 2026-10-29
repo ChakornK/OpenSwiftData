@@ -59,13 +59,23 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
                 return attribute.attributeName.trimmedDescription == "Transient"
             })
         else { return [] }
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
+        let rawPropertyName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""
+        let propertyName =
+            rawPropertyName.first == "`" && rawPropertyName.last == "`"
+            ? String(rawPropertyName.dropFirst().dropLast()) : rawPropertyName
+        guard
+            let slot = CodeGen.persistedProperties(in: classDeclaration).firstIndex(where: { $0.name == propertyName })
+        else { return [] }
         let isRelationship = variable.attributes.contains { element in
             guard case let .attribute(attribute) = element else { return false }
             return attribute.attributeName.trimmedDescription == "Relationship"
         }
         return [
             AttributeSyntax(
-                stringLiteral: isRelationship ? "@_PersistedProperty(relationship: true)" : "@_PersistedProperty")
+                stringLiteral: isRelationship
+                    ? "@_PersistedProperty(slot: \(slot), relationship: true)"
+                    : "@_PersistedProperty(slot: \(slot))")
         ]
     }
 
@@ -200,7 +210,13 @@ struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
         } else {
             isRelationship = false
         }
-        return CodeGen.accessorSources(property: propertyName, isRelationship: isRelationship)
+        let slot = node.arguments.flatMap { arguments -> Int? in
+            guard case let .argumentList(list) = arguments,
+                let argument = list.first(where: { $0.label?.text == "slot" })
+            else { return nil }
+            return Int(argument.expression.trimmedDescription)
+        }
+        return CodeGen.accessorSources(property: propertyName, slot: slot, isRelationship: isRelationship)
             .map(AccessorDeclSyntax.init(stringLiteral:))
     }
 

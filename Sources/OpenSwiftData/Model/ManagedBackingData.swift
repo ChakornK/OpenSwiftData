@@ -13,6 +13,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     private let metadata: [Schema.PropertyMetadata]
     private var baseline: [AnyKeyPath: Any]
     private var overlay: [AnyKeyPath: Any] = [:]
+    private var baselineSlots: [Any?]
+    private var overlaySlots: [Any?]
+    private var baselineSlotPresence = Set<Int>()
+    private var overlaySlotPresence = Set<Int>()
     private var context: ModelContext?
     private var contextState: ContextState?
     private weak var model: Model?
@@ -42,6 +46,14 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     ) {
         self.metadata = metadata
         baseline = values
+        baselineSlots = Array(repeating: nil, count: Model.propertyDescriptors.count)
+        overlaySlots = Array(repeating: nil, count: Model.propertyDescriptors.count)
+        for descriptor in Model.propertyDescriptors where baselineSlots.indices.contains(descriptor.slot) {
+            if let value = values[descriptor.keyPath] {
+                baselineSlots[descriptor.slot] = value
+                baselineSlotPresence.insert(descriptor.slot)
+            }
+        }
         self.context = context
         contextState = context.state
         self.storeIdentifier = storeIdentifier
@@ -65,9 +77,28 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
 
     /// Reads the current value from the dirty overlay or immutable row snapshot.
     public func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value {
+        if let slot = Model.propertySlot(forKeyPath: keyPath) {
+            return getValue(at: slot, forKey: keyPath)
+        }
         loadFaultIfNeeded(for: keyPath)
         lock.lock()
         let value = overlay[keyPath] ?? baseline[keyPath]
+        lock.unlock()
+        if let value = value as? Value { return value }
+        if let optional = Value.self as? any _OptionalType.Type, let nilValue = optional.nilValue as? Value {
+            return nilValue
+        }
+        let name = metadata.first { $0.keypath == keyPath }?.name ?? "unknown"
+        fatalError("OSD: property '\(name)' of \(Model.self) was read before assignment")
+    }
+
+    /// Reads the overlay or row snapshot through its generated slot.
+    public func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
+        loadFaultIfNeeded(for: keyPath)
+        lock.lock()
+        let value: Any? =
+            overlaySlotPresence.contains(slot)
+            ? overlaySlots[slot] : (baselineSlotPresence.contains(slot) ? baselineSlots[slot] : nil)
         lock.unlock()
         if let value = value as? Value { return value }
         if let optional = Value.self as? any _OptionalType.Type, let nilValue = optional.nilValue as? Value {
@@ -96,7 +127,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
                 let value = try relationshipLoader(keyPath)
                 locked {
                     guard !overlay.keys.contains(keyPath) && !baseline.keys.contains(keyPath) else { return }
-                    baseline[keyPath] = value
+                    setBaseline(value, for: keyPath)
                     faultedRelationships.remove(keyPath)
                 }
             } catch {
@@ -122,7 +153,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             let values = try loader(missing)
             locked {
                 for (key, value) in values where !overlay.keys.contains(key) && !baseline.keys.contains(key) {
-                    baseline[key] = value
+                    setBaseline(value, for: key)
                     faultedProperties.remove(key)
                 }
             }
@@ -151,8 +182,22 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
 
     /// Writes a value into the dirty overlay.
     public func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
+        if let slot = Model.propertySlot(forKeyPath: keyPath) {
+            setValue(at: slot, forKey: keyPath, to: value)
+            return
+        }
         locked {
-            overlay[keyPath] = value as Any
+            setOverlay(value as Any, for: keyPath)
+            faultedProperties.remove(keyPath)
+            faultedRelationships.remove(keyPath)
+            changed = true
+        }
+    }
+
+    /// Writes the overlay through its generated slot and synchronizes snapshot state.
+    public func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value) {
+        locked {
+            setOverlay(value as Any, for: keyPath, slot: slot)
             faultedProperties.remove(keyPath)
             faultedRelationships.remove(keyPath)
             changed = true
@@ -162,9 +207,9 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     func setMaterializedValue(forKey keyPath: AnyKeyPath, to value: Any) {
         locked {
             if overlay.keys.contains(keyPath) {
-                overlay[keyPath] = value
+                setOverlay(value, for: keyPath)
             } else {
-                baseline[keyPath] = value
+                setBaseline(value, for: keyPath)
             }
             faultedProperties.remove(keyPath)
             faultedRelationships.remove(keyPath)
@@ -182,7 +227,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     func setMaterializedValueIfNoOverlay(forKey keyPath: AnyKeyPath, to value: Any) {
         locked {
             guard !overlay.keys.contains(keyPath) else { return }
-            baseline[keyPath] = value
+            setBaseline(value, for: keyPath)
             faultedProperties.remove(keyPath)
             faultedRelationships.remove(keyPath)
         }
@@ -192,6 +237,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         locked {
             for keyPath in keyPaths where !overlay.keys.contains(keyPath) {
                 baseline.removeValue(forKey: keyPath)
+                if let slot = Model.propertySlot(forKeyPath: keyPath), baselineSlots.indices.contains(slot) {
+                    baselineSlots[slot] = nil
+                    baselineSlotPresence.remove(slot)
+                }
                 faultedRelationships.insert(keyPath)
             }
         }
@@ -241,6 +290,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         locked {
             baseline = snapshot.savedValues ?? snapshot.values
             overlay = snapshot.savedValues == nil ? [:] : Self.difference(snapshot.values, baseline)
+            synchronizeSlots()
             context = snapshot.context
             contextState = snapshot.context?.state
             identifier = snapshot.identifier
@@ -260,6 +310,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     public func restoreValues(_ snapshot: BackingDataSnapshot) {
         locked {
             overlay = Self.difference(snapshot.values, baseline)
+            synchronizeSlots()
             faultedProperties = faultedProperties.filter { !baseline.keys.contains($0) && !overlay.keys.contains($0) }
             faultedRelationships = faultedRelationships.filter {
                 !baseline.keys.contains($0) && !overlay.keys.contains($0)
@@ -280,6 +331,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             faultedRelationships.removeAll()
             baseline = snapshot.values
             overlay.removeAll()
+            synchronizeSlots()
             context = nil
             contextState = nil
             identifier = detachedIdentifier
@@ -304,6 +356,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             }
             baseline = mergedValues()
             overlay.removeAll()
+            synchronizeSlots()
             self.storeIdentifier = storeIdentifier
             self.entityID = entityID
             self.primaryKey = primaryKey
@@ -357,7 +410,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     /// Marks the model saved.
     public func markSaved() {
         locked {
-            baseline = mergedValues(); overlay.removeAll(); changed = false; deleted = false
+            baseline = mergedValues(); overlay.removeAll(); synchronizeSlots(); changed = false; deleted = false
         }
     }
     /// Detaches the model and restores detached identity.
@@ -395,6 +448,39 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
     var storedVersion: Int { locked { version } }
 
     private func mergedValues() -> [AnyKeyPath: Any] { baseline.merging(overlay) { _, new in new } }
+
+    private func setBaseline(_ value: Any, for keyPath: AnyKeyPath) {
+        baseline[keyPath] = value
+        guard let slot = Model.propertySlot(forKeyPath: keyPath), baselineSlots.indices.contains(slot) else { return }
+        baselineSlots[slot] = value
+        baselineSlotPresence.insert(slot)
+    }
+
+    private func setOverlay(_ value: Any, for keyPath: AnyKeyPath, slot explicitSlot: Int? = nil) {
+        overlay[keyPath] = value
+        guard let slot = explicitSlot ?? Model.propertySlot(forKeyPath: keyPath), overlaySlots.indices.contains(slot)
+        else { return }
+        overlaySlots[slot] = value
+        overlaySlotPresence.insert(slot)
+    }
+
+    private func synchronizeSlots() {
+        baselineSlots = Array(repeating: nil, count: Model.propertyDescriptors.count)
+        overlaySlots = Array(repeating: nil, count: Model.propertyDescriptors.count)
+        baselineSlotPresence.removeAll()
+        overlaySlotPresence.removeAll()
+        for descriptor in Model.propertyDescriptors where baselineSlots.indices.contains(descriptor.slot) {
+            if let value = baseline[descriptor.keyPath] {
+                baselineSlots[descriptor.slot] = value
+                baselineSlotPresence.insert(descriptor.slot)
+            }
+            if let value = overlay[descriptor.keyPath] {
+                overlaySlots[descriptor.slot] = value
+                overlaySlotPresence.insert(descriptor.slot)
+            }
+        }
+    }
+
     private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
     private static func difference(_ values: [AnyKeyPath: Any], _ baseline: [AnyKeyPath: Any]) -> [AnyKeyPath: Any] {
         values.filter { key, value in

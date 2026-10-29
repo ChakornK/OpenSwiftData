@@ -104,6 +104,8 @@ final class CodeGenTests: XCTestCase {
                 "@Transient\nprivate var _$backingData: any BackingData<Trip> = Trip.createBackingData()",
                 "public var persistentBackingData: any BackingData<Trip> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
                 "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n    return [\n        Schema.PropertyMetadata(name: \"name\", keypath: \\Trip.name, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"days\", keypath: \\Trip.days, defaultValue: 1, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"notes\", keypath: \\Trip.notes, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"stops\", keypath: \\Trip.stops, defaultValue: [], metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), isExplicitRelationship: true)\n    ]\n}",
+                "public static let propertyDescriptors: [PropertyDescriptor] = [PropertyDescriptor(slot: 0, name: \"name\", keyPath: \\Trip.name, kind: .attribute, codec: String.self, options: []), PropertyDescriptor(slot: 1, name: \"days\", keyPath: \\Trip.days, kind: .attribute, codec: Int.self, options: []), PropertyDescriptor(slot: 2, name: \"notes\", keyPath: \\Trip.notes, kind: .attribute, codec: String?.self, options: []), PropertyDescriptor(slot: 3, name: \"stops\", keyPath: \\Trip.stops, kind: .relationship, codec: [Stop].self, options: [])]",
+                "public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }",
                 "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Trip>] {\n    [\n        TypedPropertyAdapter<Trip, String>(\"name\", keyPath: \\Trip.name, encode: { model in try PersistentValue.encode(model.name) }, decode: { value, model in model.name = try PersistentValue.decode(String.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, Int>(\"days\", keyPath: \\Trip.days, encode: { model in try PersistentValue.encode(model.days) }, decode: { value, model in model.days = try PersistentValue.decode(Int.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(Int.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, String?>(\"notes\", keyPath: \\Trip.notes, encode: { model in try PersistentValue.encode(model.notes) }, decode: { value, model in model.notes = try PersistentValue.decode(String?.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String?.self, from: value)) as Any })\n    ]\n}",
                 "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
@@ -310,6 +312,16 @@ final class CodeGenTests: XCTestCase {
         let adapters = try XCTUnwrap(CodeGen.memberSources(declaration).first { $0.contains("persistenceAdapters()") })
         XCTAssertTrue(adapters.contains("TypedPropertyAdapter<Model, Int>"))
         XCTAssertTrue(adapters.contains("PersistentValue.encode(model.count)"))
+    }
+
+    func testGeneratedAccessorsUseDeclarationOrderSlots() {
+        XCTAssertEqual(
+            CodeGen.accessorSources(property: "title", slot: 3),
+            [
+                "@storageRestrictions(accesses: _$backingData, initializes: _title)\ninit(initialValue) {\n    _$backingData.setValue(at: 3, forKey: \\.title, to: initialValue)\n    _title = _SwiftDataNoType()\n}",
+                "get {\n    access(keyPath: \\.title)\n    return self.getValue(at: 3, forKey: \\.title)\n}",
+                "set {\n    withMutation(keyPath: \\.title) {\n        self.setValue(at: 3, forKey: \\.title, to: newValue)\n    }\n}",
+            ])
     }
 
     func testFlattenedKeywordPropertyUsesEscapedIdentifierInGeneratedAdapter() throws {

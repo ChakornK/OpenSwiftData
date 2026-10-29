@@ -18,16 +18,16 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     var title: String {
                         @storageRestrictions(accesses: _$backingData, initializes: _title)
                         init(initialValue) {
-                            _$backingData.setValue(forKey: \.title, to: initialValue)
+                            _$backingData.setValue(at: 0, forKey: \.title, to: initialValue)
                             _title = _SwiftDataNoType()
                         }
                         get {
                             access(keyPath: \.title)
-                            return self.getValue(forKey: \.title)
+                            return self.getValue(at: 0, forKey: \.title)
                         }
                         set {
                             withMutation(keyPath: \.title) {
-                                self.setValue(forKey: \.title, to: newValue)
+                                self.setValue(at: 0, forKey: \.title, to: newValue)
                             }
                         }
                     }
@@ -38,12 +38,12 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     var pets: [Pet] {
                         @storageRestrictions(accesses: _$backingData, initializes: _pets)
                         init(initialValue) {
-                            _$backingData.setValue(forKey: \.pets, to: initialValue)
+                            _$backingData.setValue(at: 1, forKey: \.pets, to: initialValue)
                             _pets = _SwiftDataNoType()
                         }
                         get {
                             access(keyPath: \.pets)
-                            return self.getValue(forKey: \.pets)
+                            return self.getValue(at: 1, forKey: \.pets)
                         }
                         set {
                             withMutation(keyPath: \.pets) {
@@ -72,6 +72,14 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                             Schema.PropertyMetadata(name: "title", keypath: \Example.title, defaultValue: nil, metadata: nil, isExplicitRelationship: false),
                             Schema.PropertyMetadata(name: "pets", keypath: \Example.pets, defaultValue: nil, metadata: nil, isExplicitRelationship: true)
                         ]
+                    }
+
+                    public static let propertyDescriptors: [PropertyDescriptor] = [PropertyDescriptor(slot: 0, name: "title", keyPath: \Example.title, kind: .attribute, codec: String.self, options: []), PropertyDescriptor(slot: 1, name: "pets", keyPath: \Example.pets, kind: .relationship, codec: [Pet].self, options: [])]
+
+                    public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? {
+                        propertyDescriptors.first(where: {
+                                $0.keyPath == keyPath
+                            })?.slot
                     }
 
                     public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Example>] {

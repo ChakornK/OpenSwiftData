@@ -16,6 +16,7 @@ public struct ModelConfiguration: Sendable {
     public let cloudKitDatabase: CloudKitDatabase
     package let storeFactory: RuntimeStoreFactory?
     package let schemaVersionReader: RuntimeSchemaVersionReader?
+    package let dataStoreConfiguration: (any DataStoreConfiguration)?
 
     /// Creates a store configuration.
     public init(
@@ -34,6 +35,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
         schemaVersionReader = nil
+        dataStoreConfiguration = nil
         _ = schema
     }
 
@@ -45,7 +47,8 @@ public struct ModelConfiguration: Sendable {
         groupContainer: GroupContainer = .none,
         cloudKitDatabase: CloudKitDatabase = .none,
         storeFactory: RuntimeStoreFactory?,
-        schemaVersionReader: RuntimeSchemaVersionReader? = nil
+        schemaVersionReader: RuntimeSchemaVersionReader? = nil,
+        dataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.name = name
         url = nil
@@ -55,6 +58,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
         self.schemaVersionReader = schemaVersionReader
+        self.dataStoreConfiguration = dataStoreConfiguration
         _ = schema
     }
 
@@ -75,6 +79,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
         schemaVersionReader = nil
+        dataStoreConfiguration = nil
         _ = schema
     }
 
@@ -86,7 +91,8 @@ public struct ModelConfiguration: Sendable {
         groupContainer: GroupContainer = .none,
         cloudKitDatabase: CloudKitDatabase = .none,
         storeFactory: RuntimeStoreFactory?,
-        schemaVersionReader: RuntimeSchemaVersionReader? = nil
+        schemaVersionReader: RuntimeSchemaVersionReader? = nil,
+        dataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.name = name
         self.url = url
@@ -96,6 +102,26 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
         self.schemaVersionReader = schemaVersionReader
+        self.dataStoreConfiguration = dataStoreConfiguration
+        _ = schema
+    }
+
+    /// Creates a configuration backed by a custom value-oriented data store.
+    public init(
+        _ name: String = "custom",
+        schema: Schema? = nil,
+        allowsSave: Bool = true,
+        dataStoreConfiguration: any DataStoreConfiguration
+    ) {
+        self.name = name
+        url = nil
+        isStoredInMemoryOnly = false
+        self.allowsSave = allowsSave
+        groupContainer = .none
+        cloudKitDatabase = .none
+        storeFactory = nil
+        schemaVersionReader = nil
+        self.dataStoreConfiguration = dataStoreConfiguration
         _ = schema
     }
 

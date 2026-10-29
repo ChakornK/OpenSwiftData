@@ -11,6 +11,7 @@ public final class ModelContainer: Sendable {
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
     package let store: (any RuntimeStore)?
+    package let dataStore: (any DataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
     let modelTypesByEntityName: [String: ModelTypeRegistration]
@@ -340,6 +341,7 @@ public final class ModelContainer: Sendable {
         }
         schema = Schema(inferredEntities)
         self.configurations = configurations
+        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
         var registrations: [String: ModelTypeRegistration] = [:]
         for (modelType, entityName) in zip(types, entityNames) {
@@ -360,6 +362,7 @@ public final class ModelContainer: Sendable {
     public init(for schema: Schema, configurations: [ModelConfiguration] = []) throws {
         self.schema = schema
         self.configurations = configurations
+        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
         modelTypesByEntityName = [:]
         relationshipAdapterTable = [:]
@@ -373,6 +376,7 @@ public final class ModelContainer: Sendable {
     ) throws {
         self.schema = schema
         self.configurations = configurations
+        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
         var registrations: [String: ModelTypeRegistration] = [:]
         for modelType in types {
@@ -675,6 +679,7 @@ public final class ModelContainer: Sendable {
         guard configuration.cloudKitDatabase == .none else {
             throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
         }
+        if configuration.dataStoreConfiguration != nil { return nil }
         guard case .none = configuration.groupContainer else {
             throw SwiftDataError.unsupportedStore("App-group store locations are not supported.")
         }
@@ -695,6 +700,22 @@ public final class ModelContainer: Sendable {
             location = .file(url)
         }
         return try factory(location, schema)
+    }
+
+    private static func openDataStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any DataStore)? {
+        guard configurations.contains(where: { $0.dataStoreConfiguration != nil }) else { return nil }
+        guard configurations.count == 1, let configuration = configurations.first else {
+            throw SwiftDataError.unsupportedStore("Exactly one custom DataStore configuration is supported.")
+        }
+        guard let dataStoreConfiguration = configuration.dataStoreConfiguration else { return nil }
+        guard configuration.cloudKitDatabase == .none, case .none = configuration.groupContainer,
+            configuration.storeFactory == nil, configuration.schemaVersionReader == nil,
+            configuration.url == nil, !configuration.isStoredInMemoryOnly
+        else {
+            throw SwiftDataError.unsupportedStore(
+                "Custom DataStore configurations cannot be combined with another backend.")
+        }
+        return try dataStoreConfiguration.makeStore(schema: schema)
     }
 
     private static func relationshipDestination(_ type: String) -> String? {

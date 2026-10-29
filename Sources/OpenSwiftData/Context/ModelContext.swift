@@ -23,6 +23,7 @@ public final class ModelContext {
     private var containerStorage: ModelContainer?
     private var autosaveEnabledStorage = false
     private var historyAuthorStorage: String?
+    private var dataStoreTemporaryIdentifiers: [ObjectIdentifier: PersistentIdentifier] = [:]
     /// Whether this context saves changes automatically after a coalesced delay.
     public var autosaveEnabled: Bool {
         get {
@@ -140,7 +141,7 @@ public final class ModelContext {
         }
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.configurations.first?.name ?? "default",
+            storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
             entityIDsByName: Dictionary(
                 uniqueKeysWithValues: (container?.schema.entities ?? []).enumerated().map { ($1.name, $0 + 1) }),
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }),
@@ -161,7 +162,7 @@ public final class ModelContext {
         autosaveHandle = AutosaveHandle(trigger: autosaveTrigger, enabled: false, schedule: {})
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.configurations.first?.name ?? "default",
+            storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
             entityIDsByName: Dictionary(
                 uniqueKeysWithValues: (container?.schema.entities ?? []).enumerated().map { ($1.name, $0 + 1) }),
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }))
@@ -225,7 +226,10 @@ public final class ModelContext {
         assertAffinity()
         guard model.modelContext == nil else { return }
         var insertionSnapshot = snapshot
-        for adapter in container?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? [] {
+        let relationshipAdapters = container?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? []
+        let detachedDestinations = relationshipAdapters.flatMap { $0.read(model) ?? [] }
+            .filter { $0.modelContext == nil && $0 !== model }
+        for adapter in relationshipAdapters {
             guard snapshot.values[adapter.keyPath] == nil,
                 let value = try? adapter.makeValue([]),
                 let metadata = type(of: model).schemaMetadata().first(where: { $0.name == adapter.name }),
@@ -245,7 +249,7 @@ public final class ModelContext {
                 optimisticLockVersion: insertionSnapshot.optimisticLockVersion)
         }
         func attach<Model: PersistentModel>(_ model: Model) {
-            guard container?.store != nil else {
+            guard container?.store != nil || container?.dataStore != nil else {
                 model.persistentBackingData.attach(to: self, model: model)
                 model.setInsertionChanged()
                 state.setBaseline(model, snapshot: model.snapshotLifecycle())
@@ -262,6 +266,11 @@ public final class ModelContext {
         }
         state.insert(model, snapshot: insertionSnapshot)
         attach(model)
+        if container?.dataStore != nil {
+            for destination in detachedDestinations where destination !== model {
+                insertRelationshipDestination(destination, snapshot: destination.snapshotLifecycle())
+            }
+        }
     }
 
     /// Deletes a model or cancels its pending insertion.
@@ -637,8 +646,12 @@ public final class ModelContext {
     public func fetch<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
         assertAffinity()
         try processPendingChanges()
-        guard let store = container?.store else { throw unsupportedStore("Fetch") }
-        guard let entity = container?.schema.entity(forName: String(describing: Model.self)) else { return [] }
+        guard let container = containerStorage else { throw unsupportedStore("Fetch") }
+        guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return [] }
+        if let dataStore = container.dataStore {
+            return try fetchFromDataStore(descriptor, dataStore: dataStore, container: container, entity: entity)
+        }
+        guard let store = container.store else { throw unsupportedStore("Fetch") }
         let allAttributes = canonicalAttributes(for: entity)
         let requestedProperties = try selectedAttributes(descriptor.propertiesToFetch, entity: entity, type: Model.self)
         let selectedAttributesForMaterialization = allAttributes.filter { requestedProperties.contains($0.name) }
@@ -723,10 +736,126 @@ public final class ModelContext {
             models, descriptor: descriptor, entity: entity, evaluatorPlan: compiled?.evaluatorPlan)
     }
 
+    private func fetchFromDataStore<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>,
+        dataStore: any DataStore,
+        container: ModelContainer,
+        entity: Schema.Entity
+    ) throws -> [Model] {
+        if let limit = descriptor.fetchLimit, limit < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
+        }
+        if let offset = descriptor.fetchOffset, offset < 0 {
+            throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
+        }
+        guard descriptor.propertiesToFetch == nil
+        else {
+            throw unsupportedStore("This DataStore fetch path does not support partial property materialization.")
+        }
+        let result = try dataStore.fetch(DataStoreFetchRequest(descriptor: descriptor, entity: entity))
+        var models: [Model] = []
+        var materialized: [PersistentIdentifier: any PersistentModel] = [:]
+        for snapshot in result.snapshots {
+            guard
+                let model = try resolveDataStoreSnapshot(
+                    snapshot, dataStore: dataStore, container: container, cache: &materialized) as? Model
+            else {
+                throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with the wrong model type.")
+            }
+            models.append(model)
+        }
+        return try mergePending(models, descriptor: descriptor, entity: entity, evaluatorPlan: nil)
+    }
+
+    private func resolveDataStoreSnapshot(
+        _ snapshot: DataStoreSnapshot,
+        dataStore: any DataStore,
+        container: ModelContainer,
+        cache: inout [PersistentIdentifier: any PersistentModel]
+    ) throws -> any PersistentModel {
+        if let cached = cache[snapshot.persistentIdentifier] { return cached }
+        guard let entity = container.schema.entity(forName: snapshot.entityName) else {
+            throw SwiftDataError.unsupportedStore("DataStore snapshot refers to an unknown entity.")
+        }
+        _ = try validateDataStoreSnapshot(snapshot, entity: entity, store: dataStore)
+        let expectedAttributes = Set(
+            entity.attributes.flatMap { attribute in
+                attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
+            })
+        guard Set(snapshot.values.keys) == expectedAttributes,
+            Set(snapshot.relationships.keys) == Set(entity.relationships.map(\.name))
+        else {
+            throw SwiftDataError.unsupportedStore("DataStore returned an incomplete model snapshot for \(entity.name).")
+        }
+        guard let registration = container.modelRegistration(forEntityName: entity.name),
+            let primaryKey = snapshot.persistentIdentifier.primaryKey
+        else {
+            throw SwiftDataError.unsupportedStore("No model type is registered for DataStore entity \(entity.name).")
+        }
+        let key = EntityPrimaryKey(entityName: entity.name, primaryKey: primaryKey)
+        let candidate = try registration.materializeDataStore(context: self, entity: entity, snapshot: snapshot)
+        let model = identityMap.canonicalHandle(for: key, candidate: candidate).model
+        cache[snapshot.persistentIdentifier] = model
+        let wasDirty = model.hasChanges
+        if !wasDirty, model !== candidate {
+            try registration.applyDataStoreValues(on: model, entity: entity, snapshot: snapshot)
+        }
+
+        var relationships: [String: [any PersistentModel]] = [:]
+        for relationship in entity.relationships {
+            var endpoints: [any PersistentModel] = []
+            for relatedIdentifier in snapshot.relationships[relationship.name] ?? [] {
+                guard let relatedSnapshot = try dataStore.snapshot(for: relatedIdentifier) else {
+                    throw SwiftDataError.unsupportedStore("DataStore relationship target snapshot is missing.")
+                }
+                endpoints.append(
+                    try resolveDataStoreSnapshot(
+                        relatedSnapshot, dataStore: dataStore, container: container, cache: &cache))
+            }
+            relationships[relationship.name] = endpoints
+        }
+        if !wasDirty {
+            try registration.assignDataStoreRelationships(on: model, relationships: relationships)
+            state.setBaseline(model, snapshot: model.snapshotLifecycle())
+        }
+        return model
+    }
+
+    private func validateDataStoreSnapshot(
+        _ snapshot: DataStoreSnapshot, entity: Schema.Entity, store: any DataStore
+    ) throws -> Int64 {
+        guard snapshot.entityName == entity.name,
+            snapshot.persistentIdentifier.entityName == entity.name,
+            snapshot.persistentIdentifier.storeIdentifier == store.identifier,
+            let primaryKey = snapshot.persistentIdentifier.primaryKey
+        else {
+            throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with an incompatible identifier.")
+        }
+        return primaryKey
+    }
+
+    private func dataStoreRow(
+        _ snapshot: DataStoreSnapshot, attributes: [Schema.Attribute], type: any PersistentModel.Type,
+        primaryKey: Int64
+    ) -> [RuntimeValue] {
+        var values = [RuntimeValue.int(primaryKey), .int(0)]
+        for attribute in attributes {
+            if attribute.options.contains(.flattened) {
+                let components = type.flattenedPropertyAdapters().filter { $0.propertyName == attribute.name }
+                    .sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) }
+                values.append(contentsOf: components.map { snapshot.values[$0.columnName].map(runtimeValue) ?? .null })
+            } else {
+                values.append(snapshot.values[attribute.name].map(runtimeValue) ?? .null)
+            }
+        }
+        return values
+    }
+
     /// Counts models matching a descriptor, which requires a persistent store.
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
         assertAffinity()
         try processPendingChanges()
+        if container?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
             guard let store = container?.store,
                 let entity = container?.schema.entity(forName: String(describing: Model.self))
@@ -762,6 +891,7 @@ public final class ModelContext {
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
         try processPendingChanges()
+        if container?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
         guard let store = container?.store,
             let entity = container?.schema.entity(forName: String(describing: Model.self))
         else { throw unsupportedStore("Identifier fetch") }
@@ -906,6 +1036,16 @@ public final class ModelContext {
             let modelEntity = container.schema.entity(forName: String(describing: Model.self)),
             modelEntity.name == entity.name
         else { throw unsupportedStore("Model lookup") }
+        if let dataStore = container.dataStore {
+            guard let snapshot = try dataStore.snapshot(for: identifier) else { return nil }
+            guard try validateDataStoreSnapshot(snapshot, entity: entity, store: dataStore) == key else {
+                throw SwiftDataError.unsupportedStore(
+                    "DataStore snapshot identifier does not match the requested model.")
+            }
+            var cache: [PersistentIdentifier: any PersistentModel] = [:]
+            return try resolveDataStoreSnapshot(
+                snapshot, dataStore: dataStore, container: container, cache: &cache) as? Model
+        }
         guard let store = container.store else { throw unsupportedStore("Model lookup") }
         if let registered: Model = registeredModel(for: identifier) {
             let attributes = canonicalAttributes(for: entity)
@@ -1018,8 +1158,13 @@ public final class ModelContext {
             NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
             return
         }
-        guard let store = container?.store else { throw unsupportedStore("Saving") }
-        try persistPendingChanges(to: store)
+        if let dataStore = container?.dataStore {
+            try persistPendingChanges(to: dataStore)
+        } else if let store = container?.store {
+            try persistPendingChanges(to: store)
+        } else {
+            throw unsupportedStore("Saving")
+        }
         let savedIDs = saveNotificationIdentifiers(before: before, insertedModels: originalInsertedIDs)
         NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
     }
@@ -1118,7 +1263,9 @@ public final class ModelContext {
         state.recordMutation(model)
     }
 
-    private var storeIdentifier: String { container?.configurations.first?.name ?? "default" }
+    private var storeIdentifier: String {
+        container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default"
+    }
 
     private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
         entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
@@ -2284,6 +2431,218 @@ public final class ModelContext {
                 updated: updatedKeys,
                 deleted: deletedKeys)
         }
+    }
+
+    private func persistPendingChanges(to dataStore: any DataStore) throws {
+        let pending = state.pendingState()
+        guard let container = containerStorage else { throw unsupportedStore("Saving") }
+        let insertedOriginal = try pending.inserted.map { try dataStoreSnapshot(for: $0, container: container) }
+        let updated = try pending.changed.map { try dataStoreSnapshot(for: $0, container: container) }
+        let deleted = pending.deleted.map(\.persistentModelID)
+        var normalizedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:]
+        for model in pending.inserted {
+            let current = model.persistentModelID
+            let old = pending.snapshots[ObjectIdentifier(model)]?.1.identifier
+            let objectID = ObjectIdentifier(model)
+            let normalized =
+                dataStoreTemporaryIdentifiers[objectID]
+                ?? PersistentIdentifier(
+                    storeIdentifier: dataStore.identifier,
+                    entityName: current.entityName,
+                    temporaryIdentifier: current.temporaryIdentifier ?? old?.temporaryIdentifier ?? UUID())
+            dataStoreTemporaryIdentifiers[objectID] = normalized
+            normalizedIdentifiers[current] = normalized
+            if let old { normalizedIdentifiers[old] = normalized }
+        }
+        let inserted = insertedOriginal.map { snapshot in
+            DataStoreSnapshot(
+                persistentIdentifier: normalizedIdentifiers[snapshot.persistentIdentifier]
+                    ?? snapshot.persistentIdentifier,
+                entityName: snapshot.entityName,
+                values: snapshot.values,
+                relationships: snapshot.relationships.mapValues { endpoints in
+                    endpoints.map { normalizedIdentifiers[$0] ?? $0 }
+                })
+        }
+        guard
+            (inserted + updated).allSatisfy({
+                $0.persistentIdentifier.storeIdentifier == dataStore.identifier
+                    && container.schema.entity(forName: $0.entityName) != nil
+            }), deleted.allSatisfy({ $0.storeIdentifier == dataStore.identifier })
+        else {
+            throw SwiftDataError.unsupportedStore("DataStore save request contains identifiers from another store.")
+        }
+        let reservations = try dataStore.reserveIdentifiers(for: inserted)
+        let insertedIdentifiers = Set(inserted.map(\.persistentIdentifier))
+        guard Set(reservations.keys).isSubset(of: insertedIdentifiers),
+            Set(reservations.values).count == reservations.count,
+            reservations.allSatisfy({ source, destination in
+                source.isTemporary && !destination.isTemporary
+                    && source.entityName == destination.entityName
+                    && destination.storeIdentifier == dataStore.identifier
+                    && !insertedIdentifiers.contains(destination)
+            })
+        else {
+            throw SwiftDataError.unsupportedStore("DataStore returned invalid identifier reservations.")
+        }
+        let remapRelationships: (DataStoreSnapshot) -> DataStoreSnapshot = { snapshot in
+            DataStoreSnapshot(
+                persistentIdentifier: snapshot.persistentIdentifier,
+                entityName: snapshot.entityName,
+                values: snapshot.values,
+                relationships: snapshot.relationships.mapValues { $0.map { reservations[$0] ?? $0 } })
+        }
+        let saveRequest = DataStoreSaveRequest(
+            inserted: inserted.map { snapshot in
+                let relationshipSnapshot = remapRelationships(snapshot)
+                let identifier = reservations[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+                return DataStoreSnapshot(
+                    persistentIdentifier: identifier,
+                    entityName: relationshipSnapshot.entityName,
+                    values: relationshipSnapshot.values,
+                    relationships: relationshipSnapshot.relationships)
+            },
+            updated: updated.map(remapRelationships),
+            deleted: deleted)
+        let result = try dataStore.save(saveRequest)
+
+        let updatedIdentifiers = Set(updated.map(\.persistentIdentifier))
+        let deletedIdentifiers = Set(deleted)
+        let remappedIdentifiers = Array(result.identifierRemappings.values)
+        let requiredSaveMappings = insertedIdentifiers.subtracting(reservations.keys)
+        let mappingsCoverInserts = Set(result.identifierRemappings.keys) == requiredSaveMappings
+        let updatesAcknowledged = result.updatedIdentifiers == updatedIdentifiers
+        let deletionsAcknowledged = result.deletedIdentifiers == deletedIdentifiers
+        let allPermanentIdentifiers = Array(reservations.values) + remappedIdentifiers
+        let mappingsAreUnique = Set(allPermanentIdentifiers).count == allPermanentIdentifiers.count
+        let mappingsAreValid = result.identifierRemappings.allSatisfy({ source, destination in
+            source.isTemporary && !destination.isTemporary
+                && source.storeIdentifier == dataStore.identifier
+                && source.entityName == destination.entityName
+                && destination.storeIdentifier == dataStore.identifier
+        })
+        guard mappingsCoverInserts, updatesAcknowledged, deletionsAcknowledged, mappingsAreUnique,
+            mappingsAreValid
+        else {
+            throw SwiftDataError.unsupportedStore(
+                "DataStore returned an invalid save result (insert mappings: \(mappingsCoverInserts), "
+                    + "updates: \(updatesAcknowledged), deletes: \(deletionsAcknowledged), "
+                    + "unique IDs: \(mappingsAreUnique), valid mappings: \(mappingsAreValid), "
+                    + "reserved IDs: \(reservations.count)); invalid results must not commit changes.")
+        }
+
+        var insertedKeys = Set<StoreEntityKey>()
+        let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
+        for model in pending.inserted + pending.changed {
+            let originalIdentifier = model.persistentModelID
+            let requestIdentifier = normalizedIdentifiers[originalIdentifier] ?? originalIdentifier
+            let isInserted = insertedIDs.contains(ObjectIdentifier(model))
+            guard
+                let identifier = reservations[requestIdentifier]
+                    ?? result.identifierRemappings[requestIdentifier]
+                    ?? (isInserted ? nil : originalIdentifier),
+                let primaryKey = identifier.primaryKey
+            else {
+                throw SwiftDataError.unsupportedStore("DataStore save did not return a permanent model identifier.")
+            }
+            if isInserted || reservations[requestIdentifier] != nil
+                || result.identifierRemappings[requestIdentifier] != nil
+            {
+                model.markPersistedLifecycle(
+                    storeIdentifier: identifier.storeIdentifier, entityID: entityID(for: identifier.entityName),
+                    primaryKey: primaryKey, version: 1)
+            } else {
+                model.markSavedLifecycle()
+            }
+            let key = StoreEntityKey(entityName: identifier.entityName, primaryKey: primaryKey)
+            if isInserted { insertedKeys.insert(key) }
+            identityMap.register(model, for: EntityPrimaryKey(entityName: key.entityName, primaryKey: key.primaryKey))
+            state.setBaseline(model, snapshot: model.snapshotLifecycle())
+            if originalIdentifier.isTemporary {
+                temporaryIdentifiers[originalIdentifier] = identifier
+            }
+        }
+        for model in pending.deleted {
+            if let primaryKey = model.persistentModelID.primaryKey {
+                identityMap.remove(
+                    EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey))
+            }
+            state.removeBaseline(for: model)
+            model.detachDeletedLifecycle()
+        }
+        for model in pending.inserted { dataStoreTemporaryIdentifiers.removeValue(forKey: ObjectIdentifier(model)) }
+        finalizePendingChanges()
+        state.clearRelationshipMutationEvents()
+        if let storeHubStoreIdentifier {
+            let updated = Set(
+                pending.changed.compactMap { model -> StoreEntityKey? in
+                    guard let primaryKey = model.persistentModelID.primaryKey else { return nil }
+                    return StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
+                }
+            ).subtracting(insertedKeys)
+            let deleted = Set(
+                pending.deleted.compactMap { model -> StoreEntityKey? in
+                    guard let primaryKey = model.persistentModelID.primaryKey else { return nil }
+                    return StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
+                })
+            storeHub?.publish(
+                storeIdentifier: storeHubStoreIdentifier,
+                sourceSubscription: storeHubSubscription ?? UUID(),
+                inserted: insertedKeys, updated: updated, deleted: deleted)
+        }
+    }
+
+    private func dataStoreSnapshot(
+        for model: any PersistentModel, container: ModelContainer
+    ) throws -> DataStoreSnapshot {
+        func typed<Model: PersistentModel>(_ model: Model) throws -> DataStoreSnapshot {
+            let entityName = String(describing: Model.self)
+            guard let entity = container.schema.entity(forName: entityName) else {
+                throw SwiftDataError.unsupportedStore("DataStore model is not present in the container schema.")
+            }
+            var values: [String: StoredValue] = [:]
+            let flattened = Model.flattenedPropertyAdapters()
+            for attribute in entity.attributes {
+                if attribute.options.contains(.flattened) {
+                    let components = flattened.filter { $0.propertyName == attribute.name }
+                    guard components.count == attribute.components.count else {
+                        throw SwiftDataError.unsupportedStore(
+                            "DataStore flattened component adapters do not match \(entity.name).\(attribute.name).")
+                    }
+                    for component in components {
+                        values[component.columnName] = try component.encoded(model)
+                    }
+                } else {
+                    guard let adapter = Model.persistenceAdapters().first(where: { $0.name == attribute.name }) else {
+                        throw SwiftDataError.unsupportedStore(
+                            "DataStore has no encoder for \(entity.name).\(attribute.name).")
+                    }
+                    values[attribute.name] = try adapter.encoded(model)
+                }
+            }
+            let relationshipAdapters: [any AnyRelationshipAdapterBox]
+            if let modelType = Model.self as? any RelationshipModel.Type {
+                relationshipAdapters =
+                    modelType.relationshipAdapterCandidates()
+                    + modelType.inferredRelationshipAdapterCandidates()
+            } else {
+                relationshipAdapters = []
+            }
+            var relationships: [String: [PersistentIdentifier]] = [:]
+            for relationship in entity.relationships {
+                guard let adapter = relationshipAdapters.first(where: { $0.name == relationship.name }) else {
+                    throw SwiftDataError.unsupportedStore(
+                        "DataStore has no relationship adapter for \(entity.name).\(relationship.name).")
+                }
+                relationships[relationship.name] = adapter.read(model)?.map(\.persistentModelID) ?? []
+            }
+            return DataStoreSnapshot(
+                persistentIdentifier: model.persistentModelID,
+                entityName: entity.name,
+                values: values, relationships: relationships)
+        }
+        func dispatch<Model: PersistentModel>(_ model: Model) throws -> DataStoreSnapshot { try typed(model) }
+        return try dispatch(model)
     }
 
     private func persistModel(

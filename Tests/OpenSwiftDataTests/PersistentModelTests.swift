@@ -214,6 +214,210 @@ final class InheritedToManySiblingFixture: InheritedToManyBaseFixture {
 }
 
 @Model
+class HierarchyTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class HierarchyTargetChildFixture: HierarchyTargetBaseFixture {
+    var detail: String
+    @Relationship(inverse: nil) var owners: [HierarchyOwnerChildFixture] = []
+    init(name: String, detail: String) {
+        self.detail = detail
+        super.init(name: name)
+    }
+}
+
+@Model
+final class HierarchyTargetGrandchildFixture: HierarchyTargetChildFixture {
+    var rank: Int
+    init(name: String, detail: String, rank: Int) {
+        self.rank = rank
+        super.init(name: name, detail: detail)
+    }
+}
+
+@Model
+final class HierarchyTargetSiblingFixture: HierarchyTargetBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
+class PlainHierarchyTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class PlainHierarchyTargetChildFixture: PlainHierarchyTargetBaseFixture {
+    var detail: String
+    init(name: String, detail: String) {
+        self.detail = detail
+        super.init(name: name)
+    }
+}
+
+@Model
+final class PlainHierarchyTargetGrandchildFixture: PlainHierarchyTargetChildFixture {
+    var rank: Int
+    init(name: String, detail: String, rank: Int) {
+        self.rank = rank
+        super.init(name: name, detail: detail)
+    }
+}
+
+@Model
+final class PlainHierarchyTargetSiblingFixture: PlainHierarchyTargetBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
+class HierarchyOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class HierarchyOwnerChildFixture: HierarchyOwnerBaseFixture {
+    @Relationship(inverse: \HierarchyTargetChildFixture.owners)
+    var target: HierarchyTargetBaseFixture?
+    init(name: String, target: HierarchyTargetBaseFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+class DeniedHierarchyTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class DeniedHierarchyTargetChildFixture: DeniedHierarchyTargetBaseFixture {
+    @Relationship(deleteRule: .deny, inverse: nil) var owners: [HierarchySubtypeOwnerChildFixture] = []
+    var detail: String
+    init(name: String, detail: String) {
+        self.detail = detail
+        super.init(name: name)
+    }
+}
+
+@Model
+class CascadeHierarchyTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class CascadeHierarchyTargetChildFixture: CascadeHierarchyTargetBaseFixture {
+    @Relationship(deleteRule: .cascade, inverse: nil) var owners: [CascadeHierarchyInverseOwnerChildFixture] = []
+    var detail: String
+    init(name: String, detail: String) {
+        self.detail = detail
+        super.init(name: name)
+    }
+}
+
+@Model
+class CascadeHierarchySourceBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class CascadeHierarchyInverseOwnerChildFixture: CascadeHierarchySourceBaseFixture {
+    @Relationship(inverse: \CascadeHierarchyTargetChildFixture.owners)
+    var target: CascadeHierarchyTargetBaseFixture?
+    init(name: String, target: CascadeHierarchyTargetBaseFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+class HierarchySubtypeOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class HierarchySubtypeOwnerChildFixture: HierarchySubtypeOwnerBaseFixture {
+    @Relationship(inverse: \DeniedHierarchyTargetChildFixture.owners)
+    var target: DeniedHierarchyTargetBaseFixture?
+    init(name: String, target: DeniedHierarchyTargetBaseFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+final class FlatHierarchyTargetOwnerFixture {
+    @Relationship(inverse: nil) var target: PlainHierarchyTargetBaseFixture?
+    var title: String
+    init(title: String, target: PlainHierarchyTargetBaseFixture?) {
+        self.title = title
+        self.target = target
+    }
+}
+
+@Model
+class HierarchyToHierarchyOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class HierarchyToHierarchyOwnerChildFixture: HierarchyToHierarchyOwnerBaseFixture {
+    @Relationship(inverse: nil) var target: PlainHierarchyTargetBaseFixture?
+    var rank: Int
+    init(name: String, target: PlainHierarchyTargetBaseFixture?, rank: Int) {
+        self.target = target
+        self.rank = rank
+        super.init(name: name)
+    }
+}
+
+@Model
+class CascadeHierarchyOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class CascadeHierarchyOwnerChildFixture: CascadeHierarchyOwnerBaseFixture {
+    @Relationship(deleteRule: .cascade, inverse: nil) var target: PlainHierarchyTargetBaseFixture?
+    init(name: String, target: PlainHierarchyTargetBaseFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+class DenyHierarchyOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class DenyHierarchyOwnerChildFixture: DenyHierarchyOwnerBaseFixture {
+    @Relationship(deleteRule: .deny, inverse: nil) var target: PlainHierarchyTargetBaseFixture?
+    init(name: String, target: PlainHierarchyTargetBaseFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
 final class InheritedManyToManyTagFixture {
     @Relationship(inverse: nil) var owners: [InheritedManyToManyChildFixture] = []
     var title: String
@@ -628,6 +832,170 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testFlatToOneRelationshipMaterializesConcreteHierarchyDestination() throws {
+        let container = try ModelContainer(
+            for: [
+                FlatHierarchyTargetOwnerFixture.self,
+                PlainHierarchyTargetChildFixture.self,
+                PlainHierarchyTargetGrandchildFixture.self,
+                PlainHierarchyTargetSiblingFixture.self,
+            ],
+            configurations: [.sqliteMemory("flat-to-hierarchy-to-one")])
+        let writer = container.mainContext
+        let target = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "detail", rank: 6)
+        writer.insert(target)
+        writer.insert(FlatHierarchyTargetOwnerFixture(title: "owner", target: target))
+        try writer.save()
+
+        let reader = container.makeContext()
+        let owner = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<FlatHierarchyTargetOwnerFixture>(
+                    relationshipKeyPathsForPrefetching: [\FlatHierarchyTargetOwnerFixture.target])
+            ).first)
+        let resolved = try XCTUnwrap(owner.target)
+        XCTAssertTrue(resolved is PlainHierarchyTargetGrandchildFixture)
+        XCTAssertEqual((resolved as? PlainHierarchyTargetGrandchildFixture)?.rank, 6)
+
+        let lazyReader = container.makeContext()
+        let lazyOwner = try XCTUnwrap(
+            lazyReader.fetch(FetchDescriptor<FlatHierarchyTargetOwnerFixture>()).first)
+        XCTAssertEqual((lazyOwner.target as? PlainHierarchyTargetGrandchildFixture)?.detail, "detail")
+    }
+
+    @MainActor
+    func testDeletingHierarchyToOneDestinationNullifiesFlatOwnerFK() throws {
+        let container = try ModelContainer(
+            for: [
+                FlatHierarchyTargetOwnerFixture.self,
+                PlainHierarchyTargetChildFixture.self,
+                PlainHierarchyTargetGrandchildFixture.self,
+            ],
+            configurations: [.sqliteMemory("flat-to-hierarchy-to-one-delete")])
+        let context = container.mainContext
+        let target = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "detail", rank: 6)
+        let owner = FlatHierarchyTargetOwnerFixture(title: "owner", target: target)
+        context.insert(target)
+        context.insert(owner)
+        try context.save()
+
+        context.delete(target)
+        try context.save()
+
+        let values = try container.store?.read {
+            try $0.rows("SELECT ZTARGET FROM ZFLATHIERARCHYTARGETOWNERFIXTURE", arguments: [])
+        }
+        XCTAssertEqual(values, [[.null]])
+        let reader = container.makeContext()
+        let fetchedOwner = try XCTUnwrap(reader.fetch(FetchDescriptor<FlatHierarchyTargetOwnerFixture>()).first)
+        XCTAssertNil(fetchedOwner.target)
+    }
+
+    @MainActor
+    func testHierarchyToOneCascadeAndDenyDeleteRules() throws {
+        let cascadeContainer = try ModelContainer(
+            for: [CascadeHierarchyOwnerChildFixture.self, PlainHierarchyTargetGrandchildFixture.self],
+            configurations: [.sqliteMemory("hierarchy-to-one-cascade")])
+        let cascadeContext = cascadeContainer.mainContext
+        let cascadedTarget = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "cascade", rank: 1)
+        let cascadeOwner = CascadeHierarchyOwnerChildFixture(name: "owner", target: cascadedTarget)
+        cascadeContext.insert(cascadedTarget)
+        cascadeContext.insert(cascadeOwner)
+        try cascadeContext.save()
+        cascadeContext.delete(cascadeOwner)
+        try cascadeContext.save()
+        XCTAssertTrue(try cascadeContext.fetch(FetchDescriptor<PlainHierarchyTargetBaseFixture>()).isEmpty)
+
+        let denyContainer = try ModelContainer(
+            for: [DenyHierarchyOwnerChildFixture.self, PlainHierarchyTargetGrandchildFixture.self],
+            configurations: [.sqliteMemory("hierarchy-to-one-deny")])
+        let denyContext = denyContainer.mainContext
+        let deniedTarget = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "deny", rank: 2)
+        let denyOwner = DenyHierarchyOwnerChildFixture(name: "owner", target: deniedTarget)
+        denyContext.insert(deniedTarget)
+        denyContext.insert(denyOwner)
+        try denyContext.save()
+        denyContext.delete(denyOwner)
+        XCTAssertFalse(denyOwner.isDeleted)
+        XCTAssertFalse(denyContext.hasChanges)
+        XCTAssertEqual(try denyContext.fetch(FetchDescriptor<DenyHierarchyOwnerBaseFixture>()).count, 1)
+    }
+
+    @MainActor
+    func testHierarchyToOneRelationshipMaterializesBothConcreteTypes() throws {
+        let container = try ModelContainer(
+            for: [
+                HierarchyToHierarchyOwnerChildFixture.self,
+                PlainHierarchyTargetGrandchildFixture.self,
+            ],
+            configurations: [.sqliteMemory("hierarchy-to-hierarchy-to-one")])
+        let context = container.mainContext
+        let target = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "detail", rank: 9)
+        let owner = HierarchyToHierarchyOwnerChildFixture(name: "owner", target: target, rank: 3)
+        context.insert(target)
+        context.insert(owner)
+        try context.save()
+
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+                    relationshipKeyPathsForPrefetching: [\HierarchyToHierarchyOwnerChildFixture.target])
+            )
+            .first)
+        XCTAssertTrue(fetched.target is PlainHierarchyTargetGrandchildFixture)
+        XCTAssertEqual((fetched.target as? PlainHierarchyTargetGrandchildFixture)?.rank, 9)
+
+        let lazyReader = container.makeContext()
+        let lazyOwner = try XCTUnwrap(
+            lazyReader.fetch(FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>()).first)
+        XCTAssertEqual((lazyOwner.target as? PlainHierarchyTargetGrandchildFixture)?.detail, "detail")
+    }
+
+    @MainActor
+    func testHierarchyToHierarchyOneToManyInverseRoundTrips() throws {
+        let container = try ModelContainer(
+            for: [HierarchyOwnerChildFixture.self, HierarchyTargetGrandchildFixture.self],
+            configurations: [.sqliteMemory("hierarchy-to-hierarchy-inverse")])
+        XCTAssertEqual(
+            container.schema.entity(forName: "HierarchyTargetChildFixture")?.relationships
+                .first(where: { $0.name == "owners" })?.inverse,
+            "target")
+        let writer = container.mainContext
+        let target = HierarchyTargetGrandchildFixture(name: "target", detail: "detail", rank: 7)
+        let owner = HierarchyOwnerChildFixture(name: "owner", target: target)
+        writer.insert(target)
+        writer.insert(owner)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedTarget = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<HierarchyTargetChildFixture>(
+                    relationshipKeyPathsForPrefetching: [\HierarchyTargetChildFixture.owners])
+            ).first)
+        XCTAssertEqual(fetchedTarget.owners.map(\.name), ["owner"])
+        XCTAssertTrue(fetchedTarget.owners.first?.target === fetchedTarget)
+        XCTAssertTrue(fetchedTarget.owners.first?.target is HierarchyTargetGrandchildFixture)
+
+        let lazyReader = container.makeContext()
+        let lazyOwner = try XCTUnwrap(
+            lazyReader.fetch(FetchDescriptor<HierarchyOwnerChildFixture>()).first)
+        let lazyTarget = try XCTUnwrap(lazyOwner.target)
+        let lazyTargetChild = try XCTUnwrap(lazyTarget as? HierarchyTargetChildFixture)
+        XCTAssertEqual(lazyTargetChild.owners.map(\.name), ["owner"])
+
+        fetchedTarget.owners = []
+        try reader.save()
+        let foreignKeys = try container.store?.read {
+            try $0.rows(
+                "SELECT ZHIERARCHYOWNERCHILDFIXTURE_TARGET FROM ZHIERARCHYOWNERBASEFIXTURE",
+                arguments: [])
+        }
+        XCTAssertEqual(foreignKeys, [[.null]])
+    }
+
+    @MainActor
     func testRequiredInheritedToOneRelationshipResolvesAfterEndpointInsert() throws {
         let container = try ModelContainer(
             for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],
@@ -684,6 +1052,10 @@ final class PersistentModelTests: XCTestCase {
                 InheritedOneToManyTargetFixture.self,
             ],
             configurations: [.sqliteMemory("inherited-to-one-inverse")])
+        XCTAssertEqual(
+            container.schema.entity(forName: "InheritedOneToManyTargetFixture")?.relationships
+                .first(where: { $0.name == "children" })?.inverse,
+            "target")
         let writer = container.mainContext
         let target = InheritedOneToManyTargetFixture(title: "target")
         let child = InheritedOneToManyChildFixture(name: "child", target: target)
@@ -875,6 +1247,14 @@ final class PersistentModelTests: XCTestCase {
                 InheritedManyToManyTagFixture.self,
             ],
             configurations: [.sqliteMemory("inherited-many-to-many-inverse")])
+        let tagsMetadata = try XCTUnwrap(
+            InheritedManyToManyChildFixture.schemaMetadata().first(where: { $0.name == "tags" }))
+        let tagsRelationship = try XCTUnwrap(tagsMetadata.metadata?.base as? Schema.Relationship)
+        XCTAssertEqual(tagsRelationship.inverse, "owners")
+        XCTAssertEqual(
+            container.schema.entity(forName: "InheritedManyToManyTagFixture")?.relationships
+                .first(where: { $0.name == "owners" })?.inverse,
+            "tags")
         let writer = container.mainContext
         let first = InheritedManyToManyTagFixture(title: "first")
         let second = InheritedManyToManyTagFixture(title: "second")
@@ -1022,6 +1402,96 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertFalse(
             ModelContainer.relationshipDestination(
                 "InheritanceMacroGrandchildFixture", matchesLogicalOwner: "InheritanceMacroBaseFixture", among: types))
+    }
+
+    @MainActor
+    func testExplicitInverseMayBeDeclaredOnDestinationSubtype() throws {
+        let container = try ModelContainer(
+            for: [HierarchyOwnerChildFixture.self, HierarchyTargetGrandchildFixture.self],
+            configurations: [.sqliteMemory("inverse-on-destination-subtype")])
+
+        let ownerRelationship = try XCTUnwrap(
+            container.schema.entity(forName: "HierarchyOwnerChildFixture")?.relationships
+                .first(where: { $0.name == "target" }))
+        let targetRelationship = try XCTUnwrap(
+            container.schema.entity(forName: "HierarchyTargetChildFixture")?.relationships
+                .first(where: { $0.name == "owners" }))
+
+        XCTAssertEqual(ownerRelationship.destination, "HierarchyTargetBaseFixture")
+        XCTAssertNil(
+            container.schema.entity(forName: "HierarchyTargetBaseFixture")?.relationships
+                .first(where: { $0.name == "owners" }))
+        XCTAssertEqual(ownerRelationship.inverse, "owners")
+        XCTAssertEqual(targetRelationship.inverse, "target")
+        XCTAssertEqual(
+            container.schema.relationshipStorageMapping(
+                modelEntityName: "HierarchyTargetGrandchildFixture", relationshipName: "owners")?
+                .declaringEntityName,
+            "HierarchyTargetChildFixture")
+    }
+
+    @MainActor
+    func testSubtypeInverseDenyRulePreventsConcreteTargetDeletion() throws {
+        let container = try ModelContainer(
+            for: [
+                HierarchySubtypeOwnerChildFixture.self,
+                DeniedHierarchyTargetChildFixture.self,
+            ],
+            configurations: [.sqliteMemory("subtype-inverse-deny")])
+        let context = container.mainContext
+        let target = DeniedHierarchyTargetChildFixture(name: "target", detail: "deny")
+        context.insert(target)
+        let owner = HierarchySubtypeOwnerChildFixture(name: "owner", target: target)
+        context.insert(owner)
+        try context.save()
+        let deleteContext = container.makeContext()
+        let targetForDelete = try XCTUnwrap(
+            deleteContext.fetch(FetchDescriptor<DeniedHierarchyTargetBaseFixture>()).first
+                as? DeniedHierarchyTargetChildFixture)
+        deleteContext.delete(targetForDelete)
+
+        XCTAssertFalse(targetForDelete.isDeleted)
+        XCTAssertFalse(deleteContext.hasChanges)
+        XCTAssertEqual(try deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerBaseFixture>()).count, 1)
+
+        let ownerForDelete = try XCTUnwrap(
+            deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerChildFixture>()).first)
+        deleteContext.delete(ownerForDelete)
+        try deleteContext.save()
+        XCTAssertEqual(try deleteContext.fetch(FetchDescriptor<DeniedHierarchyTargetBaseFixture>()).count, 1)
+        XCTAssertTrue(try deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerBaseFixture>()).isEmpty)
+    }
+
+    @MainActor
+    func testSubtypeInverseCascadeDeletesOwnerWhenTargetIsDeleted() throws {
+        let container = try ModelContainer(
+            for: [CascadeHierarchyInverseOwnerChildFixture.self, CascadeHierarchyTargetChildFixture.self],
+            configurations: [.sqliteMemory("subtype-inverse-cascade")])
+        let context = container.mainContext
+        let target = CascadeHierarchyTargetChildFixture(name: "target", detail: "cascade")
+        context.insert(target)
+        context.insert(CascadeHierarchyInverseOwnerChildFixture(name: "owner", target: target))
+        try context.save()
+
+        let deleteContext = container.makeContext()
+        let targetForDelete = try XCTUnwrap(
+            deleteContext.fetch(FetchDescriptor<CascadeHierarchyTargetBaseFixture>()).first
+                as? CascadeHierarchyTargetChildFixture)
+        let cascadeJoinOrFK = try container.store?.read {
+            try $0.rows(
+                "SELECT ZCASCADEHIERARCHYINVERSEOWNERCHILDFIXTURE_TARGET FROM ZCASCADEHIERARCHYSOURCEBASEFIXTURE",
+                arguments: [])
+        }
+        XCTAssertEqual(cascadeJoinOrFK, [[.int(1)]])
+        let inverseMetadata = try XCTUnwrap(
+            container.schema.relationship(named: "owners", onOrBelow: "CascadeHierarchyTargetBaseFixture"))
+        XCTAssertEqual(inverseMetadata.deleteRule, .cascade)
+        XCTAssertEqual(targetForDelete.owners.map(\.name), ["owner"])
+        deleteContext.delete(targetForDelete)
+        try deleteContext.save()
+
+        XCTAssertTrue(try deleteContext.fetch(FetchDescriptor<CascadeHierarchySourceBaseFixture>()).isEmpty)
+        XCTAssertTrue(try deleteContext.fetch(FetchDescriptor<CascadeHierarchyTargetBaseFixture>()).isEmpty)
     }
 
     @MainActor

@@ -435,6 +435,27 @@ public struct Schema: Sendable {
             destinationRootEntityName: destinationRootEntityName)
     }
 
+    package func relationshipDeclaration(
+        named relationshipName: String, onOrBelow entityName: String
+    ) -> (entityName: String, relationship: Relationship)? {
+        guard entity(forName: entityName) != nil else { return nil }
+        var declarations: [String: (String, Relationship)] = [:]
+        for candidate in entities where isAncestorEntity(entityName, of: candidate.name) {
+            for relationship in candidate.relationships where relationship.name == relationshipName {
+                let declarationName = relationship.declaringEntityName ?? candidate.name
+                let key = "\(declarationName).\(relationship.name).\(relationship.destination).\(relationship.isToMany)"
+                declarations[key] = (declarationName, relationship)
+            }
+        }
+        guard declarations.count == 1 else { return nil }
+        guard let declaration = declarations.values.first else { return nil }
+        return (declaration.0, declaration.1)
+    }
+
+    package func relationship(named relationshipName: String, onOrBelow entityName: String) -> Relationship? {
+        relationshipDeclaration(named: relationshipName, onOrBelow: entityName)?.relationship
+    }
+
     package func validateRelationshipStorageMappings() throws {
         for entity in entities {
             for relationship in entity.relationships where relationship.declaringEntityName != nil {

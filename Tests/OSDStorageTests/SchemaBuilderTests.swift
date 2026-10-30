@@ -106,6 +106,65 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertEqual(built.bootstrapRows.map(\.name), ["Base", "Child", "Grandchild", "Target"])
     }
 
+    func testInheritedToOneRelationshipMayTargetAnotherHierarchy() throws {
+        let schema = Schema([
+            Schema.Entity(name: "OwnerBase"),
+            Schema.Entity(
+                name: "OwnerChild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "TargetBase", declaringEntityName: "OwnerChild")
+                ],
+                superentityName: "OwnerBase"),
+            Schema.Entity(name: "TargetBase"),
+            Schema.Entity(name: "TargetChild", superentityName: "TargetBase"),
+        ])
+
+        let built = try SchemaBuilder.build(schema)
+
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE TABLE ZOWNERBASE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, "
+                    + "ZOWNERCHILD_TARGET INTEGER);"))
+        XCTAssertEqual(
+            schema.relationshipStorageMapping(modelEntityName: "OwnerChild", relationshipName: "target")?
+                .destinationRootEntityName,
+            "TargetBase")
+    }
+
+    func testInverseNamesDeclaredOnMultipleDestinationSubtypesAreAmbiguous() {
+        let schema = Schema([
+            Schema.Entity(name: "OwnerBase"),
+            Schema.Entity(
+                name: "OwnerChild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "TargetBase", inverse: "owners",
+                        declaringEntityName: "OwnerChild")
+                ],
+                superentityName: "OwnerBase"),
+            Schema.Entity(name: "TargetBase"),
+            Schema.Entity(
+                name: "TargetFirst",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
+                ],
+                superentityName: "TargetBase"),
+            Schema.Entity(
+                name: "TargetSecond",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
+                ],
+                superentityName: "TargetBase"),
+        ])
+
+        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
+    }
+
     func testInheritedToManyOwnerToFlatDestinationUsesJoinTable() throws {
         let schema = Schema([
             Schema.Entity(name: "Base"),
@@ -227,6 +286,37 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertEqual(
             built.statements.filter { $0.hasSuffix("(Z_A INTEGER, Z_B INTEGER);") },
             ["CREATE TABLE Z_CHILD_TAGS_TAG_OWNERS (Z_A INTEGER, Z_B INTEGER);"])
+    }
+
+    func testToOneStorageOwnershipFindsInverseDeclaredOnDestinationSubtype() throws {
+        let schema = Schema([
+            Schema.Entity(name: "OwnerBase"),
+            Schema.Entity(
+                name: "OwnerChild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "TargetBase", inverse: "owners",
+                        declaringEntityName: "OwnerChild")
+                ],
+                superentityName: "OwnerBase"),
+            Schema.Entity(name: "TargetBase"),
+            Schema.Entity(
+                name: "TargetChild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "OwnerChild", isToMany: true, inverse: "target")
+                ],
+                superentityName: "TargetBase"),
+        ])
+
+        let owner = try XCTUnwrap(schema.entity(forName: "OwnerChild"))
+        let relationship = try XCTUnwrap(owner.relationships.first)
+
+        XCTAssertFalse(SchemaBuilder.isNonOwner(owner, relationship, schema: schema))
+        XCTAssertTrue(
+            try SchemaBuilder.build(schema).statements.contains(
+                "CREATE TABLE ZOWNERBASE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, "
+                    + "ZOWNERCHILD_TARGET INTEGER);"))
     }
 
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {

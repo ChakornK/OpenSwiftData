@@ -235,19 +235,13 @@ public final class ModelContext {
         model.prepareForPersistence()
         var insertionSnapshot = model.snapshotLifecycle()
         let relationshipAdapters = container?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? []
-        let detachedDestinations = relationshipAdapters.flatMap { $0.read(model) ?? [] }
-            .filter { $0.modelContext == nil && $0 !== model }
         for adapter in relationshipAdapters {
             guard insertionSnapshot.values[adapter.keyPath] == nil,
                 let value = try? adapter.makeValue([]),
                 let metadata = type(of: model).schemaMetadata().first(where: { $0.name == adapter.name }),
                 let keyPath = metadata.keypath
             else { continue }
-            func setRelationshipDefault<Model: PersistentModel>(_ model: Model) {
-                (model.persistentBackingData as? ManagedBackingData<Model>)?.setMaterializedValue(
-                    forKey: keyPath, to: value)
-            }
-            setRelationshipDefault(model)
+            model.setInheritedValue(keyPath: keyPath, to: value)
             let values = insertionSnapshot.values.merging([keyPath: value]) { _, new in new }
             insertionSnapshot = BackingDataSnapshot(
                 values: values, context: insertionSnapshot.context, identifier: insertionSnapshot.identifier,
@@ -256,6 +250,8 @@ public final class ModelContext {
                 entityID: insertionSnapshot.entityID,
                 optimisticLockVersion: insertionSnapshot.optimisticLockVersion)
         }
+        let detachedDestinations = relationshipAdapters.flatMap { $0.read(model) ?? [] }
+            .filter { $0.modelContext == nil && $0 !== model }
         func attach<Model: PersistentModel>(_ model: Model) {
             guard container?.store != nil || container?.dataStore != nil else {
                 model.anyBackingData.attach(to: self, model: model)
@@ -796,6 +792,12 @@ public final class ModelContext {
                     on: backing, type: Model.self, entity: entity, loadedAttributes: requestedProperties,
                     primaryKey: pk, store: store)
             }
+            if hasHierarchy,
+                let registration = container.modelRegistration(forEntityName: String(describing: type(of: model))),
+                let resolver = try relationshipResolver()
+            {
+                registration.installRelationshipFaults(on: model, entity: concreteEntity, resolver: resolver)
+            }
             primaryKeys.append(pk)
             models.append(model)
         }
@@ -1200,6 +1202,12 @@ public final class ModelContext {
             }
             guard let compatible = model as? Model else {
                 throw SwiftDataError.unsupportedStore("Materialized model is not query-compatible.")
+            }
+            if let resolvedRegistration = container.modelRegistration(forEntityName: concreteEntity.name),
+                let resolver = try relationshipResolver()
+            {
+                resolvedRegistration.installRelationshipFaults(
+                    on: compatible, entity: concreteEntity, resolver: resolver)
             }
             relationshipLoadVisited.removeAll()
             var visited = relationshipLoadVisited
@@ -2124,13 +2132,14 @@ public final class ModelContext {
                     sideBEntity = relationship.destination
                 } else if isCanonicalSideA(entity, relationship),
                     let inverseName = relationship.inverse,
-                    let destination = container.schema.entity(forName: relationship.destination),
-                    destination.relationships.first(where: { $0.name == inverseName })?.isToMany == true,
+                    let inverse = container.schema.relationshipDeclaration(
+                        named: inverseName, onOrBelow: relationship.destination),
+                    inverse.relationship.isToMany,
                     let joinTable = joinTableName(for: entity, relationship)
                 {
                     table = joinTable
                     sideAEntity = entity.name
-                    sideBEntity = destination.name
+                    sideBEntity = inverse.entityName
                 } else {
                     continue
                 }
@@ -2144,16 +2153,22 @@ public final class ModelContext {
                 _ = sideAEntity
             }
         }
+        var nulledColumns = Set<String>()
         for ownerEntity in container.schema.entities {
             for relationship in canonicalRelationships(for: ownerEntity) where !relationship.isToMany {
-                guard relationship.destination == model.persistentModelID.entityName,
-                    let inverseName = relationship.inverse,
-                    let deletedEntity = container.schema.entity(forName: relationship.destination),
-                    let inverse = deletedEntity.relationships.first(where: { $0.name == inverseName }),
-                    inverse.deleteRule == .nullify,
+                guard isEntity(model.persistentModelID.entityName, descendantOf: relationship.destination),
                     isToOneStorageOwner(ownerEntity, relationship)
                 else { continue }
+                if let inverseName = relationship.inverse,
+                    let inverse = container.schema.relationship(
+                        named: inverseName, onOrBelow: relationship.destination),
+                    inverse.deleteRule != .nullify
+                {
+                    continue
+                }
                 let storage = relationshipStorageLocation(ownerEntity: ownerEntity, relationship: relationship)
+                let columnKey = "\(storage.tableName).\(storage.columnName)"
+                guard nulledColumns.insert(columnKey).inserted else { continue }
                 try connection.execute(
                     "UPDATE Z\(storage.tableName) SET Z\(storage.columnName) = NULL "
                         + "WHERE Z\(storage.columnName) = ?",
@@ -2190,19 +2205,19 @@ public final class ModelContext {
             if relationship.isToMany,
                 let inverseName = relationship.inverse,
                 let destinationEntity = container?.schema.entity(forName: relationship.destination),
-                let inverse = destinationEntity.relationships.first(where: { $0.name == inverseName }),
-                inverse.isToMany
+                let inverse = container?.schema.relationshipDeclaration(
+                    named: inverseName, onOrBelow: relationship.destination),
+                inverse.relationship.isToMany
             {
                 let storageOwner = relationship.inverse == nil || isCanonicalSideA(entity, relationship)
-                let storageEntity = storageOwner ? entity : destinationEntity
+                let storageEntity =
+                    storageOwner
+                    ? entity : (container?.schema.entity(forName: inverse.entityName) ?? destinationEntity)
                 let storageRelationship: Schema.Relationship
                 if storageOwner {
                     storageRelationship = relationship
                 } else {
-                    guard let inverse = destinationEntity.relationships.first(where: { $0.name == inverseName }) else {
-                        continue
-                    }
-                    storageRelationship = inverse
+                    storageRelationship = inverse.relationship
                 }
                 guard let table = joinTableName(for: storageEntity, storageRelationship) else { continue }
                 let requestedSideIsStorageOwner = joinSideAOwner(entity, relationship)
@@ -2255,14 +2270,18 @@ public final class ModelContext {
             } else if relationship.isToMany,
                 let inverseName = relationship.inverse,
                 let destinationEntity = container?.schema.entity(forName: relationship.destination),
-                let inverseRelationship = destinationEntity.relationships.first(where: { $0.name == inverseName }),
-                !inverseRelationship.isToMany
+                let inverseDeclaration = container?.schema.relationshipDeclaration(
+                    named: inverseName, onOrBelow: relationship.destination),
+                !inverseDeclaration.relationship.isToMany
             {
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let inverseRelationship = inverseDeclaration.relationship
+                let inverseStorageEntity =
+                    container?.schema.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
                 let storage = relationshipStorageLocation(
-                    ownerEntity: destinationEntity, relationship: inverseRelationship)
-                let inverseOwnerIDs = descendantEntityIDs(for: destinationEntity)
+                    ownerEntity: inverseStorageEntity, relationship: inverseRelationship)
+                let inverseOwnerIDs = descendantEntityIDs(for: inverseStorageEntity)
                 let discriminatorFilter =
                     inverseOwnerIDs.isEmpty
                     ? ""
@@ -2297,12 +2316,16 @@ public final class ModelContext {
             } else {
                 guard let inverseName = relationship.inverse,
                     let destinationEntity = container?.schema.entity(forName: relationship.destination),
-                    let inverseRelationship = destinationEntity.relationships.first(where: { $0.name == inverseName })
+                    let inverseDeclaration = container?.schema.relationshipDeclaration(
+                        named: inverseName, onOrBelow: relationship.destination)
                 else { continue }
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let inverseRelationship = inverseDeclaration.relationship
+                let inverseStorageEntity =
+                    container?.schema.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
                 let storage = relationshipStorageLocation(
-                    ownerEntity: destinationEntity, relationship: inverseRelationship)
+                    ownerEntity: inverseStorageEntity, relationship: inverseRelationship)
                 rows = try store.read { connection in
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
@@ -2491,39 +2514,40 @@ public final class ModelContext {
 
     private func isToOneStorageOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let destination = container?.schema.entity(forName: relationship.destination),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
+            let inverse = containerStorage?.schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination),
+            !inverse.relationship.isToMany
         else { return true }
         let current = "\(relationshipLogicalOwnerName(entity, relationship)).\(relationship.name)"
-        let other = "\(destination.name).\(inverse.name)"
+        let other = "\(inverse.entityName).\(inverse.relationship.name)"
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
 
     private func isCanonicalSideA(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let destination = container?.schema.entity(forName: relationship.destination),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = containerStorage?.schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
         let current = "\(relationshipLogicalOwnerName(entity, relationship)).\(relationship.name)"
-        let other = "\(destination.name).\(inverse.name)"
+        let other = "\(inverse.entityName).\(inverse.relationship.name)"
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
 
     private func joinSideAOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let destination = container?.schema.entity(forName: relationship.destination),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = containerStorage?.schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
-        guard inverse.isToMany else { return false }
+        guard inverse.relationship.isToMany else { return false }
         return isCanonicalSideA(entity, relationship)
     }
 
     private func isToManyStorageOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let destination = container?.schema.entity(forName: relationship.destination),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = containerStorage?.schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return true }
-        return inverse.isToMany && !isCanonicalSideA(entity, relationship)
+        return inverse.relationship.isToMany && !isCanonicalSideA(entity, relationship)
     }
 
     private func relationshipLogicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
@@ -2542,20 +2566,20 @@ public final class ModelContext {
         let declaringEntityName = mapping?.declaringEntityName ?? entity.name
         let destinationEntityName = mapping?.destinationEntityName ?? relationship.destination
         guard let inverseName = relationship.inverse,
-            let destination = containerStorage?.schema.entity(forName: destinationEntityName),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = containerStorage?.schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: destinationEntityName)
         else {
             guard relationship.inverse == nil else { return nil }
             return
                 "Z_\(declaringEntityName.uppercased())_\(relationship.name.uppercased())_\(destinationEntityName.uppercased())"
         }
-        guard inverse.isToMany else { return nil }
+        guard inverse.relationship.isToMany else { return nil }
         let current = "\(declaringEntityName).\(relationship.name)"
-        let other = "\(destination.name).\(inverse.name)"
+        let other = "\(inverse.entityName).\(inverse.relationship.name)"
         let ordered =
             current.utf8.lexicographicallyPrecedes(other.utf8)
-            ? [(declaringEntityName, relationship.name), (destination.name, inverse.name)]
-            : [(destination.name, inverse.name), (declaringEntityName, relationship.name)]
+            ? [(declaringEntityName, relationship.name), (inverse.entityName, inverse.relationship.name)]
+            : [(inverse.entityName, inverse.relationship.name), (declaringEntityName, relationship.name)]
         return
             "Z_\(ordered[0].0.uppercased())_\(ordered[0].1.uppercased())_\(ordered[1].0.uppercased())_\(ordered[1].1.uppercased())"
     }
@@ -2703,6 +2727,13 @@ public final class ModelContext {
             }
             return nil
         }.sorted()
+    }
+
+    private func isEntity(_ entityName: String, descendantOf ancestorName: String) -> Bool {
+        guard let ancestor = containerStorage?.schema.entity(forName: ancestorName),
+            let entityID = containerStorage?.schema.entityIDsByName[entityName]
+        else { return entityName == ancestorName }
+        return descendantEntityIDs(for: ancestor).contains(entityID)
     }
 
     private func identityKey(for entity: Schema.Entity, primaryKey: Int64) -> EntityPrimaryKey {
@@ -3344,11 +3375,12 @@ public final class ModelContext {
                 tableRelationship = relationship
             } else {
                 guard let inverseName = relationship.inverse,
-                    let destination = container.schema.entity(forName: relationship.destination),
-                    let inverse = destination.relationships.first(where: { $0.name == inverseName })
+                    let inverse = container.schema.relationshipDeclaration(
+                        named: inverseName, onOrBelow: relationship.destination),
+                    let destination = container.schema.entity(forName: inverse.entityName)
                 else { continue }
                 tableEntity = destination
-                tableRelationship = inverse
+                tableRelationship = inverse.relationship
             }
             guard let table = joinTableName(for: tableEntity, tableRelationship) else { continue }
             var replaced = replacedRows[table] ?? ([], [])

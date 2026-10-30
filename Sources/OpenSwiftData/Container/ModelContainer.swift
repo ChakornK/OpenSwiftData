@@ -188,13 +188,10 @@ public final class ModelContainer: Sendable {
                     }
                 }
                 let destinationRelationships =
-                    effectivePropertiesByEntity[destinationName]?.compactMap {
-                        candidate -> (Schema.PropertyMetadata, Schema.Relationship)? in
-                        guard let destinationRelationship = candidate.0.metadata?.base as? Schema.Relationship else {
-                            return nil
-                        }
-                        return (candidate.0, destinationRelationship)
-                    } ?? []
+                    Self.relationshipProperties(
+                        entityName: destinationName,
+                        among: types,
+                        effectivePropertiesByEntity: effectivePropertiesByEntity)
                 let explicitInverseName = typedRelationship?.inverse
                 let hasExplicitInverse = explicitInverseName != nil
                 let explicitInverse: String?
@@ -205,14 +202,21 @@ public final class ModelContainer: Sendable {
                                 + "declares inverse '\(explicitInverseName)' but destination model '\(destinationName)' is missing."
                         )
                     }
-                    guard
-                        let inverseMetadata = effectivePropertiesByEntity[destinationName]?.first(where: {
-                            $0.0.name == explicitInverseName
-                        })
+                    let rawInverseCandidates = Self.properties(
+                        named: explicitInverseName,
+                        onOrBelow: destinationName,
+                        among: types,
+                        effectivePropertiesByEntity: effectivePropertiesByEntity)
+                    let inverseCandidates = Dictionary(
+                        rawInverseCandidates.map { (AnyHashable($0.1), $0) },
+                        uniquingKeysWith: { first, _ in first }
+                    ).map(\.value)
+                    guard inverseCandidates.count == 1,
+                        let inverseMetadata = inverseCandidates.first
                     else {
                         throw SwiftDataError.unsupportedSchemaProperty(
                             "Relationship '\(Self.unqualifiedTypeName(String(describing: modelType))).\(metadata.name)' "
-                                + "declares inverse '\(destinationName).\(explicitInverseName)', but that property does not exist."
+                                + "declares inverse '\(destinationName).\(explicitInverseName)', but that property is missing or ambiguous."
                         )
                     }
                     let inversePropertyRawType =
@@ -305,46 +309,16 @@ public final class ModelContainer: Sendable {
                 superentityName: modelType.parentModel.map { Self.unqualifiedTypeName(String(describing: $0)) }
             )
         }
-        let explicitInverseDeclarations = Set(
-            types.flatMap { modelType in
-                let entityName = Self.unqualifiedTypeName(String(describing: modelType))
-                return modelType.schemaMetadata().compactMap { metadata -> String? in
-                    guard let relationship = metadata.metadata?.base as? Schema.Relationship,
-                        relationship.inverse != nil
-                    else { return nil }
-                    return
-                        "\(Self.relationshipDeclaringEntityName(modelType: modelType, metadata: metadata) ?? entityName).\(metadata.name)"
-                }
-            })
         let inferredEntities = try entities.map { entity in
             let relationships = try entity.relationships.map { relationship in
                 let logicalOwnerName = relationship.declaringEntityName ?? entity.name
-                guard relationship.inverse == nil,
-                    !explicitInverseDeclarations.contains("\(logicalOwnerName).\(relationship.name)")
-                else { return relationship }
-                let explicitReciprocalCount =
-                    effectivePropertiesByEntity[relationship.destination]?.filter { candidate, _ in
-                        (candidate.metadata?.base as? Schema.Relationship)?.inverse == relationship.name
-                    }.count ?? 0
-                guard explicitReciprocalCount <= 1 else { return relationship }
-                let destinationRelationships = Self.effectiveRelationships(
-                    entities.first(where: { $0.name == relationship.destination })?.relationships ?? [])
-                let reciprocalCandidates = destinationRelationships.filter { inverseRelationship in
-                    Self.relationshipDestination(
-                        inverseRelationship.destination, matchesLogicalOwner: logicalOwnerName, among: types)
-                        && inverseRelationship.inverse == relationship.name
-                }
-                let inverseCandidates = reciprocalCandidates
-                let matchingInverse: String?
-                if inverseCandidates.count == 1 {
-                    matchingInverse = inverseCandidates[0].name
-                } else if inverseCandidates.count > 1 {
-                    throw SwiftDataError.unsupportedSchemaProperty(
-                        "Relationship '\(entity.name).\(relationship.name)' has ambiguous inverse candidates."
-                    )
-                } else {
-                    matchingInverse = nil
-                }
+                guard relationship.inverse == nil else { return relationship }
+                let matchingInverse = try Self.inferredInverseName(
+                    relationshipName: relationship.name,
+                    destinationName: relationship.destination,
+                    logicalOwnerName: logicalOwnerName,
+                    among: types,
+                    effectivePropertiesByEntity: effectivePropertiesByEntity)
                 guard let matchingInverse else { return relationship }
                 return Schema.Relationship(
                     name: relationship.name,
@@ -828,6 +802,116 @@ public final class ModelContainer: Sendable {
         return relationships.enumerated().compactMap { index, relationship in
             lastIndexByName[relationship.name] == index ? relationship : nil
         }
+    }
+
+    private static func relationshipProperties(
+        entityName: String,
+        among types: [any PersistentModel.Type],
+        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
+    ) -> [(Schema.PropertyMetadata, Schema.Relationship)] {
+        types
+            .filter { candidate in
+                let candidateName = unqualifiedTypeName(String(describing: candidate))
+                return candidateName == entityName
+                    || isAncestorModel(entityName, of: candidateName, among: types)
+            }
+            .flatMap { candidate in
+                effectivePropertiesByEntity[unqualifiedTypeName(String(describing: candidate))] ?? []
+            }
+            .compactMap { property, _ in
+                guard let relationship = property.metadata?.base as? Schema.Relationship else { return nil }
+                return (property, relationship)
+            }
+    }
+
+    package static func relationshipProperties(
+        entityName: String, among types: [any PersistentModel.Type]
+    ) -> [(Schema.PropertyMetadata, Schema.Relationship)] {
+        let effectivePropertiesByEntity = Dictionary(
+            uniqueKeysWithValues: types.map { modelType in
+                let name = unqualifiedTypeName(String(describing: modelType))
+                let properties = modelType.schemaMetadata().compactMap { metadata in
+                    metadata.keypath.map { (metadata, $0) }
+                }
+                return (name, effectiveProperties(properties))
+            })
+        return relationshipProperties(
+            entityName: entityName,
+            among: types,
+            effectivePropertiesByEntity: effectivePropertiesByEntity)
+    }
+
+    package static func inferredInverseName(
+        relationshipName: String,
+        destinationName: String,
+        logicalOwnerName: String,
+        among types: [any PersistentModel.Type],
+        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
+    ) throws -> String? {
+        let candidateProperties = relationshipProperties(
+            entityName: destinationName,
+            among: types,
+            effectivePropertiesByEntity: effectivePropertiesByEntity)
+        var inverseNamesByDeclaration: [String: String] = [:]
+        for (property, relationship) in candidateProperties where relationship.inverse == relationshipName {
+            let rawType = property.keypath.map { String(reflecting: type(of: $0).valueType) } ?? ""
+            let (normalizedType, _) = normalizedPropertyType(rawType)
+            let parsedType = parseType(normalizedType)
+            let inverseDestination = unqualifiedTypeName(
+                parsedType.collectionElement ?? parsedType.name)
+            guard
+                relationshipDestination(
+                    inverseDestination, matchesLogicalOwner: logicalOwnerName, among: types)
+            else { continue }
+            let declarationName = relationship.declaringEntityName ?? destinationName
+            inverseNamesByDeclaration["\(declarationName).\(property.name)"] = property.name
+        }
+        guard inverseNamesByDeclaration.count <= 1 else {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Relationship '\(logicalOwnerName).\(relationshipName)' has ambiguous inverse candidates.")
+        }
+        return inverseNamesByDeclaration.values.first
+    }
+
+    package static func inferredInverseName(
+        relationshipName: String,
+        destinationName: String,
+        logicalOwnerName: String,
+        among types: [any PersistentModel.Type]
+    ) throws -> String? {
+        let effectivePropertiesByEntity = Dictionary(
+            uniqueKeysWithValues: types.map { modelType in
+                let entityName = unqualifiedTypeName(String(describing: modelType))
+                let properties = modelType.schemaMetadata().compactMap { metadata in
+                    metadata.keypath.map { (metadata, $0) }
+                }
+                return (entityName, effectiveProperties(properties))
+            })
+        return try inferredInverseName(
+            relationshipName: relationshipName,
+            destinationName: destinationName,
+            logicalOwnerName: logicalOwnerName,
+            among: types,
+            effectivePropertiesByEntity: effectivePropertiesByEntity)
+    }
+
+    private static func properties(
+        named propertyName: String,
+        onOrBelow entityName: String,
+        among types: [any PersistentModel.Type],
+        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
+    ) -> [(Schema.PropertyMetadata, AnyKeyPath)] {
+        types
+            .filter { candidate in
+                let candidateName = unqualifiedTypeName(String(describing: candidate))
+                return candidateName == entityName
+                    || isAncestorModel(entityName, of: candidateName, among: types)
+            }
+            .compactMap { candidate in
+                effectivePropertiesByEntity[unqualifiedTypeName(String(describing: candidate))]?.first {
+                    $0.0.name == propertyName
+                }
+            }
     }
 
     private static func isAncestorModel(

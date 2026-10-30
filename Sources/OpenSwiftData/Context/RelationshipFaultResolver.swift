@@ -64,23 +64,35 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         }
 
         let ownerID = owner.persistentModelID
-        let persistedIDs =
-            try ownerID.primaryKey.map { ownerPK in
-                try persistedEndpointIDs(
-                    ownerEntity: entity, relationship: relationship, ownerPrimaryKey: ownerPK
-                )
-                .map {
-                    PersistentIdentifier(
-                        storeIdentifier: storeIdentifier, entityName: relationship.destination, primaryKey: $0)
-                }
-            } ?? []
-        var endpointIDs = persistedIDs
-
         let pending = state.pendingState()
+        let pendingModels = pending.inserted + pending.changed
+        var modelsByIdentifier: [PersistentIdentifier: any PersistentModel] = [:]
+        var persistedIDs: [PersistentIdentifier] = []
+        if let ownerPrimaryKey = ownerID.primaryKey {
+            let endpointPrimaryKeys = try persistedEndpointIDs(
+                ownerEntity: entity, relationship: relationship, ownerPrimaryKey: ownerPrimaryKey)
+            for primaryKey in endpointPrimaryKeys {
+                guard
+                    let endpoint = try loadModel(
+                        entityName: relationship.destination, primaryKey: primaryKey)
+                else {
+                    throw SwiftDataError.unsupportedStore(
+                        "Relationship '\(entity.name).\(relationship.name)' references missing destination "
+                            + "\(relationship.destination)#\(primaryKey).")
+                }
+                let identifier = endpoint.persistentModelID
+                if !persistedIDs.contains(identifier) { persistedIDs.append(identifier) }
+                modelsByIdentifier[identifier] = endpoint
+            }
+        }
+        var endpointIDs = persistedIDs
         let deletedIDs = Set(pending.deleted.map(\.persistentModelID))
         for event in pending.relationshipMutationEvents {
             if event.owner.persistentModelID == ownerID, event.property == relationship.name {
-                endpointIDs = event.newEndpointIDs
+                endpointIDs = event.newEndpoints.map(\.persistentModelID)
+                for endpoint in event.newEndpoints {
+                    modelsByIdentifier[endpoint.persistentModelID] = endpoint
+                }
             } else if let inverseName = relationship.inverse,
                 event.property == inverseName,
                 event.relationship.inverse == relationship.name
@@ -94,25 +106,26 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                     endpointIDs.removeAll { $0 == otherID }
                 } else if isRelated && !wasRelated {
                     if !endpointIDs.contains(otherID) { endpointIDs.append(otherID) }
+                    modelsByIdentifier[otherID] = event.owner
                 }
             }
         }
         endpointIDs.removeAll { deletedIDs.contains($0) }
 
-        let pendingModels = pending.inserted + pending.changed
         var endpointModels: [any PersistentModel] = []
         for identifier in endpointIDs {
-            if let pendingModel = pendingModels.first(where: { $0.persistentModelID == identifier }) {
-                endpointModels.append(pendingModel)
+            if let endpoint = modelsByIdentifier[identifier] {
+                endpointModels.append(endpoint)
                 continue
             }
-            guard let primaryKey = identifier.primaryKey,
-                let model = try loadModel(entityName: relationship.destination, primaryKey: primaryKey)
+            guard let pendingModel = pendingModels.first(where: { $0.persistentModelID == identifier })
             else {
                 throw SwiftDataError.unsupportedStore(
-                    "Relationship '\(entity.name).\(relationship.name)' references missing destination \(identifier).")
+                    "Relationship '\(entity.name).\(relationship.name)' references missing destination \(identifier)."
+                )
             }
-            endpointModels.append(model)
+            endpointModels.append(pendingModel)
+            modelsByIdentifier[identifier] = pendingModel
         }
         let value = try adapter.makeValue(endpointModels)
         assign(value, keyPath: keyPath, to: owner)
@@ -123,7 +136,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             let deletedModelIDs = Set(pending.deleted.map(ObjectIdentifier.init))
             for identifier in affectedIDs where !deletedIDs.contains(identifier) {
                 let endpoint: any PersistentModel
-                if let pendingModel = pendingModels.first(where: { $0.persistentModelID == identifier }) {
+                if let knownModel = modelsByIdentifier[identifier] {
+                    endpoint = knownModel
+                } else if let pendingModel = pendingModels.first(where: { $0.persistentModelID == identifier }) {
                     endpoint = pendingModel
                 } else if let primaryKey = identifier.primaryKey,
                     let loaded = try loadModel(entityName: relationship.destination, primaryKey: primaryKey)
@@ -141,7 +156,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                             $0.name == inverseName
                         })
                 else { continue }
-                guard let registration = container.modelRegistration(forEntityName: relationship.destination),
+                guard
+                    let registration = container.modelRegistration(
+                        forEntityName: String(describing: type(of: endpoint))),
                     case let .baseline(existingValue)? = registration.valueState(on: endpoint, keyPath: inverseKeyPath)
                 else { continue }
                 let existing = try inverseAdapter.endpoints(in: existingValue)
@@ -191,10 +208,13 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             }
         }
         if relationship.isToMany, let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination),
+            !inverse.relationship.isToMany
         {
-            let storage = relationshipStorageLocation(destination, inverse)
-            let destinationIDs = descendantEntityIDs(for: destination)
+            let inverseEntity = schema.entity(forName: inverse.entityName) ?? destination
+            let storage = relationshipStorageLocation(inverseEntity, inverse.relationship)
+            let destinationIDs = descendantEntityIDs(for: inverseEntity)
             return try store.read { connection in
                 try connection.rows(
                     "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? "
@@ -237,9 +257,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             }
         }
         guard let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return [] }
-        let storage = relationshipStorageLocation(destination, inverse)
+        let inverseEntity = schema.entity(forName: inverse.entityName) ?? destination
+        let storage = relationshipStorageLocation(inverseEntity, inverse.relationship)
         return try store.read { connection in
             try connection.rows(
                 "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? ORDER BY Z_PK ASC",
@@ -352,11 +374,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func assign(_ value: Any, keyPath: AnyKeyPath, to model: any PersistentModel) {
-        func assign<Model: PersistentModel>(_ model: Model) {
-            guard let backing = model.persistentBackingData as? ManagedBackingData<Model> else { return }
-            backing.setMaterializedValue(forKey: keyPath, to: value)
-        }
-        assign(model)
+        model.anyBackingData.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: value)
     }
 
     private func entityID(for name: String) -> Int {
@@ -386,10 +404,12 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         destination: Schema.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination),
+            !inverse.relationship.isToMany
         else { return true }
         return "\(logicalOwnerName(entity, relationship)).\(relationship.name)".utf8.lexicographicallyPrecedes(
-            "\(destination.name).\(inverse.name)".utf8)
+            "\(inverse.entityName).\(inverse.relationship.name)".utf8)
     }
 
     private func isCanonicalSideA(
@@ -398,10 +418,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         destination: Schema.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
         return "\(logicalOwnerName(entity, relationship)).\(relationship.name)".utf8.lexicographicallyPrecedes(
-            "\(destination.name).\(inverse.name)".utf8)
+            "\(inverse.entityName).\(inverse.relationship.name)".utf8)
     }
 
     private func joinSideAOwner(
@@ -410,9 +431,10 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         destination: Schema.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
-        return inverse.isToMany && isCanonicalSideA(entity, relationship, destination: destination)
+        return inverse.relationship.isToMany && isCanonicalSideA(entity, relationship, destination: destination)
     }
 
     private func joinTableName(
@@ -426,19 +448,20 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             modelEntityName: entity.name, relationshipName: relationship.name)
         let destinationName = mapping?.destinationEntityName ?? relationship.destination
         guard let inverseName = relationship.inverse,
-            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: destinationName)
         else {
             return relationship.inverse == nil
                 ? "Z_\(ownerName.uppercased())_\(relationship.name.uppercased())_\(destinationName.uppercased())"
                 : nil
         }
-        guard inverse.isToMany else { return nil }
+        guard inverse.relationship.isToMany else { return nil }
         let current = "\(ownerName).\(relationship.name)"
-        let other = "\(destination.name).\(inverse.name)"
+        let other = "\(inverse.entityName).\(inverse.relationship.name)"
         let ordered =
             current.utf8.lexicographicallyPrecedes(other.utf8)
-            ? [(ownerName, relationship.name), (destination.name, inverse.name)]
-            : [(destination.name, inverse.name), (ownerName, relationship.name)]
+            ? [(ownerName, relationship.name), (inverse.entityName, inverse.relationship.name)]
+            : [(inverse.entityName, inverse.relationship.name), (ownerName, relationship.name)]
         return
             "Z_\(ordered[0].0.uppercased())_\(ordered[0].1.uppercased())_\(ordered[1].0.uppercased())_\(ordered[1].1.uppercased())"
     }

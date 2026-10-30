@@ -77,11 +77,33 @@ package enum SchemaBuilder {
                     "Relationship '\(property)' cannot be its own inverse."
                 )
             }
-            guard let destination = entities.first(where: { $0.name == relationship.destination }),
-                let inverse = destination.relationships.first(where: { $0.name == inverseName })
+            let inverseCandidates = entities.flatMap { candidateEntity -> [(String, Schema.Relationship)] in
+                var current: Schema.Entity? = candidateEntity
+                var visited: Set<String> = []
+                var isDestinationDescendant = false
+                while let value = current, visited.insert(value.name).inserted {
+                    if value.name == relationship.destination {
+                        isDestinationDescendant = true
+                        break
+                    }
+                    current = value.superentityName.flatMap(schema.entity(forName:))
+                }
+                guard isDestinationDescendant else { return [] }
+                return candidateEntity.relationships
+                    .filter { $0.name == inverseName }
+                    .map { (candidateEntity.name, $0) }
+            }
+            var seenInverseDeclarations = Set<String>()
+            let uniqueInverseCandidates = inverseCandidates.compactMap { candidateEntityName, candidate in
+                let declarationName = candidate.declaringEntityName ?? candidateEntityName
+                let key = "\(declarationName).\(candidate.name).\(candidate.destination).\(candidate.isToMany)"
+                return seenInverseDeclarations.insert(key).inserted ? (declarationName, candidate) : nil
+            }
+            guard uniqueInverseCandidates.count == 1,
+                let (inverseOwnerName, inverse) = uniqueInverseCandidates.first
             else {
                 throw SwiftDataError.unsupportedSchemaProperty(
-                    "Relationship '\(property)' references missing inverse '\(relationship.destination).\(inverseName)'."
+                    "Relationship '\(property)' references missing or ambiguous inverse '\(relationship.destination).\(inverseName)'."
                 )
             }
             let logicalOwnerName =
@@ -98,7 +120,19 @@ package enum SchemaBuilder {
                 }
                 ownerAncestor = schema.entity(forName: name)?.superentityName
             }
-            guard inverseTargetsOwner, inverse.inverse == relationship.name else {
+            var inverseOwnerAncestor: String? = inverseOwnerName
+            var visitedInverseOwners: Set<String> = []
+            var inverseOwnerIsDestinationSubtype = false
+            while let name = inverseOwnerAncestor, visitedInverseOwners.insert(name).inserted {
+                if name == relationship.destination {
+                    inverseOwnerIsDestinationSubtype = true
+                    break
+                }
+                inverseOwnerAncestor = schema.entity(forName: name)?.superentityName
+            }
+            guard (inverseTargetsOwner || inverseOwnerIsDestinationSubtype),
+                inverse.inverse == nil || inverse.inverse == relationship.name
+            else {
                 throw SwiftDataError.unsupportedSchemaProperty(
                     "Relationship '\(property)' has incompatible inverse '\(relationship.destination).\(inverseName)'."
                 )
@@ -125,6 +159,9 @@ package enum SchemaBuilder {
                 }
                 current = entitiesByName[name]?.superentityName
             }
+        }
+        for entity in entities {
+            try validateRelationships(entity.relationships, in: entity, schema: schema)
         }
         if entities.contains(where: { $0.superentityName != nil }) {
             return try buildInheritedSchema(
@@ -162,10 +199,6 @@ package enum SchemaBuilder {
             "CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER PRIMARY KEY, Z_NAME VARCHAR, Z_SUPER INTEGER, Z_MAX INTEGER);",
             "CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);",
         ]
-        for entity in entities {
-            try validateRelationships(entity.relationships, in: entity, schema: schema)
-        }
-
         var allIndexNames: [String] = []
         for entity in entities {
             allIndexNames.append(
@@ -433,11 +466,11 @@ package enum SchemaBuilder {
                         }
                         guard mapping.ownerRootEntityName == root.name,
                             !ownerIsHierarchical || !destinationIsHierarchical,
-                            let destination = entitiesByName[mapping.destinationEntityName],
-                            relationship.inverse == nil
-                                || destination.relationships.contains(where: {
-                                    $0.name == relationship.inverse && $0.isToMany
-                                }),
+                            relationship.inverse.map({ inverseName in
+                                schema.relationshipDeclaration(
+                                    named: inverseName, onOrBelow: mapping.destinationEntityName)?.relationship
+                                    .isToMany == true
+                            }) ?? true,
                             let joinTable = joinTableName(for: member, relationship: relationship, schema: schema)
                         else {
                             throw SwiftDataError.unsupportedSchemaProperty(
@@ -448,23 +481,44 @@ package enum SchemaBuilder {
                         continue
                     }
                     let hasSupportedInverse: Bool
-                    if let inverseName = relationship.inverse,
-                        let destination = schema.entity(forName: relationship.destination),
-                        let inverse = destination.relationships.first(where: { $0.name == inverseName })
-                    {
-                        hasSupportedInverse = inverse.isToMany && inverse.inverse == relationship.name
+                    if let inverseName = relationship.inverse {
+                        let inverseCandidates = schema.entities.flatMap { entity -> [(String, Schema.Relationship)] in
+                            let isDestinationDescendant = {
+                                var current: Schema.Entity? = entity
+                                var visited: Set<String> = []
+                                while let value = current, visited.insert(value.name).inserted {
+                                    if value.name == relationship.destination { return true }
+                                    current = value.superentityName.flatMap(schema.entity(forName:))
+                                }
+                                return false
+                            }
+                            guard isDestinationDescendant() else { return [] }
+                            return entity.relationships
+                                .filter { $0.name == inverseName }
+                                .map { (entity.name, $0) }
+                        }
+                        var seenInverseDeclarations = Set<String>()
+                        let uniqueInverseCandidates = inverseCandidates.compactMap { entityName, candidate in
+                            let declaration = candidate.declaringEntityName ?? entityName
+                            let key = "\(declaration).\(candidate.name).\(candidate.destination).\(candidate.isToMany)"
+                            return seenInverseDeclarations.insert(key).inserted ? candidate : nil
+                        }
+                        let inverse = uniqueInverseCandidates.first
+                        hasSupportedInverse =
+                            uniqueInverseCandidates.count == 1
+                            && inverse.map {
+                                $0.isToMany && ($0.inverse == nil || $0.inverse == relationship.name)
+                            } == true
                     } else {
-                        hasSupportedInverse = relationship.inverse == nil
+                        hasSupportedInverse = true
                     }
                     guard hasSupportedInverse,
-                        relationship.deleteRule == .nullify,
                         relationship.minimumModelCount == nil,
                         relationship.maximumModelCount == nil,
-                        mapping.ownerRootEntityName == root.name,
-                        mapping.destinationRootEntityName == mapping.destinationEntityName
+                        mapping.ownerRootEntityName == root.name
                     else {
                         throw SwiftDataError.unsupportedSchemaProperty(
-                            "Inherited schema currently supports to-one relationships with optional to-many inverses to flat destinations ('\(member.name).\(relationship.name)')."
+                            "Inherited schema currently supports to-one relationships with optional to-many inverses ('\(member.name).\(relationship.name)')."
                         )
                     }
                     let columnKey = identifierKey(mapping.storageColumnName)
@@ -620,10 +674,11 @@ package enum SchemaBuilder {
         _ entity: Schema.Entity, _ relationship: Schema.Relationship, schema: Schema
     ) -> Bool {
         guard let inverseName = relationship.inverse,
-            let destination = schema.entity(forName: relationship.destination),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName }),
-            inverse.inverse == relationship.name
+            let inverseDeclaration = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination)
         else { return false }
+        let inverse = inverseDeclaration.relationship
+        guard inverse.inverse == nil || inverse.inverse == relationship.name else { return false }
         let mapping = schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)
         let logicalOwnerName = mapping?.declaringEntityName ?? entity.name
@@ -637,13 +692,13 @@ package enum SchemaBuilder {
         guard inverseDestinationMatchesOwner else { return false }
         if relationship.isToMany, inverse.isToMany {
             let current = "\(logicalOwnerName).\(relationship.name)"
-            let other = "\(destination.name).\(inverse.name)"
+            let other = "\(inverseDeclaration.entityName).\(inverse.name)"
             return !bytewiseLess(current, other)
         }
         if relationship.isToMany, !inverse.isToMany { return true }
         guard !relationship.isToMany, !inverse.isToMany else { return false }
         let current = "\(logicalOwnerName).\(relationship.name)"
-        let other = "\(destination.name).\(inverse.name)"
+        let other = "\(inverseDeclaration.entityName).\(inverse.name)"
         return bytewiseLess(other, current)
     }
 
@@ -657,13 +712,13 @@ package enum SchemaBuilder {
         let destinationEntityName = mapping?.destinationEntityName ?? relationship.destination
         let owner = "\(declaringEntityName).\(relationship.name)"
         if let inverseName = relationship.inverse,
-            let destination = schema.entity(forName: destinationEntityName),
-            let inverse = destination.relationships.first(where: { $0.name == inverseName }), inverse.isToMany
+            let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: destinationEntityName),
+            inverse.relationship.isToMany
         {
-            let other = "\(destination.name).\(inverse.name)"
+            let other = "\(inverse.entityName).\(inverse.relationship.name)"
             guard bytewiseLess(owner, other) else { return nil }
             return
-                "Z_\(declaringEntityName.uppercased())_\(relationship.name.uppercased())_\(destination.name.uppercased())_\(inverse.name.uppercased())"
+                "Z_\(declaringEntityName.uppercased())_\(relationship.name.uppercased())_\(inverse.entityName.uppercased())_\(inverse.relationship.name.uppercased())"
         }
         guard relationship.inverse == nil else { return nil }
         return

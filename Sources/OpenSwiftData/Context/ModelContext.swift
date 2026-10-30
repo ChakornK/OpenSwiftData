@@ -294,7 +294,10 @@ public final class ModelContext {
                 OSDLog.debug("Delete rejected: \(error)")
                 return
             }
-            capture(model)
+            let snapshot = model.snapshotLifecycle()
+            registerUndoIfNeeded(
+                model, snapshot: snapshot, retainModel: true, restoresDeletedRow: snapshot.primaryKey != nil)
+            state.willMutate(model, snapshot: snapshot)
             markDeletedTyped(model)
             state.markDeleted(model)
         }
@@ -386,7 +389,7 @@ public final class ModelContext {
         let nullifications = try planNullifications(for: deletes, relationships: relationshipSnapshots)
         var snapshotsByID: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
         for model in deletes {
-            let snapshot = model.snapshotLifecycle()
+            let snapshot = before.snapshots[ObjectIdentifier(model)]?.1 ?? model.snapshotLifecycle()
             snapshotsByID[ObjectIdentifier(model)] = (model, snapshot)
         }
         for nullification in nullifications where snapshotsByID[ObjectIdentifier(nullification.owner)] == nil {
@@ -431,6 +434,9 @@ public final class ModelContext {
             markDeletedTyped(deleted)
             state.markDeleted(deleted)
         }
+        registerUndoGroup(
+            from: snapshotsByID,
+            retaining: Set(deletes.map(ObjectIdentifier.init)))
     }
 
     private struct PlannedNullification {
@@ -1462,7 +1468,10 @@ public final class ModelContext {
         state.recordMutation(model)
     }
 
-    package func registerUndoIfNeeded(_ model: any PersistentModel, snapshot: BackingDataSnapshot) {
+    package func registerUndoIfNeeded(
+        _ model: any PersistentModel, snapshot: BackingDataSnapshot,
+        retainModel: Bool = false, restoresDeletedRow: Bool = false
+    ) {
         guard undoManagerStorage != nil else { return }
         assertAffinity()
         guard !state.hasTransaction else { return }
@@ -1479,15 +1488,21 @@ public final class ModelContext {
             currentUndoGroup = group
             registerUndoOperation(group)
         }
-        group.append(model: model, snapshot: undoSnapshot)
+        group.append(
+            model: model, snapshot: undoSnapshot, retainModel: retainModel,
+            restoresDeletedRow: restoresDeletedRow)
     }
 
     private func registerUndoGroup(
-        from snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
+        from snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)],
+        retaining retainedModels: Set<ObjectIdentifier> = []
     ) {
         guard undoManagerStorage != nil else { return }
         for (model, snapshot) in snapshots.values {
-            registerUndoIfNeeded(model, snapshot: snapshot)
+            registerUndoIfNeeded(
+                model, snapshot: snapshot,
+                retainModel: retainedModels.contains(ObjectIdentifier(model)),
+                restoresDeletedRow: retainedModels.contains(ObjectIdentifier(model)))
         }
     }
 
@@ -1538,22 +1553,33 @@ public final class ModelContext {
         assertAffinity()
         var inverse: [UndoGroupMember] = []
         for member in members {
-            guard let model = member.model, model.modelContext === self else { continue }
+            guard let model = member.resolvedModel else { continue }
+            let restoresDeletedRow = member.restoresDeletedRow
+            let isPendingDeletion = model.modelContext === self && state.containsDeleted(model)
+            let reinsertsDeletedRow = restoresDeletedRow && model.modelContext == nil
+            guard model.modelContext === self || reinsertsDeletedRow else { continue }
             let preUndoSnapshot = model.snapshotLifecycle()
             inverse.append(
-                UndoGroupMember(model: model, snapshot: UndoGroupOperation.detachedSnapshot(preUndoSnapshot)))
+                UndoGroupMember(
+                    model: model,
+                    retainedModel: member.restoresDeletedRow || member.snapshot.isDeleted || model.isDeleted
+                        ? model : nil,
+                    restoresDeletedRow: member.snapshot.isDeleted && member.retainedModel != nil
+                        && !isPendingDeletion,
+                    snapshot: UndoGroupOperation.detachedSnapshot(preUndoSnapshot)))
             undoRegisteredModels.remove(ObjectIdentifier(model))
             model.restoreLifecycle(
                 BackingDataSnapshot(
                     values: member.snapshot.values,
                     context: self,
-                    identifier: preUndoSnapshot.identifier,
+                    identifier: member.snapshot.identifier,
                     isDeleted: member.snapshot.isDeleted,
                     hasChanges: true,
                     savedValues: preUndoSnapshot.values,
-                    primaryKey: preUndoSnapshot.primaryKey,
-                    entityID: preUndoSnapshot.entityID,
-                    optimisticLockVersion: preUndoSnapshot.optimisticLockVersion))
+                    primaryKey: member.snapshot.primaryKey,
+                    entityID: member.snapshot.entityID,
+                    optimisticLockVersion: reinsertsDeletedRow
+                        ? member.snapshot.optimisticLockVersion : preUndoSnapshot.optimisticLockVersion))
             model.attachBackingData(to: self)
             if let adapters = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] {
                 for adapter in adapters {
@@ -1564,7 +1590,21 @@ public final class ModelContext {
                 }
             }
             model.setInsertionChanged()
-            state.recordMutation(model)
+            if reinsertsDeletedRow {
+                state.restoreDeletedModel(model, asInserted: true, snapshot: preUndoSnapshot)
+                if let entity = containerStorage?.schema.entity(forName: model.persistentModelID.entityName),
+                    let primaryKey = model.persistentModelID.primaryKey
+                {
+                    identityMap.register(model, for: identityKey(for: entity, primaryKey: primaryKey))
+                }
+            } else if member.snapshot.isDeleted && !isPendingDeletion {
+                markDeletedTyped(model)
+                state.markDeleted(model)
+            } else if isPendingDeletion {
+                state.restorePendingDeletion(model)
+            } else {
+                state.recordMutation(model)
+            }
             state.recordRestoredRelationshipChanges(model, from: preUndoSnapshot)
         }
         if !inverse.isEmpty { autosaveHandle.changed() }
@@ -3224,8 +3264,10 @@ public final class ModelContext {
             }
             let table = "Z\(rootEntity(for: entity).name.uppercased())"
             if inserted {
-                if let match = try uniqueMatch(
-                    entity: entity, columns: columns, values: values, connection: connection)
+                let preservedPrimaryKey = snapshot.primaryKey
+                if preservedPrimaryKey == nil,
+                    let match = try uniqueMatch(
+                        entity: entity, columns: columns, values: values, connection: connection)
                 {
                     let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
                     let version = match.version + 1
@@ -3249,14 +3291,21 @@ public final class ModelContext {
                             replacedModel: replaced === model ? nil : replaced))
                     return
                 }
-                let names = (["Z_ENT", "Z_OPT"] + columns).joined(separator: ", ")
-                let placeholders = Array(repeating: "?", count: columns.count + 2).joined(separator: ", ")
+                let names = ((preservedPrimaryKey == nil ? [] : ["Z_PK"]) + ["Z_ENT", "Z_OPT"] + columns)
+                    .joined(separator: ", ")
+                let placeholders = Array(repeating: "?", count: columns.count + (preservedPrimaryKey == nil ? 2 : 3))
+                    .joined(separator: ", ")
+                var identityValues: [RuntimeValue] = [
+                    .int(Int64(entityIDs[entity.name] ?? 1)), .int(1),
+                ]
+                if let preservedPrimaryKey { identityValues.insert(.int(preservedPrimaryKey), at: 0) }
                 try connection.execute(
                     "INSERT INTO \(table) (\(names)) VALUES (\(placeholders))",
-                    arguments: [.int(Int64(entityIDs[entity.name] ?? 1)), .int(1)] + values)
+                    arguments: identityValues + values)
                 append.append(
                     PersistedModel(
-                        model: model, entityName: entity.name, primaryKey: connection.lastInsertRowID(), version: 1,
+                        model: model, entityName: entity.name,
+                        primaryKey: preservedPrimaryKey ?? connection.lastInsertRowID(), version: 1,
                         replacedModel: nil))
             } else if let pk = model.persistentModelID.primaryKey {
                 let expectedVersion = snapshot.optimisticLockVersion

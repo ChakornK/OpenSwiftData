@@ -323,6 +323,30 @@ package final class ContextState: @unchecked Sendable {
         onLocalChange?()
     }
 
+    func restoreDeletedModel(_ model: any PersistentModel, asInserted: Bool, snapshot: BackingDataSnapshot) {
+        locked {
+            remove(model, from: &deleted)
+            if asInserted {
+                if snapshots[ObjectIdentifier(model)] == nil {
+                    snapshots[ObjectIdentifier(model)] = (model, snapshot)
+                }
+                appendUnique(model, to: &inserted)
+                remove(model, from: &changed)
+            } else {
+                appendUnique(model, to: &changed)
+            }
+        }
+        onLocalChange?()
+    }
+
+    func restorePendingDeletion(_ model: any PersistentModel) {
+        locked {
+            remove(model, from: &deleted)
+            if snapshots[ObjectIdentifier(model)] != nil { appendUnique(model, to: &changed) }
+        }
+        onLocalChange?()
+    }
+
     func mutate(_ model: any PersistentModel, snapshot: () -> BackingDataSnapshot?, write: () -> Void) -> Bool {
         let didMutate = locked {
             guard let current = snapshot(), current.context?.state === self else { return false }

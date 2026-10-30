@@ -2051,6 +2051,165 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testHierarchyLifecycleRollbackUndoAndIdentity() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("hierarchy-lifecycle-undo"))
+        let context = container.mainContext
+        let grandchild = InheritanceMacroGrandchildFixture(name: "saved", age: 4, rank: 8)
+        context.insert(grandchild)
+        try context.save()
+        let undoManager = UndoManager()
+        context.undoManager = undoManager
+
+        grandchild.rank = 10
+        XCTAssertTrue(grandchild.hasChanges)
+        context.rollback()
+        XCTAssertEqual(grandchild.rank, 8)
+        XCTAssertFalse(context.hasChanges)
+
+        grandchild.rank = 11
+        try context.save()
+        undoManager.undo()
+        XCTAssertEqual(grandchild.rank, 8)
+        try context.save()
+        undoManager.redo()
+        XCTAssertEqual(grandchild.rank, 11)
+        try context.save()
+
+        let reader = container.makeContext()
+        let fetchedAsBase: InheritanceMacroBaseFixture = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        XCTAssertTrue(fetchedAsBase is InheritanceMacroGrandchildFixture)
+        let fetchedAsGrandchild: InheritanceMacroGrandchildFixture = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroGrandchildFixture>()).first)
+        XCTAssertTrue(fetchedAsBase === fetchedAsGrandchild)
+        XCTAssertEqual(fetchedAsGrandchild.rank, 11)
+
+        let readerUndoManager = UndoManager()
+        reader.undoManager = readerUndoManager
+        reader.delete(fetchedAsGrandchild)
+        try reader.save()
+        XCTAssertTrue(readerUndoManager.canUndo)
+        readerUndoManager.undo()
+        let restored: InheritanceMacroBaseFixture = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        XCTAssertTrue(restored is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual((restored as? InheritanceMacroGrandchildFixture)?.rank, 11)
+    }
+
+    @MainActor
+    func testUndoDeletionRestoresHierarchySubtypeAndConcreteIdentity() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("hierarchy-delete-undo"))
+        let context = container.mainContext
+        let grandchild = InheritanceMacroGrandchildFixture(name: "saved", age: 4, rank: 8)
+        context.insert(grandchild)
+        try context.save()
+        let originalPrimaryKey = try XCTUnwrap(grandchild.persistentModelID.primaryKey)
+        let undoManager = UndoManager()
+        context.undoManager = undoManager
+
+        context.delete(grandchild)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+        XCTAssertTrue(undoManager.canUndo)
+
+        undoManager.undo()
+
+        XCTAssertTrue(undoManager.canRedo)
+        XCTAssertTrue(grandchild.modelContext === context)
+        XCTAssertFalse(grandchild.isDeleted)
+        XCTAssertTrue(context.insertedModels.contains { $0 === grandchild })
+        let restoredBase = try XCTUnwrap(context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        let restoredGrandchild = try XCTUnwrap(restoredBase as? InheritanceMacroGrandchildFixture)
+        XCTAssertTrue(restoredGrandchild === grandchild)
+        XCTAssertEqual(restoredGrandchild.age, 4)
+        XCTAssertEqual(restoredGrandchild.rank, 8)
+        XCTAssertEqual(restoredGrandchild.persistentModelID.entityName, "InheritanceMacroGrandchildFixture")
+        try context.save()
+
+        undoManager.redo()
+        XCTAssertTrue(grandchild.isDeleted)
+        XCTAssertTrue(grandchild.modelContext === context)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+        XCTAssertEqual(grandchild.persistentModelID.primaryKey, originalPrimaryKey)
+
+        undoManager.undo()
+        XCTAssertFalse(grandchild.isDeleted)
+        XCTAssertTrue(grandchild.modelContext === context)
+        XCTAssertTrue(context.insertedModels.contains { $0 === grandchild })
+        try context.save()
+        let restoredAgain = try XCTUnwrap(context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        XCTAssertTrue(restoredAgain is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(restoredAgain.persistentModelID.primaryKey, originalPrimaryKey)
+    }
+
+    @MainActor
+    func testUndoPendingHierarchyDeleteBeforeSave() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("hierarchy-pending-delete-undo"))
+        let context = container.mainContext
+        let grandchild = InheritanceMacroGrandchildFixture(name: "saved", age: 4, rank: 8)
+        context.insert(grandchild)
+        try context.save()
+        context.undoManager = UndoManager()
+
+        context.delete(grandchild)
+        XCTAssertTrue(grandchild.isDeleted)
+        XCTAssertTrue(context.hasChanges)
+        context.undoManager?.undo()
+
+        XCTAssertFalse(grandchild.isDeleted)
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertTrue(try XCTUnwrap(context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first) === grandchild)
+        try context.save()
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testHierarchySubtypeUndoRestoresMutationAndDelete() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("hierarchy-insert-undo"))
+        let context = container.mainContext
+        let grandchild = InheritanceMacroGrandchildFixture(name: "pending", age: 3, rank: 5)
+        context.insert(grandchild)
+        try context.save()
+        let undoManager = UndoManager()
+        context.undoManager = undoManager
+        grandchild.rank = 6
+
+        XCTAssertTrue(context.hasChanges)
+        undoManager.undo()
+        XCTAssertEqual(grandchild.rank, 5)
+        try context.save()
+        context.delete(grandchild)
+        try context.save()
+        undoManager.undo()
+        try context.save()
+
+        let restored = try XCTUnwrap(context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        XCTAssertTrue(restored is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual((restored as? InheritanceMacroGrandchildFixture)?.rank, 5)
+        let rows = try container.store?.read {
+            try $0.rows("SELECT Z_PK FROM ZINHERITANCEMACROBASEFIXTURE", arguments: [])
+        }
+        XCTAssertEqual(rows?.count, 1)
+    }
+
+    @MainActor
     func testHierarchyIdentifierLookupReusesExistingMaterializedModel() throws {
         let container = try ModelContainer(
             for: InheritanceLookupBaseFixture.self, InheritanceLookupChildFixture.self,

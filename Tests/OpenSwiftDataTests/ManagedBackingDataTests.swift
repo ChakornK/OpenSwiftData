@@ -188,6 +188,31 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
+    func testUndoSavedDeleteRestoresModel() throws {
+        let container = try ModelContainer(
+            for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-saved-delete"))
+        let context = container.mainContext
+        let model = MacroBackingTestModel(value: 5, note: "saved")
+        context.insert(model)
+        try context.save()
+        let undoManager = UndoManager()
+        context.undoManager = undoManager
+
+        context.delete(model)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<MacroBackingTestModel>()).isEmpty)
+        XCTAssertTrue(undoManager.canUndo)
+
+        undoManager.undo()
+
+        XCTAssertTrue(model.modelContext === context)
+        XCTAssertFalse(model.isDeleted)
+        XCTAssertTrue(context.insertedModels.contains { $0 === model })
+        try context.save()
+        XCTAssertEqual(try context.fetch(FetchDescriptor<MacroBackingTestModel>()).first?.value, 5)
+    }
+
+    @MainActor
     func testUndoGroupPreservesRelationshipChangedAfterPropertyEdit() throws {
         let container = try ModelContainer(
             for: UndoRelationshipOwner.self, UndoRelationshipDestination.self,

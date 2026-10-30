@@ -2,8 +2,12 @@ import Foundation
 
 struct UndoGroupMember {
     weak var model: (any PersistentModel)?
+    var retainedModel: (any PersistentModel)?
+    var restoresDeletedRow: Bool = false
     var snapshot: BackingDataSnapshot
     var relationshipEndpoints: [String: [any PersistentModel]] = [:]
+
+    var resolvedModel: (any PersistentModel)? { model ?? retainedModel }
 }
 
 final class UndoGroupOperation {
@@ -17,11 +21,18 @@ final class UndoGroupOperation {
         self.managerGeneration = managerGeneration
     }
 
-    func append(model: any PersistentModel, snapshot: BackingDataSnapshot) {
+    func append(
+        model: any PersistentModel,
+        snapshot: BackingDataSnapshot,
+        retainModel: Bool = false,
+        restoresDeletedRow: Bool = false
+    ) {
         guard memberIDs.insert(ObjectIdentifier(model)).inserted else { return }
         members.append(
             UndoGroupMember(
                 model: model,
+                retainedModel: retainModel ? model : nil,
+                restoresDeletedRow: restoresDeletedRow,
                 snapshot: Self.detachedSnapshot(snapshot),
                 relationshipEndpoints: Self.currentRelationshipEndpoints(model)))
     }
@@ -31,7 +42,7 @@ final class UndoGroupOperation {
         with snapshot: BackingDataSnapshot,
         relationships: [String: [any PersistentModel]] = [:]
     ) {
-        guard let index = members.firstIndex(where: { $0.model === model }) else { return }
+        guard let index = members.firstIndex(where: { $0.resolvedModel === model }) else { return }
         members[index].snapshot = Self.detachedSnapshot(snapshot)
         members[index].relationshipEndpoints = relationships
     }
@@ -39,22 +50,35 @@ final class UndoGroupOperation {
     func setRelationshipEndpoints(
         for model: any PersistentModel, relationships: [String: [any PersistentModel]]
     ) {
-        guard let index = members.firstIndex(where: { $0.model === model }) else { return }
+        guard let index = members.firstIndex(where: { $0.resolvedModel === model }) else { return }
         members[index].relationshipEndpoints = relationships
     }
 
     func perform() {
         guard let context, context.undoManagerGeneration == managerGeneration else { return }
         let current = members.compactMap { member -> UndoGroupMember? in
-            guard let model = member.model else { return nil }
+            guard let model = member.resolvedModel else { return nil }
+            let currentSnapshot = model.snapshotLifecycle()
+            let inverseSnapshot = BackingDataSnapshot(
+                values: currentSnapshot.values,
+                context: currentSnapshot.context,
+                identifier: currentSnapshot.identifier,
+                isDeleted: member.restoresDeletedRow || currentSnapshot.isDeleted,
+                hasChanges: currentSnapshot.hasChanges,
+                savedValues: currentSnapshot.savedValues,
+                primaryKey: currentSnapshot.primaryKey,
+                entityID: currentSnapshot.entityID,
+                optimisticLockVersion: currentSnapshot.optimisticLockVersion)
             return UndoGroupMember(
                 model: model,
-                snapshot: Self.detachedSnapshot(model.snapshotLifecycle()),
+                retainedModel: member.retainedModel != nil || model.isDeleted ? model : nil,
+                restoresDeletedRow: member.restoresDeletedRow && !member.snapshot.isDeleted,
+                snapshot: Self.detachedSnapshot(inverseSnapshot),
                 relationshipEndpoints: Self.currentRelationshipEndpoints(model))
         }
         _ = context.applyUndoGroup(members)
         members = current
-        memberIDs = Set(members.compactMap { $0.model.map(ObjectIdentifier.init) })
+        memberIDs = Set(members.compactMap { $0.resolvedModel.map(ObjectIdentifier.init) })
         context.endCurrentUndoGroup()
         context.registerUndoOperation(self)
     }

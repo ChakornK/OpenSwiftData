@@ -113,7 +113,7 @@ package enum SchemaBuilder {
         }
         if entities.contains(where: { $0.superentityName != nil }) {
             return try buildInheritedSchema(
-                entities, entitiesByName: entitiesByName, entityIDs: schema.entityIDsByName)
+                schema, entities, entitiesByName: entitiesByName, entityIDs: schema.entityIDsByName)
         }
         for entity in entities {
             for index in entity.indexes {
@@ -161,7 +161,7 @@ package enum SchemaBuilder {
                     let mapping = schema.relationshipStorageMapping(
                         modelEntityName: entity.name, relationshipName: relationship.name)
                     let storageEntityName = mapping?.ownerRootEntityName ?? entity.name
-                    let columnName = mapping?.relationshipName ?? relationship.name
+                    let columnName = mapping?.storageColumnName ?? relationship.name
                     return "Z\(storageEntityName.uppercased())_Z\(columnName.uppercased())_INDEX"
                 })
             allIndexNames.append(
@@ -302,7 +302,7 @@ package enum SchemaBuilder {
             for relationship in toOne {
                 let mapping = schema.relationshipStorageMapping(
                     modelEntityName: entity.name, relationshipName: relationship.name)
-                let columnName = mapping?.relationshipName ?? relationship.name
+                let columnName = mapping?.storageColumnName ?? relationship.name
                 columns.append("Z\(columnName.uppercased()) INTEGER")
             }
             statements.append("CREATE TABLE Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));")
@@ -311,7 +311,7 @@ package enum SchemaBuilder {
                 let mapping = schema.relationshipStorageMapping(
                     modelEntityName: entity.name, relationshipName: relationship.name)
                 let storageEntityName = mapping?.ownerRootEntityName ?? entity.name
-                let columnName = mapping?.relationshipName ?? relationship.name
+                let columnName = mapping?.storageColumnName ?? relationship.name
                 statements.append(
                     "CREATE INDEX Z\(storageEntityName.uppercased())_Z\(columnName.uppercased())_INDEX ON Z\(storageEntityName.uppercased()) (Z\(columnName.uppercased()));"
                 )
@@ -349,13 +349,14 @@ package enum SchemaBuilder {
     }
 
     private static func buildInheritedSchema(
+        _ schema: Schema,
         _ entities: [Schema.Entity],
         entitiesByName: [String: Schema.Entity],
         entityIDs: [String: Int]
     ) throws -> BuiltSchema {
-        for entity in entities where !entity.relationships.isEmpty || !entity.indexes.isEmpty {
+        for entity in entities where !entity.indexes.isEmpty {
             throw SwiftDataError.unsupportedSchemaProperty(
-                "Single-table inheritance currently requires a relationship-free and index-free hierarchy ('\(entity.name)')."
+                "Single-table inheritance currently requires an index-free hierarchy ('\(entity.name)')."
             )
         }
 
@@ -391,6 +392,37 @@ package enum SchemaBuilder {
 
         for root in roots {
             let members = ordered.filter { rootsByEntity[$0.name] == root.name }
+            var relationshipsByColumn: [String: Schema.RelationshipStorageMapping] = [:]
+            for member in members {
+                for relationship in member.relationships {
+                    guard
+                        let mapping = schema.relationshipStorageMapping(
+                            modelEntityName: member.name, relationshipName: relationship.name)
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Relationship '\(member.name).\(relationship.name)' has no physical storage mapping.")
+                    }
+                    guard mapping.declaringEntityName == member.name else { continue }
+                    guard !relationship.isToMany,
+                        relationship.inverse == nil,
+                        relationship.deleteRule == .nullify,
+                        relationship.minimumModelCount == nil,
+                        relationship.maximumModelCount == nil,
+                        mapping.ownerRootEntityName == root.name,
+                        mapping.destinationRootEntityName == mapping.destinationEntityName
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Inherited schema currently supports optional or required to-one relationships without inverses to flat destinations ('\(member.name).\(relationship.name)')."
+                        )
+                    }
+                    let columnKey = identifierKey(mapping.storageColumnName)
+                    if relationshipsByColumn[columnKey] != nil {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Hierarchy relationships collide on physical column '\(mapping.storageColumnName)'.")
+                    }
+                    relationshipsByColumn[columnKey] = mapping
+                }
+            }
             var attributesByName: [String: (Schema.Attribute, String)] = [:]
             for entity in members {
                 let parentAttributes = entity.superentityName.flatMap { entitiesByName[$0]?.attributes } ?? []
@@ -465,6 +497,9 @@ package enum SchemaBuilder {
                 let nullable = attribute.isOptional || !requiredAtRoot
                 columns.append("Z\(key) \(sqlType.rawValue)\(nullable ? "" : " NOT NULL")")
             }
+            for columnKey in relationshipsByColumn.keys.sorted(by: bytewiseLess) {
+                columns.append("Z\(columnKey) INTEGER")
+            }
             let generatedColumns = columns.dropFirst(3).map { $0.split(separator: " ", maxSplits: 1)[0] }
             let generatedKeys = Set(generatedColumns.map { identifierKey(String($0)) })
             guard generatedKeys.count == generatedColumns.count,
@@ -474,6 +509,11 @@ package enum SchemaBuilder {
                     "Hierarchy rooted at '\(root.name)' has colliding or reserved SQL columns.")
             }
             statements.append("CREATE TABLE Z\(root.name.uppercased()) (\(columns.joined(separator: ", ")));")
+            for columnKey in relationshipsByColumn.keys.sorted(by: bytewiseLess) {
+                let indexName = "Z\(root.name.uppercased())_Z\(columnKey)_INDEX"
+                statements.append(
+                    "CREATE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(columnKey));")
+            }
         }
 
         let rows = try ordered.map { entity -> SchemaBootstrapRow in

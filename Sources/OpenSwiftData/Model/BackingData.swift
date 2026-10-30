@@ -134,10 +134,15 @@ public protocol AnyBackingData: AnyObject {
     func attach(to context: ModelContext, model: any PersistentModel)
     /// Replaces the model identifier's entity name after a concrete hierarchy entity is persisted.
     func setConcreteEntityName(_ entityName: String)
+    /// Applies a loaded property value only when the model has no pending overlay for that key path.
+    func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any)
 }
 
 public extension AnyBackingData {
     func setConcreteEntityName(_ entityName: String) { _ = entityName }
+    func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any) {
+        _ = (keyPath, value)
+    }
 }
 
 private final class ErasedBackingData<Model: PersistentModel>: AnyBackingData {
@@ -170,6 +175,9 @@ private final class ErasedBackingData<Model: PersistentModel>: AnyBackingData {
     }
 
     func setConcreteEntityName(_ entityName: String) { _ = entityName }
+    func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any) {
+        _ = (keyPath, value)
+    }
 
     var supportsSubclassKeyPaths: Bool { false }
 }
@@ -400,6 +408,15 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, Any
                 temporaryIdentifier: temporaryIdentifier)
         }
         lock.unlock()
+    }
+
+    /// Applies a loaded value without replacing a value already stored in this detached backing.
+    public func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !values.keys.contains(keyPath) else { return }
+        values[keyPath] = value
+        synchronizeSlots()
     }
 
     /// Marks the model deleted and changed.

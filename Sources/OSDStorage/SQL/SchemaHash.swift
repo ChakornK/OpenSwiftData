@@ -59,6 +59,10 @@ package enum SchemaHash {
                         encoder.append(relationship.minimumModelCount)
                         encoder.append(relationship.maximumModelCount)
                         encoder.append(relationship.originalName)
+                        if !relationship.isOptional {
+                            encoder.append("isOptional")
+                            encoder.append(false)
+                        }
                         if let declaringEntityName = relationship.declaringEntityName {
                             encoder.append("declaringEntityName")
                             encoder.append(declaringEntityName)
@@ -313,6 +317,7 @@ package enum SchemaHash {
         var name: String
         var destination: String
         var isToMany: Bool
+        var isOptional: Bool?
         var deleteRule: String
         var inverse: String?
         var minimumModelCount: Int?
@@ -324,6 +329,7 @@ package enum SchemaHash {
             name = relationship.name
             destination = relationship.destination
             isToMany = relationship.isToMany
+            isOptional = relationship.isOptional ? nil : false
             deleteRule = relationship.deleteRule.rawValue
             inverse = relationship.inverse
             minimumModelCount = relationship.minimumModelCount
@@ -337,7 +343,8 @@ package enum SchemaHash {
                 throw SwiftDataError.migrationUnsupported("Invalid stored relationship delete rule.")
             }
             return Schema.Relationship(
-                name: name, destination: destination, isToMany: isToMany, inverse: inverse, deleteRule: rule,
+                name: name, destination: destination, isToMany: isToMany, isOptional: isOptional ?? true,
+                inverse: inverse, deleteRule: rule,
                 minimumModelCount: minimumModelCount, maximumModelCount: maximumModelCount,
                 originalName: originalName, declaringEntityName: declaringEntityName)
         }

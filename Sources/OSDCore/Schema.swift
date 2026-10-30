@@ -20,6 +20,7 @@ public struct Schema: Sendable {
         package let relationshipName: String
         package let declaringEntityName: String
         package let ownerRootEntityName: String
+        package let storageColumnName: String
         package let destinationEntityName: String
         package let destinationRootEntityName: String
     }
@@ -201,6 +202,8 @@ public struct Schema: Sendable {
         public let destination: String
         /// Whether the relationship contains multiple destinations.
         public let isToMany: Bool
+        /// Whether the relationship can be empty.
+        package let isOptional: Bool
         /// The inverse relationship property name, if known.
         public let inverse: String?
         /// The relationship's delete behavior.
@@ -226,6 +229,7 @@ public struct Schema: Sendable {
             self.name = ""
             self.destination = ""
             self.isToMany = false
+            isOptional = true
             self.inverse = inverseName ?? inverse.flatMap(Self.inversePropertyName)
             self.deleteRule = deleteRule
             self.minimumModelCount = minimumModelCount
@@ -251,6 +255,7 @@ public struct Schema: Sendable {
             name: String,
             destination: String,
             isToMany: Bool = false,
+            isOptional: Bool = true,
             inverse: String? = nil,
             deleteRule: DeleteRule = .nullify,
             minimumModelCount: Int? = nil,
@@ -261,6 +266,7 @@ public struct Schema: Sendable {
             self.name = name
             self.destination = destination
             self.isToMany = isToMany
+            self.isOptional = isOptional
             self.inverse = inverse
             self.deleteRule = deleteRule
             self.minimumModelCount = minimumModelCount
@@ -415,11 +421,16 @@ public struct Schema: Sendable {
             let ownerRootEntityName = rootEntityName(for: declaringEntityName),
             let destinationRootEntityName = rootEntityName(for: relationship.destination)
         else { return nil }
+        let hasHierarchyMembers = entities.contains { candidate in
+            candidate.name != ownerRootEntityName && rootEntityName(for: candidate.name) == ownerRootEntityName
+        }
         return RelationshipStorageMapping(
             modelEntityName: modelEntity.name,
             relationshipName: relationship.name,
             declaringEntityName: declaringEntityName,
             ownerRootEntityName: ownerRootEntityName,
+            storageColumnName: hasHierarchyMembers
+                ? "\(declaringEntityName)_\(relationship.name)" : relationship.name,
             destinationEntityName: relationship.destination,
             destinationRootEntityName: destinationRootEntityName)
     }

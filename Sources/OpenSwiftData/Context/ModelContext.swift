@@ -361,6 +361,18 @@ public final class ModelContext {
                     "Cannot delete model while relationship '\(adapter.name)' has related models.")
             }
         }
+        let owners = identityMap.liveModels().map(\.1) + state.insertedModels + state.changedModels
+        var visited = Set<ObjectIdentifier>()
+        for owner in owners where owner !== model && visited.insert(ObjectIdentifier(owner)).inserted {
+            for adapter in containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: owner))] ?? []
+            where adapter.metadata?.isOptional == false {
+                guard let endpoints = adapter.read(owner) else { continue }
+                if endpoints.contains(where: { $0 === model }) {
+                    throw SwiftDataError.relationshipGraphConflict(
+                        "Cannot delete a model that is required by relationship '\(adapter.name)'.")
+                }
+            }
+        }
     }
 
     private func applyDeletePlan(
@@ -2393,13 +2405,7 @@ public final class ModelContext {
                 "Relationship metadata key path was missing for '\(String(describing: type(of: model))).\(adapter.name)'."
             )
         }
-        func assign<Model: PersistentModel>(_ model: Model) {
-            guard let backing = model.persistentBackingData as? ManagedBackingData<Model> else { return }
-            let snapshot = backing.snapshot()
-            backing.setMaterializedValue(forKey: keyPath, to: value)
-            if snapshot.hasChanges { backing.restore(snapshot) }
-        }
-        assign(model)
+        model.anyBackingData.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: value)
         if let loaded = adapter.read(model),
             loaded.count != endpoints.count || !zip(loaded, endpoints).allSatisfy({ $0 === $1 })
         {
@@ -2492,7 +2498,7 @@ public final class ModelContext {
             modelEntityName: ownerEntity.name, relationshipName: relationship.name)
         return (
             mapping?.ownerRootEntityName.uppercased() ?? ownerEntity.name.uppercased(),
-            mapping?.relationshipName.uppercased() ?? relationship.name.uppercased()
+            mapping?.storageColumnName.uppercased() ?? relationship.name.uppercased()
         )
     }
 
@@ -2649,6 +2655,9 @@ public final class ModelContext {
     private func persistPendingChanges(to store: any RuntimeStore) throws {
         let pending = state.pendingState()
         guard let container = containerStorage else { throw unsupportedStore("Saving") }
+        for model in pending.inserted + pending.changed {
+            try state.validateRequiredRelationships(for: model)
+        }
         let entityIDs = container.schema.entityIDsByName
         let models = pending.inserted + pending.changed
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
@@ -2820,6 +2829,9 @@ public final class ModelContext {
     private func persistPendingChanges(to dataStore: any DataStore) throws {
         let pending = state.pendingState()
         guard let container = containerStorage else { throw unsupportedStore("Saving") }
+        for model in pending.inserted + pending.changed {
+            try state.validateRequiredRelationships(for: model)
+        }
         let insertedOriginal = try pending.inserted.map { try dataStoreSnapshot(for: $0, container: container) }
         let updated = try pending.changed.map { try dataStoreSnapshot(for: $0, container: container) }
         let deleted = pending.deleted.map(\.persistentModelID)

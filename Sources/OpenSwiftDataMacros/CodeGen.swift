@@ -735,7 +735,7 @@ enum CodeGen {
                 "if let pending = _\(property) { return pending }\n    return getInheritedValue(keyPath: \(keyPath), property: \"\(escapeSwiftString(property))\", as: \(valueType ?? "Any").self)"
             let setter =
                 isRelationship
-                ? "setInheritedRelationshipValue(forKey: \(keyPath), to: newValue)"
+                ? "setRelationshipValue(forKey: \(keyPath), to: newValue)"
                 : "setInheritedValue(keyPath: \(keyPath), to: newValue)"
             return [
                 "@storageRestrictions(initializes: _\(property))\ninit(initialValue) {\n    _\(property) = initialValue\n}",

@@ -271,6 +271,7 @@ public final class ModelContainer: Sendable {
                     name: metadata.name,
                     destination: destinationName,
                     isToMany: isToMany,
+                    isOptional: isToMany || isOptional,
                     inverse: inverse,
                     deleteRule: typedRelationship?.deleteRule ?? .nullify,
                     minimumModelCount: typedRelationship?.minimumModelCount,
@@ -349,6 +350,7 @@ public final class ModelContainer: Sendable {
                     name: relationship.name,
                     destination: relationship.destination,
                     isToMany: relationship.isToMany,
+                    isOptional: relationship.isOptional,
                     inverse: matchingInverse,
                     deleteRule: relationship.deleteRule,
                     minimumModelCount: relationship.minimumModelCount,
@@ -631,6 +633,8 @@ public final class ModelContainer: Sendable {
                 name: property.name,
                 destination: unqualifiedTypeName(destination),
                 isToMany: rawType.contains("Array<") || rawType.contains("Set<"),
+                isOptional: rawType.contains("Array<") || rawType.contains("Set<")
+                    || Self.normalizedPropertyType(rawType).1,
                 inverse: (property.metadata?.base as? Schema.Relationship)?.inverse,
                 declaringEntityName: Self.relationshipDeclaringEntityName(
                     modelType: modelType, metadata: property))
@@ -676,7 +680,7 @@ public final class ModelContainer: Sendable {
                 resolved = candidate.resolved(
                     with: Schema.Relationship(
                         name: relationship.name, destination: relationship.destination,
-                        isToMany: relationship.isToMany, inverse: inverse,
+                        isToMany: relationship.isToMany, isOptional: relationship.isOptional, inverse: inverse,
                         deleteRule: relationship.deleteRule,
                         minimumModelCount: relationship.minimumModelCount,
                         maximumModelCount: relationship.maximumModelCount,

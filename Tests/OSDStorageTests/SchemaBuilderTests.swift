@@ -74,6 +74,59 @@ final class SchemaBuilderTests: XCTestCase {
         }
     }
 
+    func testInheritedToOneRelationshipUsesDeclaredColumnOnRootTable() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", declaringEntityName: "Child")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", declaringEntityName: "Child")
+                ],
+                superentityName: "Child"),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "title", type: "String")]),
+        ])
+
+        let built = try SchemaBuilder.build(schema)
+
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE TABLE ZBASE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZCHILD_TARGET INTEGER);"))
+        XCTAssertTrue(
+            built.statements.contains(
+                "CREATE INDEX ZBASE_ZCHILD_TARGET_INDEX ON ZBASE (ZCHILD_TARGET);"))
+        XCTAssertFalse(built.statements.contains { $0.contains("ZCHILD (Z_PK") || $0.contains("ZGRANDCHILD (Z_PK") })
+        XCTAssertEqual(built.bootstrapRows.map(\.name), ["Base", "Child", "Grandchild", "Target"])
+    }
+
+    func testInheritedToManyRelationshipRemainsFailClosed() {
+        let schema = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(
+                        name: "targets", destination: "Target", isToMany: true,
+                        declaringEntityName: "Child")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+
+        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
+    }
+
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
         let schema = Schema([
             Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
@@ -109,14 +162,36 @@ final class SchemaBuilderTests: XCTestCase {
             ])
     }
 
-    func testInheritanceRejectsUnsupportedRelationshipsIndexesAndConflictingColumns() {
+    func testInheritanceRejectsUnsupportedRelationshipsIndexesAndConflictingColumns() throws {
         let related = Schema([
             Schema.Entity(name: "Base"),
             Schema.Entity(
                 name: "Child", relationships: [Schema.Relationship(name: "parent", destination: "Base")],
                 superentityName: "Base"),
         ])
-        XCTAssertThrowsError(try SchemaBuilder.build(related))
+        XCTAssertTrue(try SchemaBuilder.build(related).statements.contains { $0.contains("ZCHILD_PARENT") })
+
+        let toMany = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(name: "parents", destination: "Base", isToMany: true)
+                ],
+                superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(toMany))
+
+        let inverse = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(name: "parent", destination: "Base", inverse: "children")
+                ],
+                superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(inverse))
 
         let indexed = Schema([
             Schema.Entity(name: "Base"),

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import XCTest
-import OpenSwiftData
+@testable import OpenSwiftData
 import OSDTestSupport
 
 @Model
@@ -87,6 +87,55 @@ final class InheritanceRelationshipChildFixture: InheritanceRelationshipBaseFixt
 final class InheritanceRelationshipItemFixture {
     var title: String
     init(title: String) { self.title = title }
+}
+
+@Model
+final class InheritedToOneTargetFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+class InheritedToOneBaseFixture {
+    @Relationship(inverse: nil) var target: InheritedToOneTargetFixture?
+    init(target: InheritedToOneTargetFixture?) { self.target = target }
+}
+
+@Model
+final class InheritedToOneChildFixture: InheritedToOneBaseFixture {
+    @Relationship(inverse: nil) var childTarget: InheritedToOneTargetFixture?
+    var age: Int
+
+    init(target: InheritedToOneTargetFixture?, childTarget: InheritedToOneTargetFixture?, age: Int) {
+        self.childTarget = childTarget
+        self.age = age
+        super.init(target: target)
+    }
+}
+
+@Model
+final class InheritedToOneSiblingFixture: InheritedToOneBaseFixture {
+    @Relationship(inverse: nil) var siblingTarget: InheritedToOneTargetFixture?
+
+    init(target: InheritedToOneTargetFixture?, siblingTarget: InheritedToOneTargetFixture?) {
+        self.siblingTarget = siblingTarget
+        super.init(target: target)
+    }
+}
+
+@Model
+class RequiredInheritedToOneBaseFixture {
+    @Relationship(inverse: nil) var target: InheritedToOneTargetFixture
+    init(target: InheritedToOneTargetFixture) { self.target = target }
+}
+
+@Model
+final class RequiredInheritedToOneChildFixture: RequiredInheritedToOneBaseFixture {
+    var rank: Int
+    init(target: InheritedToOneTargetFixture, rank: Int) {
+        self.rank = rank
+        super.init(target: target)
+    }
 }
 
 @Model
@@ -311,6 +360,135 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(mapping.ownerRootEntityName, "InheritanceRelationshipBaseFixture")
         XCTAssertEqual(mapping.destinationEntityName, "InheritanceRelationshipItemFixture")
         XCTAssertEqual(mapping.destinationRootEntityName, "InheritanceRelationshipItemFixture")
+    }
+
+    @MainActor
+    func testInheritedToOneRelationshipsPersistInRootTableAndMaterialize() throws {
+        let container = try ModelContainer(
+            for: [
+                InheritedToOneChildFixture.self,
+                InheritedToOneSiblingFixture.self,
+                InheritedToOneTargetFixture.self,
+            ],
+            configurations: [.sqliteMemory("inherited-to-one-root-table")])
+        let writer = container.mainContext
+        let baseTarget = InheritedToOneTargetFixture(title: "base")
+        let childTarget = InheritedToOneTargetFixture(title: "child")
+        let siblingTarget = InheritedToOneTargetFixture(title: "sibling")
+        writer.insert(baseTarget)
+        writer.insert(childTarget)
+        writer.insert(siblingTarget)
+        writer.insert(InheritedToOneChildFixture(target: baseTarget, childTarget: childTarget, age: 5))
+        writer.insert(InheritedToOneSiblingFixture(target: nil, siblingTarget: siblingTarget))
+        try writer.save()
+
+        let rows = try XCTUnwrap(container.store).read {
+            try $0.rows(
+                "SELECT Z_ENT, ZINHERITEDTOONEBASEFIXTURE_TARGET, "
+                    + "ZINHERITEDTOONECHILDFIXTURE_CHILDTARGET, ZINHERITEDTOONESIBLINGFIXTURE_SIBLINGTARGET "
+                    + "FROM ZINHERITEDTOONEBASEFIXTURE ORDER BY Z_PK",
+                arguments: [])
+        }
+        XCTAssertEqual(
+            rows,
+            [
+                [.int(2), .int(1), .int(2), .null],
+                [.int(3), .null, .null, .int(3)],
+            ])
+
+        let reader = container.makeContext()
+        let fetched = try reader.fetch(
+            FetchDescriptor<InheritedToOneBaseFixture>(
+                relationshipKeyPathsForPrefetching: [\InheritedToOneBaseFixture.target]))
+        let child = try XCTUnwrap(fetched.compactMap { $0 as? InheritedToOneChildFixture }.first)
+        let sibling = try XCTUnwrap(fetched.compactMap { $0 as? InheritedToOneSiblingFixture }.first)
+        XCTAssertTrue(
+            InheritedToOneChildFixture.relationshipAdapterCandidatesForMutation().contains {
+                $0.keyPath == \InheritedToOneChildFixture.childTarget
+            })
+        XCTAssertEqual(child.target?.title, "base")
+        let fetchedChild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<InheritedToOneChildFixture>(
+                    relationshipKeyPathsForPrefetching: [
+                        \InheritedToOneChildFixture.target,
+                        \InheritedToOneChildFixture.childTarget,
+                    ])
+            ).first)
+        XCTAssertTrue(fetchedChild === child)
+        XCTAssertEqual(child.childTarget?.title, "child")
+        XCTAssertTrue(child.modelContext === reader)
+        XCTAssertNil(sibling.target)
+        let fetchedSibling = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<InheritedToOneSiblingFixture>(
+                    relationshipKeyPathsForPrefetching: [\InheritedToOneSiblingFixture.siblingTarget])
+            ).first)
+        XCTAssertTrue(fetchedSibling === sibling)
+        XCTAssertEqual(sibling.siblingTarget?.title, "sibling")
+
+        child.setRelationshipValue(
+            forKey: \InheritedToOneChildFixture.childTarget,
+            to: fetchedChild.childTarget)
+        reader.state.clearRelationshipMutationEvents()
+        child.childTarget = nil
+        XCTAssertEqual(reader.state.relationshipMutations.count, 1)
+        XCTAssertNil(child.childTarget)
+        XCTAssertTrue(child.hasChanges)
+        try reader.save()
+        let updated = try container.store?.read {
+            try $0.rows(
+                "SELECT ZINHERITEDTOONECHILDFIXTURE_CHILDTARGET FROM ZINHERITEDTOONEBASEFIXTURE WHERE Z_PK = 1",
+                arguments: [])
+        }
+        XCTAssertEqual(updated, [[.null]])
+    }
+
+    @MainActor
+    func testRequiredInheritedToOneRelationshipResolvesAfterEndpointInsert() throws {
+        let container = try ModelContainer(
+            for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],
+            configurations: [.sqliteMemory("inherited-required-to-one")])
+        let context = container.mainContext
+        let target = InheritedToOneTargetFixture(title: "required")
+        let child = RequiredInheritedToOneChildFixture(target: target, rank: 8)
+        context.insert(target)
+        context.insert(child)
+
+        try context.save()
+
+        let row = try container.store?.read {
+            try $0.rows(
+                "SELECT ZREQUIREDINHERITEDTOONEBASEFIXTURE_TARGET FROM ZREQUIREDINHERITEDTOONEBASEFIXTURE",
+                arguments: [])
+        }
+        XCTAssertEqual(row, [[.int(1)]])
+    }
+
+    @MainActor
+    func testRequiredInheritedToOneRelationshipRejectsDeletedEndpoint() throws {
+        let container = try ModelContainer(
+            for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],
+            configurations: [.sqliteMemory("inherited-required-to-one-delete")])
+        let context = container.mainContext
+        let target = InheritedToOneTargetFixture(title: "required")
+        let child = RequiredInheritedToOneChildFixture(target: target, rank: 8)
+        context.insert(target)
+        context.insert(child)
+        try context.save()
+        XCTAssertTrue(target.modelContext === context)
+
+        context.delete(target)
+
+        XCTAssertFalse(target.isDeleted)
+        XCTAssertTrue(target.modelContext === context)
+        XCTAssertFalse(context.hasChanges)
+        let rows = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_PK FROM ZREQUIREDINHERITEDTOONEBASEFIXTURE WHERE Z_PK = ?",
+                arguments: [.int(1)])
+        }
+        XCTAssertEqual(rows, [[.int(1)]])
     }
 
     func testRelationshipInverseDestinationAcceptsLogicalOwnerAncestors() {

@@ -363,7 +363,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             modelEntityName: entity.name, relationshipName: relationship.name)
         return (
             mapping?.ownerRootEntityName.uppercased() ?? entity.name.uppercased(),
-            mapping?.relationshipName.uppercased() ?? relationship.name.uppercased()
+            mapping?.storageColumnName.uppercased() ?? relationship.name.uppercased()
         )
     }
 }

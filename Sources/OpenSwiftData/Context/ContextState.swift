@@ -253,6 +253,23 @@ package final class ContextState: @unchecked Sendable {
         }
     }
 
+    func validateRequiredRelationships(for model: any PersistentModel) throws {
+        let deletedIDs = Set(deleted.map(ObjectIdentifier.init))
+        for adapter in relationshipAdapters(for: model) where adapter.metadata?.isOptional == false {
+            guard let endpoints = adapter.read(model), !endpoints.isEmpty,
+                endpoints.allSatisfy({ endpoint in
+                    endpoint.modelContext === model.modelContext
+                        && !endpoint.isDeleted
+                        && !deletedIDs.contains(ObjectIdentifier(endpoint))
+                })
+            else {
+                throw SwiftDataError.relationshipGraphConflict(
+                    "Required relationship '\(adapter.name)' must have a live destination in the same context before saving."
+                )
+            }
+        }
+    }
+
     func relationshipAdapters<Model: PersistentModel>(for modelType: Model.Type) -> [any AnyRelationshipAdapterBox] {
         relationshipAdaptersByModel[ObjectIdentifier(modelType)] ?? []
     }

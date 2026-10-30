@@ -430,6 +430,11 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
         lock.unlock()
     }
 
+    /// Applies a loaded value only when no pending overlay shadows the property.
+    public func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any) {
+        setMaterializedValueIfNoOverlay(forKey: keyPath, to: value)
+    }
+
     /// Routes a relationship write through the context's resolved adapter table.
     public func mutateRelationship<Value>(
         forKey keyPath: KeyPath<Model, Value>,

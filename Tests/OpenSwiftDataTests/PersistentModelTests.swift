@@ -1379,6 +1379,12 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(fetched.map(\.name), ["matched"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+        let storedOnly = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name == "selected" },
+            sortBy: [SortDescriptor(\HierarchyToHierarchyOwnerChildFixture.name)],
+            fetchLimit: 1,
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedOnly).map(\.name), ["matched"])
 
         let nilTarget = try context.fetch(
             FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(predicate: #Predicate { $0.target?.name == nil }))
@@ -1391,6 +1397,14 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(pendingMatches.map(\.name), ["matched", "pending"])
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), pendingMatches.map(\.persistentModelID))
+        let pendingPage = try context.fetch(
+            FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+                predicate: #Predicate { $0.target?.name == "selected" },
+                sortBy: [SortDescriptor(\HierarchyToHierarchyOwnerChildFixture.name)],
+                fetchLimit: 1,
+                fetchOffset: 1,
+                includePendingChanges: true))
+        XCTAssertEqual(pendingPage.map(\.name), ["pending"])
 
         selectedTarget.name = "renamed-pending"
         let renamedDescriptor = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(

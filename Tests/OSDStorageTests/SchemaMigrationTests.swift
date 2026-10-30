@@ -451,6 +451,287 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testHierarchyAddOptionalSubtypeAttributeAndReopen() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-add-optional"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                superentityName: "Child"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Base",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                ]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "rankNote", type: "String", isOptional: true),
+                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                ],
+                superentityName: "Child"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "label", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+
+        try driver.write { try LightweightMigration.openOrMigrate(to: source, connection: $0) }
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZAGE, ZNAME) VALUES (?, ?, ?, ?)",
+                [.int(Int64(source.entityIDsByName["Child"] ?? 0)), .int(1), .int(7), .text("saved")])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZAGE, ZNAME, ZRANK) VALUES (?, ?, ?, ?, ?)",
+                [.int(Int64(source.entityIDsByName["Grandchild"] ?? 0)), .int(1), .int(8), .text("grand"), .int(3)])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZLABEL, ZNAME) VALUES (?, ?, ?, ?)",
+                [.int(Int64(source.entityIDsByName["Sibling"] ?? 0)), .int(1), .text("side"), .text("sibling")])
+        }
+        try driver.write { try LightweightMigration.openOrMigrate(to: destination, connection: $0) }
+        let rows = try driver.read {
+            try $0.rows(
+                "SELECT Z_ENT, ZNAME, ZAGE, ZRANK, ZLABEL, ZROOTNOTE, ZNOTE, ZRANKNOTE FROM ZBASE ORDER BY Z_PK")
+        }
+        XCTAssertEqual(
+            rows,
+            [
+                [
+                    .int(Int64(source.entityIDsByName["Child"] ?? 0)), .text("saved"), .int(7), .null, .null, .null,
+                    .null, .null,
+                ],
+                [
+                    .int(Int64(source.entityIDsByName["Grandchild"] ?? 0)), .text("grand"), .int(8), .int(3), .null,
+                    .null, .null, .null,
+                ],
+                [
+                    .int(Int64(source.entityIDsByName["Sibling"] ?? 0)), .text("sibling"), .null, .null, .text("side"),
+                    .null, .null, .null,
+                ],
+            ])
+        try driver.write { try LightweightMigration.openOrMigrate(to: destination, connection: $0) }
+        try driver.close()
+    }
+
+    func testHierarchyAttributeRemovalFailsBeforeWrites() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-remove-attribute"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        }
+        XCTAssertTrue(tables.isEmpty)
+        try driver.close()
+    }
+
+    func testHierarchySiblingAttributeDefinitionConflictFailsBeforeWrites() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-sibling-conflict"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "First", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+            Schema.Entity(
+                name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "First",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "extra", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Second",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "extra", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        }
+        XCTAssertTrue(tables.isEmpty)
+        try driver.close()
+    }
+
+    func testHierarchySiblingCaseVariantColumnAdditionCoalesces() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-case-variant"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "First", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+            Schema.Entity(
+                name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "First",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Second",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "NOTE", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+
+        try driver.write { try LightweightMigration.openOrMigrate(to: source, connection: $0) }
+        try driver.write { try LightweightMigration.openOrMigrate(to: destination, connection: $0) }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        XCTAssertEqual(columns.filter { $0.count > 1 && $0[1] == .text("ZNOTE") }.count, 1)
+        try driver.close()
+    }
+
+    func testHierarchyEntityAdditionFailsBeforeWrites() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-entity-add"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Child", superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Child", superentityName: "Base"),
+            Schema.Entity(name: "Sibling", superentityName: "Base"),
+        ])
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        }
+        XCTAssertTrue(tables.isEmpty)
+        try driver.close()
+    }
+
+    func testHierarchyAttributeAdditionRejectsRelationshipColumnCollision() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-fk-collision"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "Owner_target", type: "Int", isOptional: true)],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+        try bootstrap(source, driver: driver)
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        let collisionColumn = columns.filter { $0.count > 2 && $0[1] == .text("ZOWNER_TARGET") }
+        XCTAssertEqual(collisionColumn.count, 1)
+        XCTAssertEqual(collisionColumn.first?[2], .text("INTEGER"))
+        try driver.close()
+    }
+
     func testHierarchyTopologyAndAttributeMovesFailClosedBeforeWrites() throws {
         let variants = [
             Schema([

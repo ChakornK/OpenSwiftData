@@ -169,26 +169,59 @@ package enum LightweightMigration {
     }
 
     private static func validatePhysicalSchema(_ schema: Schema, connection: SQLConnection) throws {
-        for entity in schema.entities {
-            let table = "Z\(entity.name.uppercased())"
+        let entitiesByName = Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, $0) })
+        func rootName(for entity: Schema.Entity) throws -> String {
+            var current = entity
+            var visited = Set<String>()
+            while let parentName = current.superentityName {
+                guard visited.insert(current.name).inserted,
+                    let parent = entitiesByName[parentName]
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Physical schema has invalid inheritance for \(entity.name).")
+                }
+                current = parent
+            }
+            return current.name
+        }
+        let roots = schema.entities.filter { $0.superentityName == nil }
+        for root in roots {
+            let members = try schema.entities.filter { try rootName(for: $0) == root.name }
+            let table = "Z\(root.name.uppercased())"
             let columns = try tableColumns(table, connection: connection)
             guard columns.contains("Z_PK"), columns.contains("Z_ENT"), columns.contains("Z_OPT") else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Physical schema is missing required columns for \(entity.name).")
+                    "Physical root table is missing required columns for \(root.name).")
             }
-            for attribute in entity.attributes {
-                let expectedColumns =
-                    attribute.options.contains(.flattened)
-                    ? attribute.components.map(\.columnName) : [attribute.name]
-                for column in expectedColumns where !columns.contains("Z\(column.uppercased())") {
-                    throw SwiftDataError.migrationUnsupported(
-                        "Physical schema is missing attribute column \(entity.name).\(column).")
+            for entity in members {
+                for attribute in entity.attributes {
+                    let expectedColumns =
+                        attribute.options.contains(.flattened)
+                        ? attribute.components.map(\.columnName) : [attribute.name]
+                    for column in expectedColumns where !columns.contains("Z\(column.uppercased())") {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Physical root table is missing attribute column \(entity.name).\(column).")
+                    }
+                }
+                for relationship in entity.relationships where !relationship.isToMany {
+                    guard !SchemaBuilder.isNonOwner(entity, relationship, schema: schema),
+                        let mapping = schema.relationshipStorageMapping(
+                            modelEntityName: entity.name, relationshipName: relationship.name),
+                        columns.contains("Z\(mapping.storageColumnName.uppercased())")
+                    else {
+                        if SchemaBuilder.isNonOwner(entity, relationship, schema: schema) { continue }
+                        throw SwiftDataError.migrationUnsupported(
+                            "Physical root table is missing relationship column \(entity.name).\(relationship.name).")
+                    }
                 }
             }
-            for relationship in entity.relationships where !relationship.isToMany {
-                guard columns.contains("Z\(relationship.name.uppercased())") else {
+        }
+        if !roots.isEmpty {
+            for entity in schema.entities where entity.superentityName != nil {
+                let table = "Z\(entity.name.uppercased())"
+                guard try tableColumns(table, connection: connection).isEmpty else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Physical schema is missing relationship \(entity.name).\(relationship.name).")
+                        "Physical hierarchy contains an unexpected per-entity table \(table).")
                 }
             }
         }
@@ -307,9 +340,11 @@ package enum LightweightMigration {
     private static func apply(source: Schema, destination: Schema, connection: SQLConnection) throws {
         let sourceHasInheritance = source.entities.contains { $0.superentityName != nil }
         let destinationHasInheritance = destination.entities.contains { $0.superentityName != nil }
-        guard !sourceHasInheritance && !destinationHasInheritance else {
-            throw SwiftDataError.migrationUnsupported(
-                "Hierarchy schema changes require a versioned root-table migration.")
+        if sourceHasInheritance || destinationHasInheritance {
+            try applyHierarchyOptionalAttributeAdditions(
+                source: source, destination: destination, connection: connection,
+                sourceHasInheritance: sourceHasInheritance, destinationHasInheritance: destinationHasInheritance)
+            return
         }
         for schema in [source, destination] {
             try schema.validateRelationshipStorageMappings()
@@ -344,6 +379,192 @@ package enum LightweightMigration {
                 connection: connection)
         }
         try reconcileIndexes(indexTransitions, connection: connection)
+    }
+
+    private static func applyHierarchyOptionalAttributeAdditions(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection,
+        sourceHasInheritance: Bool,
+        destinationHasInheritance: Bool
+    ) throws {
+        func columnKey(_ name: String) -> String { name.uppercased() }
+        func less(_ lhs: String, _ rhs: String) -> Bool {
+            lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
+        }
+        func sameAttributeDefinition(_ lhs: Schema.Attribute, _ rhs: Schema.Attribute) -> Bool {
+            lhs.type == rhs.type
+                && lhs.isOptional == rhs.isOptional
+                && lhs.defaultValue == rhs.defaultValue
+                && lhs.options == rhs.options
+                && lhs.originalName == rhs.originalName
+                && lhs.components == rhs.components
+        }
+        guard sourceHasInheritance, destinationHasInheritance,
+            Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)),
+            source.entityIDsByName == destination.entityIDsByName
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Hierarchy migration requires unchanged entity topology and identifiers.")
+        }
+        try source.validateRelationshipStorageMappings()
+        try destination.validateRelationshipStorageMappings()
+
+        let sourceByName = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
+        let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        for sourceEntity in source.entities {
+            guard let destinationEntity = destinationByName[sourceEntity.name],
+                sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.relationships == destinationEntity.relationships,
+                sourceEntity.indexes == destinationEntity.indexes
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration cannot change topology, relationships, or constraints.")
+            }
+        }
+
+        func rootName(for entityName: String, schema: Schema) throws -> String {
+            var current = schema.entity(forName: entityName)
+            var visited = Set<String>()
+            while let entity = current, let parentName = entity.superentityName {
+                guard visited.insert(entity.name).inserted,
+                    let parent = schema.entity(forName: parentName)
+                else {
+                    throw SwiftDataError.migrationUnsupported("Hierarchy contains an invalid parent mapping.")
+                }
+                current = parent
+            }
+            guard let root = current else {
+                throw SwiftDataError.migrationUnsupported("Hierarchy migration cannot find an entity root.")
+            }
+            return root.name
+        }
+        func isAncestor(_ ancestorName: String, of entityName: String, schema: Schema) -> Bool {
+            var current = schema.entity(forName: entityName)
+            var visited = Set<String>()
+            while let entity = current, visited.insert(entity.name).inserted {
+                if entity.name == ancestorName { return true }
+                current = entity.superentityName.flatMap(schema.entity(forName:))
+            }
+            return false
+        }
+
+        var sourceColumnsByRoot: [String: Set<String>] = [:]
+        for entity in source.entities {
+            let root = try rootName(for: entity.name, schema: source)
+            var existingColumns = Set(
+                entity.attributes.flatMap { attribute in
+                    attribute.options.contains(.flattened)
+                        ? attribute.components.map { "Z\($0.columnName)" } : ["Z\(attribute.name)"]
+                }.map(columnKey))
+            for relationship in entity.relationships where !relationship.isToMany {
+                guard !SchemaBuilder.isNonOwner(entity, relationship, schema: source),
+                    let mapping = source.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name)
+                else { continue }
+                existingColumns.insert(columnKey("Z\(mapping.storageColumnName)"))
+            }
+            existingColumns.formUnion(["Z_PK", "Z_ENT", "Z_OPT"])
+            sourceColumnsByRoot[root, default: []].formUnion(existingColumns)
+        }
+
+        var additionsByRootAndColumn: [String: (root: String, column: String, attribute: Schema.Attribute)] = [:]
+        var additionOwnersByRootAndColumn: [String: [String]] = [:]
+        for destinationEntity in destination.entities {
+            guard let sourceEntity = sourceByName[destinationEntity.name] else {
+                throw SwiftDataError.migrationUnsupported("Hierarchy entity mapping is incomplete.")
+            }
+            let sourceAttributes = Dictionary(uniqueKeysWithValues: sourceEntity.attributes.map { ($0.name, $0) })
+            let destinationAttributesByName = Dictionary(
+                uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
+            let destinationParentAttributes =
+                destinationEntity.superentityName
+                .flatMap { destinationByName[$0]?.attributes }
+                ?? []
+            guard sourceAttributes.allSatisfy({ name, _ in destinationAttributesByName[name] != nil }) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration cannot remove persisted attributes from \(sourceEntity.name).")
+            }
+            for attribute in destinationEntity.attributes {
+                if let existing = sourceAttributes[attribute.name] {
+                    guard existing == attribute else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Hierarchy migration cannot change existing attribute \(destinationEntity.name).\(attribute.name)."
+                        )
+                    }
+                    continue
+                }
+                if let inherited = destinationParentAttributes.first(where: {
+                    columnKey($0.name) == columnKey(attribute.name)
+                }) {
+                    guard sameAttributeDefinition(inherited, attribute) else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Hierarchy migration cannot redeclare a newly inherited attribute incompatibly.")
+                    }
+                    continue
+                }
+                guard attribute.isOptional, attribute.defaultValue == nil,
+                    attribute.originalName == nil,
+                    !attribute.options.contains(.unique),
+                    !attribute.options.contains(.externalStorage),
+                    !attribute.options.contains(.flattened),
+                    attribute.components.isEmpty,
+                    !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration only adds optional scalar attributes without defaults.")
+                }
+                let root = try rootName(for: destinationEntity.name, schema: destination)
+                let keyName = columnKey("Z\(attribute.name)")
+                guard !sourceColumnsByRoot[root, default: []].contains(keyName) else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration cannot add an attribute over an existing union column.")
+                }
+                let key = "\(root):\(keyName)"
+                if let existing = additionsByRootAndColumn[key] {
+                    guard sameAttributeDefinition(existing.attribute, attribute) else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Hierarchy siblings add incompatible definitions for \(attribute.name).")
+                    }
+                    let existingOwners = additionOwnersByRootAndColumn[key] ?? []
+                    guard
+                        !existingOwners.contains(where: {
+                            isAncestor($0, of: destinationEntity.name, schema: destination)
+                                || isAncestor(destinationEntity.name, of: $0, schema: destination)
+                        })
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Hierarchy migration cannot redeclare one new column along an ancestor chain.")
+                    }
+                    additionOwnersByRootAndColumn[key, default: []].append(destinationEntity.name)
+                } else {
+                    additionsByRootAndColumn[key] = (root, attribute.name, attribute)
+                    additionOwnersByRootAndColumn[key] = [destinationEntity.name]
+                }
+            }
+        }
+
+        for (root, column, attribute) in additionsByRootAndColumn.values.sorted(by: {
+            if $0.root != $1.root { return less($0.root, $1.root) }
+            return less($0.column, $1.column)
+        }) {
+            let sqlType = try SQLColumnType.resolve(
+                attribute.type, property: "\(root).\(attribute.name)", options: attribute.options)
+            let table = "Z\(root.uppercased())"
+            let physicalColumn = "Z\(column.uppercased())"
+            try connection.execute(
+                "ALTER TABLE \(table) ADD COLUMN \(physicalColumn) \(sqlType.rawValue)")
+            let definition = try connection.rows("PRAGMA table_info(\(table))").first {
+                $0.count > 4 && $0[1] == .text(physicalColumn)
+            }
+            guard let definition, definition[2] == .text(sqlType.rawValue),
+                definition[3] == .int(0), definition[4] == .null
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Added hierarchy column \(table).\(physicalColumn) has an incompatible physical definition.")
+            }
+        }
+        try validatePhysicalSchema(destination, connection: connection)
     }
 
     private static func attributeMappings(

@@ -36,7 +36,8 @@ package enum PredicateRuntimeTreeBuilder {
     package static func build<Model: PersistentModel>(
         _ value: Any,
         modelType: Model.Type,
-        entity: Schema.Entity
+        entity: Schema.Entity,
+        schema: Schema? = nil
     ) throws -> Result {
         var captures: [RuntimePredicatePath: StoredValue] = [:]
         func visit(
@@ -47,7 +48,8 @@ package enum PredicateRuntimeTreeBuilder {
         ) throws -> RuntimePredicateNode {
             let typeName = String(reflecting: type(of: value))
             if let keyPath = value as? AnyKeyPath {
-                return try propertyReference(for: keyPath, modelType: modelType, entity: entity)
+                return try propertyReference(
+                    for: keyPath, modelType: modelType, entity: entity, schema: schema)
             }
 
             let mirror = Mirror(reflecting: value)
@@ -90,7 +92,8 @@ package enum PredicateRuntimeTreeBuilder {
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath
             {
-                return try propertyReference(for: keyPath, modelType: modelType, entity: entity)
+                return try propertyReference(
+                    for: keyPath, modelType: modelType, entity: entity, schema: schema)
             }
             if name == "KeyPath" {
                 throw SwiftDataError.unsupportedPredicate(
@@ -222,9 +225,17 @@ package enum PredicateRuntimeTreeBuilder {
     private static func propertyReference<Model: PersistentModel>(
         for keyPath: AnyKeyPath,
         modelType: Model.Type,
-        entity: Schema.Entity
+        entity: Schema.Entity,
+        schema: Schema?
     ) throws -> RuntimePredicateNode {
         let metadata = modelType.schemaMetadata()
+        if let propertyName = modelType.propertyName(forKeyPath: keyPath),
+            let property = metadata.first(where: { $0.name == propertyName }),
+            property.isRelationship,
+            entity.relationships.contains(where: { $0.name == property.name })
+        {
+            return .property(RuntimePropertyReference(name: property.name))
+        }
         if let propertyName = modelType.propertyName(forKeyPath: keyPath),
             let property = metadata.first(where: { $0.name == propertyName }),
             !property.isRelationship,
@@ -242,6 +253,18 @@ package enum PredicateRuntimeTreeBuilder {
         {
             return .property(RuntimePropertyReference(name: component.columnName))
         }
+        if let schema,
+            let destinationModelType = type(of: keyPath).rootType as? any PersistentModel.Type,
+            let destinationEntityName = String(describing: destinationModelType).split(separator: ".").last.map(
+                String.init),
+            let destination = schema.entity(forName: destinationEntityName),
+            let property = destinationModelType.schemaMetadata().first(where: { $0.keypath == keyPath }),
+            !property.isRelationship,
+            destination.attributes.contains(where: { $0.name == property.name }),
+            destination.attributes.first(where: { $0.name == property.name })?.options.contains(.flattened) != true
+        {
+            return .property(RuntimePropertyReference(name: property.name))
+        }
         let pathParts = String(describing: keyPath).split(separator: ".").map(String.init)
         if pathParts.count == 2,
             let component = modelType.flattenedPropertyAdapters().first(where: {
@@ -251,7 +274,9 @@ package enum PredicateRuntimeTreeBuilder {
         {
             return .property(RuntimePropertyReference(name: component.columnName))
         }
-        throw SwiftDataError.unsupportedPredicate("Predicate key path is not a direct persisted scalar attribute.")
+        throw SwiftDataError.unsupportedPredicate(
+            "Predicate key path is not a direct persisted scalar attribute: \(String(describing: keyPath)) on \(entity.name)."
+        )
     }
 
 }

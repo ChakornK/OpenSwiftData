@@ -1358,6 +1358,50 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateTraversesOptionalToOneIntoHierarchyDestination() throws {
+        let container = try ModelContainer(
+            for: HierarchyToHierarchyOwnerChildFixture.self,
+            PlainHierarchyTargetGrandchildFixture.self,
+            configurations: .sqliteMemory("hierarchy-to-one-predicate"))
+        let context = container.mainContext
+        let selectedTarget = PlainHierarchyTargetGrandchildFixture(name: "selected", detail: "detail", rank: 4)
+        let otherTarget = PlainHierarchyTargetChildFixture(name: "other", detail: "other")
+        context.insert(selectedTarget)
+        context.insert(otherTarget)
+        context.insert(HierarchyToHierarchyOwnerChildFixture(name: "matched", target: selectedTarget, rank: 1))
+        context.insert(HierarchyToHierarchyOwnerChildFixture(name: "other", target: otherTarget, rank: 2))
+        context.insert(HierarchyToHierarchyOwnerChildFixture(name: "nil", target: nil, rank: 3))
+        try context.save()
+
+        let descriptor = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name == "selected" })
+        let fetched = try context.fetch(descriptor)
+        XCTAssertEqual(fetched.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+
+        let nilTarget = try context.fetch(
+            FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(predicate: #Predicate { $0.target?.name == nil }))
+        XCTAssertEqual(nilTarget.map(\.name), ["nil"])
+        let insertedTarget = PlainHierarchyTargetChildFixture(name: "selected", detail: "pending")
+        let insertedOwner = HierarchyToHierarchyOwnerChildFixture(name: "pending", target: insertedTarget, rank: 4)
+        context.insert(insertedTarget)
+        context.insert(insertedOwner)
+        let pendingMatches = try context.fetch(descriptor)
+        XCTAssertEqual(pendingMatches.map(\.name), ["matched", "pending"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), pendingMatches.map(\.persistentModelID))
+
+        selectedTarget.name = "renamed-pending"
+        let renamedDescriptor = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name == "renamed-pending" })
+        let renamedOwners = try context.fetch(renamedDescriptor)
+        XCTAssertEqual(renamedOwners.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(renamedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(renamedDescriptor), renamedOwners.map(\.persistentModelID))
+    }
+
+    @MainActor
     func testRequiredInheritedToOneRelationshipResolvesAfterEndpointInsert() throws {
         let container = try ModelContainer(
             for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],

@@ -731,12 +731,17 @@ public final class ModelContext {
             throw SwiftDataError.unsupportedPredicate(
                 "The store cannot evaluate this predicate against pending models.")
         }
+        let evaluatePredicateAfterPendingMerge =
+            descriptor.includePendingChanges
+            && descriptor.predicate != nil
+            && compiled?.evaluatorPlan != nil
+            && !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         let query = FetchSQLBuilder.build(
             FetchSQLInput(
                 table: "Z\(rootEntity(for: entity).name.uppercased())",
                 columns: selectedColumns.map { "Z\($0.uppercased())" },
-                predicateSQL: compiled?.sql,
-                predicateArguments: compiled?.arguments ?? [],
+                predicateSQL: evaluatePredicateAfterPendingMerge ? nil : compiled?.sql,
+                predicateArguments: evaluatePredicateAfterPendingMerge ? [] : (compiled?.arguments ?? []),
                 orderSQL: orderSQL,
                 limit: fetchedLimit,
                 offset: descriptor.includePendingChanges ? nil : descriptor.fetchOffset,
@@ -981,6 +986,11 @@ public final class ModelContext {
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
         assertAffinity()
         try processPendingChanges()
+        if descriptor.includePendingChanges, descriptor.predicate != nil,
+            !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
+        {
+            return try fetch(descriptor).count
+        }
         if container?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
             guard let container,
@@ -1031,6 +1041,11 @@ public final class ModelContext {
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
         try processPendingChanges()
+        if descriptor.includePendingChanges, descriptor.predicate != nil,
+            !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
+        {
+            return try fetch(descriptor).map(\.persistentModelID)
+        }
         if container?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
         guard let container,
             let store = container.store,
@@ -1764,7 +1779,8 @@ public final class ModelContext {
         modelType: Model.Type,
         entity: Schema.Entity
     ) throws -> PredicateRuntimeTreeBuilder.Result {
-        try PredicateRuntimeTreeBuilder.build(value, modelType: modelType, entity: entity)
+        guard let schema = containerStorage?.schema else { throw unsupportedStore("Predicate schema") }
+        return try PredicateRuntimeTreeBuilder.build(value, modelType: modelType, entity: entity, schema: schema)
     }
 
     private func compilePredicate<Model: PersistentModel>(
@@ -1779,11 +1795,36 @@ public final class ModelContext {
             throw SwiftDataError.unsupportedPredicate("The configured store does not compile predicates.")
         }
         let tree = try runtimePredicateTree(predicate.expression, modelType: modelType, entity: entity)
+        let relationshipPaths = entity.relationships.compactMap { relationship -> RuntimePredicateRelationship? in
+            guard !relationship.isToMany, isToOneStorageOwner(entity, relationship),
+                let mapping = containerStorage?.schema.relationshipStorageMapping(
+                    modelEntityName: entity.name, relationshipName: relationship.name),
+                let destination = containerStorage?.schema.entity(forName: relationship.destination)
+            else { return nil }
+            return RuntimePredicateRelationship(
+                ownerEntityName: entity.name,
+                propertyName: relationship.name,
+                destinationEntityName: relationship.destination,
+                destinationRootEntityName: rootEntity(for: destination).name,
+                foreignKeyColumnName: mapping.storageColumnName,
+                destinationEntityIDs: descendantEntityIDs(for: destination))
+        }
         let flattenedAttributes = entity.attributes.flatMap { attribute in
             attribute.components.map { ($0.columnName, $0.type) }
         }
-        let attributeTypes = Dictionary(
+        var attributeTypes = Dictionary(
             uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) } + flattenedAttributes)
+        var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
+        for relationshipPath in relationshipPaths {
+            attributeNames.insert(relationshipPath.propertyName)
+            guard let destination = containerStorage?.schema.entity(forName: relationshipPath.destinationEntityName)
+            else { continue }
+            for attribute in destination.attributes where !attribute.options.contains(.flattened) {
+                let path = "\(relationshipPath.propertyName).\(attribute.name)"
+                attributeNames.insert(path)
+                attributeTypes[path] = attribute.type
+            }
+        }
         return try compiler.compile(
             RuntimePredicateRequest(
                 entityName: entity.name,
@@ -1791,8 +1832,9 @@ public final class ModelContext {
                 ordering: ordering,
                 typedCaptures: tree.captures,
                 captureEncoding: .typed,
-                attributeNames: Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0)),
-                attributeTypes: attributeTypes))
+                attributeNames: attributeNames,
+                attributeTypes: attributeTypes,
+                relationships: relationshipPaths))
     }
 
     private func sortSQL<Model: PersistentModel>(
@@ -1825,6 +1867,9 @@ public final class ModelContext {
     ) throws -> [Model] {
         guard descriptor.includePendingChanges else { return fetched }
         var merged = fetched.filter { model in !state.containsDeleted(model) }
+        if let evaluatorPlan {
+            merged = try merged.filter { try pendingModel($0, matches: evaluatorPlan) }
+        }
         var present = Set(merged.map(ObjectIdentifier.init))
         let pending = (state.insertedModels + state.changedModels).compactMap { $0 as? Model }
         for model in pending where !model.isDeleted && !state.containsDeleted(model) {
@@ -1900,6 +1945,31 @@ public final class ModelContext {
         }
         for adapter in Model.flattenedPropertyAdapters() where names == nil || names!.contains(adapter.columnName) {
             values[adapter.columnName] = runtimeValue(try adapter.encoded(model))
+        }
+        if let names {
+            for relationship in containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? []
+            where names.contains(relationship.name) && !relationship.isToMany {
+                values[relationship.name] =
+                    relationship.read(model)?.first?.persistentModelID.primaryKey
+                    .map(RuntimeValue.int) ?? .null
+            }
+        }
+        for name in names ?? [] {
+            let components = name.split(separator: ".").map(String.init)
+            guard components.count == 2,
+                let relationship = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
+                    .first(where: { $0.name == components[0] && !$0.isToMany })
+            else { continue }
+            guard let endpoint = relationship.read(model)?.first else {
+                values[name] = .null
+                continue
+            }
+            let propertyAdapters = type(of: endpoint).erasedPersistenceAdapters()
+            guard let property = propertyAdapters.first(where: { $0.name == components[1] }) else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Relationship predicate path references unknown property '\(name)'.")
+            }
+            values[name] = runtimeValue(try property.encoded(endpoint))
         }
         return values
     }

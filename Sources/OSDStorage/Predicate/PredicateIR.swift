@@ -104,6 +104,16 @@ package enum PredicateIRBuilder {
                 return try field("value", from: fields)
             case "NilCoalesce":
                 return .nilCoalesce(try field("lhs", from: fields), try field("rhs", from: fields))
+            case "OptionalFlatMap":
+                guard case let .keyPath(relationshipPath) = try field("wrapped", from: fields),
+                    case let .keyPath(propertyPath) = try field("transform", from: fields),
+                    relationshipPath.count == 1,
+                    propertyPath.count == 1
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Optional relationship predicates support one direct to-one scalar traversal.")
+                }
+                return .keyPath(relationshipPath + propertyPath)
             case "Conditional":
                 return .conditional(
                     try field("test", from: fields),
@@ -219,6 +229,7 @@ package enum PredicateIRBuilder {
         case "IntDivision", "IntRemainder": ["lhs", "rhs"]
         case "KeyPath": ["root", "keyPath"]
         case "Value": ["value"]
+        case "OptionalFlatMap": ["wrapped", "transform", "variable"]
         case "StringLocalizedStandardContains", "OSDLocalizedStandardContains": ["root", "other"]
         case "CollectionContainsCollection": ["base", "other"]
         case "SequenceStartsWith": ["base", "prefix"]

@@ -36,6 +36,7 @@ public enum PredicateNodeMetadata {
             Entry(name: "ExpressionEvaluate", requiredChildren: ["expression", "input"]),
             Entry(name: "Value", requiredChildren: ["value"]),
             Entry(name: "NilCoalesce", requiredChildren: ["lhs", "rhs"]),
+            Entry(name: "OptionalFlatMap", requiredChildren: ["wrapped", "transform", "variable"]),
             Entry(name: "StringLocalizedStandardContains", requiredChildren: ["root", "other"]),
             Entry(name: "CollectionContainsCollection", requiredChildren: ["base", "other"]),
             Entry(name: "OSDLocalizedStandardContains", requiredChildren: ["root", "other"]),

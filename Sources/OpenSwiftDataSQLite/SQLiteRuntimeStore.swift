@@ -117,7 +117,10 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore {
         let ir = try PredicateIRBuilder.build(node, attributeTypes: request.attributeTypes)
         let plan = PredicatePlanBuilder.build(ir)
         let compiled = try SQLCompiler.compile(
-            ir, entity: request.entityName, ordering: request.ordering)
+            ir,
+            entity: request.entityName,
+            ordering: request.ordering,
+            relationships: request.relationships)
         return RuntimeCompiledPredicate(
             sql: compiled.sql, arguments: compiled.arguments.map(runtimeValue), evaluatorPlan: plan)
     }

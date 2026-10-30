@@ -40,8 +40,8 @@ package enum PredicatePlanBuilder {
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
         case let .keyPath(path):
-            guard path.count == 1, let name = path.first else { return nil }
-            return .property(name)
+            guard !path.isEmpty else { return nil }
+            return .property(path.joined(separator: "."))
         case let .value(value):
             return .value(value)
         case let .nilCoalesce(lhs, rhs):
@@ -92,16 +92,20 @@ package enum PredicatePlanBuilder {
 package enum SQLCompiler {
     private static let cache = PredicatePlanCache()
 
-    package static func compile(_ ir: PredicateIR, entity: String, ordering: [String] = []) throws -> CompiledPredicate
-    {
-        let key = structuralKey(ir, entity: entity, ordering: ordering)
+    package static func compile(
+        _ ir: PredicateIR,
+        entity: String,
+        ordering: [String] = [],
+        relationships: [RuntimePredicateRelationship] = []
+    ) throws -> CompiledPredicate {
+        let key = structuralKey(ir, entity: entity, ordering: ordering, relationships: relationships)
         if let cached = cache.value(for: key) {
             var arguments: [StoredValue] = []
-            _ = try render(ir, arguments: &arguments)
+            _ = try render(ir, arguments: &arguments, entity: entity, relationships: relationships)
             return CompiledPredicate(sql: cached.sql, arguments: arguments, cacheKey: key)
         }
         var arguments: [StoredValue] = []
-        let sql = try render(ir, arguments: &arguments)
+        let sql = try render(ir, arguments: &arguments, entity: entity, relationships: relationships)
         cache.insert(Plan(sql: sql), for: key)
         return CompiledPredicate(sql: sql, arguments: arguments, cacheKey: key)
     }
@@ -114,25 +118,32 @@ package enum SQLCompiler {
         try compile(PredicateIRBuilder.build(node), entity: entity, ordering: ordering)
     }
 
-    private static func render(_ ir: PredicateIR, arguments: inout [StoredValue]) throws -> String {
+    private static func render(
+        _ ir: PredicateIR,
+        arguments: inout [StoredValue],
+        entity: String,
+        relationships: [RuntimePredicateRelationship]
+    ) throws -> String {
         switch ir {
         case let .conjunction(lhs, rhs):
-            return "(\(try render(lhs, arguments: &arguments)) AND \(try render(rhs, arguments: &arguments)))"
+            return
+                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)) AND \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .disjunction(lhs, rhs):
-            return "(\(try render(lhs, arguments: &arguments)) OR \(try render(rhs, arguments: &arguments)))"
+            return
+                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)) OR \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .negation(value):
-            return "(NOT \(try render(value, arguments: &arguments)))"
+            return "(NOT \(try render(value, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .comparison(op, lhs, rhs):
             if case .value(.null) = rhs, op == .equal || op == .notEqual {
-                let lhsSQL = try render(lhs, arguments: &arguments)
+                let lhsSQL = try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)
                 return "(\(lhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
             }
             if case .value(.null) = lhs, op == .equal || op == .notEqual {
-                let rhsSQL = try render(rhs, arguments: &arguments)
+                let rhsSQL = try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)
                 return "(\(rhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
             }
-            let lhsSQL = try render(lhs, arguments: &arguments)
-            let rhsSQL = try render(rhs, arguments: &arguments)
+            let lhsSQL = try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)
+            let rhsSQL = try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)
             let symbol: String
             switch op {
             case .equal: symbol = "="
@@ -152,37 +163,75 @@ package enum SQLCompiler {
                 case .divide: "osd_int_divide"
                 case .remainder: "osd_int_remainder"
                 }
-            return "\(function)(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+            return
+                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .keyPath(path):
             guard let property = path.last, Self.validIdentifier(property) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid key path")
+            }
+            if path.count == 2,
+                let relationship = relationships.first(where: {
+                    $0.ownerEntityName == entity && $0.propertyName == path[0]
+                })
+            {
+                let destinationIDs = relationship.destinationEntityIDs
+                guard !destinationIDs.isEmpty else {
+                    throw SwiftDataError.unsupportedPredicate("Relationship predicate has no destination entities")
+                }
+                let placeholders = Array(repeating: "?", count: destinationIDs.count).joined(separator: ", ")
+                arguments.append(contentsOf: destinationIDs.map { .int(Int64($0)) })
+                return
+                    "(SELECT t1.Z\(property.uppercased()) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                    + "WHERE t1.Z_PK = t0.Z\(relationship.foreignKeyColumnName.uppercased()) "
+                    + "AND t1.Z_ENT IN (\(placeholders)) LIMIT 1)"
+            }
+            if path.count == 1,
+                let relationship = relationships.first(where: {
+                    $0.ownerEntityName == entity && $0.propertyName == property
+                })
+            {
+                return "t0.Z\(relationship.foreignKeyColumnName.uppercased())"
+            }
+            guard path.count == 1 else {
+                throw SwiftDataError.unsupportedPredicate("Unsupported relationship predicate path")
             }
             return "t0.Z\(property.uppercased())"
         case let .value(value):
             arguments.append(value)
             return "?"
         case let .nilCoalesce(lhs, rhs):
-            return "COALESCE(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+            return
+                "COALESCE(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .conditional(test, trueBranch, falseBranch):
             return
-                "(CASE WHEN \(try render(test, arguments: &arguments)) THEN \(try render(trueBranch, arguments: &arguments)) ELSE \(try render(falseBranch, arguments: &arguments)) END)"
+                "(CASE WHEN \(try render(test, arguments: &arguments, entity: entity, relationships: relationships)) THEN \(try render(trueBranch, arguments: &arguments, entity: entity, relationships: relationships)) ELSE \(try render(falseBranch, arguments: &arguments, entity: entity, relationships: relationships)) END)"
         case let .localizedStandardContains(lhs, rhs):
             return
-                "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+                "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .stringContains(lhs, rhs):
             return
-                "osd_string_contains(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+                "osd_string_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case let .stringStartsWith(lhs, rhs):
             return
-                "osd_string_starts_with(\(try render(lhs, arguments: &arguments)), \(try render(rhs, arguments: &arguments)))"
+                "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate(
                 "SequenceContains SQL compilation requires collection encoding metadata")
         }
     }
 
-    private static func structuralKey(_ ir: PredicateIR, entity: String, ordering: [String]) -> String {
-        "\(entity)|\(ordering.joined(separator: ","))|\(structure(ir))"
+    private static func structuralKey(
+        _ ir: PredicateIR,
+        entity: String,
+        ordering: [String],
+        relationships: [RuntimePredicateRelationship]
+    ) -> String {
+        let relationshipKey = relationships.sorted {
+            "\($0.ownerEntityName).\($0.propertyName)" < "\($1.ownerEntityName).\($1.propertyName)"
+        }.map {
+            "\($0.ownerEntityName).\($0.propertyName)->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.destinationEntityIDs)"
+        }.joined(separator: ";")
+        return "\(entity)|\(ordering.joined(separator: ","))|\(relationshipKey)|\(structure(ir))"
     }
 
     private static func structure(_ ir: PredicateIR) -> String {

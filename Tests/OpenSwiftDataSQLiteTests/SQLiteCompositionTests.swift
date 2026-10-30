@@ -180,7 +180,7 @@ final class SQLiteCompositionTests: XCTestCase {
             "\(indexes)")
 
         let tree = try PredicateRuntimeTreeBuilder.build(
-            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity)
+            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schema)
         let request = RuntimePredicateRequest(
             entityName: entity.name,
             root: tree.root,

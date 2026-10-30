@@ -110,6 +110,8 @@ public struct RuntimePredicateRequest: Sendable {
     public let attributeNames: Set<String>
     /// Swift type names for persisted attributes, used to validate typed predicate nodes.
     public let attributeTypes: [String: String]
+    /// Resolved owning to-one relationships referenced by nested predicate key paths.
+    public let relationships: [RuntimePredicateRelationship]
 
     /// Creates a query request for a backend compiler.
     public init(
@@ -119,7 +121,8 @@ public struct RuntimePredicateRequest: Sendable {
         typedCaptures: [RuntimePredicatePath: StoredValue] = [:],
         captureEncoding: RuntimePredicateCaptureEncoding = .legacyDescription,
         attributeNames: Set<String> = [],
-        attributeTypes: [String: String] = [:]
+        attributeTypes: [String: String] = [:],
+        relationships: [RuntimePredicateRelationship] = []
     ) {
         self.entityName = entityName
         self.root = root
@@ -128,6 +131,7 @@ public struct RuntimePredicateRequest: Sendable {
         self.captureEncoding = captureEncoding
         self.attributeNames = attributeNames
         self.attributeTypes = attributeTypes
+        self.relationships = relationships
     }
 }
 

@@ -60,6 +60,9 @@ package enum PredicatePlanBuilder {
         case let .stringStartsWith(lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .stringStartsWith(lhs, rhs)
+        case let .relationshipContains(name, body):
+            guard let body = build(body) else { return nil }
+            return .relationshipContains(name, body)
         case .sequenceContains:
             return nil
         }
@@ -122,28 +125,34 @@ package enum SQLCompiler {
         _ ir: PredicateIR,
         arguments: inout [StoredValue],
         entity: String,
-        relationships: [RuntimePredicateRelationship]
+        relationships: [RuntimePredicateRelationship],
+        tableAlias: String = "t0"
     ) throws -> String {
         switch ir {
         case let .conjunction(lhs, rhs):
             return
-                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)) AND \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) AND \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .disjunction(lhs, rhs):
             return
-                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)) OR \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) OR \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .negation(value):
-            return "(NOT \(try render(value, arguments: &arguments, entity: entity, relationships: relationships)))"
+            return
+                "(NOT \(try render(value, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .comparison(op, lhs, rhs):
             if case .value(.null) = rhs, op == .equal || op == .notEqual {
-                let lhsSQL = try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)
+                let lhsSQL = try render(
+                    lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
                 return "(\(lhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
             }
             if case .value(.null) = lhs, op == .equal || op == .notEqual {
-                let rhsSQL = try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)
+                let rhsSQL = try render(
+                    rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
                 return "(\(rhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
             }
-            let lhsSQL = try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)
-            let rhsSQL = try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)
+            let lhsSQL = try render(
+                lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+            let rhsSQL = try render(
+                rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
             let symbol: String
             switch op {
             case .equal: symbol = "="
@@ -164,7 +173,7 @@ package enum SQLCompiler {
                 case .remainder: "osd_int_remainder"
                 }
             return
-                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .keyPath(path):
             guard let property = path.last, Self.validIdentifier(property) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid key path")
@@ -195,25 +204,50 @@ package enum SQLCompiler {
             guard path.count == 1 else {
                 throw SwiftDataError.unsupportedPredicate("Unsupported relationship predicate path")
             }
-            return "t0.Z\(property.uppercased())"
+            return "\(tableAlias).Z\(property.uppercased())"
         case let .value(value):
             arguments.append(value)
             return "?"
         case let .nilCoalesce(lhs, rhs):
             return
-                "COALESCE(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "COALESCE(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .conditional(test, trueBranch, falseBranch):
             return
-                "(CASE WHEN \(try render(test, arguments: &arguments, entity: entity, relationships: relationships)) THEN \(try render(trueBranch, arguments: &arguments, entity: entity, relationships: relationships)) ELSE \(try render(falseBranch, arguments: &arguments, entity: entity, relationships: relationships)) END)"
+                "(CASE WHEN \(try render(test, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) THEN \(try render(trueBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) ELSE \(try render(falseBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) END)"
         case let .localizedStandardContains(lhs, rhs):
             return
-                "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .stringContains(lhs, rhs):
             return
-                "osd_string_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "osd_string_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .stringStartsWith(lhs, rhs):
             return
-                "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships)))"
+                "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
+        case let .relationshipContains(name, body):
+            guard
+                let relationship = relationships.first(where: {
+                    $0.ownerEntityName == entity && $0.propertyName == name && $0.isToMany
+                }), let joinTable = relationship.joinTableName,
+                Self.validIdentifier(joinTable),
+                Self.validIdentifier(relationship.destinationRootEntityName),
+                Self.validIdentifier(relationship.ownerJoinColumnName),
+                Self.validIdentifier(relationship.destinationJoinColumnName),
+                !relationship.destinationEntityIDs.isEmpty
+            else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "SequenceContainsWhere requires a supported to-many relationship join table.")
+            }
+            let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
+                .joined(separator: ", ")
+            arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+            let bodySQL = try render(
+                body, arguments: &arguments, entity: relationship.destinationEntityName,
+                relationships: relationships, tableAlias: "t1")
+            return "EXISTS (SELECT 1 FROM \(joinTable.uppercased()) AS j "
+                + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
+                + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(tableAlias).Z_PK "
+                + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate(
                 "SequenceContains SQL compilation requires collection encoding metadata")
@@ -229,7 +263,7 @@ package enum SQLCompiler {
         let relationshipKey = relationships.sorted {
             "\($0.ownerEntityName).\($0.propertyName)" < "\($1.ownerEntityName).\($1.propertyName)"
         }.map {
-            "\($0.ownerEntityName).\($0.propertyName)->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.destinationEntityIDs)"
+            "\($0.ownerEntityName).\($0.propertyName)[toMany=\($0.isToMany)]->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.joinTableName ?? "").\($0.ownerJoinColumnName).\($0.destinationJoinColumnName).\($0.destinationEntityIDs)"
         }.joined(separator: ";")
         return "\(entity)|\(ordering.joined(separator: ","))|\(relationshipKey)|\(structure(ir))"
     }
@@ -251,6 +285,7 @@ package enum SQLCompiler {
         case let .stringContains(lhs, rhs): "stringContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
+        case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
         }
     }
 

@@ -7,8 +7,12 @@ package enum RuntimePredicateEvaluator {
         case unknown
     }
 
-    package static func matches(_ plan: PredicatePlan, values: [String: RuntimeValue]) throws -> Bool {
-        try evaluateTruth(plan, values: values) == .yes
+    package static func matches(
+        _ plan: PredicatePlan,
+        values: [String: RuntimeValue],
+        relationshipValues: [String: [[String: RuntimeValue]]] = [:]
+    ) throws -> Bool {
+        try evaluateTruth(plan, values: values, relationshipValues: relationshipValues) == .yes
     }
 
     package static func referencedProperties(in plan: PredicatePlan) -> Set<String> {
@@ -27,34 +31,73 @@ package enum RuntimePredicateEvaluator {
             referencedProperties(in: value)
         case let .property(name):
             [name]
+        case .relationshipContains:
+            []
         case .value:
             []
         }
     }
 
+    package static func relationshipProperties(in plan: PredicatePlan) -> [String: Set<String>] {
+        switch plan {
+        case let .relationshipContains(name, body):
+            [name: referencedProperties(in: body)]
+        case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
+            merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
+        case let .negation(value), let .isNull(value, _):
+            relationshipProperties(in: value)
+        case let .comparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
+            let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
+            let .stringStartsWith(lhs, rhs):
+            merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
+        case let .conditional(test, trueBranch, falseBranch):
+            merge(
+                relationshipProperties(in: test),
+                merge(
+                    relationshipProperties(in: trueBranch), relationshipProperties(in: falseBranch)))
+        case .property, .value:
+            [:]
+        }
+    }
+
+    private static func merge(
+        _ lhs: [String: Set<String>],
+        _ rhs: [String: Set<String>]
+    ) -> [String: Set<String>] {
+        var result = lhs
+        for (name, properties) in rhs { result[name, default: []].formUnion(properties) }
+        return result
+    }
+
     private static func evaluateTruth(
         _ plan: PredicatePlan,
-        values: [String: RuntimeValue]
+        values: [String: RuntimeValue],
+        relationshipValues: [String: [[String: RuntimeValue]]]
     ) throws -> TruthValue {
         switch plan {
         case let .conjunction(lhs, rhs):
-            return and(try evaluateTruth(lhs, values: values), try evaluateTruth(rhs, values: values))
+            return and(
+                try evaluateTruth(lhs, values: values, relationshipValues: relationshipValues),
+                try evaluateTruth(rhs, values: values, relationshipValues: relationshipValues))
         case let .disjunction(lhs, rhs):
-            return or(try evaluateTruth(lhs, values: values), try evaluateTruth(rhs, values: values))
+            return or(
+                try evaluateTruth(lhs, values: values, relationshipValues: relationshipValues),
+                try evaluateTruth(rhs, values: values, relationshipValues: relationshipValues))
         case let .negation(value):
-            switch try evaluateTruth(value, values: values) {
+            switch try evaluateTruth(value, values: values, relationshipValues: relationshipValues) {
             case .yes: return .no
             case .no: return .yes
             case .unknown: return .unknown
             }
         case let .conditional(test, trueBranch, falseBranch):
-            switch try evaluateTruth(test, values: values) {
-            case .yes: return try evaluateTruth(trueBranch, values: values)
-            case .no, .unknown: return try evaluateTruth(falseBranch, values: values)
+            switch try evaluateTruth(test, values: values, relationshipValues: relationshipValues) {
+            case .yes: return try evaluateTruth(trueBranch, values: values, relationshipValues: relationshipValues)
+            case .no, .unknown:
+                return try evaluateTruth(falseBranch, values: values, relationshipValues: relationshipValues)
             }
         case let .comparison(op, lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values)
-            let rhsValue = try evaluateValue(rhs, values: values)
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard lhsValue != .null, rhsValue != .null else { return .unknown }
             if case let .double(value) = lhsValue, value.isNaN { return .unknown }
             if case let .double(value) = rhsValue, value.isNaN { return .unknown }
@@ -65,16 +108,24 @@ package enum RuntimePredicateEvaluator {
         case .arithmetic:
             throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
         case let .isNull(value, negated):
-            let isNull = try evaluateValue(value, values: values) == .null
+            let isNull = try evaluateValue(value, values: values, relationshipValues: relationshipValues) == .null
             return isNull != negated ? .yes : .no
         case let .localizedStandardContains(lhs, rhs):
-            return try evaluateStringPredicate(.localizedStandardContains(lhs, rhs), values: values)
+            return try evaluateStringPredicate(
+                .localizedStandardContains(lhs, rhs), values: values, relationshipValues: relationshipValues)
         case let .stringContains(lhs, rhs):
-            return try evaluateStringPredicate(.stringContains(lhs, rhs), values: values)
+            return try evaluateStringPredicate(
+                .stringContains(lhs, rhs), values: values, relationshipValues: relationshipValues)
         case let .stringStartsWith(lhs, rhs):
-            return try evaluateStringPredicate(.stringStartsWith(lhs, rhs), values: values)
+            return try evaluateStringPredicate(
+                .stringStartsWith(lhs, rhs), values: values, relationshipValues: relationshipValues)
+        case let .relationshipContains(name, body):
+            for endpointValues in relationshipValues[name] ?? [] {
+                if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
+            }
+            return .no
         case .property, .value, .coalesce:
-            let value = try evaluateValue(plan, values: values)
+            let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate("Predicate expression does not evaluate to a boolean value")
             }
@@ -86,10 +137,11 @@ package enum RuntimePredicateEvaluator {
         _ operation: PredicateArithmeticOperator,
         lhs: PredicatePlan,
         rhs: PredicatePlan,
-        values: [String: RuntimeValue]
+        values: [String: RuntimeValue],
+        relationshipValues: [String: [[String: RuntimeValue]]]
     ) throws -> RuntimeValue {
-        let lhsValue = try evaluateValue(lhs, values: values)
-        let rhsValue = try evaluateValue(rhs, values: values)
+        let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+        let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
         guard case let .int(left) = lhsValue, case let .int(right) = rhsValue else {
             throw SwiftDataError.unsupportedPredicate("Checked integer arithmetic requires integer operands")
         }
@@ -114,7 +166,8 @@ package enum RuntimePredicateEvaluator {
 
     private static func evaluateStringPredicate(
         _ plan: PredicatePlan,
-        values: [String: RuntimeValue]
+        values: [String: RuntimeValue],
+        relationshipValues: [String: [[String: RuntimeValue]]]
     ) throws -> TruthValue {
         let left: PredicatePlan
         let right: PredicatePlan
@@ -125,8 +178,8 @@ package enum RuntimePredicateEvaluator {
         default:
             throw SwiftDataError.unsupportedPredicate("Expected a string predicate plan")
         }
-        let lhsValue = try evaluateValue(left, values: values)
-        let rhsValue = try evaluateValue(right, values: values)
+        let lhsValue = try evaluateValue(left, values: values, relationshipValues: relationshipValues)
+        let rhsValue = try evaluateValue(right, values: values, relationshipValues: relationshipValues)
         guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
             if lhsValue == .null || rhsValue == .null { return .unknown }
             throw SwiftDataError.unsupportedPredicate("String predicate requires string operands")
@@ -147,7 +200,8 @@ package enum RuntimePredicateEvaluator {
 
     private static func evaluateValue(
         _ plan: PredicatePlan,
-        values: [String: RuntimeValue]
+        values: [String: RuntimeValue],
+        relationshipValues: [String: [[String: RuntimeValue]]]
     ) throws -> RuntimeValue {
         switch plan {
         case let .property(name):
@@ -158,38 +212,41 @@ package enum RuntimePredicateEvaluator {
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values)
-            return lhsValue == .null ? try evaluateValue(rhs, values: values) : lhsValue
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            return lhsValue == .null
+                ? try evaluateValue(rhs, values: values, relationshipValues: relationshipValues) : lhsValue
         case let .arithmetic(op, lhs, rhs):
-            return try evaluateArithmetic(op, lhs: lhs, rhs: rhs, values: values)
+            return try evaluateArithmetic(
+                op, lhs: lhs, rhs: rhs, values: values, relationshipValues: relationshipValues)
         case let .conditional(test, trueBranch, falseBranch):
-            switch try evaluateTruth(test, values: values) {
-            case .yes: return try evaluateValue(trueBranch, values: values)
-            case .no, .unknown: return try evaluateValue(falseBranch, values: values)
+            switch try evaluateTruth(test, values: values, relationshipValues: relationshipValues) {
+            case .yes: return try evaluateValue(trueBranch, values: values, relationshipValues: relationshipValues)
+            case .no, .unknown:
+                return try evaluateValue(falseBranch, values: values, relationshipValues: relationshipValues)
             }
         case let .localizedStandardContains(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values)
-            let rhsValue = try evaluateValue(rhs, values: values)
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
                 throw SwiftDataError.unsupportedPredicate("localizedStandardContains requires string operands")
             }
             return .int(OSDStringMatch.localizedStandardContains(haystack, needle) ? 1 : 0)
         case let .stringContains(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values)
-            let rhsValue = try evaluateValue(rhs, values: values)
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
                 throw SwiftDataError.unsupportedPredicate("String contains requires string operands")
             }
             return .int(OSDStringMatch.contains(haystack, needle) ? 1 : 0)
         case let .stringStartsWith(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values)
-            let rhsValue = try evaluateValue(rhs, values: values)
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(value) = lhsValue, case let .text(prefix) = rhsValue else {
                 throw SwiftDataError.unsupportedPredicate("String prefix requires string operands")
             }
             return .int(OSDStringMatch.startsWith(value, prefix) ? 1 : 0)
-        case .comparison, .conjunction, .disjunction, .negation, .isNull:
-            switch try evaluateTruth(plan, values: values) {
+        case .comparison, .conjunction, .disjunction, .negation, .isNull, .relationshipContains:
+            switch try evaluateTruth(plan, values: values, relationshipValues: relationshipValues) {
             case .yes: return .int(1)
             case .no: return .int(0)
             case .unknown: return .null

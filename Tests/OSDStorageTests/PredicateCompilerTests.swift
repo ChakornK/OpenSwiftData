@@ -66,6 +66,39 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.text("value")])
     }
 
+    func testCollectionPredicateAcceptsQualifiedScalarAndRejectsBlobOrCodableTypes() throws {
+        func node(for property: String) -> PredicateMirrorWalker.Node {
+            .expression(
+                name: "OSDSequenceContainsWhere",
+                children: [
+                    ("sequence", .propertyReference("items")),
+                    (
+                        "test",
+                        .expression(
+                            name: "Equal",
+                            children: [
+                                ("lhs", .propertyReference("items[].\(property)")),
+                                ("rhs", .typedValue(.text("value"))),
+                            ])
+                    ),
+                ])
+        }
+
+        XCTAssertNoThrow(
+            try PredicateIRBuilder.build(
+                node(for: "rank"), attributeTypes: ["items[].rank": "Swift.Int?"]))
+
+        for type in ["Data", "UUID", "Payload"] {
+            XCTAssertThrowsError(
+                try PredicateIRBuilder.build(node(for: "payload"), attributeTypes: ["items[].payload": type])
+            ) {
+                guard case SwiftDataError.unsupportedPredicate = $0 else {
+                    return XCTFail("Expected unsupportedPredicate, got \($0)")
+                }
+            }
+        }
+    }
+
     func testCompilesComparisonAndRebindsStructuralCache() throws {
         let first = #Predicate<CompilerRow> { $0.age > 18 }
         let second = #Predicate<CompilerRow> { $0.age > 65 }

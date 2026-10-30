@@ -42,6 +42,8 @@ public enum PredicateNodeMetadata {
             Entry(name: "OSDLocalizedStandardContains", requiredChildren: ["root", "other"]),
             Entry(name: "SequenceStartsWith", requiredChildren: ["base", "prefix"]),
             Entry(name: "SequenceContains", requiredChildren: ["sequence", "element"]),
+            Entry(name: "SequenceContainsWhere", requiredChildren: ["sequence", "test", "variable"]),
+            Entry(name: "OSDSequenceContainsWhere", requiredChildren: ["sequence", "test"]),
             Entry(name: "RangeExpressionContains", requiredChildren: ["range", "element"]),
             Entry(name: "ClosedRange", requiredChildren: ["lower", "upper"]),
             Entry(name: "Range", requiredChildren: ["lower", "upper"]),

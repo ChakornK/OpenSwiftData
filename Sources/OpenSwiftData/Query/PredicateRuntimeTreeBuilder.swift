@@ -37,9 +37,13 @@ package enum PredicateRuntimeTreeBuilder {
         _ value: Any,
         modelType: Model.Type,
         entity: Schema.Entity,
-        schema: Schema? = nil
+        schema: Schema? = nil,
+        modelTypeForEntity: (String) -> (any PersistentModel.Type)? = { _ in nil }
     ) throws -> Result {
         var captures: [RuntimePredicatePath: StoredValue] = [:]
+        var activeModelType: any PersistentModel.Type = modelType
+        var activeEntity = entity
+        var activeCollectionName: String?
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -49,7 +53,8 @@ package enum PredicateRuntimeTreeBuilder {
             let typeName = String(reflecting: type(of: value))
             if let keyPath = value as? AnyKeyPath {
                 return try propertyReference(
-                    for: keyPath, modelType: modelType, entity: entity, schema: schema)
+                    for: keyPath, modelType: activeModelType, entity: activeEntity, schema: schema,
+                    collectionName: activeCollectionName)
             }
 
             let mirror = Mirror(reflecting: value)
@@ -89,11 +94,62 @@ package enum PredicateRuntimeTreeBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Malformed predicate node \(name): expected \(requiredLabels.sorted()), found \(labels.sorted())")
             }
+            if name == "SequenceContainsWhere" {
+                guard activeCollectionName == nil else {
+                    throw SwiftDataError.unsupportedPredicate("Nested SequenceContainsWhere is unsupported")
+                }
+                guard let schema,
+                    let sequence = children.first(where: { $0.label == "sequence" })?.value,
+                    let test = children.first(where: { $0.label == "test" })?.value,
+                    let variable = children.first(where: { $0.label == "variable" })?.value,
+                    variableIdentifier(variable) != nil
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContainsWhere requires a direct no-inverse to-many relationship.")
+                }
+                let sequenceNode = try visit(
+                    sequence, path: path + ["sequence"], bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+                guard case let .property(sequenceProperty) = sequenceNode,
+                    let relationship = activeEntity.relationships.first(where: {
+                        $0.name == sequenceProperty.name && $0.isToMany && $0.inverse == nil
+                    }),
+                    let destinationEntity = schema.entity(forName: relationship.destination),
+                    let destinationModelType = modelTypeForEntity(destinationEntity.name)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContainsWhere requires a direct no-inverse to-many relationship.")
+                }
+                let previousModelType = activeModelType
+                let previousEntity = activeEntity
+                let previousCollectionName = activeCollectionName
+                activeModelType = destinationModelType
+                activeEntity = destinationEntity
+                activeCollectionName = sequenceProperty.name
+                let testNode: RuntimePredicateNode
+                do {
+                    testNode = try visit(
+                        test, path: path + ["test"], bindings: bindings,
+                        capturePathRewrites: capturePathRewrites)
+                } catch {
+                    activeModelType = previousModelType
+                    activeEntity = previousEntity
+                    activeCollectionName = previousCollectionName
+                    throw error
+                }
+                activeModelType = previousModelType
+                activeEntity = previousEntity
+                activeCollectionName = previousCollectionName
+                return .expression(
+                    name: "OSDSequenceContainsWhere",
+                    children: [("sequence", sequenceNode), ("test", testNode)])
+            }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath
             {
                 return try propertyReference(
-                    for: keyPath, modelType: modelType, entity: entity, schema: schema)
+                    for: keyPath, modelType: activeModelType, entity: activeEntity, schema: schema,
+                    collectionName: activeCollectionName)
             }
             if name == "KeyPath" {
                 throw SwiftDataError.unsupportedPredicate(
@@ -222,11 +278,12 @@ package enum PredicateRuntimeTreeBuilder {
         return id as? UInt
     }
 
-    private static func propertyReference<Model: PersistentModel>(
+    private static func propertyReference(
         for keyPath: AnyKeyPath,
-        modelType: Model.Type,
+        modelType: any PersistentModel.Type,
         entity: Schema.Entity,
-        schema: Schema?
+        schema: Schema?,
+        collectionName: String? = nil
     ) throws -> RuntimePredicateNode {
         let metadata = modelType.schemaMetadata()
         if let propertyName = modelType.propertyName(forKeyPath: keyPath),
@@ -242,7 +299,9 @@ package enum PredicateRuntimeTreeBuilder {
             entity.attributes.contains(where: { $0.name == property.name }),
             entity.attributes.first(where: { $0.name == property.name })?.options.contains(.flattened) != true
         {
-            return .property(RuntimePropertyReference(name: property.name))
+            return .property(
+                RuntimePropertyReference(
+                    name: collectionName.map { "\($0)[].\(property.name)" } ?? property.name))
         }
         if let component = modelType.flattenedPropertyAdapters().first(where: {
             $0.componentKeyPath == keyPath || $0.localComponentKeyPath == keyPath

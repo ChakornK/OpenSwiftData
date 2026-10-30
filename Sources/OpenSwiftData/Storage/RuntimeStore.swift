@@ -110,7 +110,7 @@ public struct RuntimePredicateRequest: Sendable {
     public let attributeNames: Set<String>
     /// Swift type names for persisted attributes, used to validate typed predicate nodes.
     public let attributeTypes: [String: String]
-    /// Resolved owning to-one relationships referenced by nested predicate key paths.
+    /// Resolved to-one and direct to-many relationships referenced by predicate expressions.
     public let relationships: [RuntimePredicateRelationship]
 
     /// Creates a query request for a backend compiler.

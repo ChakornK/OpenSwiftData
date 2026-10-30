@@ -1774,15 +1774,6 @@ public final class ModelContext {
         }
     }
 
-    private func runtimePredicateTree<Model: PersistentModel>(
-        _ value: Any,
-        modelType: Model.Type,
-        entity: Schema.Entity
-    ) throws -> PredicateRuntimeTreeBuilder.Result {
-        guard let schema = containerStorage?.schema else { throw unsupportedStore("Predicate schema") }
-        return try PredicateRuntimeTreeBuilder.build(value, modelType: modelType, entity: entity, schema: schema)
-    }
-
     private func compilePredicate<Model: PersistentModel>(
         _ predicate: Predicate<Model>?,
         modelType: Model.Type,
@@ -1794,12 +1785,35 @@ public final class ModelContext {
         guard let compiler = store as? any RuntimeQueryStore else {
             throw SwiftDataError.unsupportedPredicate("The configured store does not compile predicates.")
         }
-        let tree = try runtimePredicateTree(predicate.expression, modelType: modelType, entity: entity)
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            predicate.expression,
+            modelType: modelType,
+            entity: entity,
+            schema: containerStorage?.schema,
+            modelTypeForEntity: { [weak container] entityName in
+                container?.modelType(forEntityName: entityName)
+            })
         let relationshipPaths = entity.relationships.compactMap { relationship -> RuntimePredicateRelationship? in
-            guard !relationship.isToMany, isToOneStorageOwner(entity, relationship),
-                let mapping = containerStorage?.schema.relationshipStorageMapping(
-                    modelEntityName: entity.name, relationshipName: relationship.name),
-                let destination = containerStorage?.schema.entity(forName: relationship.destination)
+            guard let schema = containerStorage?.schema,
+                let destination = schema.entity(forName: relationship.destination)
+            else { return nil }
+            if relationship.isToMany {
+                guard relationship.inverse == nil,
+                    let joinTable = joinTableName(for: entity, relationship)
+                else { return nil }
+                return RuntimePredicateRelationship(
+                    ownerEntityName: entity.name,
+                    propertyName: relationship.name,
+                    destinationEntityName: relationship.destination,
+                    destinationRootEntityName: rootEntity(for: destination).name,
+                    foreignKeyColumnName: "",
+                    destinationEntityIDs: descendantEntityIDs(for: destination),
+                    isToMany: true,
+                    joinTableName: joinTable)
+            }
+            guard isToOneStorageOwner(entity, relationship),
+                let mapping = schema.relationshipStorageMapping(
+                    modelEntityName: entity.name, relationshipName: relationship.name)
             else { return nil }
             return RuntimePredicateRelationship(
                 ownerEntityName: entity.name,
@@ -1820,9 +1834,15 @@ public final class ModelContext {
             guard let destination = containerStorage?.schema.entity(forName: relationshipPath.destinationEntityName)
             else { continue }
             for attribute in destination.attributes where !attribute.options.contains(.flattened) {
-                let path = "\(relationshipPath.propertyName).\(attribute.name)"
-                attributeNames.insert(path)
-                attributeTypes[path] = attribute.type
+                if relationshipPath.isToMany {
+                    let path = "\(relationshipPath.propertyName)[].\(attribute.name)"
+                    attributeNames.insert(path)
+                    attributeTypes[path] = attribute.type
+                } else {
+                    let path = "\(relationshipPath.propertyName).\(attribute.name)"
+                    attributeNames.insert(path)
+                    attributeTypes[path] = attribute.type
+                }
             }
         }
         return try compiler.compile(
@@ -1932,7 +1952,22 @@ public final class ModelContext {
     ) throws -> Bool {
         let propertyNames = RuntimePredicateEvaluator.referencedProperties(in: plan)
         let values = try runtimeValues(for: model, selecting: propertyNames)
-        return try RuntimePredicateEvaluator.matches(plan, values: values)
+        let relationshipProperties = RuntimePredicateEvaluator.relationshipProperties(in: plan)
+        var relationshipValues: [String: [[String: RuntimeValue]]] = [:]
+        for (name, properties) in relationshipProperties {
+            guard
+                let adapter = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
+                    .first(where: { $0.name == name && $0.isToMany })
+            else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Pending predicate relationship '\(name)' is not a to-many relationship.")
+            }
+            let endpoints = adapter.read(model) ?? []
+            relationshipValues[name] = try endpoints.map { endpoint in
+                try runtimeValues(for: endpoint, selecting: properties)
+            }
+        }
+        return try RuntimePredicateEvaluator.matches(plan, values: values, relationshipValues: relationshipValues)
     }
 
     private func runtimeValues<Model: PersistentModel>(

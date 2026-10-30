@@ -13,6 +13,7 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case localizedStandardContains(PredicatePlan, PredicatePlan)
     case stringContains(PredicatePlan, PredicatePlan)
     case stringStartsWith(PredicatePlan, PredicatePlan)
+    case relationshipContains(String, PredicatePlan)
 }
 
 /// A checked numeric operation supported by SQL and pending predicate evaluation.
@@ -34,7 +35,7 @@ public enum PredicateComparisonOperator: Sendable, Equatable {
     case greaterThanOrEqual
 }
 
-/// A resolved to-one relationship path used by runtime predicate compilers.
+/// A resolved relationship path used by runtime predicate compilers.
 public struct RuntimePredicateRelationship: Sendable, Equatable {
     /// The entity that declares the relationship.
     public let ownerEntityName: String
@@ -44,19 +45,31 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
     public let destinationEntityName: String
     /// The root entity that stores destination rows.
     public let destinationRootEntityName: String
-    /// The physical foreign-key column on the owner root table.
+    /// The physical foreign-key column on the owner root table for to-one relationships.
     public let foreignKeyColumnName: String
+    /// Whether the relationship is encoded by a no-inverse to-many join table.
+    public let isToMany: Bool
+    /// The join table used for direct no-inverse to-many relationships.
+    public let joinTableName: String?
+    /// The owner primary-key column in the join table.
+    public let ownerJoinColumnName: String
+    /// The destination primary-key column in the join table.
+    public let destinationJoinColumnName: String
     /// Concrete entity identifiers allowed by the destination entity's inheritance subtree.
     public let destinationEntityIDs: [Int]
 
-    /// Creates a resolved to-one relationship path.
+    /// Creates a resolved relationship path.
     public init(
         ownerEntityName: String,
         propertyName: String,
         destinationEntityName: String,
         destinationRootEntityName: String,
         foreignKeyColumnName: String,
-        destinationEntityIDs: [Int]
+        destinationEntityIDs: [Int],
+        isToMany: Bool = false,
+        joinTableName: String? = nil,
+        ownerJoinColumnName: String = "Z_A",
+        destinationJoinColumnName: String = "Z_B"
     ) {
         self.ownerEntityName = ownerEntityName
         self.propertyName = propertyName
@@ -64,5 +77,9 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
         self.destinationRootEntityName = destinationRootEntityName
         self.foreignKeyColumnName = foreignKeyColumnName
         self.destinationEntityIDs = destinationEntityIDs
+        self.isToMany = isToMany
+        self.joinTableName = joinTableName
+        self.ownerJoinColumnName = ownerJoinColumnName
+        self.destinationJoinColumnName = destinationJoinColumnName
     }
 }

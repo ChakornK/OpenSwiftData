@@ -90,6 +90,45 @@ final class InheritanceRelationshipItemFixture {
 }
 
 @Model
+final class ToManyHierarchyOwnerFixture {
+    @Relationship(inverse: nil) var targets: [ToManyHierarchyTargetChildFixture]
+    init(targets: [ToManyHierarchyTargetChildFixture]) { self.targets = targets }
+}
+
+@Model
+class ToManyHierarchyTargetBaseFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+class ToManyHierarchyTargetChildFixture: ToManyHierarchyTargetBaseFixture {
+    var code: String
+    init(title: String, code: String) {
+        self.code = code
+        super.init(title: title)
+    }
+}
+
+@Model
+final class ToManyHierarchyTargetGrandchildFixture: ToManyHierarchyTargetChildFixture {
+    var rank: Int
+    init(title: String, code: String, rank: Int) {
+        self.rank = rank
+        super.init(title: title, code: code)
+    }
+}
+
+@Model
+final class ToManyHierarchyTargetSiblingFixture: ToManyHierarchyTargetBaseFixture {
+    var label: String
+    init(title: String, label: String) {
+        self.label = label
+        super.init(title: title)
+    }
+}
+
+@Model
 final class InheritedToOneTargetFixture {
     var title: String
     init(title: String) { self.title = title }
@@ -1413,6 +1452,162 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(renamedOwners.map(\.name), ["matched"])
         XCTAssertEqual(try context.fetchCount(renamedDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(renamedDescriptor), renamedOwners.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testPredicateMatchesToManyRelationshipElements() throws {
+        let container = try ModelContainer(
+            for: InheritanceRelationshipBaseFixture.self,
+            InheritanceRelationshipChildFixture.self,
+            InheritanceRelationshipItemFixture.self,
+            configurations: .sqliteMemory("hierarchy-to-many-membership-predicate"))
+        let context = container.mainContext
+        let selectedItem = InheritanceRelationshipItemFixture(title: "selected")
+        let duplicateSelectedItem = InheritanceRelationshipItemFixture(title: "selected")
+        let otherItem = InheritanceRelationshipItemFixture(title: "other")
+        let nilTitleItem = InheritanceRelationshipItemFixture(title: "")
+        context.insert(selectedItem)
+        context.insert(duplicateSelectedItem)
+        context.insert(otherItem)
+        context.insert(nilTitleItem)
+        context.insert(InheritanceRelationshipBaseFixture(items: [selectedItem, duplicateSelectedItem]))
+        context.insert(InheritanceRelationshipChildFixture(items: [otherItem], age: 4))
+        context.insert(InheritanceRelationshipBaseFixture(items: [nilTitleItem]))
+        try context.save()
+
+        let baseOwner = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<InheritanceRelationshipBaseFixture>())
+                .first(where: { $0.items.contains(where: { $0 === selectedItem }) }))
+        let emptyOwner = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<InheritanceRelationshipBaseFixture>())
+                .first(where: { $0.items.first === nilTitleItem }))
+        let childOwner = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<InheritanceRelationshipBaseFixture>())
+                .first(where: { $0.items.first === otherItem }))
+        let joinRows = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_A, Z_B FROM Z_INHERITANCERELATIONSHIPBASEFIXTURE_ITEMS_INHERITANCERELATIONSHIPITEMFIXTURE ORDER BY Z_A",
+                arguments: [])
+        }
+        let expectedJoinRows = [
+            [baseOwner.persistentModelID.primaryKey, selectedItem.persistentModelID.primaryKey],
+            [baseOwner.persistentModelID.primaryKey, duplicateSelectedItem.persistentModelID.primaryKey],
+            [emptyOwner.persistentModelID.primaryKey, nilTitleItem.persistentModelID.primaryKey],
+            [childOwner.persistentModelID.primaryKey, otherItem.persistentModelID.primaryKey],
+        ].compactMap { pair -> [RuntimeValue]? in
+            guard let ownerID = pair[0], let itemID = pair[1] else { return nil }
+            return [.int(ownerID), .int(itemID)]
+        }.sorted { lhs, rhs in
+            guard case let .int(lhsID) = lhs[0], case let .int(rhsID) = rhs[0] else { return false }
+            return lhsID < rhsID
+        }
+        XCTAssertEqual(joinRows, expectedJoinRows)
+
+        let selectedTitle = selectedItem.title
+        let descriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title == selectedTitle })
+            },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertTrue(matches[0].items.first === selectedItem)
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let pendingTitle = "pending-title"
+        selectedItem.title = pendingTitle
+        let pendingDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title == pendingTitle })
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.count, 1)
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+
+        let disjunction = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title == pendingTitle })
+                    || base.items.contains(where: { item in item.title == "other" })
+            })
+        XCTAssertEqual(try context.fetch(disjunction).count, 2)
+
+        let negated = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                !base.items.contains(where: { item in item.title == "absent" })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(negated).count, 3)
+
+        let optionalTitlePredicate = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title == "" || item.title == "other" })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(optionalTitlePredicate).count, 2)
+
+        let pendingItem = InheritanceRelationshipItemFixture(title: "pending-owner")
+        context.insert(pendingItem)
+        context.insert(InheritanceRelationshipBaseFixture(items: [pendingItem]))
+        let pendingOwnerDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title == "pending-owner" })
+            })
+        XCTAssertEqual(try context.fetch(pendingOwnerDescriptor).count, 1)
+
+    }
+
+    @MainActor
+    func testPredicateMatchesInheritedNoInverseToManyRelationship() throws {
+        let container = try ModelContainer(
+            for: InheritedToManyChildFixture.self,
+            InheritedToOneTargetFixture.self,
+            configurations: .sqliteMemory("to-many-hierarchy-destination-predicate"))
+        let context = container.mainContext
+        let target = InheritedToOneTargetFixture(title: "selected")
+        let otherTarget = InheritedToOneTargetFixture(title: "other")
+        context.insert(target)
+        context.insert(otherTarget)
+        context.insert(InheritedToManyChildFixture(name: "selected-owner", targets: [target]))
+        context.insert(InheritedToManySiblingFixture(name: "sibling-owner", targets: [otherTarget]))
+        try context.save()
+
+        let selectedTitle = target.title
+        let childDescriptor = FetchDescriptor<InheritedToManyChildFixture>(
+            predicate: #Predicate { owner in
+                owner.targets.contains(where: { target in target.title == selectedTitle })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(childDescriptor).map(\.name), ["selected-owner"])
+    }
+
+    @MainActor
+    func testPredicateIncludesGrandchildInToManyDestinationSubtree() throws {
+        let container = try ModelContainer(
+            for: ToManyHierarchyOwnerFixture.self,
+            ToManyHierarchyTargetChildFixture.self,
+            ToManyHierarchyTargetGrandchildFixture.self,
+            ToManyHierarchyTargetSiblingFixture.self,
+            configurations: .sqliteMemory("to-many-destination-subtree-predicate"))
+        let context = container.mainContext
+        let child = ToManyHierarchyTargetChildFixture(title: "selected", code: "child")
+        let grandchild = ToManyHierarchyTargetGrandchildFixture(title: "selected", code: "grandchild", rank: 2)
+        let sibling = ToManyHierarchyTargetSiblingFixture(title: "selected", label: "sibling")
+        context.insert(child)
+        context.insert(grandchild)
+        context.insert(sibling)
+        context.insert(ToManyHierarchyOwnerFixture(targets: [child, grandchild]))
+        try context.save()
+
+        let selectedTitle = "selected"
+        let descriptor = FetchDescriptor<ToManyHierarchyOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.targets.contains(where: { target in target.title == selectedTitle })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 1)
     }
 
     @MainActor

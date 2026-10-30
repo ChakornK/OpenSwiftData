@@ -404,6 +404,7 @@ package enum SchemaBuilder {
         try validateUniqueNames(
             ["Z_PRIMARYKEY", "_osd_meta"] + roots.map { "Z\($0.name)" }, scope: "table")
         let reservedColumnKeys = Set(["Z_PK", "Z_ENT", "Z_OPT", "ZPRIMARYKEY", "Z_OSD_META"].map(identifierKey))
+        var inheritedJoinTablesByName: [String: String] = [:]
 
         for root in roots {
             let members = ordered.filter { rootsByEntity[$0.name] == root.name }
@@ -419,6 +420,20 @@ package enum SchemaBuilder {
                     }
                     guard mapping.declaringEntityName == member.name else { continue }
                     if relationship.isToMany {
+                        if relationship.inverse == nil {
+                            guard mapping.ownerRootEntityName == root.name,
+                                mapping.destinationRootEntityName == mapping.destinationEntityName,
+                                let destination = entitiesByName[mapping.destinationEntityName],
+                                destination.superentityName == nil,
+                                let joinTable = joinTableName(for: member, relationship: relationship, schema: schema)
+                            else {
+                                throw SwiftDataError.unsupportedSchemaProperty(
+                                    "Inherited to-many owner '\(member.name).\(relationship.name)' requires a flat destination."
+                                )
+                            }
+                            inheritedJoinTablesByName[joinTable] = root.name
+                            continue
+                        }
                         guard isNonOwner(member, relationship, schema: schema) else {
                             throw SwiftDataError.unsupportedSchemaProperty(
                                 "Inherited schema does not yet support to-many owner relationships ('\(member.name).\(relationship.name)')."
@@ -545,6 +560,15 @@ package enum SchemaBuilder {
                 statements.append(
                     "CREATE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(columnKey));")
             }
+        }
+
+        try validateUniqueNames(
+            roots.map { "Z\($0.name)" } + inheritedJoinTablesByName.keys.sorted(by: bytewiseLess),
+            scope: "table")
+        for joinTable in inheritedJoinTablesByName.keys.sorted(by: bytewiseLess) {
+            statements.append("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
+            statements.append("CREATE UNIQUE INDEX \(joinTable)_UNIQUE_INDEX ON \(joinTable) (Z_A, Z_B);")
+            statements.append("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B);")
         }
 
         let rows = try ordered.map { entity -> SchemaBootstrapRow in

@@ -106,7 +106,7 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertEqual(built.bootstrapRows.map(\.name), ["Base", "Child", "Grandchild", "Target"])
     }
 
-    func testInheritedToManyRelationshipRemainsFailClosed() {
+    func testInheritedToManyOwnerToFlatDestinationUsesJoinTable() throws {
         let schema = Schema([
             Schema.Entity(name: "Base"),
             Schema.Entity(
@@ -120,7 +120,21 @@ final class SchemaBuilderTests: XCTestCase {
             Schema.Entity(name: "Target"),
         ])
 
-        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertTrue(
+            built.statements.contains("CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);"))
+
+        let hierarchyDestination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
+                ],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target", superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(hierarchyDestination)) { error in
             guard case SwiftDataError.unsupportedSchemaProperty = error else {
                 return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
             }
@@ -143,6 +157,44 @@ final class SchemaBuilderTests: XCTestCase {
                 return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
             }
         }
+    }
+
+    func testInheritedToManyOwnerCreatesDeclaringEntityJoinTable() throws {
+        let base = Schema.Entity(name: "Base")
+        let child = Schema.Entity(
+            name: "Child",
+            relationships: [
+                Schema.Relationship(
+                    name: "targets", destination: "Target", isToMany: true,
+                    declaringEntityName: "Child")
+            ],
+            superentityName: "Base")
+        let grandchild = Schema.Entity(
+            name: "Grandchild",
+            relationships: [
+                Schema.Relationship(
+                    name: "targets", destination: "Target", isToMany: true,
+                    declaringEntityName: "Child")
+            ],
+            superentityName: "Child")
+        let sibling = Schema.Entity(
+            name: "Sibling",
+            relationships: [
+                Schema.Relationship(
+                    name: "targets", destination: "Target", isToMany: true,
+                    declaringEntityName: "Sibling")
+            ],
+            superentityName: "Base")
+        let target = Schema.Entity(name: "Target")
+        let built = try SchemaBuilder.build(Schema([base, child, grandchild, sibling, target]))
+
+        XCTAssertEqual(
+            built.statements.filter { $0.hasSuffix("(Z_A INTEGER, Z_B INTEGER);") },
+            [
+                "CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);",
+                "CREATE TABLE Z_SIBLING_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);",
+            ])
+        XCTAssertEqual(built.statements.filter { $0.contains("Z_CHILD_TARGETS_TARGET") }.count, 3)
     }
 
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
@@ -198,7 +250,10 @@ final class SchemaBuilderTests: XCTestCase {
                 ],
                 superentityName: "Base"),
         ])
-        XCTAssertThrowsError(try SchemaBuilder.build(toMany))
+        XCTAssertTrue(
+            try SchemaBuilder.build(toMany).statements.contains(
+                "CREATE TABLE Z_CHILD_PARENTS_BASE (Z_A INTEGER, Z_B INTEGER);")
+        )
 
         let inverse = Schema([
             Schema.Entity(name: "Base"),

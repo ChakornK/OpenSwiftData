@@ -160,7 +160,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
         }
         relationshipFaultBody = { model, entity, resolver in
             guard let model = model as? Model,
-                let backing = model.persistentBackingData as? ManagedBackingData<Model>
+                let backing = model.persistentBackingData as? ManagedBackingData<Model.Model>
             else { return }
             let keyPaths = Set(
                 Model.schemaMetadata().compactMap { metadata in
@@ -176,13 +176,13 @@ struct ModelTypeRegistration: @unchecked Sendable {
         }
         valueStateBody = { model, keyPath in
             guard let model = model as? Model,
-                let backing = model.persistentBackingData as? ManagedBackingData<Model>
+                let backing = model.persistentBackingData as? ManagedBackingData<Model.Model>
             else { return nil }
             return backing.valueState(forKey: keyPath)
         }
         setMaterializedValueBody = { model, keyPath, value in
             guard let model = model as? Model,
-                let backing = model.persistentBackingData as? ManagedBackingData<Model>
+                let backing = model.persistentBackingData as? ManagedBackingData<Model.Model>
             else { return }
             backing.setMaterializedValueIfNoOverlay(forKey: keyPath, to: value)
         }

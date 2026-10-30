@@ -214,6 +214,38 @@ final class InheritedToManySiblingFixture: InheritedToManyBaseFixture {
 }
 
 @Model
+final class InheritedManyToManyTagFixture {
+    @Relationship(inverse: nil) var owners: [InheritedManyToManyChildFixture] = []
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+class InheritedManyToManyBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class InheritedManyToManyChildFixture: InheritedManyToManyBaseFixture {
+    @Relationship(inverse: \InheritedManyToManyTagFixture.owners)
+    var tags: [InheritedManyToManyTagFixture] = []
+    init(name: String, tags: [InheritedManyToManyTagFixture]) {
+        self.tags = tags
+        super.init(name: name)
+    }
+}
+
+@Model
+final class InheritedManyToManyGrandchildFixture: InheritedManyToManyChildFixture {
+    var rank: Int
+    init(name: String, tags: [InheritedManyToManyTagFixture], rank: Int) {
+        self.rank = rank
+        super.init(name: name, tags: tags)
+    }
+}
+
+@Model
 class InheritedCascadeJoinBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -832,6 +864,74 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertFalse(denyOwner.isDeleted)
         XCTAssertFalse(denyContext.hasChanges)
         XCTAssertEqual(try denyContext.fetch(FetchDescriptor<InheritedDenyJoinBaseFixture>()).count, 1)
+    }
+
+    @MainActor
+    func testInheritedManyToManyInverseJoinTableFiltersSiblings() throws {
+        let container = try ModelContainer(
+            for: [
+                InheritedManyToManyChildFixture.self,
+                InheritedManyToManyGrandchildFixture.self,
+                InheritedManyToManyTagFixture.self,
+            ],
+            configurations: [.sqliteMemory("inherited-many-to-many-inverse")])
+        let writer = container.mainContext
+        let first = InheritedManyToManyTagFixture(title: "first")
+        let second = InheritedManyToManyTagFixture(title: "second")
+        writer.insert(first)
+        writer.insert(second)
+        writer.insert(InheritedManyToManyChildFixture(name: "child", tags: [first]))
+        writer.insert(InheritedManyToManyGrandchildFixture(name: "grandchild", tags: [second], rank: 5))
+        try writer.save()
+
+        let joinRows = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_A, Z_B FROM Z_INHERITEDMANYTOMANYCHILDFIXTURE_TAGS_INHERITEDMANYTOMANYTAGFIXTURE_OWNERS "
+                    + "ORDER BY Z_A",
+                arguments: [])
+        }
+        XCTAssertEqual(joinRows, [[.int(1), .int(1)], [.int(2), .int(2)]])
+
+        let reader = container.makeContext()
+        let firstTag = try XCTUnwrap(reader.fetch(FetchDescriptor<InheritedManyToManyTagFixture>()).first)
+        XCTAssertEqual(firstTag.owners.map(\.name), ["child"])
+        let secondTag = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritedManyToManyTagFixture>())
+                .first(where: { $0.title == "second" }))
+        XCTAssertTrue(secondTag.owners.first is InheritedManyToManyGrandchildFixture)
+        let firstOwners = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<InheritedManyToManyTagFixture>(
+                    propertiesToFetch: nil,
+                    relationshipKeyPathsForPrefetching: [\InheritedManyToManyTagFixture.owners])
+            )
+            .first(where: { $0.title == "first" }))
+        XCTAssertEqual(firstOwners.owners.map(\.name), ["child"])
+        XCTAssertNil(firstTag.owners.first(where: { $0.name == "sibling" }))
+
+        firstOwners.owners = []
+        XCTAssertTrue(firstOwners.owners.isEmpty)
+        XCTAssertTrue(firstOwners.hasChanges)
+        try reader.save()
+        let remainingEdges = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_A, Z_B FROM Z_INHERITEDMANYTOMANYCHILDFIXTURE_TAGS_INHERITEDMANYTOMANYTAGFIXTURE_OWNERS "
+                    + "ORDER BY Z_A",
+                arguments: [])
+        }
+        XCTAssertEqual(remainingEdges, [[.int(2), .int(2)]])
+
+        let grandchild = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritedManyToManyGrandchildFixture>()).first)
+        XCTAssertEqual(grandchild.tags.map(\.title), ["second"])
+        reader.delete(grandchild)
+        try reader.save()
+        let afterGrandchildDelete = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_A, Z_B FROM Z_INHERITEDMANYTOMANYCHILDFIXTURE_TAGS_INHERITEDMANYTOMANYTAGFIXTURE_OWNERS",
+                arguments: [])
+        }
+        XCTAssertTrue(afterGrandchildDelete?.isEmpty == true)
     }
 
     @MainActor

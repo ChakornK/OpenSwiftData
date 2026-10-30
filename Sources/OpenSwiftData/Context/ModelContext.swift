@@ -2208,17 +2208,32 @@ public final class ModelContext {
                 let requestedSideIsStorageOwner = joinSideAOwner(entity, relationship)
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let destinationHasHierarchy =
+                    destinationEntity.superentityName != nil
+                    || container?.schema.entities.contains(where: { $0.superentityName == destinationEntity.name })
+                        == true
+                let destinationRoot = rootEntity(for: destinationEntity)
+                let destinationIDs = destinationHasHierarchy ? descendantEntityIDs(for: destinationEntity) : []
                 rows = try store.read { connection in
                     let rootColumn = requestedSideIsStorageOwner ? "Z_A" : "Z_B"
                     let endpointColumn = requestedSideIsStorageOwner ? "Z_B" : "Z_A"
+                    let endpointJoin =
+                        destinationHasHierarchy
+                        ? " JOIN Z\(destinationRoot.name.uppercased()) AS endpoint ON endpoint.Z_PK = joins.\(endpointColumn)"
+                        : ""
+                    let discriminatorFilter =
+                        destinationHasHierarchy
+                        ? " AND endpoint.Z_ENT IN (\(Array(repeating: "?", count: destinationIDs.count).joined(separator: ", ")))"
+                        : ""
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
-                            "SELECT \(rootColumn), \(endpointColumn) FROM \(table) "
-                                + "WHERE \(rootColumn) IN (\(placeholders)) "
-                                + "ORDER BY \(rootColumn) ASC, \(endpointColumn) ASC",
-                            arguments: batch.map(RuntimeValue.int))
+                            "SELECT joins.\(rootColumn), joins.\(endpointColumn) FROM \(table) AS joins"
+                                + endpointJoin + " WHERE joins.\(rootColumn) IN (\(placeholders))"
+                                + discriminatorFilter
+                                + " ORDER BY joins.\(rootColumn) ASC, joins.\(endpointColumn) ASC",
+                            arguments: batch.map(RuntimeValue.int) + destinationIDs.map { .int(Int64($0)) })
                     }
                     return result
                 }
@@ -2392,6 +2407,10 @@ public final class ModelContext {
                 }
             }
 
+            guard let relationshipDestinationEntity = container?.schema.entity(forName: relationship.destination) else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship destination '\(relationship.destination)' is missing from the schema.")
+            }
             for row in rows {
                 guard row.count == 2, case let .int(firstPK) = row[0], case let .int(secondPK) = row[1] else {
                     continue
@@ -2402,8 +2421,7 @@ public final class ModelContext {
                 let destination =
                     destinationModels[destinationPK]
                     ?? identityMap.model(
-                        for: EntityPrimaryKey(
-                            entityName: relationship.destination, primaryKey: destinationPK),
+                        for: identityKey(for: relationshipDestinationEntity, primaryKey: destinationPK),
                         as: destinationType)
                 guard let destination
                 else {
@@ -2511,6 +2529,10 @@ public final class ModelContext {
     private func relationshipLogicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
         containerStorage?.schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
+    }
+
+    private func modelEntityName(of model: any PersistentModel) -> String? {
+        String(describing: type(of: model)).split(separator: ".").last.map(String.init)
     }
 
     private func joinTableName(for entity: Schema.Entity, _ relationship: Schema.Relationship) -> String? {
@@ -3345,7 +3367,12 @@ public final class ModelContext {
                 {
                     continue
                 }
-                guard String(describing: type(of: endpoint)) == relationship.destination else {
+                guard let endpointEntityName = modelEntityName(of: endpoint),
+                    let endpointEntity = container.schema.entity(forName: endpointEntityName),
+                    let destinationEntity = container.schema.entity(forName: relationship.destination),
+                    descendantEntityIDs(for: destinationEntity).contains(
+                        container.schema.entityIDsByName[endpointEntity.name] ?? 0)
+                else {
                     throw SwiftDataError.unsupportedStore(
                         "Relationship '\(entity.name).\(relationship.name)' received endpoint type "
                             + "'\(String(describing: type(of: endpoint)))' instead of '\(relationship.destination)'.")

@@ -197,6 +197,38 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertEqual(built.statements.filter { $0.contains("Z_CHILD_TARGETS_TARGET") }.count, 3)
     }
 
+    func testInheritedManyToManyInverseUsesOneCanonicalJoinTable() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(
+                        name: "tags", destination: "Tag", isToMany: true, inverse: "owners",
+                        declaringEntityName: "Child")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "tags", destination: "Tag", isToMany: true, inverse: "owners",
+                        declaringEntityName: "Child")
+                ],
+                superentityName: "Child"),
+            Schema.Entity(
+                name: "Tag",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Child", isToMany: true, inverse: "tags")
+                ]),
+        ])
+
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertEqual(
+            built.statements.filter { $0.hasSuffix("(Z_A INTEGER, Z_B INTEGER);") },
+            ["CREATE TABLE Z_CHILD_TAGS_TAG_OWNERS (Z_A INTEGER, Z_B INTEGER);"])
+    }
+
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
         let schema = Schema([
             Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
@@ -246,13 +278,14 @@ final class SchemaBuilderTests: XCTestCase {
             Schema.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parents", destination: "Base", isToMany: true)
+                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
                 ],
                 superentityName: "Base"),
+            Schema.Entity(name: "Target"),
         ])
         XCTAssertTrue(
             try SchemaBuilder.build(toMany).statements.contains(
-                "CREATE TABLE Z_CHILD_PARENTS_BASE (Z_A INTEGER, Z_B INTEGER);")
+                "CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);")
         )
 
         let inverse = Schema([

@@ -420,25 +420,31 @@ package enum SchemaBuilder {
                     }
                     guard mapping.declaringEntityName == member.name else { continue }
                     if relationship.isToMany {
-                        if relationship.inverse == nil {
-                            guard mapping.ownerRootEntityName == root.name,
-                                mapping.destinationRootEntityName == mapping.destinationEntityName,
-                                let destination = entitiesByName[mapping.destinationEntityName],
-                                destination.superentityName == nil,
-                                let joinTable = joinTableName(for: member, relationship: relationship, schema: schema)
-                            else {
-                                throw SwiftDataError.unsupportedSchemaProperty(
-                                    "Inherited to-many owner '\(member.name).\(relationship.name)' requires a flat destination."
-                                )
-                            }
-                            inheritedJoinTablesByName[joinTable] = root.name
+                        if relationship.inverse != nil, isNonOwner(member, relationship, schema: schema) {
                             continue
                         }
-                        guard isNonOwner(member, relationship, schema: schema) else {
+                        let destinationRoot = mapping.destinationRootEntityName
+                        let ownerIsHierarchical = entities.contains {
+                            $0.name != mapping.ownerRootEntityName
+                                && rootsByEntity[$0.name] == mapping.ownerRootEntityName
+                        }
+                        let destinationIsHierarchical = entities.contains {
+                            $0.name != destinationRoot && rootsByEntity[$0.name] == destinationRoot
+                        }
+                        guard mapping.ownerRootEntityName == root.name,
+                            !ownerIsHierarchical || !destinationIsHierarchical,
+                            let destination = entitiesByName[mapping.destinationEntityName],
+                            relationship.inverse == nil
+                                || destination.relationships.contains(where: {
+                                    $0.name == relationship.inverse && $0.isToMany
+                                }),
+                            let joinTable = joinTableName(for: member, relationship: relationship, schema: schema)
+                        else {
                             throw SwiftDataError.unsupportedSchemaProperty(
-                                "Inherited schema does not yet support to-many owner relationships ('\(member.name).\(relationship.name)')."
+                                "Inherited many-to-many storage requires no more than one hierarchy endpoint ('\(member.name).\(relationship.name)')."
                             )
                         }
+                        inheritedJoinTablesByName[joinTable] = root.name
                         continue
                     }
                     let hasSupportedInverse: Bool

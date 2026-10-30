@@ -211,10 +211,25 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             let sideAOwner = joinSideAOwner(ownerEntity, relationship, destination: destination)
             let ownerColumn = sideAOwner ? "Z_A" : "Z_B"
             let endpointColumn = sideAOwner ? "Z_B" : "Z_A"
+            let endpointRoot = rootEntity(for: destination)
+            let endpointIDs = descendantEntityIDs(for: destination)
+            let endpointIsHierarchical =
+                endpointRoot.name != destination.name
+                || schema.entities.contains(where: { $0.superentityName == destination.name })
+            let endpointJoin =
+                endpointIsHierarchical
+                ? " JOIN Z\(endpointRoot.name.uppercased()) AS endpoint ON endpoint.Z_PK = joins.\(endpointColumn)"
+                : ""
+            let endpointFilter =
+                endpointIsHierarchical
+                ? " AND endpoint.Z_ENT IN (\(Array(repeating: "?", count: endpointIDs.count).joined(separator: ", ")))"
+                : ""
             return try store.read { connection in
                 try connection.rows(
-                    "SELECT \(endpointColumn) FROM \(table) WHERE \(ownerColumn) = ? ORDER BY \(endpointColumn) ASC",
+                    "SELECT joins.\(endpointColumn) FROM \(table) AS joins\(endpointJoin) "
+                        + "WHERE joins.\(ownerColumn) = ?\(endpointFilter) ORDER BY joins.\(endpointColumn) ASC",
                     arguments: [.int(ownerPrimaryKey)]
+                        + (endpointIsHierarchical ? endpointIDs.map { .int(Int64($0)) } : [])
                 ).compactMap { row in
                     guard case let .int(primaryKey)? = row.first else { return nil }
                     return primaryKey

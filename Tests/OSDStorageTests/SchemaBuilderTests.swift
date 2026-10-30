@@ -199,27 +199,76 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertFalse(built.statements.contains { $0.contains("ZRECORDCHILD") && $0.contains("INDEX") })
     }
 
-    func testHierarchyRejectsSubtypeDeclaredIndexesAndUniqueAttributes() {
-        let subtypeIndex = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
+    func testHierarchySubtypeIndexesAndUniqueAttributesUsePartialSubtreeIndexes() throws {
+        let rootIndex = Schema.Index(properties: ["rootKey"])
+        let childIndex = Schema.Index(properties: ["score"])
+        let childCompositeUnique = Schema.Index(properties: ["rootKey", "score"], isUnique: true)
+        let schema = Schema([
+            Schema.Entity(
+                name: "Base",
+                attributes: [
+                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "token", type: "String"),
+                ],
+                indexes: [rootIndex]),
             Schema.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String"), Schema.Attribute(name: "rank", type: "Int"),
+                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "token", type: "String"),
+                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["rank"])],
+                indexes: [rootIndex, childIndex, childCompositeUnique],
                 superentityName: "Base"),
-        ])
-        XCTAssertThrowsError(try SchemaBuilder.build(subtypeIndex))
-
-        let subtypeUnique = Schema([
-            Schema.Entity(name: "Base"),
             Schema.Entity(
-                name: "Child",
-                attributes: [Schema.Attribute(name: "token", type: "String", options: [.unique])],
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "token", type: "String"),
+                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                indexes: [rootIndex, childIndex, childCompositeUnique],
+                superentityName: "Child"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [
+                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "token", type: "String"),
+                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                ],
+                indexes: [rootIndex],
                 superentityName: "Base"),
         ])
-        XCTAssertThrowsError(try SchemaBuilder.build(subtypeUnique))
+
+        let statements = try SchemaBuilder.build(schema).statements
+        XCTAssertEqual(
+            statements.filter { $0.contains("INDEX") },
+            [
+                "CREATE UNIQUE INDEX ZBASE_ZROOTKEY_UNIQUE_INDEX ON ZBASE (ZROOTKEY);",
+                "CREATE UNIQUE INDEX ZBASE_CHILD_ZSCORE_UNIQUE_INDEX ON ZBASE (ZSCORE) WHERE Z_ENT IN (2, 3);",
+                "CREATE UNIQUE INDEX ZBASE_SIBLING_ZLABEL_UNIQUE_INDEX ON ZBASE (ZLABEL) WHERE Z_ENT IN (4);",
+                "CREATE INDEX ZBASE_ZROOTKEY_INDEX ON ZBASE (ZROOTKEY);",
+                "CREATE INDEX ZBASE_CHILD_ZSCORE_INDEX ON ZBASE (ZSCORE) WHERE Z_ENT IN (2, 3);",
+                "CREATE UNIQUE INDEX ZBASE_CHILD_ZROOTKEY_ZSCORE_UNIQUE_INDEX ON ZBASE (ZROOTKEY, ZSCORE) WHERE Z_ENT IN (2, 3);",
+            ])
+        XCTAssertTrue(
+            statements.contains(
+                "CREATE INDEX ZBASE_ZROOTKEY_INDEX ON ZBASE (ZROOTKEY);"))
+        XCTAssertTrue(
+            statements.contains(
+                "CREATE UNIQUE INDEX ZBASE_CHILD_ZSCORE_UNIQUE_INDEX ON ZBASE (ZSCORE) WHERE Z_ENT IN (2, 3);"))
+        XCTAssertTrue(
+            statements.contains(
+                "CREATE INDEX ZBASE_CHILD_ZSCORE_INDEX ON ZBASE (ZSCORE) WHERE Z_ENT IN (2, 3);"))
+        XCTAssertTrue(
+            statements.contains(
+                "CREATE UNIQUE INDEX ZBASE_CHILD_ZROOTKEY_ZSCORE_UNIQUE_INDEX ON ZBASE (ZROOTKEY, ZSCORE) WHERE Z_ENT IN (2, 3);"
+            ))
+        XCTAssertTrue(
+            statements.contains(
+                "CREATE UNIQUE INDEX ZBASE_SIBLING_ZLABEL_UNIQUE_INDEX ON ZBASE (ZLABEL) WHERE Z_ENT IN (4);"))
+        XCTAssertEqual(statements.filter { $0.contains("ZBASE_CHILD_ZSCORE") }.count, 2)
     }
 
     func testInheritedToManyOwnerToFlatDestinationUsesJoinTable() throws {

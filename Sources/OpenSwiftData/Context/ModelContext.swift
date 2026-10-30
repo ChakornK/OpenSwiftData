@@ -3445,13 +3445,37 @@ public final class ModelContext {
     private func uniqueMatch(
         entity: Schema.Entity, columns: [String], values: [RuntimeValue], connection: any RuntimeConnection
     ) throws -> (primaryKey: Int64, version: Int)? {
-        let attributes = canonicalAttributes(for: entity)
         let storageEntity = rootEntity(for: entity)
-        let constraints =
-            attributes.filter { $0.options.contains(.unique) }.map { [$0.name] }
-            + entity.indexes.filter(\.isUnique).map(\.properties)
+        var ancestors: [Schema.Entity] = []
+        var current: Schema.Entity? = entity
+        var visited = Set<String>()
+        while let value = current, visited.insert(value.name).inserted {
+            ancestors.append(value)
+            current = value.superentityName.flatMap { containerStorage?.schema.entity(forName: $0) }
+        }
+        let orderedAncestors = ancestors.reversed()
+        var constraints: [(properties: [String], owner: Schema.Entity)] = []
+        var ancestorAttributes = Set<String>()
+        var ancestorIndexes = Set<Schema.Index>()
+        for owner in orderedAncestors {
+            for attribute in owner.attributes
+            where attribute.options.contains(.unique) && !ancestorAttributes.contains(attribute.name) {
+                constraints.append(([attribute.name], owner))
+            }
+            for index in owner.indexes where index.isUnique && !ancestorIndexes.contains(index) {
+                constraints.append((index.properties, owner))
+            }
+            ancestorAttributes.formUnion(owner.attributes.map(\.name))
+            ancestorIndexes.formUnion(owner.indexes)
+        }
+        var seenConstraints = Set<String>()
+        constraints = constraints.filter { constraint in
+            let key = constraint.owner.name + ":" + constraint.properties.joined(separator: "\u{0}")
+            return seenConstraints.insert(key).inserted
+        }
         var match: (primaryKey: Int64, version: Int)?
-        for properties in constraints {
+        for constraint in constraints {
+            let properties = constraint.properties
             guard !properties.isEmpty else { continue }
             var predicates: [String] = []
             var arguments: [RuntimeValue] = []
@@ -3464,9 +3488,17 @@ public final class ModelContext {
                 arguments.append(value)
             }
             guard predicates.count == properties.count else { continue }
+            let scopeIDs =
+                constraint.owner.superentityName == nil
+                ? [] : descendantEntityIDs(for: constraint.owner)
+            if !scopeIDs.isEmpty {
+                predicates.append("Z_ENT IN (\(Array(repeating: "?", count: scopeIDs.count).joined(separator: ", ")))")
+                arguments.append(contentsOf: scopeIDs.map { .int(Int64($0)) })
+            }
             let sql =
                 "SELECT Z_PK, Z_OPT FROM Z\(storageEntity.name.uppercased()) WHERE \(predicates.joined(separator: " AND ")) ORDER BY Z_PK LIMIT 1"
-            if let row = try connection.rows(sql, arguments: arguments).first, row.count >= 2 {
+            let rows = try connection.rows(sql, arguments: arguments)
+            if let row = rows.first, row.count >= 2 {
                 guard case let .int(primaryKey) = row[0] else { continue }
                 let current = (primaryKey, runtimeInt(row[1]))
                 if let match, match.primaryKey != current.0 {

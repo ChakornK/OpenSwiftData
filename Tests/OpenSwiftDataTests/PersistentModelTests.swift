@@ -272,6 +272,50 @@ final class UniqueHierarchySiblingFixture: UniqueHierarchyBaseFixture {
 }
 
 @Model
+class SubtypeUniqueBaseFixture {
+    var token: String
+    init(token: String) { self.token = token }
+}
+
+@Model
+class SubtypeUniqueChildFixture: SubtypeUniqueBaseFixture {
+    @Attribute(.unique) var scopedKey: String
+    var tenant: String
+    var score: Int
+
+    init(token: String, scopedKey: String, tenant: String, score: Int) {
+        self.scopedKey = scopedKey
+        self.tenant = tenant
+        self.score = score
+        super.init(token: token)
+    }
+
+    #Unique(\SubtypeUniqueChildFixture.tenant, \SubtypeUniqueChildFixture.score)
+    #Index(\SubtypeUniqueChildFixture.score)
+}
+
+@Model
+final class SubtypeUniqueGrandchildFixture: SubtypeUniqueChildFixture {
+    var rank: Int
+
+    init(token: String, scopedKey: String, tenant: String, score: Int, rank: Int) {
+        self.rank = rank
+        super.init(token: token, scopedKey: scopedKey, tenant: tenant, score: score)
+    }
+}
+
+@Model
+final class SubtypeUniqueSiblingFixture: SubtypeUniqueBaseFixture {
+    @Attribute(.unique) var scopedKey: String
+    var label: String
+    init(token: String, scopedKey: String, label: String) {
+        self.scopedKey = scopedKey
+        self.label = label
+        super.init(token: token)
+    }
+}
+
+@Model
 class PlainHierarchyTargetBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -1124,6 +1168,150 @@ final class PersistentModelTests: XCTestCase {
         let records = try context.fetch(FetchDescriptor<UniqueHierarchyBaseFixture>())
         XCTAssertEqual(records.count, 1)
         XCTAssertEqual((records.first as? UniqueHierarchySiblingFixture)?.label, "replacement")
+    }
+
+    @MainActor
+    func testSubtypeUniqueScopeExcludesSiblingsAndIncludesDescendants() throws {
+        let container = try ModelContainer(
+            for: SubtypeUniqueBaseFixture.self,
+            SubtypeUniqueChildFixture.self,
+            SubtypeUniqueGrandchildFixture.self,
+            SubtypeUniqueSiblingFixture.self,
+            configurations: .sqliteMemory("subtype-unique-scope"))
+        let context = container.mainContext
+        let root = SubtypeUniqueBaseFixture(token: "shared")
+        let sibling = SubtypeUniqueSiblingFixture(token: "shared", scopedKey: "same", label: "sibling")
+        let child = SubtypeUniqueChildFixture(token: "shared", scopedKey: "same", tenant: "acme", score: 5)
+        context.insert(root)
+        context.insert(sibling)
+        context.insert(child)
+        try context.save()
+        XCTAssertTrue(
+            container.schema.entity(forName: "SubtypeUniqueChildFixture")?.attributes
+                .first(where: { $0.name == "scopedKey" })?.options.contains(.unique) == true)
+        XCTAssertTrue(
+            container.schema.entity(forName: "SubtypeUniqueSiblingFixture")?.attributes
+                .first(where: { $0.name == "scopedKey" })?.options.contains(.unique) == true)
+        let uniqueIndexes: [[RuntimeValue]]? = try container.store?.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name LIKE '%UNIQUE%' ORDER BY name",
+                arguments: [])
+        }
+        XCTAssertTrue(
+            uniqueIndexes?.contains(where: { row in
+                row == [
+                    .text("ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZTENANT_ZSCORE_UNIQUE_INDEX"),
+                    .text(
+                        "CREATE UNIQUE INDEX ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZTENANT_ZSCORE_UNIQUE_INDEX ON ZSUBTYPEUNIQUEBASEFIXTURE (ZTENANT, ZSCORE) WHERE Z_ENT IN (2, 3)"
+                    ),
+                ]
+            }) == true)
+        XCTAssertTrue(
+            uniqueIndexes?.contains(where: { row in
+                row == [
+                    .text("ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZSCOPEDKEY_UNIQUE_INDEX"),
+                    .text(
+                        "CREATE UNIQUE INDEX ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZSCOPEDKEY_UNIQUE_INDEX ON ZSUBTYPEUNIQUEBASEFIXTURE (ZSCOPEDKEY) WHERE Z_ENT IN (2, 3)"
+                    ),
+                ]
+            }) == true)
+        let childID = try XCTUnwrap(child.persistentModelID.primaryKey)
+
+        let grandchildDuplicate = SubtypeUniqueGrandchildFixture(
+            token: "grandchild", scopedKey: "different", tenant: "acme", score: 5, rank: 1)
+        context.insert(grandchildDuplicate)
+        try context.save()
+        XCTAssertEqual(grandchildDuplicate.persistentModelID.primaryKey, childID)
+        let storedUniqueValue: [RuntimeValue]? = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_PK, Z_ENT, ZSCOPEDKEY FROM ZSUBTYPEUNIQUEBASEFIXTURE WHERE Z_PK = ?",
+                arguments: [.int(childID)]
+            ).first ?? []
+        }
+        let grandchildEntityID = Int64(
+            try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueGrandchildFixture"]))
+        XCTAssertEqual(storedUniqueValue, [.int(childID), .int(grandchildEntityID), .text("different")])
+
+        let attributeUniqueMatch = SubtypeUniqueChildFixture(
+            token: "different-token", scopedKey: "different", tenant: "other", score: 10)
+        context.insert(attributeUniqueMatch)
+        try context.save()
+        XCTAssertEqual(attributeUniqueMatch.persistentModelID.primaryKey, childID)
+
+        let rows: [[RuntimeValue]]? = try container.store?.read {
+            try $0.rows("SELECT Z_ENT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE ORDER BY Z_PK", arguments: [])
+        }
+        let baseID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueBaseFixture"]))
+        let siblingID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueSiblingFixture"]))
+        let childEntityID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueChildFixture"]))
+        XCTAssertEqual(
+            rows, [[.int(baseID), .null], [.int(childEntityID), .int(10)], [.int(siblingID), .null]])
+
+        let indexes: [[RuntimeValue]]? = try container.store?.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name", arguments: [])
+        }
+        XCTAssertTrue(
+            indexes?.contains([
+                .text("ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZSCORE_INDEX"),
+                .text(
+                    "CREATE INDEX ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZSCORE_INDEX ON ZSUBTYPEUNIQUEBASEFIXTURE (ZSCORE) WHERE Z_ENT IN (2, 3)"
+                ),
+            ]) == true)
+        let plan: [[RuntimeValue]]? = try container.store?.read {
+            try $0.rows(
+                "EXPLAIN QUERY PLAN SELECT Z_PK FROM ZSUBTYPEUNIQUEBASEFIXTURE WHERE Z_ENT IN (2, 3) AND ZSCORE = ?",
+                arguments: [.int(5)])
+        }
+        XCTAssertTrue(
+            plan?.contains(where: {
+                $0.contains(
+                    where: {
+                        if case let .text(value) = $0 {
+                            value.contains("ZSUBTYPEUNIQUEBASEFIXTURE_SUBTYPEUNIQUECHILDFIXTURE_ZSCORE_INDEX")
+                        } else {
+                            false
+                        }
+                    })
+            })
+                == true,
+            "Unexpected query plan: \(String(describing: plan))")
+    }
+
+    @MainActor
+    func testHierarchyUniqueConstraintsMatchingDifferentRowsFailAtomically() throws {
+        let container = try ModelContainer(
+            for: SubtypeUniqueBaseFixture.self,
+            SubtypeUniqueChildFixture.self,
+            SubtypeUniqueGrandchildFixture.self,
+            SubtypeUniqueSiblingFixture.self,
+            configurations: .sqliteMemory("hierarchy-conflicting-unique-matches"))
+        let context = container.mainContext
+        context.insert(
+            SubtypeUniqueChildFixture(token: "first", scopedKey: "key-one", tenant: "tenant-one", score: 1))
+        context.insert(
+            SubtypeUniqueChildFixture(token: "second", scopedKey: "key-two", tenant: "tenant-two", score: 2))
+        try context.save()
+        let childEntity = try XCTUnwrap(container.schema.entity(forName: "SubtypeUniqueChildFixture"))
+        XCTAssertTrue(
+            childEntity.attributes.first(where: { $0.name == "scopedKey" })?.options.contains(.unique) == true)
+        XCTAssertTrue(childEntity.indexes.contains(Schema.Index(properties: ["scopedKey"], isUnique: true)))
+        let before = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_PK, Z_ENT, ZTOKEN, ZSCOPEDKEY, ZTENANT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE",
+                arguments: [])
+        }
+
+        context.insert(
+            SubtypeUniqueChildFixture(token: "new", scopedKey: "key-one", tenant: "tenant-two", score: 2))
+        XCTAssertThrowsError(try context.save())
+
+        let after = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_PK, Z_ENT, ZTOKEN, ZSCOPEDKEY, ZTENANT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE",
+                arguments: [])
+        }
+        XCTAssertEqual(after, before)
+        XCTAssertTrue(context.hasChanges)
     }
 
     @MainActor

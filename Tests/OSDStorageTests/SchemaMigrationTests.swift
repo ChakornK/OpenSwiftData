@@ -227,14 +227,51 @@ final class SchemaMigrationTests: XCTestCase {
                 indexes: [Schema.Index(properties: ["code"], isUnique: true)]),
             Schema.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
-                indexes: [Schema.Index(properties: ["code"], isUnique: true)],
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String"),
+                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["code"], isUnique: true),
+                    Schema.Index(properties: ["score"]),
+                ],
                 superentityName: "Base"),
         ])
 
         XCTAssertNotEqual(SchemaHash.digest(withoutIndex), SchemaHash.digest(withIndex))
         let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: withIndex))
         XCTAssertEqual(decoded.entities, withIndex.entities)
+    }
+
+    func testSubtypeIndexesAndUniqueAttributesChangeHierarchyHash() throws {
+        let unconstrained = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "token", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "token", type: "String"), Schema.Attribute(name: "score", type: "Int"),
+                ],
+                superentityName: "Base"),
+        ])
+        let constrained = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "token", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "token", type: "String"),
+                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["token"], isUnique: true)],
+                superentityName: "Base"),
+        ])
+
+        XCTAssertNotEqual(SchemaHash.digest(unconstrained), SchemaHash.digest(constrained))
+        let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: constrained))
+        XCTAssertEqual(SchemaHash.digest(decoded), SchemaHash.digest(constrained))
+        XCTAssertEqual(decoded.entity(forName: "Child")?.indexes, constrained.entity(forName: "Child")?.indexes)
+        XCTAssertTrue(
+            decoded.entity(forName: "Child")?.attributes
+                .first(where: { $0.name == "score" })?.options.contains(.unique) == true)
     }
 
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {

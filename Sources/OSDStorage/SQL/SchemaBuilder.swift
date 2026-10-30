@@ -402,16 +402,6 @@ package enum SchemaBuilder {
         entitiesByName: [String: Schema.Entity],
         entityIDs: [String: Int]
     ) throws -> BuiltSchema {
-        for entity in entities where entity.superentityName != nil {
-            guard let parentName = entity.superentityName, let parent = entitiesByName[parentName] else { continue }
-            let inheritedIndexes = Set(parent.indexes)
-            guard entity.indexes.allSatisfy(inheritedIndexes.contains) else {
-                throw SwiftDataError.unsupportedSchemaProperty(
-                    "Indexes and uniqueness may only be declared on hierarchy roots ('\(entity.name)')."
-                )
-            }
-        }
-
         let roots = entities.filter { $0.superentityName == nil }.sorted { bytewiseLess($0.name, $1.name) }
         guard entities.allSatisfy({ entityIDs[$0.name] != nil }) else {
             throw SwiftDataError.unsupportedSchemaProperty("Schema inheritance has incomplete entity identifiers.")
@@ -446,27 +436,30 @@ package enum SchemaBuilder {
 
         for root in roots {
             let members = ordered.filter { rootsByEntity[$0.name] == root.name }
-            let rootAttributeNames = Set(root.attributes.map { identifierKey($0.name) })
-            for index in root.indexes {
-                guard !index.properties.isEmpty,
-                    Set(index.properties).count == index.properties.count,
-                    index.properties.allSatisfy({ rootAttributeNames.contains(identifierKey($0)) }),
-                    index.properties.allSatisfy({ property in
-                        guard
-                            let attribute = root.attributes.first(where: {
-                                identifierKey($0.name) == identifierKey(property)
-                            })
-                        else { return false }
-                        return !attribute.options.contains(.flattened)
-                            && !attribute.options.contains(.externalStorage)
-                            && !attribute.options.contains(where: {
-                                if case .transformable = $0 { true } else { false }
-                            })
-                    })
-                else {
-                    throw SwiftDataError.unsupportedSchemaProperty(
-                        "Hierarchy root index on '\(root.name)' must reference distinct root-declared scalar properties."
-                    )
+            var declaredIndexesByEntity: [String: [Schema.Index]] = [:]
+            for member in members {
+                let ancestors = ancestorEntities(of: member, entitiesByName: entitiesByName)
+                let inheritedIndexes = Set(ancestors.flatMap(\.indexes))
+                let declaredIndexes = member.indexes.filter { !inheritedIndexes.contains($0) }
+                declaredIndexesByEntity[member.name] = declaredIndexes
+                for index in declaredIndexes {
+                    guard !index.properties.isEmpty,
+                        Set(index.properties).count == index.properties.count,
+                        index.properties.allSatisfy({ property in
+                            guard let attribute = member.attributes.first(where: { $0.name == property }) else {
+                                return false
+                            }
+                            return !attribute.options.contains(.flattened)
+                                && !attribute.options.contains(.externalStorage)
+                                && !attribute.options.contains(where: {
+                                    if case .transformable = $0 { true } else { false }
+                                })
+                        })
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Hierarchy index on '\(member.name)' must reference distinct direct scalar properties."
+                        )
+                    }
                 }
             }
             var relationshipsByColumn: [String: Schema.RelationshipStorageMapping] = [:]
@@ -558,12 +551,14 @@ package enum SchemaBuilder {
                 }
             }
             var attributesByName: [String: (Schema.Attribute, String)] = [:]
+            var uniqueAttributesByOwner: [(Schema.Attribute, String)] = []
             for entity in members {
-                let parentAttributes = entity.superentityName.flatMap { entitiesByName[$0]?.attributes } ?? []
-                let parentAttributesByName = Dictionary(
-                    uniqueKeysWithValues: parentAttributes.map { (identifierKey($0.name), $0) })
+                let ancestors = ancestorEntities(of: entity, entitiesByName: entitiesByName)
+                let inheritedAttributesByName = Dictionary(
+                    ancestors.flatMap(\.attributes).reversed().map { (identifierKey($0.name), $0) },
+                    uniquingKeysWith: { first, _ in first })
                 let declared = try entity.attributes.filter { attribute in
-                    guard let inherited = parentAttributesByName[identifierKey(attribute.name)] else { return true }
+                    guard let inherited = inheritedAttributesByName[identifierKey(attribute.name)] else { return true }
                     guard inherited == attribute else {
                         throw SwiftDataError.unsupportedSchemaProperty(
                             "Inheritance column '\(attribute.name)' is redeclared incompatibly by '\(entity.name)'.")
@@ -573,8 +568,7 @@ package enum SchemaBuilder {
                 try validateUniqueNames(
                     declared.map(\.name), scope: "property declared by entity '\(entity.name)'")
                 for attribute in declared {
-                    guard (!attribute.options.contains(.unique) || entity.name == root.name),
-                        !attribute.options.contains(.externalStorage),
+                    guard !attribute.options.contains(.externalStorage),
                         !attribute.options.contains(.flattened),
                         !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
                     else {
@@ -584,6 +578,9 @@ package enum SchemaBuilder {
                     }
                     _ = try SQLColumnType.resolve(
                         attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
+                    if attribute.options.contains(.unique) {
+                        uniqueAttributesByOwner.append((attribute, entity.name))
+                    }
                     if let existing = attributesByName[identifierKey(attribute.name)] {
                         guard existing.0.type == attribute.type,
                             existing.0.options == attribute.options,
@@ -643,27 +640,47 @@ package enum SchemaBuilder {
                     "Hierarchy rooted at '\(root.name)' has colliding or reserved SQL columns.")
             }
             statements.append("CREATE TABLE Z\(root.name.uppercased()) (\(columns.joined(separator: ", ")));")
-            let uniqueRootAttributes = root.attributes.filter { $0.options.contains(.unique) }
-            for attribute in uniqueRootAttributes {
-                let indexName = "Z\(root.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX"
-                generatedIndexNames.append(indexName)
-                statements.append(
-                    "CREATE UNIQUE INDEX \(indexName) ON Z\(root.name.uppercased()) "
-                        + "(Z\(attribute.name.uppercased()));")
+            let memberPositions = Dictionary(uniqueKeysWithValues: members.enumerated().map { ($1.name, $0) })
+            let uniqueAttributes = uniqueAttributesByOwner.sorted {
+                let lhsPosition = memberPositions[$0.1] ?? Int.max
+                let rhsPosition = memberPositions[$1.1] ?? Int.max
+                if lhsPosition != rhsPosition { return lhsPosition < rhsPosition }
+                return bytewiseLess($0.0.name, $1.0.name)
             }
-            for index in root.indexes {
-                if index.isUnique, index.properties.count == 1,
-                    uniqueRootAttributes.contains(where: {
-                        identifierKey($0.name) == identifierKey(index.properties[0])
-                    })
-                {
-                    continue
-                }
-                let indexName = indexName(entity: root, properties: index.properties, unique: index.isUnique)
+            for (attribute, declaringEntity) in uniqueAttributes {
+                let indexName = hierarchyIndexName(
+                    root: root, ownerEntityName: declaringEntity,
+                    properties: [attribute.name], unique: true)
                 generatedIndexNames.append(indexName)
+                let predicate = hierarchyIndexPredicate(
+                    ownerEntityName: declaringEntity, rootEntityName: root.name,
+                    entities: entities, entityIDs: entityIDs)
                 statements.append(
-                    "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(indexName) ON Z\(root.name.uppercased()) "
-                        + "(\(index.properties.map { "Z\($0.uppercased())" }.joined(separator: ", ")));")
+                    "CREATE UNIQUE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(attribute.name.uppercased()))\(predicate);"
+                )
+            }
+            for member in members {
+                for index in declaredIndexesByEntity[member.name] ?? [] {
+                    if index.isUnique, index.properties.count == 1,
+                        uniqueAttributes.contains(where: {
+                            $0.1 == member.name
+                                && identifierKey($0.0.name) == identifierKey(index.properties[0])
+                        })
+                    {
+                        continue
+                    }
+                    let indexName = hierarchyIndexName(
+                        root: root, ownerEntityName: member.name,
+                        properties: index.properties, unique: index.isUnique)
+                    generatedIndexNames.append(indexName)
+                    let predicate = hierarchyIndexPredicate(
+                        ownerEntityName: member.name, rootEntityName: root.name,
+                        entities: entities, entityIDs: entityIDs)
+                    statements.append(
+                        "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(indexName) ON Z\(root.name.uppercased()) "
+                            + "(\(index.properties.map { "Z\($0.uppercased())" }.joined(separator: ", ")))\(predicate);"
+                    )
+                }
             }
             for columnKey in relationshipsByColumn.keys.sorted(by: bytewiseLess) {
                 let indexName = "Z\(root.name.uppercased())_Z\(columnKey)_INDEX"
@@ -707,6 +724,48 @@ package enum SchemaBuilder {
                 superEntityID: superEntityID)
         }
         return BuiltSchema(statements: statements, bootstrapRows: rows)
+    }
+
+    private static func hierarchyIndexName(
+        root: Schema.Entity, ownerEntityName: String, properties: [String], unique: Bool
+    ) -> String {
+        let columns = properties.map { "Z\($0.uppercased())" }.joined(separator: "_")
+        let owner = ownerEntityName == root.name ? "" : "_\(ownerEntityName.uppercased())"
+        return "Z\(root.name.uppercased())\(owner)_\(columns)\(unique ? "_UNIQUE" : "")_INDEX"
+    }
+
+    private static func ancestorEntities(
+        of entity: Schema.Entity, entitiesByName: [String: Schema.Entity]
+    ) -> [Schema.Entity] {
+        var ancestors: [Schema.Entity] = []
+        var parentName = entity.superentityName
+        var visited = Set<String>()
+        while let name = parentName, visited.insert(name).inserted, let parent = entitiesByName[name] {
+            ancestors.append(parent)
+            parentName = parent.superentityName
+        }
+        return ancestors
+    }
+
+    private static func hierarchyIndexPredicate(
+        ownerEntityName: String,
+        rootEntityName: String,
+        entities: [Schema.Entity],
+        entityIDs: [String: Int]
+    ) -> String {
+        guard ownerEntityName != rootEntityName else { return "" }
+        let includedIDs = entities.compactMap { candidate -> Int? in
+            var current: Schema.Entity? = candidate
+            var visited = Set<String>()
+            while let entity = current, visited.insert(entity.name).inserted {
+                if entity.name == ownerEntityName { return entityIDs[candidate.name] }
+                current = entity.superentityName.flatMap { parent in
+                    entities.first(where: { $0.name == parent })
+                }
+            }
+            return nil
+        }.sorted()
+        return " WHERE Z_ENT IN (\(includedIDs.map(String.init).joined(separator: ", ")))"
     }
 
     private static func indexStatement(entity: Schema.Entity, properties: [String], unique: Bool) -> String {

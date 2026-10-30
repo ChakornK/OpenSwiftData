@@ -414,6 +414,51 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testHierarchyTopologyAndAttributeMovesFailClosedBeforeWrites() throws {
+        let variants = [
+            Schema([
+                Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                Schema.Entity(name: "Child", superentityName: "Root"),
+            ]),
+            Schema([
+                Schema.Entity(name: "Root"),
+                Schema.Entity(name: "Child", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            ]),
+            Schema([
+                Schema.Entity(name: "Root"),
+                Schema.Entity(name: "First", superentityName: "Root"),
+                Schema.Entity(name: "Second"),
+                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            ]),
+        ]
+        for (index, destination) in variants.enumerated() {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-migration-guard-\(index)"))
+            let source = Schema([
+                Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                Schema.Entity(
+                    name: "Child", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Root"
+                ),
+                Schema.Entity(name: "Second"),
+                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            ])
+
+            XCTAssertThrowsError(
+                try driver.write { connection in
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+            let tables = try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            }
+            XCTAssertTrue(tables.isEmpty)
+            try driver.close()
+        }
+    }
+
     func testIndexAddAndRemovalMigrateOnExistingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-index-change"))
         let source = Schema([

@@ -305,6 +305,12 @@ package enum LightweightMigration {
     }
 
     private static func apply(source: Schema, destination: Schema, connection: SQLConnection) throws {
+        let sourceHasInheritance = source.entities.contains { $0.superentityName != nil }
+        let destinationHasInheritance = destination.entities.contains { $0.superentityName != nil }
+        guard !sourceHasInheritance && !destinationHasInheritance else {
+            throw SwiftDataError.migrationUnsupported(
+                "Hierarchy schema changes require a versioned root-table migration.")
+        }
         for schema in [source, destination] {
             try schema.validateRelationshipStorageMappings()
             let hasInheritance = schema.entities.contains { $0.superentityName != nil }

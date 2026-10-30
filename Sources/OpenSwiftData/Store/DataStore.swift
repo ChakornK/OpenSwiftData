@@ -5,7 +5,13 @@ import OSDCore
 public protocol DataStore: Sendable {
     /// A stable identifier for this store instance.
     var identifier: String { get }
-    /// Fetches snapshots matching the request's predicate, ordering, offset, and limit.
+    /// Whether fetch requests can return every requested hierarchy entity using its concrete entity name.
+    var supportsInheritance: Bool { get }
+    /// Fetches snapshots matching the request's entity subtree, predicate, ordering, offset, and limit.
+    /// The store applies the predicate and ordering before offset and limit. When `includePendingChanges` is true,
+    /// ModelContext requests all matching stored snapshots and applies pagination after merging pending models.
+    /// Hierarchy-capable stores include every matching `includedEntityNames` entry and return each snapshot with its
+    /// concrete entity name in both `entityName` and `persistentIdentifier.entityName`.
     func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult
     /// Reserves permanent identifiers for a batch before its atomic save. Reservations must be reusable if the
     /// subsequent `save` throws. Reserved identifiers are placed directly in inserted snapshots and may be used by
@@ -20,6 +26,8 @@ public protocol DataStore: Sendable {
 }
 
 public extension DataStore {
+    var supportsInheritance: Bool { false }
+
     func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         [:]
     }
@@ -63,11 +71,17 @@ public struct DataStoreFetchRequest<Model: PersistentModel> {
     public let descriptor: FetchDescriptor<Model>
     /// The schema entity selected by the model container.
     public let entity: Schema.Entity
+    /// The concrete entity names included by the requested entity's inheritance subtree.
+    public let includedEntityNames: Set<String>
 
-    /// Creates a fetch request for one model entity.
-    public init(descriptor: FetchDescriptor<Model>, entity: Schema.Entity) {
+    /// Creates a fetch request. Omitting `includedEntityNames` requests only `entity.name`.
+    public init(
+        descriptor: FetchDescriptor<Model>, entity: Schema.Entity,
+        includedEntityNames: Set<String>? = nil
+    ) {
         self.descriptor = descriptor
         self.entity = entity
+        self.includedEntityNames = includedEntityNames ?? [entity.name]
     }
 }
 

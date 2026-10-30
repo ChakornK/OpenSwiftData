@@ -343,6 +343,7 @@ public final class ModelContainer: Sendable {
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
+        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
         var registrations: [String: ModelTypeRegistration] = [:]
         for (modelType, entityName) in zip(types, entityNames) {
             registrations[entityName] = ModelTypeRegistration(type: modelType)
@@ -376,6 +377,7 @@ public final class ModelContainer: Sendable {
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
+        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
         modelTypesByEntityName = [:]
         modelTypesByEntityID = [:]
         relationshipAdapterTable = [:]
@@ -392,6 +394,7 @@ public final class ModelContainer: Sendable {
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
+        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
         var registrations: [String: ModelTypeRegistration] = [:]
         for modelType in types {
             let entityName = Self.unqualifiedTypeName(String(describing: modelType))
@@ -734,6 +737,17 @@ public final class ModelContainer: Sendable {
             location = .file(url)
         }
         return try factory(location, schema)
+    }
+
+    private static func validateDataStoreInheritanceSupport(
+        schema: Schema, dataStore: (any DataStore)?
+    ) throws {
+        guard schema.entities.contains(where: { $0.superentityName != nil }),
+            let dataStore,
+            !dataStore.supportsInheritance
+        else { return }
+        throw SwiftDataError.unsupportedStore(
+            "The configured DataStore does not support model inheritance.")
     }
 
     private static func openDataStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any DataStore)? {

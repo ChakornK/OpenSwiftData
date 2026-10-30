@@ -121,11 +121,10 @@ struct ModelTypeRegistration: @unchecked Sendable {
             }
         }
         applyDataStoreValuesBody = { model, entity, snapshot in
-            guard let model = model as? Model,
-                let backing = model.persistentBackingData as? ManagedBackingData<Model>
-            else {
+            guard let model = model as? Model else {
                 throw SwiftDataError.unsupportedStore("DataStore snapshot model type mismatch.")
             }
+            let backing = model.anyBackingData
             let metadata = Model.schemaMetadata()
             let adapters = Model.erasedPersistenceAdapters()
             for attribute in entity.attributes where !attribute.options.contains(.flattened) {
@@ -136,7 +135,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                     throw SwiftDataError.unsupportedStore(
                         "DataStore snapshot is missing value for \(entity.name).\(attribute.name).")
                 }
-                backing.setMaterializedValueIfNoOverlay(forKey: keyPath, to: try adapter.decoded(value))
+                backing.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: try adapter.decoded(value))
             }
             let flattened = Model.flattenedPropertyAdapters()
             for attribute in entity.attributes where attribute.options.contains(.flattened) {
@@ -155,8 +154,9 @@ struct ModelTypeRegistration: @unchecked Sendable {
                     }
                     composite = try component.decoded(value, into: composite)
                 }
-                backing.setMaterializedValueIfNoOverlay(forKey: keyPath, to: composite)
+                backing.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: composite)
             }
+            model.persistentBackingData.markSaved()
         }
         relationshipFaultBody = { model, entity, resolver in
             guard let model = model as? Model,

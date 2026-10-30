@@ -1924,6 +1924,48 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(baseIdentifiers[1].entityName, "InheritanceMacroChildFixture")
         XCTAssertEqual(baseIdentifiers[2].entityName, "InheritanceMacroGrandchildFixture")
 
+        let pagedRoot = try reader.fetch(
+            FetchDescriptor<InheritanceMacroBaseFixture>(
+                sortBy: [SortDescriptor(\InheritanceMacroBaseFixture.name)],
+                fetchLimit: 1,
+                fetchOffset: 1,
+                includePendingChanges: false))
+        XCTAssertEqual(pagedRoot.map(\.name), ["child"])
+        XCTAssertTrue(pagedRoot.first is InheritanceMacroChildFixture)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(
+                FetchDescriptor<InheritanceMacroBaseFixture>(
+                    sortBy: [SortDescriptor(\InheritanceMacroBaseFixture.name)],
+                    fetchLimit: 1,
+                    fetchOffset: 1,
+                    includePendingChanges: false)),
+            pagedRoot.map(\.persistentModelID))
+        XCTAssertEqual(
+            try reader.fetchCount(
+                FetchDescriptor<InheritanceMacroBaseFixture>(
+                    sortBy: [SortDescriptor(\InheritanceMacroBaseFixture.name)],
+                    fetchLimit: 1,
+                    fetchOffset: 1,
+                    includePendingChanges: false)),
+            1)
+
+        let secondChildPage = try reader.fetch(
+            FetchDescriptor<InheritanceMacroChildFixture>(
+                sortBy: [SortDescriptor(\InheritanceMacroChildFixture.name)],
+                fetchLimit: 1,
+                fetchOffset: 1,
+                includePendingChanges: false))
+        XCTAssertEqual(secondChildPage.map(\.name), ["grandchild"])
+        XCTAssertTrue(secondChildPage.first is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(
+                FetchDescriptor<InheritanceMacroChildFixture>(
+                    sortBy: [SortDescriptor(\InheritanceMacroChildFixture.name)],
+                    fetchLimit: 1,
+                    fetchOffset: 1,
+                    includePendingChanges: false)),
+            secondChildPage.map(\.persistentModelID))
+
         XCTAssertTrue(try XCTUnwrap(baseModels.first(where: { $0.name == "child" })) is InheritanceMacroChildFixture)
         let childFirstReader = container.makeContext()
         let childFirst = try XCTUnwrap(

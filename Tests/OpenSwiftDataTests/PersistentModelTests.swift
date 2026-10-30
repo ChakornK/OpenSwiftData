@@ -924,6 +924,15 @@ final class PersistentModelTests: XCTestCase {
         let grandchild = try XCTUnwrap(
             reader.fetch(FetchDescriptor<InheritedManyToManyGrandchildFixture>()).first)
         XCTAssertEqual(grandchild.tags.map(\.title), ["second"])
+        reader.delete(secondTag)
+        try reader.save()
+        XCTAssertTrue(grandchild.tags.isEmpty)
+        let afterTargetDelete = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_A, Z_B FROM Z_INHERITEDMANYTOMANYCHILDFIXTURE_TAGS_INHERITEDMANYTOMANYTAGFIXTURE_OWNERS",
+                arguments: [])
+        }
+        XCTAssertTrue(afterTargetDelete?.isEmpty == true)
         reader.delete(grandchild)
         try reader.save()
         let afterGrandchildDelete = try container.store?.read {

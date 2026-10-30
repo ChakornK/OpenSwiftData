@@ -8,6 +8,7 @@ package struct FetchSQLInput: Equatable {
     package let orderSQL: String
     package let limit: Int?
     package let offset: Int?
+    package let entityIDs: [Int]?
 
     package init(
         table: String,
@@ -16,7 +17,8 @@ package struct FetchSQLInput: Equatable {
         predicateArguments: [RuntimeValue],
         orderSQL: String,
         limit: Int?,
-        offset: Int?
+        offset: Int?,
+        entityIDs: [Int]? = nil
     ) {
         self.table = table
         self.columns = columns
@@ -25,6 +27,7 @@ package struct FetchSQLInput: Equatable {
         self.orderSQL = orderSQL
         self.limit = limit
         self.offset = offset
+        self.entityIDs = entityIDs
     }
 }
 
@@ -35,10 +38,21 @@ package struct FetchSQL: Equatable {
 
 package enum FetchSQLBuilder {
     package static func build(_ input: FetchSQLInput) -> FetchSQL {
-        let selectedColumns = (["Z_PK", "Z_OPT"] + input.columns).joined(separator: ", ")
+        let identityColumns = input.entityIDs == nil ? ["Z_PK", "Z_OPT"] : ["Z_PK", "Z_OPT", "Z_ENT"]
+        let selectedColumns = (identityColumns + input.columns).joined(separator: ", ")
         var sql = "SELECT \(selectedColumns) FROM \(input.table) AS t0"
-        if let predicateSQL = input.predicateSQL {
-            sql += " WHERE \(predicateSQL)"
+        var filters: [String] = []
+        var arguments = input.predicateArguments
+        if let entityIDs = input.entityIDs, !entityIDs.isEmpty {
+            filters.append("t0.Z_ENT IN (\(Array(repeating: "?", count: entityIDs.count).joined(separator: ", ")))")
+            arguments = entityIDs.map { .int(Int64($0)) } + arguments
+        }
+        if let predicateSQL = input.predicateSQL { filters.append(predicateSQL) }
+        if !filters.isEmpty {
+            let whereSQL =
+                input.entityIDs == nil
+                ? filters.joined(separator: " AND ") : filters.map { "(\($0))" }.joined(separator: " AND ")
+            sql += " WHERE \(whereSQL)"
         }
         sql += " ORDER BY \(input.orderSQL), t0.Z_PK ASC"
         if let limit = input.limit {
@@ -48,6 +62,6 @@ package enum FetchSQLBuilder {
             if input.limit == nil { sql += " LIMIT -1" }
             sql += " OFFSET \(offset)"
         }
-        return FetchSQL(sql: sql, arguments: input.predicateArguments)
+        return FetchSQL(sql: sql, arguments: arguments)
     }
 }

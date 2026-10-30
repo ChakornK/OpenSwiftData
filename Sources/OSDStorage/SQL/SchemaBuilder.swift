@@ -110,9 +110,9 @@ package enum SchemaBuilder {
                 current = entitiesByName[name]?.superentityName
             }
         }
-        if let inheritedEntity = entities.first(where: { $0.superentityName != nil }) {
-            throw SwiftDataError.unsupportedSchemaProperty(
-                "Single-table inheritance SQL generation is not implemented for '\(inheritedEntity.name)'.")
+        if entities.contains(where: { $0.superentityName != nil }) {
+            return try buildInheritedSchema(
+                entities, entitiesByName: entitiesByName, entityIDs: schema.entityIDsByName)
         }
         for entity in entities {
             for index in entity.indexes {
@@ -331,6 +331,157 @@ package enum SchemaBuilder {
 
         let rows = entities.enumerated().map { offset, entity in
             SchemaBootstrapRow(entityID: Int64(offset + 1), name: entity.name)
+        }
+        return BuiltSchema(statements: statements, bootstrapRows: rows)
+    }
+
+    private static func buildInheritedSchema(
+        _ entities: [Schema.Entity],
+        entitiesByName: [String: Schema.Entity],
+        entityIDs: [String: Int]
+    ) throws -> BuiltSchema {
+        for entity in entities where !entity.relationships.isEmpty || !entity.indexes.isEmpty {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Single-table inheritance currently requires a relationship-free and index-free hierarchy ('\(entity.name)')."
+            )
+        }
+
+        let roots = entities.filter { $0.superentityName == nil }.sorted { bytewiseLess($0.name, $1.name) }
+        guard entities.allSatisfy({ entityIDs[$0.name] != nil }) else {
+            throw SwiftDataError.unsupportedSchemaProperty("Schema inheritance has incomplete entity identifiers.")
+        }
+        let ordered = entities.sorted { (entityIDs[$0.name] ?? 0) < (entityIDs[$1.name] ?? 0) }
+        guard ordered.count == entities.count else {
+            throw SwiftDataError.unsupportedSchemaProperty("Schema inheritance contains an unreachable entity.")
+        }
+
+        var rootsByEntity: [String: String] = [:]
+        for entity in ordered {
+            if let parent = entity.superentityName {
+                guard let parentRoot = rootsByEntity[parent] else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Entity '\(entity.name)' has an invalid inheritance order.")
+                }
+                rootsByEntity[entity.name] = parentRoot
+            } else {
+                rootsByEntity[entity.name] = entity.name
+            }
+        }
+
+        var statements = [
+            "CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER PRIMARY KEY, Z_NAME VARCHAR, Z_SUPER INTEGER, Z_MAX INTEGER);",
+            "CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);",
+        ]
+        try validateUniqueNames(
+            ["Z_PRIMARYKEY", "_osd_meta"] + roots.map { "Z\($0.name)" }, scope: "table")
+        let reservedColumnKeys = Set(["Z_PK", "Z_ENT", "Z_OPT", "ZPRIMARYKEY", "Z_OSD_META"].map(identifierKey))
+
+        for root in roots {
+            let members = ordered.filter { rootsByEntity[$0.name] == root.name }
+            var attributesByName: [String: (Schema.Attribute, String)] = [:]
+            for entity in members {
+                let parentAttributes = entity.superentityName.flatMap { entitiesByName[$0]?.attributes } ?? []
+                let parentAttributesByName = Dictionary(
+                    uniqueKeysWithValues: parentAttributes.map { (identifierKey($0.name), $0) })
+                let declared = try entity.attributes.filter { attribute in
+                    guard let inherited = parentAttributesByName[identifierKey(attribute.name)] else { return true }
+                    guard inherited == attribute else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Inheritance column '\(attribute.name)' is redeclared incompatibly by '\(entity.name)'.")
+                    }
+                    return false
+                }
+                try validateUniqueNames(
+                    declared.map(\.name), scope: "property declared by entity '\(entity.name)'")
+                for attribute in declared {
+                    guard !attribute.options.contains(.unique),
+                        !attribute.options.contains(.externalStorage),
+                        !attribute.options.contains(.flattened),
+                        !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Inherited schema currently supports plain scalar attributes only ('\(entity.name).\(attribute.name)')."
+                        )
+                    }
+                    _ = try SQLColumnType.resolve(
+                        attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
+                    if let existing = attributesByName[identifierKey(attribute.name)] {
+                        guard existing.0.type == attribute.type,
+                            existing.0.options == attribute.options,
+                            existing.0.originalName == attribute.originalName
+                        else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Inheritance column '\(attribute.name)' has incompatible declarations in '\(existing.1)' and '\(entity.name)'."
+                            )
+                        }
+                    } else {
+                        attributesByName[identifierKey(attribute.name)] = (attribute, entity.name)
+                    }
+                }
+            }
+
+            let allRootRequiredNames = Set(
+                rootsByEntity
+                    .filter { $0.value == root.name }
+                    .compactMap { entityName, _ in
+                        entitiesByName[entityName]?.superentityName == nil
+                            ? entitiesByName[entityName]?.attributes.filter { !$0.isOptional }.map(\.name)
+                            : nil
+                    }
+                    .flatMap { $0 })
+            for requiredName in allRootRequiredNames {
+                guard
+                    members.allSatisfy({ entity in
+                        entity.attributes.contains { identifierKey($0.name) == identifierKey(requiredName) }
+                    })
+                else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Required root attribute '\(requiredName)' is missing from a descendant entity.")
+                }
+            }
+
+            var columns = ["Z_PK INTEGER PRIMARY KEY", "Z_ENT INTEGER", "Z_OPT INTEGER"]
+            for (key, (attribute, declaringEntity)) in attributesByName.sorted(by: { bytewiseLess($0.key, $1.key) }) {
+                let sqlType = try SQLColumnType.resolve(
+                    attribute.type,
+                    property: "\(declaringEntity).\(attribute.name)",
+                    options: attribute.options)
+                let requiredAtRoot = allRootRequiredNames.contains {
+                    identifierKey($0) == identifierKey(attribute.name)
+                }
+                let nullable = attribute.isOptional || !requiredAtRoot
+                columns.append("Z\(key) \(sqlType.rawValue)\(nullable ? "" : " NOT NULL")")
+            }
+            let generatedColumns = columns.dropFirst(3).map { $0.split(separator: " ", maxSplits: 1)[0] }
+            let generatedKeys = Set(generatedColumns.map { identifierKey(String($0)) })
+            guard generatedKeys.count == generatedColumns.count,
+                generatedKeys.isDisjoint(with: reservedColumnKeys)
+            else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Hierarchy rooted at '\(root.name)' has colliding or reserved SQL columns.")
+            }
+            statements.append("CREATE TABLE Z\(root.name.uppercased()) (\(columns.joined(separator: ", ")));")
+        }
+
+        let rows = try ordered.map { entity -> SchemaBootstrapRow in
+            guard let entityID = entityIDs[entity.name] else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Schema inheritance has no identifier for entity '\(entity.name)'.")
+            }
+            let superEntityID: Int64
+            if let parent = entity.superentityName {
+                guard let parentID = entityIDs[parent] else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Schema inheritance has no identifier for parent '\(parent)'.")
+                }
+                superEntityID = Int64(parentID)
+            } else {
+                superEntityID = 0
+            }
+            return SchemaBootstrapRow(
+                entityID: Int64(entityID),
+                name: entity.name,
+                superEntityID: superEntityID)
         }
         return BuiltSchema(statements: statements, bootstrapRows: rows)
     }

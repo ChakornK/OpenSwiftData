@@ -5,31 +5,6 @@ import SwiftSyntaxMacrosTestSupport
 import XCTest
 
 final class GroupedBindingDiagnosticsTests: XCTestCase {
-    func testModelRejectsClassInheritanceWithOneDiagnostic() {
-        assertMacroExpansion(
-            "@Model class Base { var value: Int }",
-            expandedSource: "class Base { var value: Int \n}",
-            diagnostics: [
-                DiagnosticSpec(
-                    message: "@Model currently requires a final class without a superclass",
-                    line: 1,
-                    column: 14,
-                    severity: .error)
-            ],
-            macros: ["Model": ModelMacro.self])
-        assertMacroExpansion(
-            "@Model final class Child: Base { var childValue: Int }",
-            expandedSource: "final class Child: Base { var childValue: Int \n}",
-            diagnostics: [
-                DiagnosticSpec(
-                    message: "@Model currently requires a final class without a superclass",
-                    line: 1,
-                    column: 20,
-                    severity: .error)
-            ],
-            macros: ["Model": ModelMacro.self])
-    }
-
     func testModelAccessorMarkerSeparatesScalarAndRelationshipProperties() {
         assertMacroExpansion(
             #"""
@@ -119,6 +94,10 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         ]
                     }
 
+                    public static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
+                        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+                    }
+
                     public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {
                         [
                             RelationshipAdapterBox<Example>(TypedRelationshipPropertyAdapter<Example, [Pet], Pet>("pets", keyPath: \Example.pets, read: { model in
@@ -144,12 +123,18 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<_M>(keyPath: KeyPath<Example, _M>) {
-                        _$observationRegistrar.access(self, keyPath: keyPath)
+                    internal nonisolated func access<Root: Example, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return
+                        }
+                        _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<_M, _MR>(keyPath: KeyPath<Example, _M>, _ mutation: () throws -> _MR) rethrows -> _MR {
-                        try _$observationRegistrar.withMutation(of: self, keyPath: keyPath, mutation)
+                    internal nonisolated func withMutation<Root: Example, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return try mutation()
+                        }
+                        return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
                     }
 
                     struct _SwiftDataNoType {
@@ -196,6 +181,10 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         return []
                     }
 
+                    public static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
+                        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+                    }
+
                     public static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] {
                         relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates()
                     }
@@ -207,12 +196,18 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<_M>(keyPath: KeyPath<Grouped, _M>) {
-                        _$observationRegistrar.access(self, keyPath: keyPath)
+                    internal nonisolated func access<Root: Grouped, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return
+                        }
+                        _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<_M, _MR>(keyPath: KeyPath<Grouped, _M>, _ mutation: () throws -> _MR) rethrows -> _MR {
-                        try _$observationRegistrar.withMutation(of: self, keyPath: keyPath, mutation)
+                    internal nonisolated func withMutation<Root: Grouped, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return try mutation()
+                        }
+                        return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
                     }
 
                     struct _SwiftDataNoType {

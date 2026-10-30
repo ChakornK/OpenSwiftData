@@ -14,6 +14,31 @@ public enum RuntimeSchemaVersionState: Sendable {
 
 /// Describes the entities and version metadata in a persistent store.
 public struct Schema: Sendable {
+    /// Returns deterministic entity identifiers in root-first inheritance order.
+    package var entityIDsByName: [String: Int] {
+        let orderedEntities = entities.sorted {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }
+        let childrenByParent = Dictionary(
+            grouping: orderedEntities.compactMap { entity -> (String, Entity)? in
+                guard let parent = entity.superentityName else { return nil }
+                return (parent, entity)
+            }, by: \.0
+        ).mapValues { pairs in
+            pairs.map(\.1).sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+        }
+        var ordered: [Entity] = []
+        var visited = Set<String>()
+        func append(_ entity: Entity) {
+            guard visited.insert(entity.name).inserted else { return }
+            ordered.append(entity)
+            for child in childrenByParent[entity.name] ?? [] { append(child) }
+        }
+        for root in orderedEntities where root.superentityName == nil { append(root) }
+        for entity in orderedEntities where !visited.contains(entity.name) { append(entity) }
+        return Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.name, $0 + 1) })
+    }
+
     /// An ordered index over entity attributes.
     public struct Index: Sendable, Hashable {
         /// The indexed properties in SQL column order.

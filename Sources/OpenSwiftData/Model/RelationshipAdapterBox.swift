@@ -148,3 +148,39 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
         try candidate.assign(value, to: owner)
     }
 }
+
+struct ReownedRelationshipAdapterBox: AnyRelationshipAdapterBox, @unchecked Sendable {
+    private let adapter: any AnyRelationshipAdapterBox
+    let ownerType: ObjectIdentifier
+
+    init(_ adapter: any AnyRelationshipAdapterBox, ownerType: ObjectIdentifier) {
+        self.adapter = adapter
+        self.ownerType = ownerType
+    }
+
+    var name: String { adapter.name }
+    var keyPath: AnyKeyPath { adapter.keyPath }
+    var destinationType: any PersistentModel.Type { adapter.destinationType }
+    var isToMany: Bool { adapter.isToMany }
+    var explicitInverseKeyPath: AnyKeyPath? { adapter.explicitInverseKeyPath }
+    var metadata: Schema.Relationship? { adapter.metadata }
+
+    func mutate(
+        _ value: Any,
+        on owner: AnyObject,
+        keyPath: AnyKeyPath,
+        using mutation: (AnyObject, AnyRelationshipAdapterBox, Any) throws -> Void
+    ) -> Bool {
+        adapter.mutate(value, on: owner, keyPath: keyPath, using: mutation)
+    }
+
+    func read(_ owner: AnyObject) -> [any PersistentModel]? { adapter.read(owner) }
+    func write(_ value: Any, to owner: AnyObject) throws { try adapter.write(value, to: owner) }
+    func makeValue(_ endpoints: [any PersistentModel]) throws -> Any { try adapter.makeValue(endpoints) }
+    func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any { try adapter.makeInverseValue(endpoints) }
+    func endpoints(in value: Any) throws -> [any PersistentModel] { try adapter.endpoints(in: value) }
+    func assign(_ value: Any, to owner: AnyObject) throws { try adapter.assign(value, to: owner) }
+    func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox {
+        ReownedRelationshipAdapterBox(adapter.resolved(with: relationship), ownerType: ownerType)
+    }
+}

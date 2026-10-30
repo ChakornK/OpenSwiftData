@@ -225,7 +225,8 @@ package enum PredicateRuntimeTreeBuilder {
         entity: Schema.Entity
     ) throws -> RuntimePredicateNode {
         let metadata = modelType.schemaMetadata()
-        if let property = metadata.first(where: { $0.keypath == keyPath }),
+        if let propertyName = modelType.propertyName(forKeyPath: keyPath),
+            let property = metadata.first(where: { $0.name == propertyName }),
             !property.isRelationship,
             entity.attributes.contains(where: { $0.name == property.name }),
             entity.attributes.first(where: { $0.name == property.name })?.options.contains(.flattened) != true

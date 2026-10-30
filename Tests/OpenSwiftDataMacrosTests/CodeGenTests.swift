@@ -4,6 +4,44 @@ import SwiftSyntax
 import XCTest
 
 final class CodeGenTests: XCTestCase {
+    func testInheritedModelKeyPathTablesComposeForConcreteRoots() throws {
+        let base = try parseClass(
+            """
+            class Base {
+                var name: String
+            }
+            """)
+        let child = try parseClass(
+            """
+            final class Child: Base {
+                var age: Int
+            }
+            """)
+        let baseSources = CodeGen.memberSources(base).joined(separator: "\n")
+        let childSources = CodeGen.memberSources(child, superclassName: "Base").joined(separator: "\n")
+
+        XCTAssertTrue(
+            baseSources.contains(
+                "static func __BasePropertyDescriptors<Root: Base>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+            baseSources)
+        XCTAssertTrue(
+            baseSources.contains("descriptors[\\Root.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
+            baseSources)
+        XCTAssertTrue(
+            childSources.contains(
+                "static func __ChildPropertyDescriptors<Root: Child>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+            childSources)
+        XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(Root.self)"), childSources)
+        XCTAssertTrue(
+            childSources.contains(
+                "descriptors[\\Root.age as AnyKeyPath] = PropertyDescriptor(slot: Base.propertyDescriptors.count"),
+            childSources)
+        XCTAssertTrue(
+            childSources.contains(
+                "override class func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor]"),
+            childSources)
+    }
+
     func testModelActorMemberSourcesMatchExecutorContract() {
         XCTAssertEqual(
             CodeGen.modelActorMemberSources(actorName: "StoreActor"),
@@ -107,11 +145,12 @@ final class CodeGenTests: XCTestCase {
                 "public static let propertyDescriptors: [PropertyDescriptor] = [PropertyDescriptor(slot: 0, name: \"name\", keyPath: \\Trip.name, kind: .attribute, codec: String.self, options: []), PropertyDescriptor(slot: 1, name: \"days\", keyPath: \\Trip.days, kind: .attribute, codec: Int.self, options: []), PropertyDescriptor(slot: 2, name: \"notes\", keyPath: \\Trip.notes, kind: .attribute, codec: String?.self, options: []), PropertyDescriptor(slot: 3, name: \"stops\", keyPath: \\Trip.stops, kind: .relationship, codec: [Stop].self, options: [])]",
                 "public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }",
                 "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Trip>] {\n    [\n        TypedPropertyAdapter<Trip, String>(\"name\", keyPath: \\Trip.name, encode: { model in try PersistentValue.encode(model.name) }, decode: { value, model in model.name = try PersistentValue.decode(String.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, Int>(\"days\", keyPath: \\Trip.days, encode: { model in try PersistentValue.encode(model.days) }, decode: { value, model in model.days = try PersistentValue.decode(Int.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(Int.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, String?>(\"notes\", keyPath: \\Trip.notes, encode: { model in try PersistentValue.encode(model.notes) }, decode: { value, model in model.notes = try PersistentValue.decode(String?.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String?.self, from: value)) as Any })\n    ]\n}",
+                "public static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { persistenceAdapters().map(ErasedPersistencePropertyAdapter.init) }",
                 "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
-                "internal nonisolated func access<_M>(keyPath: KeyPath<Trip, _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
-                "internal nonisolated func withMutation<_M, _MR>(keyPath: KeyPath<Trip, _M>, _ mutation: () throws -> _MR) rethrows -> _MR {\n    try _$observationRegistrar.withMutation(of: self, keyPath: keyPath, mutation)\n}",
+                "internal nonisolated func access<Root: Trip, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+                "internal nonisolated func withMutation<Root: Trip, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
                 "struct _SwiftDataNoType {}",
             ])
     }

@@ -8,7 +8,7 @@ enum ManagedValueState {
 }
 
 /// An immutable database row snapshot with a copy-on-write overlay for edited attributes.
-public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unchecked Sendable {
+public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyBackingData, @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private let metadata: [Schema.PropertyMetadata]
     private var baseline: [AnyKeyPath: Any]
@@ -97,8 +97,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         loadFaultIfNeeded(for: keyPath)
         lock.lock()
         let value: Any? =
-            overlaySlotPresence.contains(slot)
-            ? overlaySlots[slot] : (baselineSlotPresence.contains(slot) ? baselineSlots[slot] : nil)
+            overlaySlotPresence.contains(slot) && overlaySlots.indices.contains(slot)
+            ? overlaySlots[slot]
+            : (baselineSlotPresence.contains(slot) && baselineSlots.indices.contains(slot)
+                ? baselineSlots[slot] : (overlay[keyPath] ?? baseline[keyPath]))
         lock.unlock()
         if let value = value as? Value { return value }
         if let optional = Value.self as? any _OptionalType.Type, let nilValue = optional.nilValue as? Value {
@@ -106,6 +108,15 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
         }
         let name = metadata.first { $0.keypath == keyPath }?.name ?? "unknown"
         fatalError("OSD: property '\(name)' of \(Model.self) was read before assignment")
+    }
+
+    /// Reads a value by key path without requiring its root to match the backing's model type.
+    public func getValue<Value>(at slot: Int, keyPath: AnyKeyPath, as type: Value.Type) -> Value? {
+        loadFaultIfNeeded(for: keyPath)
+        lock.lock()
+        let value = overlay[keyPath] ?? baseline[keyPath]
+        lock.unlock()
+        return value as? Value
     }
 
     private func loadFaultIfNeeded(for keyPath: AnyKeyPath) {
@@ -204,6 +215,26 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             faultedRelationships.remove(keyPath)
             changed = true
         }
+    }
+
+    /// Writes a value by key path without requiring its root to match the backing's model type.
+    public func setValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value) -> Bool {
+        locked {
+            setOverlay(value as Any, for: keyPath)
+            faultedProperties.remove(keyPath)
+            faultedRelationships.remove(keyPath)
+            changed = true
+        }
+        return true
+    }
+
+    /// Reports that this backing accepts key paths rooted at subclasses of its model type.
+    public var supportsSubclassKeyPaths: Bool { true }
+
+    /// Attaches this backing to any instance compatible with its model root.
+    public func attach(to context: ModelContext, model: any PersistentModel) {
+        guard let model = model as? Model else { return }
+        attach(to: context, model: model)
     }
 
     func setMaterializedValue(forKey keyPath: AnyKeyPath, to value: Any) {
@@ -382,6 +413,21 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, @unc
             }
             deleted = false
         }
+    }
+
+    /// Updates the identifier entity name for a model managed by a concrete hierarchy entity.
+    public func setConcreteEntityName(_ entityName: String) {
+        lock.lock()
+        if let primaryKey = identifier.primaryKey {
+            identifier = PersistentIdentifier(
+                storeIdentifier: identifier.storeIdentifier, entityName: entityName, primaryKey: primaryKey)
+        } else if let temporaryIdentifier = identifier.temporaryIdentifier {
+            identifier = PersistentIdentifier(
+                storeIdentifier: identifier.storeIdentifier,
+                entityName: entityName,
+                temporaryIdentifier: temporaryIdentifier)
+        }
+        lock.unlock()
     }
 
     /// Routes a relationship write through the context's resolved adapter table.

@@ -15,6 +15,7 @@ public final class ModelContainer: Sendable {
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
     let modelTypesByEntityName: [String: ModelTypeRegistration]
+    let modelTypesByEntityID: [Int: ModelTypeRegistration]
 
     func modelType(forEntityName name: String) -> (any PersistentModel.Type)? {
         modelTypesByEntityName[name]?.type
@@ -22,6 +23,10 @@ public final class ModelContainer: Sendable {
 
     func modelRegistration(forEntityName name: String) -> ModelTypeRegistration? {
         modelTypesByEntityName[name]
+    }
+
+    func modelRegistration(forEntityID identifier: Int) -> ModelTypeRegistration? {
+        modelTypesByEntityID[identifier]
     }
 
     /// Creates a container for the schema inferred from model types.
@@ -283,7 +288,8 @@ public final class ModelContainer: Sendable {
                 name: Self.unqualifiedTypeName(String(describing: modelType)),
                 attributes: attributes,
                 relationships: relationships,
-                indexes: indexes.filter { seenIndexes.insert($0).inserted }
+                indexes: indexes.filter { seenIndexes.insert($0).inserted },
+                superentityName: modelType.parentModel.map { Self.unqualifiedTypeName(String(describing: $0)) }
             )
         }
         let explicitInverseDeclarations = Set(
@@ -337,7 +343,7 @@ public final class ModelContainer: Sendable {
             }
             return Schema.Entity(
                 name: entity.name, attributes: entity.attributes, relationships: relationships,
-                indexes: entity.indexes)
+                indexes: entity.indexes, superentityName: entity.superentityName)
         }
         schema = Schema(inferredEntities)
         self.configurations = configurations
@@ -348,6 +354,17 @@ public final class ModelContainer: Sendable {
             registrations[entityName] = ModelTypeRegistration(type: modelType)
         }
         modelTypesByEntityName = registrations
+        let resolvedSchema = schema
+        let registrationsByID: [Int: ModelTypeRegistration] = Dictionary(
+            uniqueKeysWithValues: zip(types, entityNames).compactMap { pair -> (Int, ModelTypeRegistration)? in
+                let (_, entityName) = pair
+                guard
+                    let entityID = resolvedSchema.entityIDsByName[entityName],
+                    let registration = registrations[entityName]
+                else { return nil }
+                return (entityID, registration)
+            })
+        modelTypesByEntityID = registrationsByID
         var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
         for modelType in types {
             adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
@@ -365,6 +382,7 @@ public final class ModelContainer: Sendable {
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
         modelTypesByEntityName = [:]
+        modelTypesByEntityID = [:]
         relationshipAdapterTable = [:]
     }
 
@@ -386,6 +404,13 @@ public final class ModelContainer: Sendable {
             }
         }
         modelTypesByEntityName = registrations
+        modelTypesByEntityID = Dictionary(
+            uniqueKeysWithValues: registrations.compactMap { name, registration in
+                guard let entityID = schema.entityIDsByName[name] else {
+                    return nil
+                }
+                return (entityID, registration)
+            })
         var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
         for modelType in types {
             adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
@@ -568,6 +593,11 @@ public final class ModelContainer: Sendable {
             candidates = []
         }
         let metadata = modelType.schemaMetadata()
+        var compatibleOwnerTypes: Set<ObjectIdentifier> = []
+        var currentOwner: (any PersistentModel.Type)? = modelType
+        while let owner = currentOwner, compatibleOwnerTypes.insert(ObjectIdentifier(owner)).inserted {
+            currentOwner = owner.parentModel
+        }
         var resolvedNames = Set<String>()
         var adapters: [any AnyRelationshipAdapterBox] = []
         var schemaRelationshipsByName = Dictionary(uniqueKeysWithValues: relationships.map { ($0.name, $0) })
@@ -595,7 +625,7 @@ public final class ModelContainer: Sendable {
                 continue
             }
             let matches = candidates.filter {
-                $0.ownerType == ObjectIdentifier(modelType)
+                compatibleOwnerTypes.contains($0.ownerType)
                     && $0.name == relationship.name
                     && unqualifiedTypeName(String(describing: $0.destinationType)) == relationship.destination
                     && $0.isToMany == relationship.isToMany
@@ -632,7 +662,10 @@ public final class ModelContainer: Sendable {
             } else {
                 resolved = candidate.resolved(with: relationship)
             }
-            adapters.append(resolved)
+            adapters.append(
+                candidate.ownerType == ObjectIdentifier(modelType)
+                    ? resolved
+                    : ReownedRelationshipAdapterBox(resolved, ownerType: ObjectIdentifier(modelType)))
         }
         for property in metadata {
             guard let keyPath = property.keypath else { continue }

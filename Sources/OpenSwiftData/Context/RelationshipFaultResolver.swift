@@ -275,7 +275,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func entityID(for name: String) -> Int {
-        (schema.entities.firstIndex(where: { $0.name == name }) ?? 0) + 1
+        schema.entityIDsByName[name] ?? 0
     }
 
     private func runtimeInt(_ value: RuntimeValue) -> Int {

@@ -118,6 +118,62 @@ public protocol BackingData<Model>: AnyObject {
     func detachDeleted()
 }
 
+/// Type-erased model storage used when inherited models expose properties rooted at a subclass type.
+public protocol AnyBackingData: AnyObject {
+    /// Reads a stored value through generated type-erased access closures.
+    func getValue<Value>(at slot: Int, keyPath: AnyKeyPath, as type: Value.Type) -> Value?
+    /// Writes a value through a generated type-erased access closure.
+    func setValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value) -> Bool
+    /// Performs a property write with the backing's context mutation tracking.
+    func withMutation(_ write: () -> Void)
+    /// Indicates whether this storage can access key paths rooted at subclass types.
+    var supportsSubclassKeyPaths: Bool { get }
+    /// Captures the storage's lifecycle and property values.
+    func snapshot() -> BackingDataSnapshot
+    /// Associates the storage with its context and model object.
+    func attach(to context: ModelContext, model: any PersistentModel)
+    /// Replaces the model identifier's entity name after a concrete hierarchy entity is persisted.
+    func setConcreteEntityName(_ entityName: String)
+}
+
+public extension AnyBackingData {
+    func setConcreteEntityName(_ entityName: String) { _ = entityName }
+}
+
+private final class ErasedBackingData<Model: PersistentModel>: AnyBackingData {
+    let backing: any BackingData<Model>
+
+    init(_ backing: any BackingData<Model>) {
+        self.backing = backing
+    }
+
+    func getValue<Value>(at slot: Int, keyPath: AnyKeyPath, as type: Value.Type) -> Value? {
+        guard let keyPath = keyPath as? KeyPath<Model, Value> else { return nil }
+        return backing.getValue(at: slot, forKey: keyPath)
+    }
+
+    func setValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value) -> Bool {
+        guard let keyPath = keyPath as? KeyPath<Model, Value> else { return false }
+        backing.setValue(at: slot, forKey: keyPath, to: value)
+        return true
+    }
+
+    func snapshot() -> BackingDataSnapshot { backing.snapshot() }
+
+    func withMutation(_ write: () -> Void) {
+        backing.withMutation(write)
+    }
+
+    func attach(to context: ModelContext, model: any PersistentModel) {
+        guard let model = model as? Model else { return }
+        backing.attach(to: context, model: model)
+    }
+
+    func setConcreteEntityName(_ entityName: String) { _ = entityName }
+
+    var supportsSubclassKeyPaths: Bool { false }
+}
+
 public extension BackingData {
     func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
         getValue(forKey: keyPath)
@@ -136,7 +192,7 @@ public extension BackingData {
 }
 
 /// Creates and owns the initial values for a model that is not in a context.
-public final class DetachedBackingData<Model: PersistentModel>: BackingData, @unchecked Sendable {
+public final class DetachedBackingData<Model: PersistentModel>: BackingData, AnyBackingData, @unchecked Sendable {
     private var values: [AnyKeyPath: Any] = [:]
     private var slotValues: [Any?]
     private let lock = NSRecursiveLock()
@@ -188,10 +244,18 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
     /// Reads a stored value by its generated slot, or by key path when no slot exists.
     public func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
         lock.lock()
-        let stored = slotValues.indices.contains(slot) ? slotValues[slot] : values[keyPath]
+        let stored = (slotValues.indices.contains(slot) ? slotValues[slot] : nil) ?? values[keyPath]
         lock.unlock()
         if let value = stored as? Value { return value }
         return unassignedValue(for: keyPath)
+    }
+    /// Reads a value by key path without requiring its root to match the backing's model type.
+    public func getValue<Value>(at slot: Int, keyPath: AnyKeyPath, as type: Value.Type) -> Value? {
+        lock.lock()
+        let stored = values[keyPath]
+        lock.unlock()
+        _ = slot
+        return stored as? Value
     }
     /// Notifies the managing context before mutation; detached models receive no notification.
     public func willMutate() {
@@ -226,6 +290,22 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
         if slotValues.indices.contains(slot) { slotValues[slot] = value as Any }
         if context != nil { changed = true }
         lock.unlock()
+    }
+    /// Writes a value by key path without requiring its root to match the backing's model type.
+    public func setValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value) -> Bool {
+        lock.lock()
+        values[keyPath] = value as Any
+        if context != nil { changed = true }
+        lock.unlock()
+        _ = slot
+        return true
+    }
+    /// Reports that this backing accepts key paths rooted at subclasses of its model type.
+    public var supportsSubclassKeyPaths: Bool { true }
+    /// Attaches this backing to any instance compatible with its model root.
+    public func attach(to context: ModelContext, model: any PersistentModel) {
+        guard let model = model as? Model else { return }
+        attach(to: context, model: model)
     }
     /// Routes a relationship write through the context's resolved adapter table.
     public func mutateRelationship<Value>(
@@ -307,6 +387,21 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, @un
         deleted = false; lock.unlock()
     }
 
+    /// Updates the identifier entity name for a model managed by a concrete hierarchy entity.
+    public func setConcreteEntityName(_ entityName: String) {
+        lock.lock()
+        if let primaryKey = identifier.primaryKey {
+            identifier = PersistentIdentifier(
+                storeIdentifier: identifier.storeIdentifier, entityName: entityName, primaryKey: primaryKey)
+        } else if let temporaryIdentifier = identifier.temporaryIdentifier {
+            identifier = PersistentIdentifier(
+                storeIdentifier: identifier.storeIdentifier,
+                entityName: entityName,
+                temporaryIdentifier: temporaryIdentifier)
+        }
+        lock.unlock()
+    }
+
     /// Marks the model deleted and changed.
     public func markDeleted() { lock.lock(); deleted = true; changed = true; lock.unlock() }
     /// Clears deletion and marks the model changed after restoring an insertion.
@@ -344,9 +439,15 @@ extension Optional: _OptionalType { static var nilValue: Any { Self.none as Any 
 
 public extension PersistentModel {
     /// Creates detached backing data initialized from schema defaults.
-    static func createBackingData() -> DetachedBackingData<Self> { DetachedBackingData(metadata: schemaMetadata()) }
+    static func createBackingData() -> DetachedBackingData<Model> { DetachedBackingData(metadata: schemaMetadata()) }
+}
+
+extension BackingData where Model: PersistentModel {
+    func erasedBackingData() -> any AnyBackingData {
+        ErasedBackingData(self)
+    }
 }
 
 extension PersistentModel {
-    var backingData: DetachedBackingData<Self>? { persistentBackingData as? DetachedBackingData<Self> }
+    var backingData: DetachedBackingData<Model>? { persistentBackingData as? DetachedBackingData<Model> }
 }

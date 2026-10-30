@@ -5,7 +5,7 @@ import SwiftDiagnostics
 
 enum CodeGen {
     static func modelActorMemberSources(actorName: String) -> [String] {
-        [
+        return [
             "nonisolated let modelExecutor: DefaultSerialModelExecutor",
             "nonisolated let modelContainer: ModelContainer",
             "init(modelContainer: ModelContainer) {\n    self.modelContainer = modelContainer\n    self.modelExecutor = DefaultSerialModelExecutor.make(container: modelContainer)\n}",
@@ -259,9 +259,23 @@ enum CodeGen {
 
     static func memberSources(
         _ declaration: ClassDeclSyntax, variant: InitializationVariant = .a,
-        schemaIndexes: String? = nil
+        schemaIndexes: String? = nil,
+        superclassName: String? = nil
     ) -> [String] {
         let modelName = declaration.name.text
+        let isFinal = declaration.modifiers.contains(where: { $0.name.text == "final" })
+        let isSubclass = superclassName != nil
+        let isOpen = declaration.modifiers.contains(where: { $0.name.text == "open" })
+        let isPublic = isOpen || declaration.modifiers.contains(where: { $0.name.text == "public" })
+        let declarationKind = isSubclass ? "override class" : (isFinal ? "static" : "class")
+        let typeMemberAccess = isOpen ? "open" : "public"
+        let typeOverrideAccess = isOpen ? "open override" : "public override"
+        let typeDeclarationAccess = isFinal ? "public static" : "\(typeMemberAccess) class"
+        let slotDeclarationAccess = isFinal ? "public static" : "\(typeMemberAccess) class"
+        let methodDeclarationAccess = isFinal ? "public static" : "\(typeMemberAccess) class"
+        let instanceMemberAccess = isOpen ? "open" : "public"
+        let instanceOverrideAccess = isOpen ? "open override" : "public override"
+        let associatedModelSource = isFinal || isSubclass ? nil : "public typealias Model = \(modelName)"
         let properties = persistedProperties(in: declaration)
         let descriptorRows = properties.enumerated().map { slot, property in
             let typeName = propertyType(property.name, in: declaration)?.trimmedDescription ?? "Any"
@@ -272,17 +286,32 @@ enum CodeGen {
                 } ?? false
             let kind = property.isRelationship || inferredRelationship ? ".relationship" : ".attribute"
             let options = property.attributeOptionNames.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", ")
+            let descriptorSlot = isSubclass ? "super.propertyDescriptors.count + \(slot)" : String(slot)
             return
-                "PropertyDescriptor(slot: \(slot), name: \"\(escapeSwiftString(property.name))\", keyPath: \\\((modelName)).\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
+                "PropertyDescriptor(slot: \(descriptorSlot), name: \"\(escapeSwiftString(property.name))\", keyPath: \\\((modelName)).\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
         }
-        let descriptorSource: String? =
-            descriptorRows.isEmpty
-            ? nil
-            : "public static let propertyDescriptors: [PropertyDescriptor] = [\(descriptorRows.joined(separator: ", "))]"
-        let slotLookupSource: String? =
-            descriptorRows.isEmpty
-            ? nil
-            : "public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }"
+        let descriptorBody = "[\(descriptorRows.joined(separator: ", "))]"
+        let descriptorSource: String? = {
+            guard isSubclass else {
+                if isFinal {
+                    return descriptorRows.isEmpty
+                        ? nil
+                        : "public static let propertyDescriptors: [PropertyDescriptor] = \(descriptorBody)"
+                }
+                return "\(typeDeclarationAccess) var propertyDescriptors: [PropertyDescriptor] { \(descriptorBody) }"
+            }
+            return
+                "\(typeOverrideAccess) class var propertyDescriptors: [PropertyDescriptor] { super.propertyDescriptors + \(descriptorBody) }"
+        }()
+        let slotLookupSource: String? = {
+            guard isSubclass || !isFinal || !descriptorRows.isEmpty else { return nil }
+            let lookup =
+                isFinal
+                ? "propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot"
+                : "(propertyDescriptorsByKeyPath())[keyPath]?.slot ?? propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot"
+            return
+                "\(isSubclass ? typeOverrideAccess + " class" : slotDeclarationAccess) func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { \(lookup) }"
+        }()
         let adapterRows = properties.compactMap { property -> String? in
             guard let type = propertyType(property.name, in: declaration) else { return nil }
             if property.isFlattened { return nil }
@@ -298,9 +327,18 @@ enum CodeGen {
                 "        TypedPropertyAdapter<\(modelName), \(typeName)>(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), encode: { model in try PersistentValue.encode(model.\(property.name)) }, decode: { value, model in model.\(property.name) = try PersistentValue.decode(\(typeName).self, from: value) }, decodeValue: { value in (try PersistentValue.decode(\(typeName).self, from: value)) as Any })"
         }
         let adapterSource: String? =
-            adapterRows.isEmpty
+            isSubclass || (adapterRows.isEmpty && isFinal)
             ? nil
-            : "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
+            : "\(typeDeclarationAccess) func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
+        let erasedAdapterRows = adapterRows.map { "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))" }
+        let erasedAdapterSource: String = {
+            if isSubclass {
+                return
+                    "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(erasedAdapterRows.joined(separator: ", "))] }"
+            }
+            return
+                "\(typeDeclarationAccess) func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { persistenceAdapters().map(ErasedPersistencePropertyAdapter.init) }"
+        }()
         let flattenedAdapterRows = properties.compactMap { property -> String? in
             guard property.isFlattened, let type = propertyType(property.name, in: declaration) else { return nil }
             guard type.as(OptionalTypeSyntax.self) == nil else { return nil }
@@ -310,10 +348,19 @@ enum CodeGen {
             return
                 "        \(typeName).flattenedComponents.map { $0.modelAdapter(propertyName: \"\(propertyLiteral)\", propertyKeyPath: \\\(modelName).\(memberName), setComposite: { value, model in model.\(memberName) = value }) }"
         }
-        let flattenedAdapterSource =
-            flattenedAdapterRows.isEmpty
-            ? nil
-            : "public static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] {\n    [\n\(flattenedAdapterRows.joined(separator: ",\n"))\n    ].flatMap { $0 }\n}"
+        let flattenedAdapterSource: String? = {
+            let own =
+                flattenedAdapterRows.isEmpty
+                ? "[]"
+                : "[\n\(flattenedAdapterRows.joined(separator: ",\n"))\n    ].flatMap { $0 }"
+            if isSubclass {
+                return
+                    "\(typeOverrideAccess) class func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] { super.flattenedPropertyAdapters() + \(own) }"
+            }
+            guard !flattenedAdapterRows.isEmpty || !isFinal else { return nil }
+            return
+                "\(typeDeclarationAccess) func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] {\n    \(own)\n}"
+        }()
         let relationshipRows = properties.compactMap { property -> String? in
             guard let type = propertyType(property.name, in: declaration) else { return nil }
             guard !property.hasExplicitAttribute else { return nil }
@@ -400,14 +447,26 @@ enum CodeGen {
         let inferredBoxRows = inferredRelationshipRows.map {
             "        RelationshipAdapterBox<\(modelName)>(\($0.trimmingWhitespace()))"
         }
-        let relationshipAdapterSource: String? =
-            explicitBoxRows.isEmpty
-            ? nil
-            : "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]\n}"
-        let inferredRelationshipAdapterSource: String? =
-            inferredBoxRows.isEmpty
-            ? nil
-            : "public static func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]\n}"
+        let relationshipAdapterSource: String? = {
+            let own = "[\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]"
+            if isSubclass {
+                return
+                    "\(typeOverrideAccess) class func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.relationshipAdapterCandidates() + \(own) }"
+            }
+            guard !explicitBoxRows.isEmpty || !isFinal else { return nil }
+            return
+                "\(typeDeclarationAccess) func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    \(own)\n}"
+        }()
+        let inferredRelationshipAdapterSource: String? = {
+            let own = "[\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]"
+            if isSubclass {
+                return
+                    "\(typeOverrideAccess) class func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.inferredRelationshipAdapterCandidates() + \(own) }"
+            }
+            guard !inferredBoxRows.isEmpty || !isFinal else { return nil }
+            return
+                "\(typeDeclarationAccess) func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    \(own)\n}"
+        }()
         let metadataRows = properties.map { property in
             let components =
                 property.isFlattened && propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) == nil
@@ -432,38 +491,205 @@ enum CodeGen {
             return
                 "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(options)\(components))"
         }
+        let ownMetadata = "[\n        \(metadataRows.joined(separator: ",\n        "))\n    ]"
         let metadataBody =
-            metadataRows.isEmpty
-            ? "    return []" : "    return [\n        \(metadataRows.joined(separator: ",\n        "))\n    ]"
-        let schemaIndexes = schemaIndexes
+            isSubclass
+            ? "    return super.schemaMetadata() + \(ownMetadata)"
+            : (metadataRows.isEmpty ? "    return []" : "    return \(ownMetadata)")
+        let schemaIndexes = schemaIndexesSource(
+            schemaIndexes, declarationKind: declarationKind, superclassName: superclassName,
+            memberAccess: typeMemberAccess, overrideAccess: typeOverrideAccess)
         let initializerAssignments: [String] =
             variant == .b
             ? properties.map { "    _\($0.name) = _SwiftDataNoType()" }
             : []
         let backingInitializer =
             ([
-                "public init(backingData: any BackingData<\(modelName)>) {",
+                "public \(isFinal ? "" : "required ")init(backingData: any BackingData<\(modelName)>) {",
                 "    _$backingData = backingData",
             ] + initializerAssignments + ["}"]).joined(separator: "\n")
+        let parentModelSource =
+            isFinal
+            ? nil
+            : "\(typeMemberAccess) class var parentModel: (any PersistentModel.Type)? { nil }"
+        let backingAccess = isFinal ? "private" : "internal"
+        let registrarAccess = isFinal ? "private" : "internal"
+        let keyPathTableName = "__\(modelName.replacingOccurrences(of: "`", with: ""))PropertyDescriptors"
+        let superclassIdentifier = superclassName.map(simpleTypeIdentifier)
+        let resolverAccess = isOpen ? "open" : (isPublic ? "public" : "")
+        let resolverOverrideAccess = isOpen ? "open override" : (isPublic ? "public override" : "override")
+        let tableAccess = isPublic ? "public " : ""
+        let keyPathTableBuilder: String? = {
+            guard isSubclass || !isFinal else { return nil }
+            let inherited =
+                superclassIdentifier.map {
+                    "var descriptors = \($0).__\($0.replacingOccurrences(of: "`", with: ""))PropertyDescriptors(Root.self)\n"
+                } ?? "var descriptors: [AnyKeyPath: PropertyDescriptor] = [:]\n"
+            let additions = properties.enumerated().map { slot, property in
+                let typeName = propertyType(property.name, in: declaration)?.trimmedDescription ?? "Any"
+                let propertyType = propertyType(property.name, in: declaration)
+                let inferredRelationship =
+                    propertyType.map {
+                        !property.hasExplicitAttribute && !property.isFlattened && !isSupportedScalarType($0)
+                    } ?? false
+                let kind = property.isRelationship || inferredRelationship ? ".relationship" : ".attribute"
+                let options = property.attributeOptionNames.map {
+                    "\"\(escapeSwiftString($0))\""
+                }.joined(separator: ", ")
+                let slotExpression =
+                    superclassIdentifier.map { "\($0).propertyDescriptors.count + \(slot)" }
+                    ?? String(slot)
+                return
+                    "        descriptors[\\Root.\(property.escapedName) as AnyKeyPath] = PropertyDescriptor(slot: \(slotExpression), name: \"\(escapeSwiftString(property.name))\", keyPath: \\Root.\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
+            }.joined(separator: "\n")
+            return
+                "\(tableAccess)static func \(keyPathTableName)<Root: \(modelName)>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor] {\n    \(inherited)\(additions)\n        return descriptors\n    }"
+        }()
+        let keyPathNameResolver =
+            isSubclass
+            ? "\(resolverOverrideAccess) class func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor] { \(keyPathTableName)(Self.self) }"
+            : (isFinal
+                ? nil
+                : "\(resolverAccess) class func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor] { \(keyPathTableName)(Self.self) }")
+
+        if isSubclass {
+            return subclassMemberSources(
+                modelName: modelName,
+                superclassName: superclassIdentifier ?? "",
+                metadataBody: metadataBody,
+                descriptorRows: descriptorRows,
+                properties: properties,
+                schemaIndexes: schemaIndexes,
+                erasedAdapterRows: adapterRows,
+                flattenedAdapterRows: flattenedAdapterRows,
+                explicitBoxRows: explicitBoxRows,
+                inferredBoxRows: inferredBoxRows,
+                keyPathTableBuilder: keyPathTableBuilder ?? "",
+                keyPathNameResolver: keyPathNameResolver ?? "",
+                typeMemberAccess: typeMemberAccess,
+                typeOverrideAccess: typeOverrideAccess,
+                instanceOverrideAccess: instanceOverrideAccess)
+        }
 
         return [
-            "@Transient\nprivate var _$backingData: any BackingData<\(modelName)> = \(modelName).createBackingData()",
+            "@Transient\n\(backingAccess) var _$backingData: any BackingData<\(modelName)> = \(modelName).createBackingData()",
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
-            "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            associatedModelSource,
+            "\(methodDeclarationAccess) func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            keyPathTableBuilder,
+            keyPathNameResolver,
             descriptorSource,
             slotLookupSource,
             schemaIndexes,
             adapterSource,
+            erasedAdapterSource,
             flattenedAdapterSource,
             relationshipAdapterSource,
             inferredRelationshipAdapterSource,
-            "public static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates() }",
+            "\(methodDeclarationAccess) func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates() }",
+            parentModelSource,
+            isFinal
+                ? nil
+                : "\(instanceMemberAccess) func prepareForPersistence() {}",
             backingInitializer,
-            "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
-            "internal nonisolated func access<_M>(keyPath: KeyPath<\(modelName), _M>) {\n    _$observationRegistrar.access(self, keyPath: keyPath)\n}",
-            "internal nonisolated func withMutation<_M, _MR>(keyPath: KeyPath<\(modelName), _M>, _ mutation: () throws -> _MR) rethrows -> _MR {\n    try _$observationRegistrar.withMutation(of: self, keyPath: keyPath, mutation)\n}",
+            "@Transient\n\(registrarAccess) let _$observationRegistrar = Observation.ObservationRegistrar()",
+            "\(isPublic ? "public " : "internal ")nonisolated func access<Root: \(modelName), _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+            "\(isPublic ? "public " : "internal ")nonisolated func withMutation<Root: \(modelName), _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
             "struct _SwiftDataNoType {}",
         ].compactMap { $0 }
+    }
+
+    private static func subclassMemberSources(
+        modelName: String,
+        superclassName: String,
+        metadataBody: String,
+        descriptorRows: [String],
+        properties: [Property],
+        schemaIndexes: String?,
+        erasedAdapterRows: [String],
+        flattenedAdapterRows: [String],
+        explicitBoxRows: [String],
+        inferredBoxRows: [String],
+        keyPathTableBuilder: String,
+        keyPathNameResolver: String,
+        typeMemberAccess: String,
+        typeOverrideAccess: String,
+        instanceOverrideAccess: String
+    ) -> [String] {
+        let ownDescriptors = "[\(descriptorRows.joined(separator: ", "))]"
+        let descriptors =
+            "\(typeOverrideAccess) class var propertyDescriptors: [PropertyDescriptor] { super.propertyDescriptors + \(ownDescriptors) }"
+        let ownErasedAdapters = erasedAdapterRows.map {
+            "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))"
+        }
+        let erasedAdapters =
+            "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(ownErasedAdapters.joined(separator: ", "))] }"
+        let ownFlattenedAdapters =
+            flattenedAdapterRows.isEmpty
+            ? "[]"
+            : "[\n\(flattenedAdapterRows.joined(separator: ",\n"))\n    ].flatMap { $0 }"
+        let flattenedAdapters =
+            "\(typeOverrideAccess) class func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] { super.flattenedPropertyAdapters() + \(ownFlattenedAdapters) }"
+        let ownRelationships = "[\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]"
+        let relationships =
+            "\(typeOverrideAccess) class func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.relationshipAdapterCandidates() + \(ownRelationships) }"
+        let ownInferredRelationships = "[\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]"
+        let inferredRelationships =
+            "\(typeOverrideAccess) class func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.inferredRelationshipAdapterCandidates() + \(ownInferredRelationships) }"
+        let inheritedIndexes =
+            schemaIndexes
+            ?? "\(typeOverrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() }"
+        let initializer =
+            "public required init(backingData: any BackingData<\(superclassName).Model>) {\n"
+            + "    super.init(backingData: backingData)\n}"
+        let prepareValues = properties.map { property in
+            let name = property.escapedName
+            return
+                "        if let pending = _\(property.name) { setInheritedValue(keyPath: \\\(modelName).\(name), to: pending); _\(property.name) = nil }"
+        }
+        let prepare =
+            (["\(instanceOverrideAccess) func prepareForPersistence() {", "    super.prepareForPersistence()"]
+            + prepareValues
+            + ["}"]).joined(separator: "\n")
+        return [
+            initializer,
+            "\(typeOverrideAccess) class func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            descriptors,
+            "\(typeOverrideAccess) class func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptorsByKeyPath()[keyPath]?.slot ?? propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }",
+            inheritedIndexes,
+            keyPathTableBuilder,
+            keyPathNameResolver,
+            erasedAdapters,
+            flattenedAdapters,
+            relationships,
+            inferredRelationships,
+            "\(typeOverrideAccess) class func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] { relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates() }",
+            "\(typeOverrideAccess) class var parentModel: (any PersistentModel.Type)? { \(superclassName).self }",
+            prepare,
+        ]
+    }
+
+    private static func schemaIndexesSource(
+        _ source: String?, declarationKind: String, superclassName: String?, memberAccess: String,
+        overrideAccess: String
+    ) -> String? {
+        guard let source else {
+            if superclassName != nil {
+                return "\(overrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() }"
+            }
+            return declarationKind == "class"
+                ? "\(memberAccess) class func schemaIndexes() -> [Schema.Index] { [] }"
+                : nil
+        }
+        guard superclassName != nil else {
+            return declarationKind == "class"
+                ? source.replacingOccurrences(of: "public static func", with: "\(memberAccess) class func")
+                : source
+        }
+        let prefix = "public static func schemaIndexes() -> [Schema.Index] { "
+        guard source.hasPrefix(prefix), source.hasSuffix(" }") else { return source }
+        let own = String(source.dropFirst(prefix.count).dropLast(2))
+        return "\(overrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() + \(own) }"
     }
 
     private static func isSupportedScalarType(_ type: TypeSyntax) -> Bool {
@@ -489,12 +715,34 @@ enum CodeGen {
         }.first
     }
 
+    private static func simpleTypeIdentifier(_ typeName: String) -> String {
+        let lastComponent = typeName.split(separator: ".").last.map(String.init) ?? typeName
+        return lastComponent.split(separator: "<", maxSplits: 1).first.map(String.init) ?? lastComponent
+    }
+
     static func accessorSources(
         property: String,
+        modelName: String = "",
         slot: Int? = nil,
         isRelationship: Bool = false,
+        inherited: Bool = false,
+        valueType: String? = nil,
         variant: InitializationVariant = .a
     ) -> [String] {
+        if inherited {
+            let keyPath = "\\\(modelName).\(property)"
+            let getter =
+                "if let pending = _\(property) { return pending }\n    return getInheritedValue(keyPath: \(keyPath), property: \"\(escapeSwiftString(property))\", as: \(valueType ?? "Any").self)"
+            let setter =
+                isRelationship
+                ? "setInheritedRelationshipValue(forKey: \(keyPath), to: newValue)"
+                : "setInheritedValue(keyPath: \(keyPath), to: newValue)"
+            return [
+                "@storageRestrictions(initializes: _\(property))\ninit(initialValue) {\n    _\(property) = initialValue\n}",
+                "get {\n    access(keyPath: \(keyPath))\n    \(getter)\n}",
+                "set {\n    withMutation(keyPath: \(keyPath)) {\n        _\(property) = nil\n        self.\(setter)\n    }\n}",
+            ]
+        }
         let storageRestriction =
             variant == .c
             ? "@storageRestrictions(accesses: _$backingData)"
@@ -532,6 +780,12 @@ enum CodeGen {
     static func peerSources(property: String, variant: InitializationVariant = .a) -> [String] {
         let initializer = variant == .c ? " = _SwiftDataNoType()" : ""
         return ["@Transient\nprivate var _\(property): _SwiftDataNoType\(initializer)"]
+    }
+
+    static func peerSources(property: String, valueType: String, inherited: Bool) -> [String] {
+        inherited
+            ? ["@Transient\nprivate var _\(property): \(valueType)?"]
+            : peerSources(property: property, variant: .c)
     }
 
     static func peerSources(property: Property, variant: InitializationVariant = .a) -> [String] {

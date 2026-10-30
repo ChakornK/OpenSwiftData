@@ -104,8 +104,18 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
         buildValue = build
         buildInverseValue = inverseBuild ?? build
         assignValue = { owner, value in
-            owner.persistentBackingData.withMutation {
-                owner.persistentBackingData.setValue(forKey: keyPath, to: value)
+            if let typedKeyPath = keyPath as? KeyPath<Owner.Model, Value> {
+                owner.persistentBackingData.withMutation {
+                    owner.persistentBackingData.setValue(forKey: typedKeyPath, to: value)
+                }
+                return
+            }
+            let backing = owner.anyBackingData
+            backing.withMutation {
+                _ = backing.setValue(
+                    at: Owner.propertySlot(forKeyPath: keyPath) ?? -1,
+                    keyPath: keyPath,
+                    to: value)
             }
         }
     }

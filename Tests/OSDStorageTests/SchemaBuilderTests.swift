@@ -25,18 +25,77 @@ final class SchemaBuilderTests: XCTestCase {
         }
     }
 
-    func testInheritanceLayoutFailsClosedUntilSingleTableSQLExists() {
+    func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
         let schema = Schema([
             Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
             Schema.Entity(
-                name: "Child", attributes: [Schema.Attribute(name: "age", type: "Int")], superentityName: "Base"),
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int"),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                superentityName: "Child"),
         ])
-        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
-            guard case let SwiftDataError.unsupportedSchemaProperty(message) = error else {
-                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
-            }
-            XCTAssertTrue(message.contains("Single-table inheritance"))
-        }
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertEqual(
+            built.statements.filter { $0.hasPrefix("CREATE TABLE Z") && !$0.hasPrefix("CREATE TABLE Z_PRIMARYKEY") },
+            [
+                "CREATE TABLE ZBASE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZAGE INTEGER, ZNAME VARCHAR NOT NULL, ZRANK INTEGER);"
+            ])
+        XCTAssertFalse(built.statements.contains { $0.contains("ZCHILD") || $0.contains("ZGRANDCHILD") })
+        XCTAssertEqual(
+            built.bootstrapRows,
+            [
+                SchemaBootstrapRow(entityID: 1, name: "Base"),
+                SchemaBootstrapRow(entityID: 2, name: "Child", superEntityID: 1),
+                SchemaBootstrapRow(entityID: 3, name: "Grandchild", superEntityID: 2),
+            ])
+    }
+
+    func testInheritanceRejectsUnsupportedRelationshipsIndexesAndConflictingColumns() {
+        let related = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child", relationships: [Schema.Relationship(name: "parent", destination: "Base")],
+                superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(related))
+
+        let indexed = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Child", indexes: [Schema.Index(properties: ["value"])], superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(indexed))
+
+        let conflicting = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "value", type: "String")]),
+            Schema.Entity(
+                name: "Child", attributes: [Schema.Attribute(name: "value", type: "Int")], superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(conflicting))
+
+        let caseCollision = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "value", type: "String")]),
+            Schema.Entity(
+                name: "Child", attributes: [Schema.Attribute(name: "VALUE", type: "Int")], superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(caseCollision))
+    }
+
+    func testInheritanceRequiresRootAttributesInEveryDescendant() {
+        let missingRootValue = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "requiredValue", type: "Int")]),
+            Schema.Entity(name: "Child", superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(missingRootValue))
     }
 
     func testFlattenedAttributeEmitsScalarLeafColumns() throws {

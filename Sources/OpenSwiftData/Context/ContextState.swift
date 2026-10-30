@@ -107,6 +107,31 @@ package final class ContextState: @unchecked Sendable {
         return true
     }
 
+    func setRelationship(
+        model: any PersistentModel,
+        keyPath: AnyKeyPath,
+        value: Any,
+        autoInsertDestinations: Bool = false
+    ) -> Bool {
+        guard let relationshipModel = type(of: model) as? any RelationshipModel.Type,
+            let adapter = (relationshipModel.relationshipAdapterCandidatesForMutation()).first(where: {
+                $0.keyPath == keyPath
+            })
+        else { return false }
+        do {
+            if autoInsertDestinations {
+                try insertDestinations(in: value, owner: model, adapter: adapter) { owner in
+                    try self.mutateRelationship(owner: owner, adapter: adapter, value: value)
+                }
+            } else {
+                try mutateRelationship(owner: model, adapter: adapter, value: value)
+            }
+        } catch {
+            return true
+        }
+        return true
+    }
+
     private func insertDestinations<Owner: PersistentModel>(
         in value: Any,
         owner: Owner,
@@ -160,7 +185,7 @@ package final class ContextState: @unchecked Sendable {
         let snapshot = model.snapshotLifecycle()
         let entityName = String(describing: type(of: model))
         guard let entity = entitiesByName[entityName] else {
-            model.persistentBackingData.attach(to: context, model: model)
+            model.anyBackingData.attach(to: context, model: model)
             model.setInsertionChanged()
             insert(model, snapshot: snapshot)
             return
@@ -183,7 +208,7 @@ package final class ContextState: @unchecked Sendable {
             entityID: entityIDsByName[entity.name] ?? 0,
             identifier: identifier)
         model.persistentBackingData = backing
-        backing.attach(to: context, model: model)
+        model.anyBackingData.attach(to: context, model: model)
         backing.restoreInsertionState()
         insert(model, snapshot: snapshot)
         setBaseline(model, snapshot: model.snapshotLifecycle())

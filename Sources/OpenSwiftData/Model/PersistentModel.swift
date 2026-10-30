@@ -186,13 +186,23 @@ public struct FlattenedPropertyAdapter<Model: PersistentModel, Composite: Flatte
 /// A model whose properties are stored in OpenSwiftData backing data.
 public protocol PersistentModel: AnyObject {
     associatedtype Model: PersistentModel = Self
+    /// Type-erased backing used by subclass properties whose key paths are rooted at a derived model type.
+    var anyBackingData: any AnyBackingData { get }
+    /// The parent model in an inheritance hierarchy, when present.
+    static var parentModel: (any PersistentModel.Type)? { get }
+    /// Persists subclass-initialized values after its inherited backing is available.
+    func prepareForPersistence()
     var persistentModelID: PersistentIdentifier { get }
     var modelContext: ModelContext? { get }
     var isDeleted: Bool { get }
     var hasChanges: Bool { get }
-    var persistentBackingData: any BackingData<Self> { get set }
-    init(backingData: any BackingData<Self>)
+    var persistentBackingData: any BackingData<Model> { get set }
+    init(backingData: any BackingData<Model>)
     static func schemaMetadata() -> [Schema.PropertyMetadata]
+    /// Returns the persisted property name associated with a model-rooted key path.
+    static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String?
+    /// Returns property descriptors keyed by paths rooted at this model's dynamic class.
+    static func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor]
     static func schemaIndexes() -> [Schema.Index]
     /// The generated, declaration-ordered property descriptor table.
     static var propertyDescriptors: [PropertyDescriptor] { get }
@@ -201,32 +211,55 @@ public protocol PersistentModel: AnyObject {
     static func createManagedBackingData(
         values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
         entityID: Int, identifier: PersistentIdentifier
-    ) -> any BackingData<Self>
-    static func createBackingData() -> DetachedBackingData<Self>
-    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>]
+    ) -> any BackingData<Model>
+    static func createBackingData() -> DetachedBackingData<Model>
+    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Model>]
+    /// Returns persistence adapters that can operate on heterogeneous runtime model instances.
+    static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter]
     static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter]
-    func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value
-    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>) -> Value
-    func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value)
-    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>, to value: Value)
+    func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value
+    func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value)
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value)
+    func getInheritedValue<Value>(at slot: Int, keyPath: AnyKeyPath, property: String, as type: Value.Type) -> Value
+    func setInheritedValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value)
+    func getInheritedValue<Value>(keyPath: AnyKeyPath, property: String, as type: Value.Type) -> Value
+    func setInheritedValue<Value>(keyPath: AnyKeyPath, to value: Value)
 }
 
 public extension PersistentModel {
+    static var parentModel: (any PersistentModel.Type)? { nil }
+    func prepareForPersistence() {}
+    var anyBackingData: any AnyBackingData {
+        if let backing = persistentBackingData as? any AnyBackingData { return backing }
+        return persistentBackingData.erasedBackingData()
+    }
     static func schemaIndexes() -> [Schema.Index] { [] }
+    static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String? {
+        propertyDescriptorsByKeyPath()[keyPath]?.name
+            ?? schemaMetadata().first(where: { $0.keypath == keyPath })?.name
+    }
+    static func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor] {
+        Dictionary(uniqueKeysWithValues: propertyDescriptors.map { ($0.keyPath, $0) })
+    }
     static var propertyDescriptors: [PropertyDescriptor] { [] }
     static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? {
-        propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot
+        propertyDescriptorsByKeyPath()[keyPath]?.slot
+            ?? propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot
     }
     static func createManagedBackingData(
         values: [AnyKeyPath: Any], context: ModelContext, storeIdentifier: String,
         entityID: Int, identifier: PersistentIdentifier
-    ) -> any BackingData<Self> {
-        ManagedBackingData<Self>(
+    ) -> any BackingData<Model> {
+        ManagedBackingData<Model>(
             metadata: schemaMetadata(), values: values, context: context,
             storeIdentifier: storeIdentifier, entityID: entityID,
             identifier: identifier)
     }
-    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Self>] { [] }
+    static func persistenceAdapters() -> [any PersistencePropertyAdapter<Model>] { [] }
+    static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
+        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+    }
     static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] { [] }
     static func hasFlattenedKeyPath(_ keyPath: AnyKeyPath) -> Bool {
         flattenedPropertyAdapters().contains { $0.componentKeyPath == keyPath }
@@ -235,20 +268,20 @@ public extension PersistentModel {
     var modelContext: ModelContext? { persistentBackingData.modelContext }
     var isDeleted: Bool { persistentBackingData.isDeleted }
     var hasChanges: Bool { persistentBackingData.hasChanges }
-    func getValue<Value>(forKey keyPath: KeyPath<Self, Value>) -> Value {
-        if let slot = Self.propertySlot(forKeyPath: keyPath) {
+    func getValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value {
+        if let slot = Model.propertySlot(forKeyPath: keyPath) {
             return persistentBackingData.getValue(at: slot, forKey: keyPath)
         }
         return persistentBackingData.getValue(forKey: keyPath)
     }
 
-    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>) -> Value {
+    func getValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>) -> Value {
         persistentBackingData.getValue(at: slot, forKey: keyPath)
     }
 
-    func setValue<Value>(forKey keyPath: KeyPath<Self, Value>, to value: Value) {
+    func setValue<Value>(forKey keyPath: KeyPath<Model, Value>, to value: Value) {
         persistentBackingData.withMutation {
-            if let slot = Self.propertySlot(forKeyPath: keyPath) {
+            if let slot = Model.propertySlot(forKeyPath: keyPath) {
                 persistentBackingData.setValue(at: slot, forKey: keyPath, to: value)
             } else {
                 persistentBackingData.setValue(forKey: keyPath, to: value)
@@ -256,9 +289,57 @@ public extension PersistentModel {
         }
     }
 
-    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Self, Value>, to value: Value) {
+    func setValue<Value>(at slot: Int, forKey keyPath: KeyPath<Model, Value>, to value: Value) {
         persistentBackingData.withMutation {
             persistentBackingData.setValue(at: slot, forKey: keyPath, to: value)
+        }
+    }
+
+    func getInheritedValue<Value>(
+        at slot: Int, keyPath: AnyKeyPath, property: String, as valueType: Value.Type
+    ) -> Value {
+        if let value = anyBackingData.getValue(at: slot, keyPath: keyPath, as: valueType) { return value }
+        if let optional = Value.self as? any _OptionalType.Type, let nilValue = optional.nilValue as? Value {
+            return nilValue
+        }
+        fatalError("OSD: property '\(property)' of \(type(of: self)) was read before assignment")
+    }
+
+    func getInheritedValue<Value>(
+        keyPath: AnyKeyPath, property: String, as valueType: Value.Type
+    ) -> Value {
+        getInheritedValue(
+            at: Model.propertySlot(forKeyPath: keyPath) ?? -1,
+            keyPath: keyPath,
+            property: property,
+            as: valueType)
+    }
+
+    func setInheritedValue<Value>(at slot: Int, keyPath: AnyKeyPath, to value: Value) {
+        let backing = anyBackingData
+        guard backing.supportsSubclassKeyPaths else {
+            OSDLog.debug("Subclass property mutation requires a backing that supports subclass key paths")
+            return
+        }
+        backing.withMutation {
+            _ = backing.setValue(at: slot, keyPath: keyPath, to: value)
+        }
+    }
+
+    func setInheritedValue<Value>(keyPath: AnyKeyPath, to value: Value) {
+        setInheritedValue(at: Model.propertySlot(forKeyPath: keyPath) ?? -1, keyPath: keyPath, to: value)
+    }
+
+    func setInheritedRelationshipValue<Value>(forKey keyPath: AnyKeyPath, to value: Value) {
+        guard let context = modelContext else {
+            setInheritedValue(at: Model.propertySlot(forKeyPath: keyPath) ?? -1, keyPath: keyPath, to: value)
+            return
+        }
+        context.registerUndoIfNeeded(self, snapshot: snapshotLifecycle())
+        if !context.state.setRelationship(
+            model: self, keyPath: keyPath, value: value, autoInsertDestinations: true)
+        {
+            setInheritedValue(at: Model.propertySlot(forKeyPath: keyPath) ?? -1, keyPath: keyPath, to: value)
         }
     }
 
@@ -271,7 +352,13 @@ public extension PersistentModel {
                     (modelType.relationshipAdapterCandidates() + modelType.inferredRelationshipAdapterCandidates())
                     .first(where: { $0.keyPath == keyPath })
             else {
-                setValue(forKey: keyPath, to: value)
+                let backing = anyBackingData
+                backing.withMutation {
+                    _ = backing.setValue(
+                        at: Model.propertySlot(forKeyPath: keyPath) ?? -1,
+                        keyPath: keyPath,
+                        to: value)
+                }
                 return
             }
             do {
@@ -284,21 +371,32 @@ public extension PersistentModel {
             return
         }
         context.registerUndoIfNeeded(self, snapshot: snapshotLifecycle())
-        if !context.state.setRelationship(model: self, keyPath: keyPath, value: value, autoInsertDestinations: true) {
-            setValue(forKey: keyPath, to: value)
+        if !context.state.setRelationship(
+            model: self, keyPath: keyPath, value: value, autoInsertDestinations: true)
+        {
+            let backing = anyBackingData
+            backing.withMutation {
+                _ = backing.setValue(
+                    at: Model.propertySlot(forKeyPath: keyPath) ?? -1,
+                    keyPath: keyPath,
+                    to: value)
+            }
         }
     }
 
     func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }
     func setInsertionChanged() { persistentBackingData.restoreInsertionState() }
-    func markPersistedLifecycle(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
+    func markPersistedLifecycle(
+        storeIdentifier: String, entityName: String? = nil, entityID: Int, primaryKey: Int64, version: Int
+    ) {
         persistentBackingData.markPersisted(
             storeIdentifier: storeIdentifier, entityID: entityID, primaryKey: primaryKey, version: version)
+        if let entityName { anyBackingData.setConcreteEntityName(entityName) }
     }
     func markSavedLifecycle() { persistentBackingData.markSaved() }
     func restoreLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restore(snapshot) }
     func attachBackingData(to context: ModelContext) {
-        persistentBackingData.attach(to: context, model: self)
+        anyBackingData.attach(to: context, model: self)
     }
     func restoreValuesLifecycle(_ snapshot: BackingDataSnapshot) { persistentBackingData.restoreValues(snapshot) }
     func restoreValuesAndDetachLifecycle(_ snapshot: BackingDataSnapshot) {

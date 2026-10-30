@@ -26,15 +26,7 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
-        guard classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
-            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
-        else {
-            context.diagnose(
-                Diagnostic(
-                    node: Syntax(classDeclaration.name),
-                    message: UnsupportedModelInheritanceDiagnostic()))
-            return []
-        }
+        let superclassName = classDeclaration.inheritanceClause?.inheritedTypes.first?.type.trimmedDescription
         diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)
         let schemaIndexes = try CodeGen.schemaIndexSourcesValidating(in: classDeclaration)
         for member in classDeclaration.memberBlock.members {
@@ -48,7 +40,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             let properties = try CodeGen.schemaDirectiveProperties(directive, kind: kind)
             try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
         }
-        return CodeGen.memberSources(classDeclaration, schemaIndexes: schemaIndexes).map(
+        let members = CodeGen.memberSources(
+            classDeclaration, schemaIndexes: schemaIndexes, superclassName: superclassName)
+        return members.map(
             DeclSyntax.init(stringLiteral:))
     }
 
@@ -58,10 +52,7 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         providingAttributesFor member: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
     ) throws -> [AttributeSyntax] {
-        guard let classDeclaration = declaration.as(ClassDeclSyntax.self),
-            classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
-            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
-        else { return [] }
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
         guard let variable = member.as(VariableDeclSyntax.self),
             let binding = variable.bindings.first, variable.bindings.count == 1,
             binding.pattern.is(IdentifierPatternSyntax.self),
@@ -72,7 +63,6 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
                 return attribute.attributeName.trimmedDescription == "Transient"
             })
         else { return [] }
-        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
         let rawPropertyName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""
         let propertyName =
             rawPropertyName.first == "`" && rawPropertyName.last == "`"
@@ -84,11 +74,13 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             guard case let .attribute(attribute) = element else { return false }
             return attribute.attributeName.trimmedDescription == "Relationship"
         }
+        let isInheritedModel = classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
+        let modelName = classDeclaration.name.text
         return [
             AttributeSyntax(
                 stringLiteral: isRelationship
-                    ? "@_PersistedProperty(slot: \(slot), relationship: true)"
-                    : "@_PersistedProperty(slot: \(slot))")
+                    ? "@_PersistedProperty(slot: \(slot), relationship: true, inherited: \(isInheritedModel), modelName: \"\(modelName)\")"
+                    : "@_PersistedProperty(slot: \(slot), inherited: \(isInheritedModel), modelName: \"\(modelName)\")")
         ]
     }
 
@@ -99,10 +91,12 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [ExtensionDeclSyntax] {
-        guard let classDeclaration = declaration.as(ClassDeclSyntax.self),
-            classDeclaration.modifiers.contains(where: { $0.name.text == "final" }),
-            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty != false
-        else { return [] }
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
+        if classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false {
+            return CodeGen.extensionSources(classDeclaration)
+                .filter { $0.contains("extension PersistentModel where Self:") || $0.contains("@unchecked Sendable") }
+                .compactMap { DeclSyntax(stringLiteral: $0).as(ExtensionDeclSyntax.self) }
+        }
         return CodeGen.extensionSources(declaration)
             .filter {
                 $0.contains("PersistentModel") || $0.contains("RelationshipModel")
@@ -239,8 +233,27 @@ struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
             else { return nil }
             return Int(argument.expression.trimmedDescription)
         }
-        return CodeGen.accessorSources(property: propertyName, slot: slot, isRelationship: isRelationship)
-            .map(AccessorDeclSyntax.init(stringLiteral:))
+        let inherited =
+            node.arguments.flatMap { arguments -> Bool? in
+                guard case let .argumentList(list) = arguments,
+                    let argument = list.first(where: { $0.label?.text == "inherited" })
+                else { return nil }
+                return argument.expression.trimmedDescription == "true"
+            } ?? false
+        let modelName =
+            node.arguments.flatMap { arguments -> String? in
+                guard case let .argumentList(list) = arguments,
+                    let argument = list.first(where: { $0.label?.text == "modelName" }),
+                    let literal = argument.expression.as(StringLiteralExprSyntax.self)
+                else { return nil }
+                return literal.segments.first?.as(StringSegmentSyntax.self)?.content.text
+            } ?? ""
+        let valueType = variable.bindings.first?.typeAnnotation?.type.trimmedDescription
+        return CodeGen.accessorSources(
+            property: propertyName, modelName: modelName, slot: slot,
+            isRelationship: isRelationship, inherited: inherited, valueType: valueType
+        )
+        .map(AccessorDeclSyntax.init(stringLiteral:))
     }
 
     static func expansion(
@@ -252,6 +265,15 @@ struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
             let binding = variable.bindings.first,
             let property = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
         else { return [] }
-        return CodeGen.peerSources(property: property, variant: .c).map(DeclSyntax.init(stringLiteral:))
+        let inherited =
+            node.arguments.flatMap { arguments -> Bool? in
+                guard case let .argumentList(list) = arguments,
+                    let argument = list.first(where: { $0.label?.text == "inherited" })
+                else { return nil }
+                return argument.expression.trimmedDescription == "true"
+            } ?? false
+        let valueType = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
+        return CodeGen.peerSources(property: property, valueType: valueType, inherited: inherited)
+            .map(DeclSyntax.init(stringLiteral:))
     }
 }

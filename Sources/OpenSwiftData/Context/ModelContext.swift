@@ -105,6 +105,7 @@ public final class ModelContext {
 
     private struct PersistedModel {
         let model: any PersistentModel
+        let entityName: String
         let primaryKey: Int64
         let version: Int
         let replacedModel: (any PersistentModel)?
@@ -149,8 +150,7 @@ public final class ModelContext {
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
             storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
-            entityIDsByName: Dictionary(
-                uniqueKeysWithValues: (container?.schema.entities ?? []).enumerated().map { ($1.name, $0 + 1) }),
+            entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }),
             onLocalChange: { [autosaveHandle] in autosaveHandle.changed() })
         autosaveEnabledStorage = autosaveEnabled
@@ -170,8 +170,7 @@ public final class ModelContext {
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
             storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
-            entityIDsByName: Dictionary(
-                uniqueKeysWithValues: (container?.schema.entities ?? []).enumerated().map { ($1.name, $0 + 1) }),
+            entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }))
         autosaveEnabledStorage = false
         allowsSave = true
@@ -225,6 +224,7 @@ public final class ModelContext {
         assertAffinity()
         state.withExclusiveOperation {
             guard model.modelContext == nil else { return }
+            model.prepareForPersistence()
             insertRelationshipDestination(model, snapshot: model.snapshotLifecycle())
         }
     }
@@ -232,12 +232,13 @@ public final class ModelContext {
     func insertRelationshipDestination(_ model: any PersistentModel, snapshot: BackingDataSnapshot) {
         assertAffinity()
         guard model.modelContext == nil else { return }
-        var insertionSnapshot = snapshot
+        model.prepareForPersistence()
+        var insertionSnapshot = model.snapshotLifecycle()
         let relationshipAdapters = container?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? []
         let detachedDestinations = relationshipAdapters.flatMap { $0.read(model) ?? [] }
             .filter { $0.modelContext == nil && $0 !== model }
         for adapter in relationshipAdapters {
-            guard snapshot.values[adapter.keyPath] == nil,
+            guard insertionSnapshot.values[adapter.keyPath] == nil,
                 let value = try? adapter.makeValue([]),
                 let metadata = type(of: model).schemaMetadata().first(where: { $0.name == adapter.name }),
                 let keyPath = metadata.keypath
@@ -257,7 +258,7 @@ public final class ModelContext {
         }
         func attach<Model: PersistentModel>(_ model: Model) {
             guard container?.store != nil || container?.dataStore != nil else {
-                model.persistentBackingData.attach(to: self, model: model)
+                model.anyBackingData.attach(to: self, model: model)
                 model.setInsertionChanged()
                 state.setBaseline(model, snapshot: model.snapshotLifecycle())
                 return
@@ -267,7 +268,7 @@ public final class ModelContext {
                 storeIdentifier: storeIdentifier, entityID: entityID(for: String(describing: Model.self)),
                 identifier: insertionSnapshot.identifier)
             model.persistentBackingData = managed
-            model.persistentBackingData.attach(to: self, model: model)
+            model.anyBackingData.attach(to: self, model: model)
             model.setInsertionChanged()
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
         }
@@ -568,7 +569,7 @@ public final class ModelContext {
         primaryKey: Int64
     ) {
         func invalidate<Model: PersistentModel>(_ type: Model.Type) {
-            let key = EntityPrimaryKey(entityName: entity.name, primaryKey: primaryKey)
+            let key = identityKey(for: entity, primaryKey: primaryKey)
             guard let model = identityMap.model(for: key, as: Model.self), !model.hasChanges,
                 let backing = model.persistentBackingData as? ManagedBackingData<Model>
             else { return }
@@ -589,15 +590,18 @@ public final class ModelContext {
         store: any RuntimeStore
     ) throws {
         func refresh<Model: PersistentModel>(_ type: Model.Type) throws {
-            let key = EntityPrimaryKey(entityName: entity.name, primaryKey: primaryKey)
+            let key = identityKey(for: entity, primaryKey: primaryKey)
             guard let model = identityMap.model(for: key, as: Model.self), !model.hasChanges else { return }
             let attributes = canonicalAttributes(for: entity)
-            let columns = storedColumnNames(for: attributes).map { "Z\($0.uppercased())" }.joined(separator: ", ")
-            let selectedColumns = columns.isEmpty ? "Z_PK, Z_OPT" : "Z_PK, Z_OPT, \(columns)"
+            let hasHierarchy = rootEntity(for: entity).name != entity.name
+            let selectedColumns =
+                (["Z_PK", "Z_OPT"] + (hasHierarchy ? ["Z_ENT"] : [])
+                + storedColumnNames(for: attributes).map { "Z\($0.uppercased())" }).joined(separator: ", ")
+            let table = rootEntity(for: entity)
             guard
                 let row = try store.read({ connection in
                     try connection.rows(
-                        "SELECT \(selectedColumns) FROM Z\(entity.name.uppercased()) WHERE Z_PK = ?",
+                        "SELECT \(selectedColumns) FROM Z\(table.name.uppercased()) WHERE Z_PK = ?",
                         arguments: [.int(primaryKey)])
                 }).first
             else {
@@ -607,7 +611,16 @@ public final class ModelContext {
                 model.detachDeletedLifecycle()
                 return
             }
-            try refreshAttributes(model, entity: entity, attributes: attributes, row: row)
+            if hasHierarchy {
+                guard row.count >= 3, case let .int(rawEntityID) = row[2],
+                    let entityID = Int(exactly: rawEntityID),
+                    containerStorage?.schema.entityIDsByName[entity.name] == entityID
+                else { return }
+                try refreshAttributes(
+                    model, entity: entity, attributes: attributes, row: [row[0], row[1]] + row.dropFirst(3))
+            } else {
+                try refreshAttributes(model, entity: entity, attributes: attributes, row: row)
+            }
             refreshVersion(model, version: row.count > 1 ? runtimeInt(row[1]) : 0)
         }
         try refresh(type)
@@ -655,13 +668,24 @@ public final class ModelContext {
         try processPendingChanges()
         guard let container = containerStorage else { throw unsupportedStore("Fetch") }
         guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return [] }
+        let hasHierarchy =
+            entity.superentityName != nil
+            || container.schema.entities.contains {
+                $0.superentityName == entity.name
+            }
         if let dataStore = container.dataStore {
+            guard !hasHierarchy else {
+                throw SwiftDataError.unsupportedStore("Inherited model queries require SQLite discriminator support.")
+            }
             return try fetchFromDataStore(descriptor, dataStore: dataStore, container: container, entity: entity)
         }
         guard let store = container.store else { throw unsupportedStore("Fetch") }
         let allAttributes = canonicalAttributes(for: entity)
         let requestedProperties = try selectedAttributes(descriptor.propertiesToFetch, entity: entity, type: Model.self)
-        let selectedAttributesForMaterialization = allAttributes.filter { requestedProperties.contains($0.name) }
+        let selectedAttributesForMaterialization =
+            hasHierarchy
+            ? try hierarchyAttributes(for: entity)
+            : allAttributes.filter { requestedProperties.contains($0.name) }
         let selectedColumns = storedColumnNames(for: selectedAttributesForMaterialization)
         let requestedRelationships = try selectedRelationships(
             descriptor.relationshipKeyPathsForPrefetching, entity: entity, type: Model.self)
@@ -694,13 +718,14 @@ public final class ModelContext {
         }
         let query = FetchSQLBuilder.build(
             FetchSQLInput(
-                table: "Z\(entity.name.uppercased())",
+                table: "Z\(rootEntity(for: entity).name.uppercased())",
                 columns: selectedColumns.map { "Z\($0.uppercased())" },
                 predicateSQL: compiled?.sql,
                 predicateArguments: compiled?.arguments ?? [],
                 orderSQL: orderSQL,
                 limit: fetchedLimit,
-                offset: descriptor.includePendingChanges ? nil : descriptor.fetchOffset))
+                offset: descriptor.includePendingChanges ? nil : descriptor.fetchOffset,
+                entityIDs: hasHierarchy ? descendantEntityIDs(for: entity) : nil))
         let rows = try store.read { connection in
             try connection.rows(query.sql, arguments: query.arguments)
         }
@@ -708,21 +733,51 @@ public final class ModelContext {
         var primaryKeys: [Int64] = []
         for row in rows {
             guard row.count >= 2, case let .int(pk) = row[0], case let .int(version) = row[1] else { continue }
-            let key = EntityPrimaryKey(entityName: entity.name, primaryKey: pk)
+            let concreteEntity: Schema.Entity
+            let concreteModel: any PersistentModel
+            if hasHierarchy {
+                guard row.count >= 3, case let .int(rawEntityID) = row[2],
+                    let concreteID = Int(exactly: rawEntityID),
+                    let registration = container.modelRegistration(forEntityID: concreteID),
+                    let resolvedEntity = container.schema.entities.indices.contains(concreteID - 1)
+                        ? Optional(container.schema.entities[concreteID - 1]) : nil,
+                    registration.type is Model.Type
+                else {
+                    throw SwiftDataError.unsupportedStore("Hierarchy row has an unknown or incompatible Z_ENT.")
+                }
+                concreteEntity = resolvedEntity
+                let materializationRow = [row[0], row[1]] + row.dropFirst(3)
+                concreteModel = try registration.materialize(
+                    context: self,
+                    entity: concreteEntity,
+                    attributes: selectedAttributesForMaterialization,
+                    row: materializationRow,
+                    storeIdentifier: storeIdentifier,
+                    entityID: concreteID,
+                    primaryKey: pk,
+                    version: Int(version))
+            } else {
+                concreteEntity = entity
+                concreteModel = try materialize(
+                    Model.self, entity: entity, attributes: selectedAttributesForMaterialization,
+                    row: row, storeIdentifier: storeIdentifier, primaryKey: pk, version: Int(version))
+            }
+            let key = identityKey(for: entity, primaryKey: pk)
+            let refreshRow = hasHierarchy ? [row[0], row[1]] + row.dropFirst(3) : row
             let model: Model
             if let existing = identityMap.model(for: key, as: Model.self) {
                 model = existing
                 if !existing.hasChanges {
                     try refreshAttributes(
-                        existing, entity: entity, attributes: selectedAttributesForMaterialization, row: row)
+                        existing, entity: entity, attributes: selectedAttributesForMaterialization, row: refreshRow)
                 }
                 refreshVersion(existing, version: Int(version))
             } else {
-                let candidate = try materialize(
-                    Model.self, entity: entity, attributes: selectedAttributesForMaterialization, row: row,
-                    storeIdentifier: storeIdentifier,
-                    primaryKey: pk, version: Int(version))
-                model = identityMap.canonicalHandle(for: key, candidate: candidate).model as? Model ?? candidate
+                let canonical = identityMap.canonicalHandle(for: key, candidate: concreteModel).model
+                guard let compatible = canonical as? Model else {
+                    throw SwiftDataError.unsupportedStore("Materialized model is not query-compatible.")
+                }
+                model = compatible
             }
             if let backing = model.persistentBackingData as? ManagedBackingData<Model> {
                 installPropertyFaults(
@@ -864,9 +919,15 @@ public final class ModelContext {
         try processPendingChanges()
         if container?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
-            guard let store = container?.store,
-                let entity = container?.schema.entity(forName: String(describing: Model.self))
+            guard let container,
+                let store = container.store,
+                let entity = container.schema.entity(forName: String(describing: Model.self))
             else { throw unsupportedStore("Fetch count") }
+            let hierarchyIDs =
+                entity.superentityName != nil
+                    || container.schema.entities.contains {
+                        $0.superentityName == entity.name
+                    } ? descendantEntityIDs(for: entity) : nil
             if let limit = descriptor.fetchLimit, limit < 0 {
                 throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
             }
@@ -876,10 +937,18 @@ public final class ModelContext {
             let compiled = try compilePredicate(
                 descriptor.predicate, modelType: Model.self, entity: entity, store: store,
                 ordering: descriptor.sortBy.compactMap(\.propertyName))
-            let whereSQL = compiled.map { " WHERE \($0.sql)" } ?? ""
-            let countSQL = "SELECT COUNT(*) FROM Z\(entity.name.uppercased()) AS t0\(whereSQL)"
+            var conditions: [String] = []
+            var countArguments = compiled?.arguments ?? []
+            if let hierarchyIDs, !hierarchyIDs.isEmpty {
+                conditions.append(
+                    "t0.Z_ENT IN (\(Array(repeating: "?", count: hierarchyIDs.count).joined(separator: ", ")))")
+                countArguments = hierarchyIDs.map { .int(Int64($0)) } + countArguments
+            }
+            if let compiled { conditions.append(compiled.sql) }
+            let whereSQL = conditions.isEmpty ? "" : " WHERE \(conditions.map { "(\($0))" }.joined(separator: " AND "))"
+            let countSQL = "SELECT COUNT(*) FROM Z\(rootEntity(for: entity).name.uppercased()) AS t0\(whereSQL)"
             let total = try store.read { connection -> Int in
-                guard let row = try connection.rows(countSQL, arguments: compiled?.arguments ?? []).first,
+                guard let row = try connection.rows(countSQL, arguments: countArguments).first,
                     case let .int(value)? = row.first
                 else { return 0 }
                 return Int(clamping: value)
@@ -899,8 +968,9 @@ public final class ModelContext {
         assertAffinity()
         try processPendingChanges()
         if container?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
-        guard let store = container?.store,
-            let entity = container?.schema.entity(forName: String(describing: Model.self))
+        guard let container,
+            let store = container.store,
+            let entity = container.schema.entity(forName: String(describing: Model.self))
         else { throw unsupportedStore("Identifier fetch") }
         if let fetchLimit = descriptor.fetchLimit, fetchLimit < 0 {
             throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
@@ -917,11 +987,26 @@ public final class ModelContext {
             throw SwiftDataError.unsupportedPredicate(
                 "The store cannot evaluate this predicate against pending models.")
         }
+        let hasHierarchy =
+            entity.superentityName != nil
+            || container.schema.entities.contains {
+                $0.superentityName == entity.name
+            }
+        let hierarchyIDs = hasHierarchy ? descendantEntityIDs(for: entity) : nil
         let sortProperties = try sortProperties(descriptor.sortBy, entity: entity, type: Model.self)
         let orderSQL = try sortSQL(descriptor.sortBy, entity: entity, type: Model.self)
-        let selectedColumns = (["t0.Z_PK"] + sortProperties.map { "t0.Z\($0.uppercased())" }).joined(separator: ", ")
-        var sql = "SELECT \(selectedColumns) FROM Z\(entity.name.uppercased()) AS t0"
-        if let compiled { sql += " WHERE \(compiled.sql)" }
+        let selectedColumns =
+            (["t0.Z_PK"] + (hasHierarchy ? ["t0.Z_ENT"] : [])
+            + sortProperties.map { "t0.Z\($0.uppercased())" }).joined(separator: ", ")
+        var sql = "SELECT \(selectedColumns) FROM Z\(rootEntity(for: entity).name.uppercased()) AS t0"
+        var identifierArguments = compiled?.arguments ?? []
+        var filters: [String] = []
+        if let hierarchyIDs, !hierarchyIDs.isEmpty {
+            filters.append("t0.Z_ENT IN (\(Array(repeating: "?", count: hierarchyIDs.count).joined(separator: ", ")))")
+            identifierArguments = hierarchyIDs.map { .int(Int64($0)) } + identifierArguments
+        }
+        if let compiled { filters.append(compiled.sql) }
+        if !filters.isEmpty { sql += " WHERE \(filters.map { "(\($0))" }.joined(separator: " AND "))" }
         sql += " ORDER BY \(orderSQL), t0.Z_PK ASC"
         if !descriptor.includePendingChanges {
             if let limit = descriptor.fetchLimit {
@@ -931,13 +1016,23 @@ public final class ModelContext {
                 sql += " LIMIT -1 OFFSET \(offset)"
             }
         }
-        let rows = try store.read { try $0.rows(sql, arguments: compiled?.arguments ?? []) }
+        let rows = try store.read { try $0.rows(sql, arguments: identifierArguments) }
         var queryRows = rows.compactMap { row -> IdentifierQueryRow? in
             guard case let .int(primaryKey)? = row.first else { return nil }
+            let concreteEntityName: String
+            if hasHierarchy {
+                guard row.count > 1, case let .int(rawEntityID) = row[1],
+                    let concreteID = Int(exactly: rawEntityID),
+                    container.schema.entities.indices.contains(concreteID - 1)
+                else { return nil }
+                concreteEntityName = container.schema.entities[concreteID - 1].name
+            } else {
+                concreteEntityName = entity.name
+            }
             return IdentifierQueryRow(
                 identifier: PersistentIdentifier(
-                    storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey),
-                sortValues: Array(row.dropFirst()))
+                    storeIdentifier: storeIdentifier, entityName: concreteEntityName, primaryKey: primaryKey),
+                sortValues: Array(row.dropFirst(hasHierarchy ? 2 : 1)))
         }
         if descriptor.includePendingChanges {
             let pending = (state.insertedModels + state.changedModels).compactMap { $0 as? Model }.filter {
@@ -1036,6 +1131,72 @@ public final class ModelContext {
             guard let permanent = temporaryIdentifiers[identifier] else { throw unsupportedStore("Model lookup") }
             return try model(for: permanent)
         }
+        if let container, container.store != nil,
+            identifier.storeIdentifier == storeIdentifier,
+            let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
+            let concreteEntity = container.schema.entity(forName: identifier.entityName),
+            requestedEntity.name != concreteEntity.name
+                || requestedEntity.superentityName != nil
+                || concreteEntity.superentityName != nil,
+            rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
+            requestedEntity.name == concreteEntity.name
+                || descendantEntityIDs(for: requestedEntity).contains(
+                    container.schema.entityIDsByName[concreteEntity.name] ?? 0)
+        {
+            guard let store = container.store else { throw unsupportedStore("Model lookup") }
+            let root = rootEntity(for: concreteEntity)
+            let attributes = canonicalAttributes(for: concreteEntity)
+            let columns = storedColumnNames(for: attributes).map { "Z\($0.uppercased())" }
+            let selectColumns = (["Z_PK", "Z_OPT", "Z_ENT"] + columns).joined(separator: ", ")
+            guard
+                let row = try store.read({ connection in
+                    try connection.rows(
+                        "SELECT \(selectColumns) FROM Z\(root.name.uppercased()) WHERE Z_PK = ?",
+                        arguments: [.int(key)])
+                }).first,
+                row.count >= 3,
+                case let .int(rawEntityID) = row[2],
+                let concreteID = Int(exactly: rawEntityID),
+                container.schema.entityIDsByName[concreteEntity.name] == concreteID,
+                container.schema.entities.indices.contains(concreteID - 1),
+                container.schema.entities[concreteID - 1].name == identifier.entityName,
+                let registration = container.modelRegistration(forEntityID: concreteID),
+                registration.type is Model.Type
+            else { return nil }
+            let materializationRow = [row[0], row[1]] + row.dropFirst(3)
+            let version = runtimeInt(row[1])
+            let identity = identityKey(for: concreteEntity, primaryKey: key)
+            let model: any PersistentModel
+            if let existing = identityMap.model(for: identity, as: Model.self) {
+                model = existing
+                if !existing.hasChanges {
+                    try refreshAttributes(
+                        existing, entity: concreteEntity, attributes: attributes, row: materializationRow)
+                }
+                refreshVersion(existing, version: version)
+            } else {
+                let candidate = try registration.materialize(
+                    context: self,
+                    entity: concreteEntity,
+                    attributes: attributes,
+                    row: materializationRow,
+                    storeIdentifier: identifier.storeIdentifier,
+                    entityID: concreteID,
+                    primaryKey: key,
+                    version: version)
+                model = identityMap.canonicalHandle(for: identity, candidate: candidate).model
+            }
+            guard let compatible = model as? Model else {
+                throw SwiftDataError.unsupportedStore("Materialized model is not query-compatible.")
+            }
+            relationshipLoadVisited.removeAll()
+            var visited = relationshipLoadVisited
+            try materializeRelationships(
+                [compatible], entity: concreteEntity, primaryKeys: [key], store: store, requested: nil,
+                visited: &visited)
+            relationshipLoadVisited = visited
+            return compatible
+        }
         guard let container,
             identifier.storeIdentifier == storeIdentifier,
             let entity = container.schema.entity(forName: identifier.entityName),
@@ -1090,7 +1251,7 @@ public final class ModelContext {
             primaryKey: key, version: row.count > 1 ? runtimeInt(row[1]) : 0)
         let model =
             identityMap.canonicalHandle(
-                for: EntityPrimaryKey(entityName: entity.name, primaryKey: key), candidate: candidate
+                for: identityKey(for: entity, primaryKey: key), candidate: candidate
             ).model as? Model
             ?? candidate
         relationshipLoadVisited.removeAll()
@@ -1105,14 +1266,21 @@ public final class ModelContext {
     public func registeredModel<Model: PersistentModel>(for identifier: PersistentIdentifier) -> Model? {
         assertAffinity()
         guard let container,
-            identifier.primaryKey != nil,
+            let key = identifier.primaryKey,
             identifier.storeIdentifier == storeIdentifier,
-            identifier.entityName == String(describing: Model.self),
-            container.schema.entity(forName: identifier.entityName) != nil
+            let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
+            let concreteEntity = container.schema.entity(forName: identifier.entityName),
+            rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
+            requestedEntity.name == concreteEntity.name
+                || descendantEntityIDs(for: requestedEntity).contains(
+                    container.schema.entityIDsByName[concreteEntity.name] ?? 0)
         else { return nil }
-        guard let key = identifier.primaryKey else { return nil }
-        return identityMap.model(
-            for: EntityPrimaryKey(entityName: identifier.entityName, primaryKey: key), as: Model.self)
+        guard
+            let model = identityMap.model(
+                for: identityKey(for: concreteEntity, primaryKey: key), as: Model.self),
+            model.persistentModelID == identifier
+        else { return nil }
+        return model
     }
 
     /// Saves pending changes when a supported store is available.
@@ -1391,6 +1559,25 @@ public final class ModelContext {
         entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
     }
 
+    private func hierarchyAttributes(for entity: Schema.Entity) throws -> [Schema.Attribute] {
+        guard let container else { throw unsupportedStore("Hierarchy schema lookup") }
+        let identifiers = Set(descendantEntityIDs(for: entity))
+        var attributesByName: [String: Schema.Attribute] = [:]
+        for (index, candidate) in container.schema.entities.enumerated() where identifiers.contains(index + 1) {
+            for attribute in candidate.attributes {
+                let key = attribute.name.uppercased()
+                if let existing = attributesByName[key], existing != attribute {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Hierarchy query encountered incompatible column declarations for '\(attribute.name)'.")
+                }
+                attributesByName[key] = attribute
+            }
+        }
+        return attributesByName.values.sorted {
+            $0.name.uppercased().utf8.lexicographicallyPrecedes($1.name.uppercased().utf8)
+        }
+    }
+
     private func storedColumns(for attribute: Schema.Attribute) -> [String] {
         if attribute.options.contains(.flattened) {
             return attribute.components.map(\.columnName)
@@ -1422,7 +1609,8 @@ public final class ModelContext {
     ) throws -> [String] {
         guard let keyPaths else { return canonicalAttributes(for: entity).map(\.name) }
         let names = try keyPaths.map { keyPath -> String in
-            if let metadata = type.schemaMetadata().first(where: { $0.keypath == keyPath }),
+            if let name = type.propertyName(forKeyPath: keyPath),
+                let metadata = type.schemaMetadata().first(where: { $0.name == name }),
                 !metadata.isRelationship,
                 entity.attributes.contains(where: { $0.name == metadata.name })
             {
@@ -1448,7 +1636,8 @@ public final class ModelContext {
         type: Model.Type
     ) throws -> [String] {
         try keyPaths.map { keyPath in
-            guard let property = type.schemaMetadata().first(where: { $0.keypath == keyPath }),
+            guard let name = type.propertyName(forKeyPath: keyPath),
+                let property = type.schemaMetadata().first(where: { $0.name == name }),
                 property.isRelationship,
                 entity.relationships.contains(where: { $0.name == property.name })
             else {
@@ -1595,7 +1784,7 @@ public final class ModelContext {
         selecting names: Set<String>? = nil
     ) throws -> [String: RuntimeValue] {
         var values: [String: RuntimeValue] = [:]
-        for adapter in Model.persistenceAdapters() where names == nil || names!.contains(adapter.name) {
+        for adapter in Model.erasedPersistenceAdapters() where names == nil || names!.contains(adapter.name) {
             values[adapter.name] = runtimeValue(try adapter.encoded(model))
         }
         for adapter in Model.flattenedPropertyAdapters() where names == nil || names!.contains(adapter.columnName) {
@@ -1605,7 +1794,7 @@ public final class ModelContext {
     }
 
     private func modelValues<Model: PersistentModel>(_ model: Model) throws -> [String: StoredValue] {
-        var values = try Model.persistenceAdapters().reduce(into: [String: StoredValue]()) { values, adapter in
+        var values = try Model.erasedPersistenceAdapters().reduce(into: [String: StoredValue]()) { values, adapter in
             values[adapter.name] = try adapter.encoded(model)
         }
         for adapter in Model.flattenedPropertyAdapters() {
@@ -1634,7 +1823,7 @@ public final class ModelContext {
     private func resolvedPropertyName<Model: PersistentModel>(
         keyPath: PartialKeyPath<Model>, fallback: String?, entity: Schema.Entity, type: Model.Type
     ) -> String? {
-        if let property = type.schemaMetadata().first(where: { $0.keypath == keyPath })?.name,
+        if let property = type.propertyName(forKeyPath: keyPath),
             entity.attributes.contains(where: { $0.name == property }),
             entity.attributes.first(where: { $0.name == property })?.options.contains(.flattened) != true
         {
@@ -1719,14 +1908,14 @@ public final class ModelContext {
             containerStorage?.relationshipAdapterTable[ObjectIdentifier(Model.self)] == nil
             ? defaultRelationshipValues(for: Model.self)
             : [:]
-        let backing = ManagedBackingData<Model>(
+        let backing = ManagedBackingData<Model.Model>(
             metadata: Model.schemaMetadata(), values: managedValues, context: self,
             storeIdentifier: storeIdentifier, entityID: entityID(for: entity.name), primaryKey: primaryKey,
             version: version,
             identifier: PersistentIdentifier(
                 storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
         let model = Model(backingData: backing)
-        let adapters = Model.persistenceAdapters()
+        let adapters = Model.erasedPersistenceAdapters()
         var columnIndex = 2
         for attribute in attributes {
             if attribute.options.contains(.flattened) {
@@ -1796,7 +1985,7 @@ public final class ModelContext {
                     }
                     return components.map { (property, $0.columnName, Optional($0)) }
                 }
-                guard type.persistenceAdapters().contains(where: { $0.name == property.name }) else { return [] }
+                guard type.erasedPersistenceAdapters().contains(where: { $0.name == property.name }) else { return [] }
                 return [(property, property.name, nil)]
             }
             let columns = selections.map { "Z\($0.1.uppercased())" }.joined(separator: ", ")
@@ -1809,7 +1998,7 @@ public final class ModelContext {
                 throw SwiftDataError.unsupportedStore("A faulted model row no longer exists")
             }
             var result: [AnyKeyPath: Any] = [:]
-            let scalarAdapters = type.persistenceAdapters()
+            let scalarAdapters = type.erasedPersistenceAdapters()
             var decodedFlattened: [String: [String: StoredValue]] = [:]
             for (index, selection) in selections.enumerated() {
                 guard index < row.count, let keyPath = selection.0.keypath else { continue }
@@ -1863,7 +2052,7 @@ public final class ModelContext {
         guard !model.hasChanges,
             let backing = model.persistentBackingData as? ManagedBackingData<Model>
         else { return }
-        let adapters = Model.persistenceAdapters()
+        let adapters = Model.erasedPersistenceAdapters()
         let flattenedAdapters = Dictionary(grouping: Model.flattenedPropertyAdapters(), by: \.propertyName)
             .mapValues { $0.sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) } }
         let metadata = Model.schemaMetadata()
@@ -2382,7 +2571,46 @@ public final class ModelContext {
     }
 
     private func entityID(for name: String) -> Int {
-        (container?.schema.entities.firstIndex(where: { $0.name == name }) ?? 0) + 1
+        containerStorage?.schema.entityIDsByName[name] ?? 0
+    }
+
+    private func rootEntity(for entity: Schema.Entity) -> Schema.Entity {
+        guard let entities = containerStorage?.schema.entities else { return entity }
+        var current = entity
+        var visited: Set<String> = []
+        while let parentName = current.superentityName,
+            visited.insert(current.name).inserted,
+            let parent = entities.first(where: { $0.name == parentName })
+        {
+            current = parent
+        }
+        return current
+    }
+
+    private func descendantEntityIDs(for entity: Schema.Entity) -> [Int] {
+        guard let schema = containerStorage?.schema else { return [] }
+        return schema.entities.compactMap { candidate in
+            var current: Schema.Entity? = candidate
+            var visited = Set<String>()
+            while let value = current, visited.insert(value.name).inserted {
+                if value.name == entity.name { return schema.entityIDsByName[candidate.name] }
+                current = value.superentityName.flatMap { parent in
+                    schema.entities.first(where: { $0.name == parent })
+                }
+            }
+            return nil
+        }.sorted()
+    }
+
+    private func identityKey(for entity: Schema.Entity, primaryKey: Int64) -> EntityPrimaryKey {
+        EntityPrimaryKey(entityName: rootEntity(for: entity).name, primaryKey: primaryKey)
+    }
+
+    private func identityKey(forEntityName entityName: String, primaryKey: Int64) -> EntityPrimaryKey {
+        guard let entity = containerStorage?.schema.entity(forName: entityName) else {
+            return EntityPrimaryKey(entityName: entityName, primaryKey: primaryKey)
+        }
+        return identityKey(for: entity, primaryKey: primaryKey)
     }
 
     private static func historyKeyLess(_ lhs: StoreEntityKey, _ rhs: StoreEntityKey) -> Bool {
@@ -2393,8 +2621,7 @@ public final class ModelContext {
     private func persistPendingChanges(to store: any RuntimeStore) throws {
         let pending = state.pendingState()
         guard let container = containerStorage else { throw unsupportedStore("Saving") }
-        let entityIDs = Dictionary(
-            uniqueKeysWithValues: container.schema.entities.enumerated().map { ($1.name, $0 + 1) })
+        let entityIDs = container.schema.entityIDsByName
         let models = pending.inserted + pending.changed
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
         var updatedKeys = Set(
@@ -2451,7 +2678,7 @@ public final class ModelContext {
                         let destinationPK = assignedIDs[ObjectIdentifier(endpoint)]
                     else { continue }
                     try connection.execute(
-                        "UPDATE Z\(entity.name.uppercased()) SET Z\(relationship.name.uppercased()) = ? WHERE Z_PK = ?",
+                        "UPDATE Z\(rootEntity(for: entity).name.uppercased()) SET Z\(relationship.name.uppercased()) = ? WHERE Z_PK = ?",
                         arguments: [.int(destinationPK), .int(ownerPK)])
                 }
             }
@@ -2466,7 +2693,7 @@ public final class ModelContext {
                     endpoint.persistentModelID.primaryKey ?? assignedIDs[ObjectIdentifier(endpoint)]
                 }
                 try connection.execute(
-                    "UPDATE Z\(entity.name.uppercased()) SET Z\(event.property.uppercased()) = ? WHERE Z_PK = ?",
+                    "UPDATE Z\(rootEntity(for: entity).name.uppercased()) SET Z\(event.property.uppercased()) = ? WHERE Z_PK = ?",
                     arguments: [destinationPK.map(RuntimeValue.int) ?? .null, .int(ownerPK)])
             }
             try persistRelationships(
@@ -2478,8 +2705,12 @@ public final class ModelContext {
             }
             for model in pending.deleted {
                 guard let pk = model.persistentModelID.primaryKey else { continue }
+                guard let entity = container.schema.entity(forName: model.persistentModelID.entityName) else {
+                    throw SwiftDataError.unsupportedStore(
+                        "No schema entity exists for deleted model '\(model.persistentModelID.entityName)'.")
+                }
                 try connection.execute(
-                    "DELETE FROM Z\(model.persistentModelID.entityName.uppercased()) WHERE Z_PK = ?",
+                    "DELETE FROM Z\(rootEntity(for: entity).name.uppercased()) WHERE Z_PK = ?",
                     arguments: [.int(pk)])
                 guard connection.changesCount() == 1 else {
                     throw SwiftDataError.unsupportedStore("Delete did not affect exactly one row.")
@@ -2514,25 +2745,28 @@ public final class ModelContext {
         }
         for model in pending.deleted {
             if let pk = model.persistentModelID.primaryKey {
-                identityMap.remove(EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: pk))
+                identityMap.remove(
+                    identityKey(
+                        forEntityName: model.persistentModelID.entityName,
+                        primaryKey: pk))
             }
             state.removeBaseline(for: model)
             model.detachDeletedLifecycle()
         }
         for result in persisted {
             let model = result.model
-            let entityName = model.persistentModelID.entityName
+            let entityName = result.entityName
             let originalIdentifier = state.snapshotIdentifier(for: model)
             if let replacedModel = result.replacedModel {
-                identityMap.remove(EntityPrimaryKey(entityName: entityName, primaryKey: result.primaryKey))
+                identityMap.remove(identityKey(forEntityName: entityName, primaryKey: result.primaryKey))
                 detachModel(replacedModel)
             }
             model.markPersistedLifecycle(
-                storeIdentifier: storeIdentifier, entityID: entityID(for: entityName),
+                storeIdentifier: storeIdentifier, entityName: entityName, entityID: entityID(for: entityName),
                 primaryKey: result.primaryKey, version: result.version)
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
             identityMap.register(
-                model, for: EntityPrimaryKey(entityName: entityName, primaryKey: result.primaryKey))
+                model, for: identityKey(forEntityName: entityName, primaryKey: result.primaryKey))
             if let old = originalIdentifier, old.isTemporary {
                 temporaryIdentifiers[old] = model.persistentModelID
             }
@@ -2669,14 +2903,16 @@ public final class ModelContext {
                 || result.identifierRemappings[requestIdentifier] != nil
             {
                 model.markPersistedLifecycle(
-                    storeIdentifier: identifier.storeIdentifier, entityID: entityID(for: identifier.entityName),
+                    storeIdentifier: identifier.storeIdentifier, entityName: identifier.entityName,
+                    entityID: entityID(for: identifier.entityName),
                     primaryKey: primaryKey, version: 1)
             } else {
                 model.markSavedLifecycle()
             }
             let key = StoreEntityKey(entityName: identifier.entityName, primaryKey: primaryKey)
             if isInserted { insertedKeys.insert(key) }
-            identityMap.register(model, for: EntityPrimaryKey(entityName: key.entityName, primaryKey: key.primaryKey))
+            identityMap.register(
+                model, for: identityKey(forEntityName: key.entityName, primaryKey: key.primaryKey))
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
             if originalIdentifier.isTemporary {
                 temporaryIdentifiers[originalIdentifier] = identifier
@@ -2685,7 +2921,9 @@ public final class ModelContext {
         for model in pending.deleted {
             if let primaryKey = model.persistentModelID.primaryKey {
                 identityMap.remove(
-                    EntityPrimaryKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey))
+                    identityKey(
+                        forEntityName: model.persistentModelID.entityName,
+                        primaryKey: primaryKey))
             }
             state.removeBaseline(for: model)
             model.detachDeletedLifecycle()
@@ -2733,7 +2971,8 @@ public final class ModelContext {
                         values[component.columnName] = try component.encoded(model)
                     }
                 } else {
-                    guard let adapter = Model.persistenceAdapters().first(where: { $0.name == attribute.name }) else {
+                    guard let adapter = Model.erasedPersistenceAdapters().first(where: { $0.name == attribute.name })
+                    else {
                         throw SwiftDataError.unsupportedStore(
                             "DataStore has no encoder for \(entity.name).\(attribute.name).")
                     }
@@ -2773,7 +3012,7 @@ public final class ModelContext {
     ) throws {
         func typed<Model: PersistentModel>(_ model: Model) throws {
             guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return }
-            let adapters = Model.persistenceAdapters()
+            let adapters = Model.erasedPersistenceAdapters()
             let flattenedAdapters = Dictionary(grouping: Model.flattenedPropertyAdapters(), by: \.propertyName)
                 .mapValues { $0.sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) } }
             var columns: [String] = []
@@ -2826,7 +3065,7 @@ public final class ModelContext {
                     relationshipAdapter.read(model)?.first?.persistentModelID.primaryKey
                         .map(RuntimeValue.int) ?? .null)
             }
-            let table = "Z\(entity.name.uppercased())"
+            let table = "Z\(rootEntity(for: entity).name.uppercased())"
             if inserted {
                 if let match = try uniqueMatch(
                     entity: entity, columns: columns, values: values, connection: connection)
@@ -2850,7 +3089,7 @@ public final class ModelContext {
                         as: type(of: model))
                     append.append(
                         PersistedModel(
-                            model: model, primaryKey: match.primaryKey, version: version,
+                            model: model, entityName: entity.name, primaryKey: match.primaryKey, version: version,
                             replacedModel: replaced === model ? nil : replaced))
                     return
                 }
@@ -2861,7 +3100,7 @@ public final class ModelContext {
                     arguments: [.int(Int64(entityIDs[entity.name] ?? 1)), .int(1)] + values)
                 append.append(
                     PersistedModel(
-                        model: model, primaryKey: connection.lastInsertRowID(), version: 1,
+                        model: model, entityName: entity.name, primaryKey: connection.lastInsertRowID(), version: 1,
                         replacedModel: nil))
             } else if let pk = model.persistentModelID.primaryKey {
                 let expectedVersion = snapshot.optimisticLockVersion
@@ -2879,7 +3118,9 @@ public final class ModelContext {
                 guard connection.changesCount() == 1 else {
                     throw SwiftDataError.optimisticLockConflict
                 }
-                append.append(PersistedModel(model: model, primaryKey: pk, version: version, replacedModel: nil))
+                append.append(
+                    PersistedModel(
+                        model: model, entityName: entity.name, primaryKey: pk, version: version, replacedModel: nil))
             }
         }
         func dispatch<Model: PersistentModel>(_ model: Model) throws { try typed(model) }

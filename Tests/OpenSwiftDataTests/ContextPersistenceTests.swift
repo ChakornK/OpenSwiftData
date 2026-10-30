@@ -2158,6 +2158,7 @@ final class ContextPersistenceTests: XCTestCase {
 
     @MainActor
     func testBatchedRelationshipFaultingLoadsPopulatedSiblingsInHundredRowChunks() throws {
+        XCTAssertEqual(PersistentTagGroup.propertyName(forKeyPath: \PersistentTagGroup.tags), "tags")
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("populated-batched-relationship-fetch"))
@@ -2169,6 +2170,11 @@ final class ContextPersistenceTests: XCTestCase {
             group.tags = [tag]
         }
         try writer.save()
+        let joinRows = try container.store?.read {
+            try $0.rows(
+                "SELECT COUNT(*) FROM Z_PERSISTENTTAG_GROUPS_PERSISTENTTAGGROUP_TAGS", arguments: [])
+        }
+        XCTAssertEqual(joinRows, [[.int(205)]])
 
         let reader = container.makeContext()
         let descriptor = FetchDescriptor<PersistentTagGroup>(

@@ -18,33 +18,46 @@ struct ModelTypeRegistration: @unchecked Sendable {
     init<Model: PersistentModel>(type: Model.Type) {
         self.type = type
         materializeBody = { context, entity, attributes, row, storeIdentifier, entityID, primaryKey, version in
-            let backing = ManagedBackingData<Model>(
+            let backing = ManagedBackingData<Model.Model>(
                 metadata: Model.schemaMetadata(), values: [:], context: context,
                 storeIdentifier: storeIdentifier, entityID: entityID, primaryKey: primaryKey, version: version,
                 identifier: PersistentIdentifier(
                     storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
             let model = Model(backingData: backing)
-            let adapters = Model.persistenceAdapters()
+            let adapters = Model.erasedPersistenceAdapters()
+            var selectedValues: [String: StoredValue] = [:]
             var columnIndex = 2
             for attribute in attributes {
                 if attribute.options.contains(.flattened) {
+                    for component in attribute.components {
+                        guard columnIndex < row.count else { break }
+                        selectedValues[component.columnName] = storedValue(row[columnIndex])
+                        columnIndex += 1
+                    }
+                } else if columnIndex < row.count {
+                    selectedValues[attribute.name] = storedValue(row[columnIndex])
+                    columnIndex += 1
+                } else {
+                    break
+                }
+            }
+            for metadata in Model.schemaMetadata() where attributes.contains(where: { $0.name == metadata.name }) {
+                if let attribute = attributes.first(where: { $0.name == metadata.name }),
+                    attribute.options.contains(.flattened)
+                {
                     let flattened = Model.flattenedPropertyAdapters().filter { $0.propertyName == attribute.name }
                         .sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) }
                     guard let first = flattened.first else { continue }
                     var composite = try first.makeEmptyComposite()
                     for component in flattened {
-                        guard columnIndex < row.count else { break }
-                        composite = try component.decoded(storedValue(row[columnIndex]), into: composite)
-                        columnIndex += 1
+                        guard let value = selectedValues[component.columnName] else { continue }
+                        composite = try component.decoded(value, into: composite)
                     }
                     try first.assign(composite, to: model)
-                } else if columnIndex < row.count,
-                    let adapter = adapters.first(where: { $0.name == attribute.name })
+                } else if let adapter = adapters.first(where: { $0.name == metadata.name }),
+                    let value = selectedValues[metadata.name]
                 {
-                    try adapter.decode(storedValue(row[columnIndex]), into: model)
-                    columnIndex += 1
-                } else {
-                    columnIndex += 1
+                    try adapter.decode(value, into: model)
                 }
             }
             backing.markSaved()
@@ -54,7 +67,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
         materializeDataStoreBody = { context, entity, snapshot in
             let metadata = Model.schemaMetadata()
             var values: [AnyKeyPath: Any] = [:]
-            let propertyAdapters = Model.persistenceAdapters()
+            let propertyAdapters = Model.erasedPersistenceAdapters()
             for attribute in entity.attributes where !attribute.options.contains(.flattened) {
                 guard let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath,
                     let value = snapshot.values[attribute.name],
@@ -86,10 +99,10 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 values[keyPath] = composite
             }
             let identifier = snapshot.persistentIdentifier
-            let backing = ManagedBackingData<Model>(
+            let backing = ManagedBackingData<Model.Model>(
                 metadata: metadata, values: values, context: context,
                 storeIdentifier: identifier.storeIdentifier,
-                entityID: (context.container?.schema.entities.firstIndex(where: { $0.name == entity.name }) ?? -1) + 1,
+                entityID: context.container?.schema.entityIDsByName[entity.name] ?? 0,
                 primaryKey: identifier.primaryKey, version: 0, identifier: identifier)
             let model = Model(backingData: backing)
             backing.markSaved()
@@ -114,7 +127,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 throw SwiftDataError.unsupportedStore("DataStore snapshot model type mismatch.")
             }
             let metadata = Model.schemaMetadata()
-            let adapters = Model.persistenceAdapters()
+            let adapters = Model.erasedPersistenceAdapters()
             for attribute in entity.attributes where !attribute.options.contains(.flattened) {
                 guard let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath,
                     let value = snapshot.values[attribute.name],

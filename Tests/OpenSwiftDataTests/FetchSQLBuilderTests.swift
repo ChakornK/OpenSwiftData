@@ -37,4 +37,19 @@ final class FetchSQLBuilderTests: XCTestCase {
             pendingQuery.sql,
             "SELECT Z_PK, Z_OPT, ZNAME FROM ZITEM AS t0 ORDER BY t0.Z_PK ASC, t0.Z_PK ASC")
     }
+
+    func testHierarchyFilterIsIsolatedFromPredicatePrecedence() {
+        let query = FetchSQLBuilder.build(
+            FetchSQLInput(
+                table: "ZBASE", columns: ["ZNAME"],
+                predicateSQL: "(t0.ZNAME = ? OR t0.ZNAME = ?)",
+                predicateArguments: [.text("a"), .text("b")], orderSQL: "t0.Z_PK ASC",
+                limit: nil, offset: nil, entityIDs: [1, 2]))
+        XCTAssertEqual(
+            query.sql,
+            "SELECT Z_PK, Z_OPT, Z_ENT, ZNAME FROM ZBASE AS t0 WHERE "
+                + "(t0.Z_ENT IN (?, ?)) AND ((t0.ZNAME = ? OR t0.ZNAME = ?)) "
+                + "ORDER BY t0.Z_PK ASC, t0.Z_PK ASC")
+        XCTAssertEqual(query.arguments, [.int(1), .int(2), .text("a"), .text("b")])
+    }
 }

@@ -59,6 +59,10 @@ package enum SchemaHash {
                         encoder.append(relationship.minimumModelCount)
                         encoder.append(relationship.maximumModelCount)
                         encoder.append(relationship.originalName)
+                        if let declaringEntityName = relationship.declaringEntityName {
+                            encoder.append("declaringEntityName")
+                            encoder.append(declaringEntityName)
+                        }
                     })
                 encoder.append(
                     entity.indexes.sorted(by: indexLess),
@@ -314,6 +318,7 @@ package enum SchemaHash {
         var minimumModelCount: Int?
         var maximumModelCount: Int?
         var originalName: String?
+        var declaringEntityName: String?
 
         init(_ relationship: Schema.Relationship) {
             name = relationship.name
@@ -324,6 +329,7 @@ package enum SchemaHash {
             minimumModelCount = relationship.minimumModelCount
             maximumModelCount = relationship.maximumModelCount
             originalName = relationship.originalName
+            declaringEntityName = relationship.declaringEntityName
         }
 
         func schemaRelationship() throws -> Schema.Relationship {
@@ -333,7 +339,7 @@ package enum SchemaHash {
             return Schema.Relationship(
                 name: name, destination: destination, isToMany: isToMany, inverse: inverse, deleteRule: rule,
                 minimumModelCount: minimumModelCount, maximumModelCount: maximumModelCount,
-                originalName: originalName)
+                originalName: originalName, declaringEntityName: declaringEntityName)
         }
     }
 

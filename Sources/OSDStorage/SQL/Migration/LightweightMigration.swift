@@ -305,6 +305,17 @@ package enum LightweightMigration {
     }
 
     private static func apply(source: Schema, destination: Schema, connection: SQLConnection) throws {
+        for schema in [source, destination] {
+            try schema.validateRelationshipStorageMappings()
+            let hasInheritance = schema.entities.contains { $0.superentityName != nil }
+            guard
+                !hasInheritance
+                    || schema.entities.allSatisfy({ $0.relationships.isEmpty && $0.indexes.isEmpty })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Lightweight migration does not support inherited relationships or indexes.")
+            }
+        }
         guard Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)) else {
             throw SwiftDataError.migrationUnsupported("Entity additions and removals require a versioned row mapping.")
         }
@@ -468,8 +479,8 @@ package enum LightweightMigration {
         try migrateRelationships(source: source, destination: destination, connection: connection, existing: existing)
         indexTransitions.append(
             (
-                indexDefinitions(for: source, entities: sourceEntities),
-                indexDefinitions(for: destination, entities: destinationEntities)
+                indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                indexDefinitions(for: destination, schema: Schema(destinationEntities))
             ))
     }
 
@@ -542,7 +553,7 @@ package enum LightweightMigration {
     private static func validateDestinationIndexNames(_ schema: Schema) throws {
         var seen: Set<String> = []
         for entity in schema.entities {
-            for index in indexDefinitions(for: entity, entities: schema.entities) {
+            for index in indexDefinitions(for: entity, schema: schema) {
                 guard seen.insert(index.name.uppercased()).inserted else {
                     throw SwiftDataError.migrationUnsupported(
                         "Destination schema contains colliding index name '\(index.name)'.")
@@ -551,16 +562,20 @@ package enum LightweightMigration {
         }
     }
 
-    private static func indexDefinitions(for entity: Schema.Entity, entities: [Schema.Entity]) -> [IndexDefinition] {
+    private static func indexDefinitions(for entity: Schema.Entity, schema: Schema) -> [IndexDefinition] {
         var definitions: [IndexDefinition] = []
         for relationship in entity.relationships where !relationship.isToMany {
-            guard !SchemaBuilder.isNonOwner(entity, relationship, entities) else { continue }
-            let name = "Z\(entity.name.uppercased())_Z\(relationship.name.uppercased())_INDEX"
+            guard !SchemaBuilder.isNonOwner(entity, relationship, schema: schema) else { continue }
+            let mapping = schema.relationshipStorageMapping(
+                modelEntityName: entity.name, relationshipName: relationship.name)
+            let storageEntityName = mapping?.ownerRootEntityName ?? entity.name
+            let columnName = mapping?.relationshipName ?? relationship.name
+            let name = "Z\(storageEntityName.uppercased())_Z\(columnName.uppercased())_INDEX"
             definitions.append(
                 IndexDefinition(
                     name: name,
-                    statement: "CREATE INDEX \(name) ON Z\(entity.name.uppercased()) "
-                        + "(Z\(relationship.name.uppercased()));"))
+                    statement: "CREATE INDEX \(name) ON Z\(storageEntityName.uppercased()) "
+                        + "(Z\(columnName.uppercased()));"))
         }
         for attribute in entity.attributes where attribute.options.contains(.unique) {
             let name = "Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX"

@@ -25,6 +25,55 @@ final class SchemaBuilderTests: XCTestCase {
         }
     }
 
+    func testRelationshipStorageOwnerUsesLogicalDeclarationAndAncestorInverse() throws {
+        let base = Schema.Entity(name: "Base")
+        let child = Schema.Entity(
+            name: "Child",
+            relationships: [
+                Schema.Relationship(
+                    name: "destination", destination: "Target", inverse: "sources",
+                    declaringEntityName: "Child")
+            ],
+            superentityName: "Base")
+        let target = Schema.Entity(
+            name: "Target",
+            relationships: [
+                Schema.Relationship(
+                    name: "sources", destination: "Child", inverse: "destination")
+            ])
+        let schema = Schema([base, child, target])
+        let childRelationship = try XCTUnwrap(child.relationships.first)
+        let targetRelationship = try XCTUnwrap(target.relationships.first)
+
+        XCTAssertFalse(SchemaBuilder.isNonOwner(child, childRelationship, schema: schema))
+        XCTAssertTrue(SchemaBuilder.isNonOwner(target, targetRelationship, schema: schema))
+        XCTAssertEqual(
+            schema.relationshipStorageMapping(modelEntityName: "Child", relationshipName: "destination")?
+                .ownerRootEntityName,
+            "Base")
+    }
+
+    func testRelationshipMappingRejectsDeclarationOutsideModelAncestry() {
+        let schema = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Sibling"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", declaringEntityName: "Sibling")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+
+        XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
+    }
+
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
         let schema = Schema([
             Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),

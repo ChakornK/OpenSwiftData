@@ -179,6 +179,39 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertNotEqual(SchemaHash.digest(inherited), SchemaHash.digest(legacy))
     }
 
+    func testRelationshipDeclarationOwnerChangesHashAndRoundTrips() throws {
+        let baseWithoutRelationship = Schema.Entity(name: "Base")
+        let baseWithRelationship = Schema.Entity(
+            name: "Base",
+            relationships: [Schema.Relationship(name: "target", destination: "Target")])
+        let childOwns = Schema.Entity(
+            name: "Child",
+            relationships: [
+                Schema.Relationship(
+                    name: "target", destination: "Target", declaringEntityName: "Child")
+            ],
+            superentityName: "Base")
+        let baseOwns = Schema.Entity(
+            name: "Child",
+            relationships: [
+                Schema.Relationship(
+                    name: "target", destination: "Target", declaringEntityName: "Base")
+            ],
+            superentityName: "Base")
+        let target = Schema.Entity(name: "Target")
+        let childOwnedSchema = Schema([baseWithoutRelationship, childOwns, target])
+        let baseOwnedSchema = Schema([baseWithRelationship, baseOwns, target])
+
+        XCTAssertNotEqual(SchemaHash.digest(childOwnedSchema), SchemaHash.digest(baseOwnedSchema))
+        let decoded = try SchemaHash.decodeCanonicalDescription(
+            SchemaHash.canonicalDescription(of: baseOwnedSchema))
+        XCTAssertEqual(decoded.entities, baseOwnedSchema.entities)
+        XCTAssertEqual(
+            decoded.relationshipStorageMapping(modelEntityName: "Child", relationshipName: "target")?
+                .declaringEntityName,
+            "Base")
+    }
+
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {
         let base = Schema([
             Schema.Entity(
@@ -281,6 +314,41 @@ final class SchemaMigrationTests: XCTestCase {
         }
         let columns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
         XCTAssertFalse(columns.contains { $0.count > 1 && $0[1] == .text("ZPRIORITY") })
+        try driver.close()
+    }
+
+    func testHierarchyRelationshipMigrationFailsBeforeCreatingPhysicalSchema() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-inherited-relationship"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Child", superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", declaringEntityName: "Child")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        }
+        XCTAssertTrue(tables.isEmpty)
         try driver.close()
     }
 

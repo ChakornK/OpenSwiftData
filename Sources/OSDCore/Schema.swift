@@ -405,7 +405,12 @@ public struct Schema: Sendable {
             let relationship = modelEntity.relationships.first(where: { $0.name == relationshipName })
         else { return nil }
         let declaringEntityName = relationship.declaringEntityName ?? modelEntity.name
-        guard entity(forName: declaringEntityName) != nil,
+        guard isAncestorEntity(declaringEntityName, of: modelEntity.name),
+            entity(forName: declaringEntityName)?.relationships.contains(where: {
+                $0.name == relationship.name
+                    && $0.destination == relationship.destination
+                    && $0.isToMany == relationship.isToMany
+            }) == true,
             entity(forName: relationship.destination) != nil,
             let ownerRootEntityName = rootEntityName(for: declaringEntityName),
             let destinationRootEntityName = rootEntityName(for: relationship.destination)
@@ -417,6 +422,31 @@ public struct Schema: Sendable {
             ownerRootEntityName: ownerRootEntityName,
             destinationEntityName: relationship.destination,
             destinationRootEntityName: destinationRootEntityName)
+    }
+
+    package func validateRelationshipStorageMappings() throws {
+        for entity in entities {
+            for relationship in entity.relationships where relationship.declaringEntityName != nil {
+                guard
+                    relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name) != nil
+                else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Relationship '\(entity.name).\(relationship.name)' has an invalid declaration owner."
+                    )
+                }
+            }
+        }
+    }
+
+    private func isAncestorEntity(_ ancestorName: String, of entityName: String) -> Bool {
+        var current = entity(forName: entityName)
+        var visited = Set<String>()
+        while let value = current, visited.insert(value.name).inserted {
+            if value.name == ancestorName { return true }
+            current = value.superentityName.flatMap { entity(forName: $0) }
+        }
+        return false
     }
 
     private func rootEntityName(for entityName: String) -> String? {

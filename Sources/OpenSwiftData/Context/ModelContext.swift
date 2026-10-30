@@ -2141,9 +2141,10 @@ public final class ModelContext {
                     inverse.deleteRule == .nullify,
                     isToOneStorageOwner(ownerEntity, relationship)
                 else { continue }
+                let storage = relationshipStorageLocation(ownerEntity: ownerEntity, relationship: relationship)
                 try connection.execute(
-                    "UPDATE Z\(ownerEntity.name.uppercased()) SET Z\(relationship.name.uppercased()) = NULL "
-                        + "WHERE Z\(relationship.name.uppercased()) = ?",
+                    "UPDATE Z\(storage.tableName) SET Z\(storage.columnName) = NULL "
+                        + "WHERE Z\(storage.columnName) = ?",
                     arguments: [.int(primaryKey)])
             }
         }
@@ -2227,17 +2228,20 @@ public final class ModelContext {
             } else if relationship.isToMany,
                 let inverseName = relationship.inverse,
                 let destinationEntity = container?.schema.entity(forName: relationship.destination),
-                destinationEntity.relationships.first(where: { $0.name == inverseName })?.isToMany == false
+                let inverseRelationship = destinationEntity.relationships.first(where: { $0.name == inverseName }),
+                !inverseRelationship.isToMany
             {
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let storage = relationshipStorageLocation(
+                    ownerEntity: destinationEntity, relationship: inverseRelationship)
                 rows = try store.read { connection in
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
-                            "SELECT Z\(inverseName.uppercased()), Z_PK FROM Z\(destinationEntity.name.uppercased()) "
-                                + "WHERE Z\(inverseName.uppercased()) IN (\(placeholders)) ORDER BY Z_PK ASC",
+                            "SELECT Z\(storage.columnName), Z_PK FROM Z\(storage.tableName) "
+                                + "WHERE Z\(storage.columnName) IN (\(placeholders)) ORDER BY Z_PK ASC",
                             arguments: batch.map(RuntimeValue.int))
                     }
                     return result
@@ -2245,12 +2249,13 @@ public final class ModelContext {
             } else if isToOneStorageOwner(entity, relationship) {
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let storage = relationshipStorageLocation(ownerEntity: entity, relationship: relationship)
                 rows = try store.read { connection in
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
-                            "SELECT Z_PK, Z\(relationship.name.uppercased()) FROM Z\(entity.name.uppercased()) "
+                            "SELECT Z_PK, Z\(storage.columnName) FROM Z\(storage.tableName) "
                                 + "WHERE Z_PK IN (\(placeholders)) ORDER BY Z_PK ASC",
                             arguments: batch.map(RuntimeValue.int))
                     }
@@ -2258,17 +2263,20 @@ public final class ModelContext {
                 }
             } else {
                 guard let inverseName = relationship.inverse,
-                    let destinationEntity = container?.schema.entity(forName: relationship.destination)
+                    let destinationEntity = container?.schema.entity(forName: relationship.destination),
+                    let inverseRelationship = destinationEntity.relationships.first(where: { $0.name == inverseName })
                 else { continue }
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let storage = relationshipStorageLocation(
+                    ownerEntity: destinationEntity, relationship: inverseRelationship)
                 rows = try store.read { connection in
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
-                            "SELECT Z\(inverseName.uppercased()), Z_PK FROM Z\(destinationEntity.name.uppercased()) "
-                                + "WHERE Z\(inverseName.uppercased()) IN (\(placeholders)) ORDER BY Z_PK ASC",
+                            "SELECT Z\(storage.columnName), Z_PK FROM Z\(storage.tableName) "
+                                + "WHERE Z\(storage.columnName) IN (\(placeholders)) ORDER BY Z_PK ASC",
                             arguments: batch.map(RuntimeValue.int))
                     }
                     return result
@@ -2415,7 +2423,7 @@ public final class ModelContext {
             let destination = container?.schema.entity(forName: relationship.destination),
             let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
         else { return true }
-        let current = "\(entity.name).\(relationship.name)"
+        let current = "\(relationshipLogicalOwnerName(entity, relationship)).\(relationship.name)"
         let other = "\(destination.name).\(inverse.name)"
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
@@ -2425,7 +2433,7 @@ public final class ModelContext {
             let destination = container?.schema.entity(forName: relationship.destination),
             let inverse = destination.relationships.first(where: { $0.name == inverseName })
         else { return relationship.inverse == nil }
-        let current = "\(entity.name).\(relationship.name)"
+        let current = "\(relationshipLogicalOwnerName(entity, relationship)).\(relationship.name)"
         let other = "\(destination.name).\(inverse.name)"
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
@@ -2447,25 +2455,45 @@ public final class ModelContext {
         return inverse.isToMany && !isCanonicalSideA(entity, relationship)
     }
 
+    private func relationshipLogicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
+        containerStorage?.schema.relationshipStorageMapping(
+            modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
+    }
+
     private func joinTableName(for entity: Schema.Entity, _ relationship: Schema.Relationship) -> String? {
         guard relationship.isToMany else { return nil }
+        let mapping = containerStorage?.schema.relationshipStorageMapping(
+            modelEntityName: entity.name, relationshipName: relationship.name)
+        let declaringEntityName = mapping?.declaringEntityName ?? entity.name
+        let destinationEntityName = mapping?.destinationEntityName ?? relationship.destination
         guard let inverseName = relationship.inverse,
-            let destination = container?.schema.entity(forName: relationship.destination),
+            let destination = containerStorage?.schema.entity(forName: destinationEntityName),
             let inverse = destination.relationships.first(where: { $0.name == inverseName })
         else {
             guard relationship.inverse == nil else { return nil }
             return
-                "Z_\(entity.name.uppercased())_\(relationship.name.uppercased())_\(relationship.destination.uppercased())"
+                "Z_\(declaringEntityName.uppercased())_\(relationship.name.uppercased())_\(destinationEntityName.uppercased())"
         }
         guard inverse.isToMany else { return nil }
-        let current = "\(entity.name).\(relationship.name)"
+        let current = "\(declaringEntityName).\(relationship.name)"
         let other = "\(destination.name).\(inverse.name)"
         let ordered =
             current.utf8.lexicographicallyPrecedes(other.utf8)
-            ? [(entity.name, relationship.name), (destination.name, inverse.name)]
-            : [(destination.name, inverse.name), (entity.name, relationship.name)]
+            ? [(declaringEntityName, relationship.name), (destination.name, inverse.name)]
+            : [(destination.name, inverse.name), (declaringEntityName, relationship.name)]
         return
             "Z_\(ordered[0].0.uppercased())_\(ordered[0].1.uppercased())_\(ordered[1].0.uppercased())_\(ordered[1].1.uppercased())"
+    }
+
+    private func relationshipStorageLocation(
+        ownerEntity: Schema.Entity, relationship: Schema.Relationship
+    ) -> (tableName: String, columnName: String) {
+        let mapping = containerStorage?.schema.relationshipStorageMapping(
+            modelEntityName: ownerEntity.name, relationshipName: relationship.name)
+        return (
+            mapping?.ownerRootEntityName.uppercased() ?? ownerEntity.name.uppercased(),
+            mapping?.relationshipName.uppercased() ?? relationship.name.uppercased()
+        )
     }
 
     private func loadRelationshipDestination(
@@ -2677,8 +2705,9 @@ public final class ModelContext {
                         endpoint.persistentModelID.primaryKey == nil,
                         let destinationPK = assignedIDs[ObjectIdentifier(endpoint)]
                     else { continue }
+                    let storage = relationshipStorageLocation(ownerEntity: entity, relationship: relationship)
                     try connection.execute(
-                        "UPDATE Z\(rootEntity(for: entity).name.uppercased()) SET Z\(relationship.name.uppercased()) = ? WHERE Z_PK = ?",
+                        "UPDATE Z\(storage.tableName) SET Z\(storage.columnName) = ? WHERE Z_PK = ?",
                         arguments: [.int(destinationPK), .int(ownerPK)])
                 }
             }
@@ -2692,8 +2721,9 @@ public final class ModelContext {
                 let destinationPK = event.newEndpoints.first.flatMap { endpoint in
                     endpoint.persistentModelID.primaryKey ?? assignedIDs[ObjectIdentifier(endpoint)]
                 }
+                let storage = relationshipStorageLocation(ownerEntity: entity, relationship: event.relationship)
                 try connection.execute(
-                    "UPDATE Z\(rootEntity(for: entity).name.uppercased()) SET Z\(event.property.uppercased()) = ? WHERE Z_PK = ?",
+                    "UPDATE Z\(storage.tableName) SET Z\(storage.columnName) = ? WHERE Z_PK = ?",
                     arguments: [destinationPK.map(RuntimeValue.int) ?? .null, .int(ownerPK)])
             }
             try persistRelationships(
@@ -3060,7 +3090,8 @@ public final class ModelContext {
                         let saved = savedValues?[keyPath], !Self.persistenceValuesEqual(current, saved)
                     else { continue }
                 }
-                columns.append("Z\(relationship.name.uppercased())")
+                let storage = relationshipStorageLocation(ownerEntity: entity, relationship: relationship)
+                columns.append("Z\(storage.columnName)")
                 values.append(
                     relationshipAdapter.read(model)?.first?.persistentModelID.primaryKey
                         .map(RuntimeValue.int) ?? .null)
@@ -3266,8 +3297,9 @@ public final class ModelContext {
         }
 
         for (entity, relationship, ownerPK, endpointPK) in toOneValues.values {
+            let storage = relationshipStorageLocation(ownerEntity: entity, relationship: relationship)
             try connection.execute(
-                "UPDATE Z\(entity.name.uppercased()) SET Z\(relationship.name.uppercased()) = ? WHERE Z_PK = ?",
+                "UPDATE Z\(storage.tableName) SET Z\(storage.columnName) = ? WHERE Z_PK = ?",
                 arguments: [endpointPK.map(RuntimeValue.int) ?? .null, .int(ownerPK)])
             guard connection.changesCount() == 1 else {
                 throw SwiftDataError.unsupportedStore("Relationship update did not affect exactly one row.")

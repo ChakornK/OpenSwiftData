@@ -361,7 +361,9 @@ public final class ModelContainer: Sendable {
                 name: entity.name, attributes: entity.attributes, relationships: relationships,
                 indexes: entity.indexes, superentityName: entity.superentityName)
         }
-        schema = Schema(inferredEntities)
+        let schema = Schema(inferredEntities)
+        try schema.validateRelationshipStorageMappings()
+        self.schema = schema
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         store = try Self.openStore(schema: schema, configurations: configurations)
@@ -393,6 +395,7 @@ public final class ModelContainer: Sendable {
 
     /// Creates a container for an existing schema.
     public init(for schema: Schema, configurations: [ModelConfiguration] = []) throws {
+        try schema.validateRelationshipStorageMappings()
         self.schema = schema
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
@@ -408,6 +411,7 @@ public final class ModelContainer: Sendable {
         schema: Schema,
         configurations: [ModelConfiguration] = []
     ) throws {
+        try schema.validateRelationshipStorageMappings()
         self.schema = schema
         self.configurations = configurations
         dataStore = try Self.openDataStore(schema: schema, configurations: configurations)

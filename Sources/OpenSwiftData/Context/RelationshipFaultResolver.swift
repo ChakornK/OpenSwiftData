@@ -178,10 +178,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             throw SwiftDataError.unsupportedSchemaProperty("Missing relationship destination entity")
         }
         if !relationship.isToMany, isToOneStorageOwner(ownerEntity, relationship, destination: destination) {
+            let storage = relationshipStorageLocation(ownerEntity, relationship)
             return try store.read { connection in
                 guard
                     let row = try connection.rows(
-                        "SELECT Z\(relationship.name.uppercased()) FROM Z\(ownerEntity.name.uppercased()) WHERE Z_PK = ?",
+                        "SELECT Z\(storage.columnName) FROM Z\(storage.tableName) WHERE Z_PK = ?",
                         arguments: [.int(ownerPrimaryKey)]
                     ).first,
                     case let .int(primaryKey)? = row.first
@@ -192,9 +193,10 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         if relationship.isToMany, let inverseName = relationship.inverse,
             let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
         {
+            let storage = relationshipStorageLocation(destination, inverse)
             return try store.read { connection in
                 try connection.rows(
-                    "SELECT Z_PK FROM Z\(destination.name.uppercased()) WHERE Z\(inverseName.uppercased()) = ? ORDER BY Z_PK ASC",
+                    "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? ORDER BY Z_PK ASC",
                     arguments: [.int(ownerPrimaryKey)]
                 ).compactMap { row in
                     guard case let .int(primaryKey)? = row.first else { return nil }
@@ -216,10 +218,13 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                 }
             }
         }
-        guard let inverseName = relationship.inverse else { return [] }
+        guard let inverseName = relationship.inverse,
+            let inverse = destination.relationships.first(where: { $0.name == inverseName })
+        else { return [] }
+        let storage = relationshipStorageLocation(destination, inverse)
         return try store.read { connection in
             try connection.rows(
-                "SELECT Z_PK FROM Z\(destination.name.uppercased()) WHERE Z\(inverseName.uppercased()) = ? ORDER BY Z_PK ASC",
+                "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? ORDER BY Z_PK ASC",
                 arguments: [.int(ownerPrimaryKey)]
             ).compactMap { row in
                 guard case let .int(primaryKey)? = row.first else { return nil }
@@ -291,7 +296,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         guard let inverseName = relationship.inverse,
             let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
         else { return true }
-        return "\(entity.name).\(relationship.name)".utf8.lexicographicallyPrecedes(
+        return "\(logicalOwnerName(entity, relationship)).\(relationship.name)".utf8.lexicographicallyPrecedes(
             "\(destination.name).\(inverse.name)".utf8)
     }
 
@@ -303,7 +308,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         guard let inverseName = relationship.inverse,
             let inverse = destination.relationships.first(where: { $0.name == inverseName })
         else { return relationship.inverse == nil }
-        return "\(entity.name).\(relationship.name)".utf8.lexicographicallyPrecedes(
+        return "\(logicalOwnerName(entity, relationship)).\(relationship.name)".utf8.lexicographicallyPrecedes(
             "\(destination.name).\(inverse.name)".utf8)
     }
 
@@ -324,21 +329,41 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         destination: Schema.Entity
     ) -> String? {
         guard relationship.isToMany else { return nil }
+        let ownerName = logicalOwnerName(entity, relationship)
+        let mapping = schema.relationshipStorageMapping(
+            modelEntityName: entity.name, relationshipName: relationship.name)
+        let destinationName = mapping?.destinationEntityName ?? relationship.destination
         guard let inverseName = relationship.inverse,
             let inverse = destination.relationships.first(where: { $0.name == inverseName })
         else {
             return relationship.inverse == nil
-                ? "Z_\(entity.name.uppercased())_\(relationship.name.uppercased())_\(relationship.destination.uppercased())"
+                ? "Z_\(ownerName.uppercased())_\(relationship.name.uppercased())_\(destinationName.uppercased())"
                 : nil
         }
         guard inverse.isToMany else { return nil }
-        let current = "\(entity.name).\(relationship.name)"
+        let current = "\(ownerName).\(relationship.name)"
         let other = "\(destination.name).\(inverse.name)"
         let ordered =
             current.utf8.lexicographicallyPrecedes(other.utf8)
-            ? [(entity.name, relationship.name), (destination.name, inverse.name)]
-            : [(destination.name, inverse.name), (entity.name, relationship.name)]
+            ? [(ownerName, relationship.name), (destination.name, inverse.name)]
+            : [(destination.name, inverse.name), (ownerName, relationship.name)]
         return
             "Z_\(ordered[0].0.uppercased())_\(ordered[0].1.uppercased())_\(ordered[1].0.uppercased())_\(ordered[1].1.uppercased())"
+    }
+
+    private func logicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
+        schema.relationshipStorageMapping(
+            modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
+    }
+
+    private func relationshipStorageLocation(
+        _ entity: Schema.Entity, _ relationship: Schema.Relationship
+    ) -> (tableName: String, columnName: String) {
+        let mapping = schema.relationshipStorageMapping(
+            modelEntityName: entity.name, relationshipName: relationship.name)
+        return (
+            mapping?.ownerRootEntityName.uppercased() ?? entity.name.uppercased(),
+            mapping?.relationshipName.uppercased() ?? relationship.name.uppercased()
+        )
     }
 }

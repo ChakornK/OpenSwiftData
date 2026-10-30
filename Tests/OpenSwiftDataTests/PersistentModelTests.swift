@@ -172,6 +172,15 @@ final class InheritedOneToManyGrandchildFixture: InheritedOneToManyChildFixture 
 }
 
 @Model
+final class InheritedOneToManySiblingFixture: InheritedOneToManyBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
 final class InheritedCascadeTargetFixture {
     @Relationship(deleteRule: .cascade, inverse: nil) var children: [InheritedCascadeChildFixture] = []
     var title: String
@@ -576,6 +585,7 @@ final class PersistentModelTests: XCTestCase {
             for: [
                 InheritedOneToManyChildFixture.self,
                 InheritedOneToManyGrandchildFixture.self,
+                InheritedOneToManySiblingFixture.self,
                 InheritedOneToManyTargetFixture.self,
             ],
             configurations: [.sqliteMemory("inherited-to-one-inverse")])
@@ -586,6 +596,7 @@ final class PersistentModelTests: XCTestCase {
         writer.insert(target)
         writer.insert(child)
         writer.insert(grandchild)
+        writer.insert(InheritedOneToManySiblingFixture(name: "sibling", label: "unrelated"))
         try writer.save()
 
         let reader = container.makeContext()
@@ -609,7 +620,7 @@ final class PersistentModelTests: XCTestCase {
                     + "ORDER BY Z_PK",
                 arguments: [])
         }
-        XCTAssertEqual(cleared, [[.null], [.null]])
+        XCTAssertEqual(cleared, [[.null], [.null], [.null]])
     }
 
     @MainActor

@@ -310,7 +310,10 @@ package enum LightweightMigration {
             let hasInheritance = schema.entities.contains { $0.superentityName != nil }
             guard
                 !hasInheritance
-                    || schema.entities.allSatisfy({ $0.relationships.isEmpty && $0.indexes.isEmpty })
+                    || schema.entities.allSatisfy({ entity in
+                        entity.relationships.isEmpty && entity.indexes.isEmpty
+                            && !entity.attributes.contains(where: { $0.options.contains(.unique) })
+                    })
             else {
                 throw SwiftDataError.migrationUnsupported(
                     "Lightweight migration does not support inherited relationships or indexes.")

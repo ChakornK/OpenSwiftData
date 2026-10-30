@@ -3229,21 +3229,20 @@ public final class ModelContext {
                 {
                     let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
                     let version = match.version + 1
-                    if columns.isEmpty {
-                        try connection.execute(
-                            "UPDATE \(table) SET Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
-                            arguments: [.int(Int64(version)), .int(match.primaryKey), .int(Int64(match.version))])
-                    } else {
-                        try connection.execute(
-                            "UPDATE \(table) SET \(assignments), Z_OPT = ? WHERE Z_PK = ? AND Z_OPT = ?",
-                            arguments: values + [
-                                .int(Int64(version)), .int(match.primaryKey), .int(Int64(match.version)),
-                            ])
-                    }
+                    let hasDiscriminator = entityIDs[entity.name] != nil
+                    let discriminatorAssignment = hasDiscriminator ? "Z_ENT = ?, " : ""
+                    let updateValues = hasDiscriminator ? [.int(Int64(entityIDs[entity.name]!))] + values : values
+                    let setClause =
+                        discriminatorAssignment
+                        + (columns.isEmpty ? "" : assignments + ", ") + "Z_OPT = ?"
+                    try connection.execute(
+                        "UPDATE \(table) SET \(setClause) WHERE Z_PK = ? AND Z_OPT = ?",
+                        arguments: updateValues + [
+                            .int(Int64(version)), .int(match.primaryKey), .int(Int64(match.version)),
+                        ])
                     guard connection.changesCount() == 1 else { throw SwiftDataError.optimisticLockConflict }
-                    let replaced = identityMap.model(
-                        for: EntityPrimaryKey(entityName: entity.name, primaryKey: match.primaryKey),
-                        as: type(of: model))
+                    let rootKey = identityKey(for: entity, primaryKey: match.primaryKey)
+                    let replaced = identityMap.liveModels().first(where: { $0.0 == rootKey })?.1
                     append.append(
                         PersistedModel(
                             model: model, entityName: entity.name, primaryKey: match.primaryKey, version: version,
@@ -3298,6 +3297,7 @@ public final class ModelContext {
         entity: Schema.Entity, columns: [String], values: [RuntimeValue], connection: any RuntimeConnection
     ) throws -> (primaryKey: Int64, version: Int)? {
         let attributes = canonicalAttributes(for: entity)
+        let storageEntity = rootEntity(for: entity)
         let constraints =
             attributes.filter { $0.options.contains(.unique) }.map { [$0.name] }
             + entity.indexes.filter(\.isUnique).map(\.properties)
@@ -3316,7 +3316,7 @@ public final class ModelContext {
             }
             guard predicates.count == properties.count else { continue }
             let sql =
-                "SELECT Z_PK, Z_OPT FROM Z\(entity.name.uppercased()) WHERE \(predicates.joined(separator: " AND ")) ORDER BY Z_PK LIMIT 1"
+                "SELECT Z_PK, Z_OPT FROM Z\(storageEntity.name.uppercased()) WHERE \(predicates.joined(separator: " AND ")) ORDER BY Z_PK LIMIT 1"
             if let row = try connection.rows(sql, arguments: arguments).first, row.count >= 2 {
                 guard case let .int(primaryKey) = row[0] else { continue }
                 let current = (primaryKey, runtimeInt(row[1]))

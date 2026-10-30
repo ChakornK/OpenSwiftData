@@ -165,6 +165,63 @@ final class SchemaBuilderTests: XCTestCase {
         }
     }
 
+    func testHierarchyRootIndexesAndUniqueAttributesEmitOnRootTable() throws {
+        let schema = Schema([
+            Schema.Entity(
+                name: "RecordBase",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "category", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["category"]), Schema.Index(properties: ["code", "category"])]),
+            Schema.Entity(
+                name: "RecordChild",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "category", type: "String"),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["category"]),
+                    Schema.Index(properties: ["code", "category"]),
+                ],
+                superentityName: "RecordBase"),
+        ])
+
+        let built = try SchemaBuilder.build(schema)
+        XCTAssertEqual(
+            built.statements.filter { $0.contains("INDEX") && $0.contains("ZRECORDBASE") },
+            [
+                "CREATE UNIQUE INDEX ZRECORDBASE_ZCODE_UNIQUE_INDEX ON ZRECORDBASE (ZCODE);",
+                "CREATE INDEX ZRECORDBASE_ZCATEGORY_INDEX ON ZRECORDBASE (ZCATEGORY);",
+                "CREATE INDEX ZRECORDBASE_ZCODE_ZCATEGORY_INDEX ON ZRECORDBASE (ZCODE, ZCATEGORY);",
+            ])
+        XCTAssertFalse(built.statements.contains { $0.contains("ZRECORDCHILD") && $0.contains("INDEX") })
+    }
+
+    func testHierarchyRejectsSubtypeDeclaredIndexesAndUniqueAttributes() {
+        let subtypeIndex = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String"), Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                indexes: [Schema.Index(properties: ["rank"])],
+                superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(subtypeIndex))
+
+        let subtypeUnique = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "token", type: "String", options: [.unique])],
+                superentityName: "Base"),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(subtypeUnique))
+    }
+
     func testInheritedToManyOwnerToFlatDestinationUsesJoinTable() throws {
         let schema = Schema([
             Schema.Entity(name: "Base"),

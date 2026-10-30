@@ -212,6 +212,31 @@ final class SchemaMigrationTests: XCTestCase {
             "Base")
     }
 
+    func testHierarchyRootIndexesChangeHashAndRoundTrip() throws {
+        let withoutIndex = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                superentityName: "Base"),
+        ])
+        let withIndex = Schema([
+            Schema.Entity(
+                name: "Base",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                indexes: [Schema.Index(properties: ["code"], isUnique: true)]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                indexes: [Schema.Index(properties: ["code"], isUnique: true)],
+                superentityName: "Base"),
+        ])
+
+        XCTAssertNotEqual(SchemaHash.digest(withoutIndex), SchemaHash.digest(withIndex))
+        let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: withIndex))
+        XCTAssertEqual(decoded.entities, withIndex.entities)
+    }
+
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {
         let base = Schema([
             Schema.Entity(
@@ -334,6 +359,43 @@ final class SchemaMigrationTests: XCTestCase {
                 ],
                 superentityName: "Base"),
             Schema.Entity(name: "Target"),
+        ])
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        }
+        XCTAssertTrue(tables.isEmpty)
+        try driver.close()
+    }
+
+    func testHierarchyIndexMigrationFailsBeforeCreatingPhysicalSchema() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-index"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Base",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                indexes: [Schema.Index(properties: ["code"], isUnique: true)]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "code", type: "String")],
+                indexes: [Schema.Index(properties: ["code"], isUnique: true)],
+                superentityName: "Base"),
         ])
 
         XCTAssertThrowsError(

@@ -402,10 +402,14 @@ package enum SchemaBuilder {
         entitiesByName: [String: Schema.Entity],
         entityIDs: [String: Int]
     ) throws -> BuiltSchema {
-        for entity in entities where !entity.indexes.isEmpty {
-            throw SwiftDataError.unsupportedSchemaProperty(
-                "Single-table inheritance currently requires an index-free hierarchy ('\(entity.name)')."
-            )
+        for entity in entities where entity.superentityName != nil {
+            guard let parentName = entity.superentityName, let parent = entitiesByName[parentName] else { continue }
+            let inheritedIndexes = Set(parent.indexes)
+            guard entity.indexes.allSatisfy(inheritedIndexes.contains) else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Indexes and uniqueness may only be declared on hierarchy roots ('\(entity.name)')."
+                )
+            }
         }
 
         let roots = entities.filter { $0.superentityName == nil }.sorted { bytewiseLess($0.name, $1.name) }
@@ -438,9 +442,33 @@ package enum SchemaBuilder {
             ["Z_PRIMARYKEY", "_osd_meta"] + roots.map { "Z\($0.name)" }, scope: "table")
         let reservedColumnKeys = Set(["Z_PK", "Z_ENT", "Z_OPT", "ZPRIMARYKEY", "Z_OSD_META"].map(identifierKey))
         var inheritedJoinTablesByName: [String: String] = [:]
+        var generatedIndexNames: [String] = []
 
         for root in roots {
             let members = ordered.filter { rootsByEntity[$0.name] == root.name }
+            let rootAttributeNames = Set(root.attributes.map { identifierKey($0.name) })
+            for index in root.indexes {
+                guard !index.properties.isEmpty,
+                    Set(index.properties).count == index.properties.count,
+                    index.properties.allSatisfy({ rootAttributeNames.contains(identifierKey($0)) }),
+                    index.properties.allSatisfy({ property in
+                        guard
+                            let attribute = root.attributes.first(where: {
+                                identifierKey($0.name) == identifierKey(property)
+                            })
+                        else { return false }
+                        return !attribute.options.contains(.flattened)
+                            && !attribute.options.contains(.externalStorage)
+                            && !attribute.options.contains(where: {
+                                if case .transformable = $0 { true } else { false }
+                            })
+                    })
+                else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Hierarchy root index on '\(root.name)' must reference distinct root-declared scalar properties."
+                    )
+                }
+            }
             var relationshipsByColumn: [String: Schema.RelationshipStorageMapping] = [:]
             for member in members {
                 for relationship in member.relationships {
@@ -545,7 +573,7 @@ package enum SchemaBuilder {
                 try validateUniqueNames(
                     declared.map(\.name), scope: "property declared by entity '\(entity.name)'")
                 for attribute in declared {
-                    guard !attribute.options.contains(.unique),
+                    guard (!attribute.options.contains(.unique) || entity.name == root.name),
                         !attribute.options.contains(.externalStorage),
                         !attribute.options.contains(.flattened),
                         !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
@@ -615,8 +643,31 @@ package enum SchemaBuilder {
                     "Hierarchy rooted at '\(root.name)' has colliding or reserved SQL columns.")
             }
             statements.append("CREATE TABLE Z\(root.name.uppercased()) (\(columns.joined(separator: ", ")));")
+            let uniqueRootAttributes = root.attributes.filter { $0.options.contains(.unique) }
+            for attribute in uniqueRootAttributes {
+                let indexName = "Z\(root.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX"
+                generatedIndexNames.append(indexName)
+                statements.append(
+                    "CREATE UNIQUE INDEX \(indexName) ON Z\(root.name.uppercased()) "
+                        + "(Z\(attribute.name.uppercased()));")
+            }
+            for index in root.indexes {
+                if index.isUnique, index.properties.count == 1,
+                    uniqueRootAttributes.contains(where: {
+                        identifierKey($0.name) == identifierKey(index.properties[0])
+                    })
+                {
+                    continue
+                }
+                let indexName = indexName(entity: root, properties: index.properties, unique: index.isUnique)
+                generatedIndexNames.append(indexName)
+                statements.append(
+                    "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(indexName) ON Z\(root.name.uppercased()) "
+                        + "(\(index.properties.map { "Z\($0.uppercased())" }.joined(separator: ", ")));")
+            }
             for columnKey in relationshipsByColumn.keys.sorted(by: bytewiseLess) {
                 let indexName = "Z\(root.name.uppercased())_Z\(columnKey)_INDEX"
+                generatedIndexNames.append(indexName)
                 statements.append(
                     "CREATE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(columnKey));")
             }
@@ -627,9 +678,13 @@ package enum SchemaBuilder {
             scope: "table")
         for joinTable in inheritedJoinTablesByName.keys.sorted(by: bytewiseLess) {
             statements.append("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
-            statements.append("CREATE UNIQUE INDEX \(joinTable)_UNIQUE_INDEX ON \(joinTable) (Z_A, Z_B);")
-            statements.append("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B);")
+            let uniqueIndexName = "\(joinTable)_UNIQUE_INDEX"
+            let sideBIndexName = "\(joinTable)_Z_B_INDEX"
+            generatedIndexNames.append(contentsOf: [uniqueIndexName, sideBIndexName])
+            statements.append("CREATE UNIQUE INDEX \(uniqueIndexName) ON \(joinTable) (Z_A, Z_B);")
+            statements.append("CREATE INDEX \(sideBIndexName) ON \(joinTable) (Z_B);")
         }
+        try validateUniqueNames(generatedIndexNames, scope: "index")
 
         let rows = try ordered.map { entity -> SchemaBootstrapRow in
             guard let entityID = entityIDs[entity.name] else {

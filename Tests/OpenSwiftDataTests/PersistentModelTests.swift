@@ -248,6 +248,30 @@ final class HierarchyTargetSiblingFixture: HierarchyTargetBaseFixture {
 }
 
 @Model
+class UniqueHierarchyBaseFixture {
+    @Attribute(.unique) var code: String
+    init(code: String) { self.code = code }
+}
+
+@Model
+final class UniqueHierarchyChildFixture: UniqueHierarchyBaseFixture {
+    var value: Int
+    init(code: String, value: Int) {
+        self.value = value
+        super.init(code: code)
+    }
+}
+
+@Model
+final class UniqueHierarchySiblingFixture: UniqueHierarchyBaseFixture {
+    var label: String
+    init(code: String, label: String) {
+        self.label = label
+        super.init(code: code)
+    }
+}
+
+@Model
 class PlainHierarchyTargetBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -1039,6 +1063,67 @@ final class PersistentModelTests: XCTestCase {
         let lazyOwner = try XCTUnwrap(
             lazyReader.fetch(FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>()).first)
         XCTAssertEqual((lazyOwner.target as? PlainHierarchyTargetGrandchildFixture)?.detail, "detail")
+    }
+
+    @MainActor
+    func testRootUniqueAttributeAppliesAcrossConcreteHierarchyTypes() throws {
+        let container = try ModelContainer(
+            for: [UniqueHierarchyChildFixture.self, UniqueHierarchySiblingFixture.self],
+            configurations: [.sqliteMemory("hierarchy-root-unique")])
+        XCTAssertTrue(
+            container.schema.entity(forName: "UniqueHierarchyBaseFixture")?.attributes
+                .first(where: { $0.name == "code" })?.options.contains(.unique) == true)
+        XCTAssertTrue(
+            container.schema.entity(forName: "UniqueHierarchyChildFixture")?.attributes
+                .first(where: { $0.name == "code" })?.options.contains(.unique) == true)
+        let indexes = try container.store?.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name LIKE '%UNIQUE%'",
+                arguments: [])
+        }
+        XCTAssertEqual(
+            indexes,
+            [
+                [
+                    .text("ZUNIQUEHIERARCHYBASEFIXTURE_ZCODE_UNIQUE_INDEX"),
+                    .text(
+                        "CREATE UNIQUE INDEX ZUNIQUEHIERARCHYBASEFIXTURE_ZCODE_UNIQUE_INDEX ON ZUNIQUEHIERARCHYBASEFIXTURE (ZCODE)"
+                    ),
+                ]
+            ])
+        let context = container.mainContext
+        let original = UniqueHierarchyChildFixture(code: "shared", value: 1)
+        context.insert(original)
+        try context.save()
+        let originalPK = try XCTUnwrap(original.persistentModelID.primaryKey)
+        let beforeDuplicate = try container.store?.read {
+            try $0.rows("SELECT ZCODE, Z_ENT FROM ZUNIQUEHIERARCHYBASEFIXTURE", arguments: [])
+        }
+        XCTAssertEqual(beforeDuplicate, [[.text("shared"), .int(2)]])
+        let replacement = UniqueHierarchySiblingFixture(code: "shared", label: "replacement")
+        context.insert(replacement)
+        try context.save()
+
+        XCTAssertEqual(replacement.persistentModelID.primaryKey, originalPK)
+        XCTAssertEqual(replacement.persistentModelID.entityName, "UniqueHierarchySiblingFixture")
+        XCTAssertNil(original.modelContext)
+        let afterDuplicate = try container.store?.read {
+            try $0.rows(
+                "SELECT ZCODE, Z_ENT FROM ZUNIQUEHIERARCHYBASEFIXTURE WHERE Z_PK = ?",
+                arguments: [.int(try XCTUnwrap(replacement.persistentModelID.primaryKey))])
+        }
+        XCTAssertEqual(
+            afterDuplicate,
+            [
+                [
+                    .text("shared"),
+                    .int(Int64(try XCTUnwrap(container.schema.entityIDsByName["UniqueHierarchySiblingFixture"]))),
+                ]
+            ]
+        )
+        let records = try context.fetch(FetchDescriptor<UniqueHierarchyBaseFixture>())
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual((records.first as? UniqueHierarchySiblingFixture)?.label, "replacement")
     }
 
     @MainActor

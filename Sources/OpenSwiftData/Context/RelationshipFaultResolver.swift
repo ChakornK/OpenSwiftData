@@ -194,10 +194,13 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             let inverse = destination.relationships.first(where: { $0.name == inverseName }), !inverse.isToMany
         {
             let storage = relationshipStorageLocation(destination, inverse)
+            let destinationIDs = descendantEntityIDs(for: destination)
             return try store.read { connection in
                 try connection.rows(
-                    "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? ORDER BY Z_PK ASC",
-                    arguments: [.int(ownerPrimaryKey)]
+                    "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? "
+                        + "AND Z_ENT IN (\(Array(repeating: "?", count: destinationIDs.count).joined(separator: ", "))) "
+                        + "ORDER BY Z_PK ASC",
+                    arguments: [.int(ownerPrimaryKey)] + destinationIDs.map { .int(Int64($0)) }
                 ).compactMap { row in
                     guard case let .int(primaryKey)? = row.first else { return nil }
                     return primaryKey
@@ -239,31 +242,93 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             let context = context.load()
         else { return nil }
         func load<Model: PersistentModel>(_ type: Model.Type) throws -> Model? {
-            let key = EntityPrimaryKey(entityName: entityName, primaryKey: primaryKey)
+            let hierarchyRoot = rootEntity(for: entity)
+            let hasHierarchy =
+                hierarchyRoot.name != entity.name
+                || schema.entities.contains(where: { $0.superentityName == entity.name })
+            let key =
+                hasHierarchy
+                ? EntityPrimaryKey(entityName: hierarchyRoot.name, primaryKey: primaryKey)
+                : EntityPrimaryKey(entityName: entityName, primaryKey: primaryKey)
             if let existing = identityMap.model(for: key, as: Model.self) { return existing }
-            let attributes = entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+            let attributes =
+                hasHierarchy
+                ? hierarchyAttributes(for: entity)
+                : entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
             let columns = attributes.flatMap { attribute in
                 attribute.options.contains(.flattened)
                     ? attribute.components.map(\.columnName) : [attribute.name]
             }.map { "Z\($0.uppercased())" }.joined(separator: ", ")
-            let selected = (["Z_PK", "Z_OPT"] + (columns.isEmpty ? [] : [columns])).joined(separator: ", ")
+            let selected =
+                (["Z_PK", "Z_OPT"] + (hasHierarchy ? ["Z_ENT"] : [])
+                + (columns.isEmpty ? [] : [columns])).joined(separator: ", ")
+            let hierarchyIDs = hasHierarchy ? descendantEntityIDs(for: entity) : []
+            let entityFilter =
+                hasHierarchy
+                ? " AND Z_ENT IN (\(Array(repeating: "?", count: hierarchyIDs.count).joined(separator: ", ")))"
+                : ""
             guard
                 let row = try store.read({ connection in
                     try connection.rows(
-                        "SELECT \(selected) FROM Z\(entityName.uppercased()) WHERE Z_PK = ?",
-                        arguments: [.int(primaryKey)])
+                        "SELECT \(selected) FROM Z\(hierarchyRoot.name.uppercased()) WHERE Z_PK = ?\(entityFilter)",
+                        arguments: [.int(primaryKey)] + hierarchyIDs.map { .int(Int64($0)) })
                 }).first
             else { return nil }
-            let candidate =
-                try registration.materialize(
+            let candidate: any PersistentModel
+            let concreteRegistration: ModelTypeRegistration
+            let concreteEntity: Schema.Entity
+            let version = runtimeInt(row[1])
+            if hasHierarchy {
+                guard row.count >= 3, case let .int(rawEntityID) = row[2],
+                    let concreteID = Int(exactly: rawEntityID),
+                    let registered = container.modelRegistration(forEntityID: concreteID),
+                    registered.type is Model.Type,
+                    let resolvedEntity = schema.entities.first(where: {
+                        schema.entityIDsByName[$0.name] == concreteID
+                    })
+                else { return nil }
+                concreteRegistration = registered
+                concreteEntity = resolvedEntity
+                candidate = try registered.materialize(
+                    context: context, entity: resolvedEntity, attributes: attributes,
+                    row: [row[0], row[1]] + row.dropFirst(3), storeIdentifier: storeIdentifier,
+                    entityID: concreteID, primaryKey: primaryKey, version: version)
+            } else {
+                concreteRegistration = registration
+                concreteEntity = entity
+                candidate = try registration.materialize(
                     context: context, entity: entity, attributes: attributes, row: row,
                     storeIdentifier: storeIdentifier, entityID: entityID(for: entityName),
-                    primaryKey: primaryKey, version: row.count > 1 ? runtimeInt(row[1]) : 0) as? Model
-            guard let candidate else { return nil }
-            registration.installRelationshipFaults(on: candidate, entity: entity, resolver: self)
+                    primaryKey: primaryKey, version: version)
+            }
+            concreteRegistration.installRelationshipFaults(on: candidate, entity: concreteEntity, resolver: self)
             return identityMap.canonicalHandle(for: key, candidate: candidate).model as? Model
         }
         return try load(registration.type)
+    }
+
+    private func rootEntity(for entity: Schema.Entity) -> Schema.Entity {
+        var current = entity
+        var visited: Set<String> = []
+        while let parentName = current.superentityName,
+            visited.insert(current.name).inserted,
+            let parent = schema.entity(forName: parentName)
+        {
+            current = parent
+        }
+        return current
+    }
+
+    private func hierarchyAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
+        let identifiers = Set(descendantEntityIDs(for: entity))
+        var attributesByName: [String: Schema.Attribute] = [:]
+        for candidate in schema.entities
+        where schema.entityIDsByName[candidate.name].map(identifiers.contains) == true {
+            for attribute in candidate.attributes { attributesByName[attribute.name.uppercased()] = attribute }
+        }
+        return attributesByName.values.sorted {
+            $0.name.uppercased().utf8.lexicographicallyPrecedes($1.name.uppercased().utf8)
+        }
     }
 
     private func installFaultsOnRelatedModel(_ model: any PersistentModel, entity: Schema.Entity) {
@@ -281,6 +346,18 @@ final class RelationshipFaultResolver: @unchecked Sendable {
 
     private func entityID(for name: String) -> Int {
         schema.entityIDsByName[name] ?? 0
+    }
+
+    private func descendantEntityIDs(for entity: Schema.Entity) -> [Int] {
+        schema.entities.compactMap { candidate in
+            var current: Schema.Entity? = candidate
+            var visited: Set<String> = []
+            while let value = current, visited.insert(value.name).inserted {
+                if value.name == entity.name { return schema.entityIDsByName[candidate.name] }
+                current = value.superentityName.flatMap { schema.entity(forName: $0) }
+            }
+            return nil
+        }.sorted()
     }
 
     private func runtimeInt(_ value: RuntimeValue) -> Int {

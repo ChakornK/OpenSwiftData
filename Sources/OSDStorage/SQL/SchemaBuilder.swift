@@ -42,8 +42,9 @@ package enum SchemaBuilder {
     private static func validateRelationships(
         _ relationships: [Schema.Relationship],
         in entity: Schema.Entity,
-        entities: [Schema.Entity]
+        schema: Schema
     ) throws {
+        let entities = schema.entities
         for relationship in relationships {
             let property = "\(entity.name).\(relationship.name)"
             guard entities.contains(where: { $0.name == relationship.destination }) else {
@@ -83,7 +84,21 @@ package enum SchemaBuilder {
                     "Relationship '\(property)' references missing inverse '\(relationship.destination).\(inverseName)'."
                 )
             }
-            guard inverse.destination == entity.name, inverse.inverse == relationship.name else {
+            let logicalOwnerName =
+                schema.relationshipStorageMapping(
+                    modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName
+                ?? entity.name
+            var ownerAncestor: String? = logicalOwnerName
+            var visitedOwners: Set<String> = []
+            var inverseTargetsOwner = false
+            while let name = ownerAncestor, visitedOwners.insert(name).inserted {
+                if inverse.destination == name {
+                    inverseTargetsOwner = true
+                    break
+                }
+                ownerAncestor = schema.entity(forName: name)?.superentityName
+            }
+            guard inverseTargetsOwner, inverse.inverse == relationship.name else {
                 throw SwiftDataError.unsupportedSchemaProperty(
                     "Relationship '\(property)' has incompatible inverse '\(relationship.destination).\(inverseName)'."
                 )
@@ -148,7 +163,7 @@ package enum SchemaBuilder {
             "CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);",
         ]
         for entity in entities {
-            try validateRelationships(entity.relationships, in: entity, entities: entities)
+            try validateRelationships(entity.relationships, in: entity, schema: schema)
         }
 
         var allIndexNames: [String] = []
@@ -403,8 +418,24 @@ package enum SchemaBuilder {
                             "Relationship '\(member.name).\(relationship.name)' has no physical storage mapping.")
                     }
                     guard mapping.declaringEntityName == member.name else { continue }
-                    guard !relationship.isToMany,
-                        relationship.inverse == nil,
+                    if relationship.isToMany {
+                        guard isNonOwner(member, relationship, schema: schema) else {
+                            throw SwiftDataError.unsupportedSchemaProperty(
+                                "Inherited schema does not yet support to-many owner relationships ('\(member.name).\(relationship.name)')."
+                            )
+                        }
+                        continue
+                    }
+                    let hasSupportedInverse: Bool
+                    if let inverseName = relationship.inverse,
+                        let destination = schema.entity(forName: relationship.destination),
+                        let inverse = destination.relationships.first(where: { $0.name == inverseName })
+                    {
+                        hasSupportedInverse = inverse.isToMany && inverse.inverse == relationship.name
+                    } else {
+                        hasSupportedInverse = relationship.inverse == nil
+                    }
+                    guard hasSupportedInverse,
                         relationship.deleteRule == .nullify,
                         relationship.minimumModelCount == nil,
                         relationship.maximumModelCount == nil,
@@ -412,7 +443,7 @@ package enum SchemaBuilder {
                         mapping.destinationRootEntityName == mapping.destinationEntityName
                     else {
                         throw SwiftDataError.unsupportedSchemaProperty(
-                            "Inherited schema currently supports optional or required to-one relationships without inverses to flat destinations ('\(member.name).\(relationship.name)')."
+                            "Inherited schema currently supports to-one relationships with optional to-many inverses to flat destinations ('\(member.name).\(relationship.name)')."
                         )
                     }
                     let columnKey = identifierKey(mapping.storageColumnName)

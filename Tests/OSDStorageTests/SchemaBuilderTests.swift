@@ -125,6 +125,24 @@ final class SchemaBuilderTests: XCTestCase {
                 return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
             }
         }
+
+        let oneToOneInverse = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "Target", inverse: "child")
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Target",
+                relationships: [Schema.Relationship(name: "child", destination: "Child", inverse: "target")]),
+        ])
+        XCTAssertThrowsError(try SchemaBuilder.build(oneToOneInverse)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
+            }
+        }
     }
 
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {

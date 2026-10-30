@@ -139,6 +139,85 @@ final class RequiredInheritedToOneChildFixture: RequiredInheritedToOneBaseFixtur
 }
 
 @Model
+final class InheritedOneToManyTargetFixture {
+    var title: String
+    @Relationship(inverse: nil) var children: [InheritedOneToManyChildFixture] = []
+    init(title: String) { self.title = title }
+}
+
+@Model
+class InheritedOneToManyBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class InheritedOneToManyChildFixture: InheritedOneToManyBaseFixture {
+    @Relationship(inverse: \InheritedOneToManyTargetFixture.children)
+    var target: InheritedOneToManyTargetFixture?
+    init(name: String, target: InheritedOneToManyTargetFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+final class InheritedOneToManyGrandchildFixture: InheritedOneToManyChildFixture {
+    var rank: Int
+
+    init(name: String, target: InheritedOneToManyTargetFixture?, rank: Int) {
+        self.rank = rank
+        super.init(name: name, target: target)
+    }
+}
+
+@Model
+final class InheritedCascadeTargetFixture {
+    @Relationship(deleteRule: .cascade, inverse: nil) var children: [InheritedCascadeChildFixture] = []
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+class InheritedCascadeBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class InheritedCascadeChildFixture: InheritedCascadeBaseFixture {
+    @Relationship(inverse: \InheritedCascadeTargetFixture.children)
+    var target: InheritedCascadeTargetFixture?
+    init(name: String, target: InheritedCascadeTargetFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
+final class InheritedDenyTargetFixture {
+    @Relationship(deleteRule: .deny, inverse: nil) var children: [InheritedDenyChildFixture] = []
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+class InheritedDenyBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class InheritedDenyChildFixture: InheritedDenyBaseFixture {
+    @Relationship(inverse: \InheritedDenyTargetFixture.children)
+    var target: InheritedDenyTargetFixture?
+    init(name: String, target: InheritedDenyTargetFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritanceLookupBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -489,6 +568,112 @@ final class PersistentModelTests: XCTestCase {
                 arguments: [.int(1)])
         }
         XCTAssertEqual(rows, [[.int(1)]])
+    }
+
+    @MainActor
+    func testInheritedToOneInverseCollectionRoundTrips() throws {
+        let container = try ModelContainer(
+            for: [
+                InheritedOneToManyChildFixture.self,
+                InheritedOneToManyGrandchildFixture.self,
+                InheritedOneToManyTargetFixture.self,
+            ],
+            configurations: [.sqliteMemory("inherited-to-one-inverse")])
+        let writer = container.mainContext
+        let target = InheritedOneToManyTargetFixture(title: "target")
+        let child = InheritedOneToManyChildFixture(name: "child", target: target)
+        let grandchild = InheritedOneToManyGrandchildFixture(name: "grandchild", target: target, rank: 7)
+        writer.insert(target)
+        writer.insert(child)
+        writer.insert(grandchild)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedTarget = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<InheritedOneToManyTargetFixture>(
+                    relationshipKeyPathsForPrefetching: [\InheritedOneToManyTargetFixture.children])
+            ).first)
+        XCTAssertEqual(fetchedTarget.children.map(\.name), ["child", "grandchild"])
+        XCTAssertTrue(fetchedTarget.children.allSatisfy { $0.target === fetchedTarget })
+        XCTAssertEqual((fetchedTarget.children.last as? InheritedOneToManyGrandchildFixture)?.rank, 7)
+        let readerChild = try XCTUnwrap(fetchedTarget.children.first)
+
+        fetchedTarget.children = []
+        XCTAssertTrue(fetchedTarget.children.isEmpty)
+        XCTAssertNil(readerChild.target)
+        try reader.save()
+        let cleared = try container.store?.read {
+            try $0.rows(
+                "SELECT ZINHERITEDONETOMANYCHILDFIXTURE_TARGET FROM ZINHERITEDONETOMANYBASEFIXTURE "
+                    + "ORDER BY Z_PK",
+                arguments: [])
+        }
+        XCTAssertEqual(cleared, [[.null], [.null]])
+    }
+
+    @MainActor
+    func testDeletingInverseCollectionOwnerNullifiesInheritedToOne() throws {
+        let container = try ModelContainer(
+            for: [
+                InheritedOneToManyChildFixture.self,
+                InheritedOneToManyGrandchildFixture.self,
+                InheritedOneToManyTargetFixture.self,
+            ],
+            configurations: [.sqliteMemory("inherited-to-one-inverse-delete")])
+        let writer = container.mainContext
+        let target = InheritedOneToManyTargetFixture(title: "target")
+        writer.insert(target)
+        writer.insert(InheritedOneToManyChildFixture(name: "child", target: target))
+        try writer.save()
+
+        let reader = container.makeContext()
+        let targetToDelete = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritedOneToManyTargetFixture>()).first)
+        reader.delete(targetToDelete)
+        try reader.save()
+
+        let rows = try container.store?.read {
+            try $0.rows(
+                "SELECT ZINHERITEDONETOMANYCHILDFIXTURE_TARGET FROM ZINHERITEDONETOMANYBASEFIXTURE",
+                arguments: [])
+        }
+        XCTAssertEqual(rows, [[.null]])
+        let child = try XCTUnwrap(reader.fetch(FetchDescriptor<InheritedOneToManyBaseFixture>()).first)
+        XCTAssertNil((child as? InheritedOneToManyChildFixture)?.target)
+    }
+
+    @MainActor
+    func testInheritedToOneInverseDeleteRulesCascadeAndDeny() throws {
+        let cascadeContainer = try ModelContainer(
+            for: [InheritedCascadeChildFixture.self, InheritedCascadeTargetFixture.self],
+            configurations: [.sqliteMemory("inherited-to-one-cascade")])
+        let cascadeContext = cascadeContainer.mainContext
+        let cascadeTarget = InheritedCascadeTargetFixture(title: "cascade")
+        cascadeContext.insert(cascadeTarget)
+        cascadeContext.insert(InheritedCascadeChildFixture(name: "child", target: cascadeTarget))
+        try cascadeContext.save()
+        let cascadeReader = cascadeContainer.makeContext()
+        let persistedCascadeTarget = try XCTUnwrap(
+            cascadeReader.fetch(FetchDescriptor<InheritedCascadeTargetFixture>()).first)
+        cascadeReader.delete(persistedCascadeTarget)
+        try cascadeReader.save()
+        XCTAssertTrue(try cascadeReader.fetch(FetchDescriptor<InheritedCascadeBaseFixture>()).isEmpty)
+
+        let denyContainer = try ModelContainer(
+            for: [InheritedDenyChildFixture.self, InheritedDenyTargetFixture.self],
+            configurations: [.sqliteMemory("inherited-to-one-deny")])
+        let denyContext = denyContainer.mainContext
+        let denyTarget = InheritedDenyTargetFixture(title: "deny")
+        denyContext.insert(denyTarget)
+        denyContext.insert(InheritedDenyChildFixture(name: "child", target: denyTarget))
+        try denyContext.save()
+        let denyReader = denyContainer.makeContext()
+        let persistedDenyTarget = try XCTUnwrap(denyReader.fetch(FetchDescriptor<InheritedDenyTargetFixture>()).first)
+        denyReader.delete(persistedDenyTarget)
+        XCTAssertFalse(persistedDenyTarget.isDeleted)
+        XCTAssertFalse(denyReader.hasChanges)
+        XCTAssertEqual(try denyReader.fetch(FetchDescriptor<InheritedDenyBaseFixture>()).count, 1)
     }
 
     func testRelationshipInverseDestinationAcceptsLogicalOwnerAncestors() {

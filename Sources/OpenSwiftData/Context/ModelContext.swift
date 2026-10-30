@@ -2247,14 +2247,20 @@ public final class ModelContext {
                 rootColumnFirst = true
                 let storage = relationshipStorageLocation(
                     ownerEntity: destinationEntity, relationship: inverseRelationship)
+                let inverseOwnerIDs = descendantEntityIDs(for: destinationEntity)
+                let discriminatorFilter =
+                    inverseOwnerIDs.isEmpty
+                    ? ""
+                    : " AND Z_ENT IN (\(Array(repeating: "?", count: inverseOwnerIDs.count).joined(separator: ", ")))"
                 rows = try store.read { connection in
                     var result: [[RuntimeValue]] = []
                     for batch in primaryKeyBatches {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
                             "SELECT Z\(storage.columnName), Z_PK FROM Z\(storage.tableName) "
-                                + "WHERE Z\(storage.columnName) IN (\(placeholders)) ORDER BY Z_PK ASC",
-                            arguments: batch.map(RuntimeValue.int))
+                                + "WHERE Z\(storage.columnName) IN (\(placeholders))\(discriminatorFilter) "
+                                + "ORDER BY Z_PK ASC",
+                            arguments: batch.map(RuntimeValue.int) + inverseOwnerIDs.map { .int(Int64($0)) })
                     }
                     return result
                 }
@@ -2298,6 +2304,10 @@ public final class ModelContext {
             let destinationEntity = container?.schema.entity(forName: relationship.destination)
             var destinationModels: [Int64: any PersistentModel] = [:]
             if let destinationEntity {
+                let destinationHasHierarchy =
+                    destinationEntity.superentityName != nil
+                    || container?.schema.entities.contains(where: { $0.superentityName == destinationEntity.name })
+                        == true
                 let destinationKeys = Set(
                     rows.compactMap { row -> Int64? in
                         guard row.count == 2,
@@ -2309,36 +2319,73 @@ public final class ModelContext {
                     })
                 let uncachedKeys = destinationKeys.filter { key in
                     identityMap.model(
-                        for: EntityPrimaryKey(entityName: destinationEntity.name, primaryKey: key),
+                        for: identityKey(for: destinationEntity, primaryKey: key),
                         as: destinationType)
                         == nil
                 }
-                let destinationAttributes = canonicalAttributes(for: destinationEntity)
+                let destinationAttributes =
+                    destinationHasHierarchy
+                    ? try hierarchyAttributes(for: destinationEntity)
+                    : canonicalAttributes(for: destinationEntity)
                 let selectedColumns =
-                    (["Z_PK", "Z_OPT"]
-                    + storedColumnNames(for: destinationAttributes).map {
-                        "Z\($0.uppercased())"
-                    }).joined(separator: ", ")
+                    (["Z_PK", "Z_OPT"] + (destinationHasHierarchy ? ["Z_ENT"] : [])
+                    + storedColumnNames(for: destinationAttributes).map { "Z\($0.uppercased())" }).joined(
+                        separator: ", ")
                 let uncachedBatches = stride(from: 0, to: uncachedKeys.count, by: 100).map { start in
                     Array(uncachedKeys.sorted()[start..<min(start + 100, uncachedKeys.count)])
                 }
                 var destinationRows: [[RuntimeValue]] = []
+                let destinationRoot = rootEntity(for: destinationEntity)
+                let destinationEntityIDs = destinationHasHierarchy ? descendantEntityIDs(for: destinationEntity) : []
                 for batch in uncachedBatches {
                     let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
+                    let discriminatorFilter =
+                        destinationHasHierarchy
+                        ? " AND Z_ENT IN (\(Array(repeating: "?", count: destinationEntityIDs.count).joined(separator: ", ")))"
+                        : ""
                     destinationRows += try store.read { connection in
                         try connection.rows(
-                            "SELECT \(selectedColumns) FROM Z\(destinationEntity.name.uppercased()) "
-                                + "WHERE Z_PK IN (\(placeholders)) ORDER BY Z_PK ASC",
-                            arguments: batch.map(RuntimeValue.int))
+                            "SELECT \(selectedColumns) FROM Z\(destinationRoot.name.uppercased()) "
+                                + "WHERE Z_PK IN (\(placeholders))\(discriminatorFilter) ORDER BY Z_PK ASC",
+                            arguments: batch.map(RuntimeValue.int)
+                                + destinationEntityIDs.map { .int(Int64($0)) })
                     }
                 }
                 for row in destinationRows {
                     guard row.count >= 2, case let .int(primaryKey) = row[0] else { continue }
-                    let candidate = try materialize(
-                        destinationType, entity: destinationEntity, attributes: destinationAttributes, row: row,
-                        storeIdentifier: storeIdentifier, primaryKey: primaryKey,
-                        version: runtimeInt(row[1]))
-                    let key = EntityPrimaryKey(entityName: destinationEntity.name, primaryKey: primaryKey)
+                    let candidate: any PersistentModel
+                    let key: EntityPrimaryKey
+                    if destinationHasHierarchy {
+                        guard let container else { throw unsupportedStore("Relationship destination lookup") }
+                        guard row.count >= 3, case let .int(rawEntityID) = row[2],
+                            let concreteEntityID = Int(exactly: rawEntityID),
+                            let registration = container.modelRegistration(forEntityID: concreteEntityID),
+                            let concreteEntity = container.schema.entities.first(where: {
+                                container.schema.entityIDsByName[$0.name] == concreteEntityID
+                            })
+                        else { continue }
+                        let materializationRow = [row[0], row[1]] + row.dropFirst(3)
+                        candidate = try registration.materialize(
+                            context: self,
+                            entity: concreteEntity,
+                            attributes: destinationAttributes,
+                            row: materializationRow,
+                            storeIdentifier: storeIdentifier,
+                            entityID: concreteEntityID,
+                            primaryKey: primaryKey,
+                            version: runtimeInt(row[1]))
+                        if let resolver = try relationshipResolver() {
+                            registration.installRelationshipFaults(
+                                on: candidate, entity: concreteEntity, resolver: resolver)
+                        }
+                        key = identityKey(for: concreteEntity, primaryKey: primaryKey)
+                    } else {
+                        candidate = try materialize(
+                            destinationType, entity: destinationEntity, attributes: destinationAttributes, row: row,
+                            storeIdentifier: storeIdentifier, primaryKey: primaryKey,
+                            version: runtimeInt(row[1]))
+                        key = EntityPrimaryKey(entityName: destinationEntity.name, primaryKey: primaryKey)
+                    }
                     destinationModels[primaryKey] =
                         identityMap.canonicalHandle(for: key, candidate: candidate)
                         .model

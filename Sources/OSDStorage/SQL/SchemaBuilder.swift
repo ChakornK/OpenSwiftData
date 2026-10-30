@@ -465,7 +465,7 @@ package enum SchemaBuilder {
                             $0.name != destinationRoot && rootsByEntity[$0.name] == destinationRoot
                         }
                         guard mapping.ownerRootEntityName == root.name,
-                            !ownerIsHierarchical || !destinationIsHierarchical,
+                            relationship.inverse != nil || !ownerIsHierarchical || !destinationIsHierarchical,
                             relationship.inverse.map({ inverseName in
                                 schema.relationshipDeclaration(
                                     named: inverseName, onOrBelow: mapping.destinationEntityName)?.relationship

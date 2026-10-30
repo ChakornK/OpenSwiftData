@@ -231,11 +231,24 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             let sideAOwner = joinSideAOwner(ownerEntity, relationship, destination: destination)
             let ownerColumn = sideAOwner ? "Z_A" : "Z_B"
             let endpointColumn = sideAOwner ? "Z_B" : "Z_A"
+            let ownerRoot = rootEntity(for: ownerEntity)
+            let ownerIDs = descendantEntityIDs(for: ownerEntity)
+            let ownerIsHierarchical =
+                ownerRoot.name != ownerEntity.name
+                || schema.entities.contains(where: { $0.superentityName == ownerEntity.name })
             let endpointRoot = rootEntity(for: destination)
             let endpointIDs = descendantEntityIDs(for: destination)
             let endpointIsHierarchical =
                 endpointRoot.name != destination.name
                 || schema.entities.contains(where: { $0.superentityName == destination.name })
+            let ownerJoin =
+                ownerIsHierarchical
+                ? " JOIN Z\(ownerRoot.name.uppercased()) AS owner ON owner.Z_PK = joins.\(ownerColumn)"
+                : ""
+            let ownerFilter =
+                ownerIsHierarchical
+                ? " AND owner.Z_ENT IN (\(Array(repeating: "?", count: ownerIDs.count).joined(separator: ", ")))"
+                : ""
             let endpointJoin =
                 endpointIsHierarchical
                 ? " JOIN Z\(endpointRoot.name.uppercased()) AS endpoint ON endpoint.Z_PK = joins.\(endpointColumn)"
@@ -246,9 +259,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                 : ""
             return try store.read { connection in
                 try connection.rows(
-                    "SELECT joins.\(endpointColumn) FROM \(table) AS joins\(endpointJoin) "
-                        + "WHERE joins.\(ownerColumn) = ?\(endpointFilter) ORDER BY joins.\(endpointColumn) ASC",
+                    "SELECT joins.\(endpointColumn) FROM \(table) AS joins\(ownerJoin)\(endpointJoin) "
+                        + "WHERE joins.\(ownerColumn) = ?\(ownerFilter)\(endpointFilter) "
+                        + "ORDER BY joins.\(endpointColumn) ASC",
                     arguments: [.int(ownerPrimaryKey)]
+                        + (ownerIsHierarchical ? ownerIDs.map { .int(Int64($0)) } : [])
                         + (endpointIsHierarchical ? endpointIDs.map { .int(Int64($0)) } : [])
                 ).compactMap { row in
                     guard case let .int(primaryKey)? = row.first else { return nil }

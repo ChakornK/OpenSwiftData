@@ -2143,10 +2143,10 @@ public final class ModelContext {
                 } else {
                     continue
                 }
-                if model.persistentModelID.entityName == entity.name {
+                if isEntity(model.persistentModelID.entityName, descendantOf: entity.name) {
                     try connection.execute("DELETE FROM \(table) WHERE Z_A = ?", arguments: [.int(primaryKey)])
                 }
-                if model.persistentModelID.entityName == sideBEntity {
+                if isEntity(model.persistentModelID.entityName, descendantOf: sideBEntity) {
                     try connection.execute(
                         "DELETE FROM \(table) WHERE Z_B = ?", arguments: [.int(primaryKey)])
                 }
@@ -2223,6 +2223,11 @@ public final class ModelContext {
                 let requestedSideIsStorageOwner = joinSideAOwner(entity, relationship)
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
+                let ownerHasHierarchy =
+                    entity.superentityName != nil
+                    || container?.schema.entities.contains(where: { $0.superentityName == entity.name }) == true
+                let ownerRoot = rootEntity(for: entity)
+                let ownerIDs = ownerHasHierarchy ? descendantEntityIDs(for: entity) : []
                 let destinationHasHierarchy =
                     destinationEntity.superentityName != nil
                     || container?.schema.entities.contains(where: { $0.superentityName == destinationEntity.name })
@@ -2236,7 +2241,15 @@ public final class ModelContext {
                         destinationHasHierarchy
                         ? " JOIN Z\(destinationRoot.name.uppercased()) AS endpoint ON endpoint.Z_PK = joins.\(endpointColumn)"
                         : ""
-                    let discriminatorFilter =
+                    let ownerJoin =
+                        ownerHasHierarchy
+                        ? " JOIN Z\(ownerRoot.name.uppercased()) AS owner ON owner.Z_PK = joins.\(rootColumn)"
+                        : ""
+                    let ownerFilter =
+                        ownerHasHierarchy
+                        ? " AND owner.Z_ENT IN (\(Array(repeating: "?", count: ownerIDs.count).joined(separator: ", ")))"
+                        : ""
+                    let destinationFilter =
                         destinationHasHierarchy
                         ? " AND endpoint.Z_ENT IN (\(Array(repeating: "?", count: destinationIDs.count).joined(separator: ", ")))"
                         : ""
@@ -2245,10 +2258,11 @@ public final class ModelContext {
                         let placeholders = batch.map { _ in "?" }.joined(separator: ", ")
                         result += try connection.rows(
                             "SELECT joins.\(rootColumn), joins.\(endpointColumn) FROM \(table) AS joins"
-                                + endpointJoin + " WHERE joins.\(rootColumn) IN (\(placeholders))"
-                                + discriminatorFilter
+                                + endpointJoin + ownerJoin + " WHERE joins.\(rootColumn) IN (\(placeholders))"
+                                + ownerFilter + destinationFilter
                                 + " ORDER BY joins.\(rootColumn) ASC, joins.\(endpointColumn) ASC",
-                            arguments: batch.map(RuntimeValue.int) + destinationIDs.map { .int(Int64($0)) })
+                            arguments: batch.map(RuntimeValue.int) + ownerIDs.map { .int(Int64($0)) }
+                                + destinationIDs.map { .int(Int64($0)) })
                     }
                     return result
                 }

@@ -345,6 +345,95 @@ final class CascadeHierarchyInverseOwnerChildFixture: CascadeHierarchySourceBase
 }
 
 @Model
+class MatrixLeftBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class MatrixLeftChildFixture: MatrixLeftBaseFixture {
+    @Relationship(inverse: \MatrixRightChildFixture.leftMembers)
+    var rightMembers: [MatrixRightBaseFixture] = []
+    init(name: String, rightMembers: [MatrixRightBaseFixture]) {
+        self.rightMembers = rightMembers
+        super.init(name: name)
+    }
+}
+
+@Model
+final class MatrixLeftGrandchildFixture: MatrixLeftChildFixture {
+    var rank: Int
+    init(name: String, rightMembers: [MatrixRightBaseFixture], rank: Int) {
+        self.rank = rank
+        super.init(name: name, rightMembers: rightMembers)
+    }
+}
+
+@Model
+final class MatrixLeftSiblingFixture: MatrixLeftBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
+class MatrixRightBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class MatrixRightChildFixture: MatrixRightBaseFixture {
+    @Relationship(inverse: nil) var leftMembers: [MatrixLeftBaseFixture] = []
+    override init(name: String) { super.init(name: name) }
+}
+
+@Model
+final class MatrixRightGrandchildFixture: MatrixRightChildFixture {
+    var rank: Int
+    init(name: String, rank: Int) {
+        self.rank = rank
+        super.init(name: name)
+    }
+}
+
+@Model
+final class MatrixRightSiblingFixture: MatrixRightBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
+class SelfLinkBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class SelfLinkChildFixture: SelfLinkBaseFixture {
+    @Relationship(inverse: \SelfLinkChildFixture.children) var parents: [SelfLinkBaseFixture] = []
+    @Relationship(inverse: nil) var children: [SelfLinkBaseFixture] = []
+    init(name: String, parents: [SelfLinkBaseFixture] = []) {
+        self.parents = parents
+        super.init(name: name)
+    }
+}
+
+@Model
+final class SelfLinkGrandchildFixture: SelfLinkChildFixture {
+    var rank: Int
+    init(name: String, parents: [SelfLinkBaseFixture] = [], rank: Int) {
+        self.rank = rank
+        super.init(name: name, parents: parents)
+    }
+}
+
+@Model
 class HierarchySubtypeOwnerBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -1321,6 +1410,106 @@ final class PersistentModelTests: XCTestCase {
                 arguments: [])
         }
         XCTAssertTrue(afterGrandchildDelete?.isEmpty == true)
+    }
+
+    @MainActor
+    func testHierarchyToHierarchyManyToManyFiltersBothEndpoints() throws {
+        let container = try ModelContainer(
+            for: [
+                MatrixLeftChildFixture.self,
+                MatrixLeftGrandchildFixture.self,
+                MatrixLeftSiblingFixture.self,
+                MatrixRightChildFixture.self,
+                MatrixRightGrandchildFixture.self,
+                MatrixRightSiblingFixture.self,
+            ],
+            configurations: [.sqliteMemory("hierarchy-to-hierarchy-many-to-many")])
+        let writer = container.mainContext
+        let rightChild = MatrixRightChildFixture(name: "right-child")
+        let rightGrandchild = MatrixRightGrandchildFixture(name: "right-grandchild", rank: 4)
+        let rightSibling = MatrixRightSiblingFixture(name: "right-sibling", label: "unrelated")
+        let leftChild = MatrixLeftChildFixture(name: "left-child", rightMembers: [rightGrandchild])
+        let leftGrandchild = MatrixLeftGrandchildFixture(name: "left-grandchild", rightMembers: [rightChild], rank: 3)
+        let leftSibling = MatrixLeftSiblingFixture(name: "left-sibling", label: "unrelated")
+        writer.insert(rightChild)
+        writer.insert(rightGrandchild)
+        writer.insert(rightSibling)
+        writer.insert(leftChild)
+        writer.insert(leftGrandchild)
+        writer.insert(leftSibling)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let readLeftChild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<MatrixLeftChildFixture>(
+                    relationshipKeyPathsForPrefetching: [\MatrixLeftChildFixture.rightMembers])
+            ).first)
+        let readLeftGrandchild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<MatrixLeftGrandchildFixture>(
+                    relationshipKeyPathsForPrefetching: [\MatrixLeftGrandchildFixture.rightMembers])
+            ).first)
+        let readRightChild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<MatrixRightChildFixture>(
+                    relationshipKeyPathsForPrefetching: [\MatrixRightChildFixture.leftMembers])
+            ).first)
+        let readRightGrandchild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<MatrixRightGrandchildFixture>(
+                    relationshipKeyPathsForPrefetching: [\MatrixRightGrandchildFixture.leftMembers])
+            ).first)
+        let readLeftSibling = try XCTUnwrap(reader.fetch(FetchDescriptor<MatrixLeftSiblingFixture>()).first)
+        let readRightSibling = try XCTUnwrap(reader.fetch(FetchDescriptor<MatrixRightSiblingFixture>()).first)
+
+        XCTAssertTrue(readLeftChild.rightMembers.first is MatrixRightGrandchildFixture)
+        XCTAssertEqual(readLeftGrandchild.rightMembers.map(\.name), ["right-child"])
+        XCTAssertTrue(readRightChild.leftMembers.first is MatrixLeftGrandchildFixture)
+        XCTAssertEqual(readRightGrandchild.leftMembers.map(\.name), ["left-child"])
+        XCTAssertTrue(readLeftSibling.name == "left-sibling")
+        XCTAssertTrue(readRightSibling.name == "right-sibling")
+
+        readRightChild.leftMembers = []
+        try reader.save()
+        XCTAssertTrue(readLeftGrandchild.rightMembers.isEmpty)
+
+        reader.delete(readLeftChild)
+        try reader.save()
+        XCTAssertTrue(readRightGrandchild.leftMembers.isEmpty)
+    }
+
+    @MainActor
+    func testSelfReferentialHierarchyManyToManyFiltersConcreteEndpoints() throws {
+        let container = try ModelContainer(
+            for: [SelfLinkChildFixture.self, SelfLinkGrandchildFixture.self],
+            configurations: [.sqliteMemory("self-hierarchy-many-to-many")])
+        let writer = container.mainContext
+        let child = SelfLinkChildFixture(name: "child")
+        let grandchild = SelfLinkGrandchildFixture(name: "grandchild", rank: 2)
+        writer.insert(child)
+        writer.insert(grandchild)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedChild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<SelfLinkChildFixture>(
+                    relationshipKeyPathsForPrefetching: [\SelfLinkChildFixture.children])
+            ).first)
+        let fetchedGrandchild = try XCTUnwrap(
+            reader.fetch(
+                FetchDescriptor<SelfLinkGrandchildFixture>(
+                    relationshipKeyPathsForPrefetching: [\SelfLinkGrandchildFixture.parents])
+            ).first)
+        fetchedChild.children = [fetchedGrandchild]
+        try reader.save()
+
+        let lazyReader = container.makeContext()
+        let lazyGrandchild = try XCTUnwrap(
+            lazyReader.fetch(FetchDescriptor<SelfLinkGrandchildFixture>()).first)
+        XCTAssertEqual(lazyGrandchild.parents.map(\.name), ["child"])
+        XCTAssertTrue(lazyGrandchild.parents.first is SelfLinkChildFixture)
     }
 
     @MainActor

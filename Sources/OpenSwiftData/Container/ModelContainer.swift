@@ -36,6 +36,7 @@ public final class ModelContainer: Sendable {
 
     /// Creates a container for the schema inferred from model types and configurations.
     public init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration] = []) throws {
+        let types = Self.modelTypesIncludingAncestors(of: types)
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         var uniqueEntityNames = Set<String>()
         for entityName in entityNames where !uniqueEntityNames.insert(entityName).inserted {
@@ -54,6 +55,7 @@ public final class ModelContainer: Sendable {
                 metadata.keypath.map { (metadata, $0) }
             }
         }
+        let effectivePropertiesByEntity = propertiesByEntity.mapValues(Self.effectiveProperties)
         let entities = try types.map { modelType in
             let properties = propertiesByEntity[Self.unqualifiedTypeName(String(describing: modelType))] ?? []
             let schemaProperties = try properties.map {
@@ -163,6 +165,11 @@ public final class ModelContainer: Sendable {
                 let destination = parsedType.collectionElement ?? parsedType.name
                 let typedRelationship = metadata.metadata?.base as? Schema.Relationship
                 let destinationName = Self.unqualifiedTypeName(destination)
+                let declaringEntityName = Self.relationshipDeclaringEntityName(
+                    modelType: modelType, metadata: metadata)
+                let logicalOwnerName =
+                    declaringEntityName
+                    ?? Self.unqualifiedTypeName(String(describing: modelType))
                 let isInferredModelCollection =
                     !metadata.isExplicitRelationship && isToMany
                     && parsedType.collectionElement.map { modelNames.contains(Self.unqualifiedTypeName($0)) } == true
@@ -181,7 +188,7 @@ public final class ModelContainer: Sendable {
                     }
                 }
                 let destinationRelationships =
-                    propertiesByEntity[destinationName]?.compactMap {
+                    effectivePropertiesByEntity[destinationName]?.compactMap {
                         candidate -> (Schema.PropertyMetadata, Schema.Relationship)? in
                         guard let destinationRelationship = candidate.0.metadata?.base as? Schema.Relationship else {
                             return nil
@@ -199,7 +206,7 @@ public final class ModelContainer: Sendable {
                         )
                     }
                     guard
-                        let inverseMetadata = propertiesByEntity[destinationName]?.first(where: {
+                        let inverseMetadata = effectivePropertiesByEntity[destinationName]?.first(where: {
                             $0.0.name == explicitInverseName
                         })
                     else {
@@ -229,14 +236,12 @@ public final class ModelContainer: Sendable {
                         parsedInverseType.collectionElement ?? parsedInverseType.name
                     )
                     guard
-                        inverseDestination
-                            == Self.unqualifiedTypeName(
-                                String(describing: modelType)
-                            )
+                        Self.relationshipDestination(
+                            inverseDestination, matchesLogicalOwner: logicalOwnerName, among: types)
                     else {
                         throw SwiftDataError.unsupportedSchemaProperty(
                             "Relationship inverse '\(destinationName).\(explicitInverseName)' does not point back to "
-                                + "'\(Self.unqualifiedTypeName(String(describing: modelType)))'."
+                                + "'\(logicalOwnerName)'."
                         )
                     }
                     explicitInverse = explicitInverseName
@@ -270,7 +275,14 @@ public final class ModelContainer: Sendable {
                     deleteRule: typedRelationship?.deleteRule ?? .nullify,
                     minimumModelCount: typedRelationship?.minimumModelCount,
                     maximumModelCount: typedRelationship?.maximumModelCount,
-                    originalName: typedRelationship?.originalName
+                    originalName: typedRelationship?.originalName,
+                    declaringEntityName: declaringEntityName
+                )
+            }
+            var relationshipNames = Set<String>()
+            for relationship in relationships where !relationshipNames.insert(relationship.name).inserted {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Relationship property '\(Self.unqualifiedTypeName(String(describing: modelType))).\(relationship.name)' is declared more than once in the inheritance hierarchy."
                 )
             }
             let indexes =
@@ -299,23 +311,26 @@ public final class ModelContainer: Sendable {
                     guard let relationship = metadata.metadata?.base as? Schema.Relationship,
                         relationship.inverse != nil
                     else { return nil }
-                    return "\(entityName).\(metadata.name)"
+                    return
+                        "\(Self.relationshipDeclaringEntityName(modelType: modelType, metadata: metadata) ?? entityName).\(metadata.name)"
                 }
             })
         let inferredEntities = try entities.map { entity in
             let relationships = try entity.relationships.map { relationship in
+                let logicalOwnerName = relationship.declaringEntityName ?? entity.name
                 guard relationship.inverse == nil,
-                    !explicitInverseDeclarations.contains("\(entity.name).\(relationship.name)")
+                    !explicitInverseDeclarations.contains("\(logicalOwnerName).\(relationship.name)")
                 else { return relationship }
                 let explicitReciprocalCount =
-                    propertiesByEntity[relationship.destination]?.filter { candidate, _ in
+                    effectivePropertiesByEntity[relationship.destination]?.filter { candidate, _ in
                         (candidate.metadata?.base as? Schema.Relationship)?.inverse == relationship.name
                     }.count ?? 0
                 guard explicitReciprocalCount <= 1 else { return relationship }
-                let destinationRelationships =
-                    entities.first(where: { $0.name == relationship.destination })?.relationships ?? []
+                let destinationRelationships = Self.effectiveRelationships(
+                    entities.first(where: { $0.name == relationship.destination })?.relationships ?? [])
                 let reciprocalCandidates = destinationRelationships.filter { inverseRelationship in
-                    inverseRelationship.destination == entity.name
+                    Self.relationshipDestination(
+                        inverseRelationship.destination, matchesLogicalOwner: logicalOwnerName, among: types)
                         && inverseRelationship.inverse == relationship.name
                 }
                 let inverseCandidates = reciprocalCandidates
@@ -338,7 +353,8 @@ public final class ModelContainer: Sendable {
                     deleteRule: relationship.deleteRule,
                     minimumModelCount: relationship.minimumModelCount,
                     maximumModelCount: relationship.maximumModelCount,
-                    originalName: relationship.originalName
+                    originalName: relationship.originalName,
+                    declaringEntityName: relationship.declaringEntityName
                 )
             }
             return Schema.Entity(
@@ -611,7 +627,9 @@ public final class ModelContainer: Sendable {
                 name: property.name,
                 destination: unqualifiedTypeName(destination),
                 isToMany: rawType.contains("Array<") || rawType.contains("Set<"),
-                inverse: (property.metadata?.base as? Schema.Relationship)?.inverse)
+                inverse: (property.metadata?.base as? Schema.Relationship)?.inverse,
+                declaringEntityName: Self.relationshipDeclaringEntityName(
+                    modelType: modelType, metadata: property))
         }
         let bindingRelationships = Array(schemaRelationshipsByName.values).sorted { $0.name < $1.name }
         for relationship in bindingRelationships {
@@ -658,7 +676,8 @@ public final class ModelContainer: Sendable {
                         deleteRule: relationship.deleteRule,
                         minimumModelCount: relationship.minimumModelCount,
                         maximumModelCount: relationship.maximumModelCount,
-                        originalName: relationship.originalName))
+                        originalName: relationship.originalName,
+                        declaringEntityName: relationship.declaringEntityName))
             } else {
                 resolved = candidate.resolved(with: relationship)
             }
@@ -767,6 +786,77 @@ public final class ModelContainer: Sendable {
         !name.isEmpty && name != "." && name != ".."
             && !name.contains("/") && !name.contains("\\")
             && !name.contains(":")
+    }
+
+    private static func relationshipDeclaringEntityName(
+        modelType: any PersistentModel.Type, metadata: Schema.PropertyMetadata
+    ) -> String? {
+        guard let keyPath = metadata.keypath else { return nil }
+        var declaringType = modelType
+        var visited: Set<ObjectIdentifier> = [ObjectIdentifier(modelType)]
+        while let parent = declaringType.parentModel,
+            visited.insert(ObjectIdentifier(parent)).inserted,
+            parent.schemaMetadata().contains(where: { $0.name == metadata.name && $0.keypath == keyPath })
+        {
+            declaringType = parent
+        }
+        guard ObjectIdentifier(declaringType) != ObjectIdentifier(modelType) else { return nil }
+        return unqualifiedTypeName(String(describing: declaringType))
+    }
+
+    private static func effectiveProperties(
+        _ properties: [(Schema.PropertyMetadata, AnyKeyPath)]
+    ) -> [(Schema.PropertyMetadata, AnyKeyPath)] {
+        var lastIndexByName: [String: Int] = [:]
+        for (index, property) in properties.enumerated() { lastIndexByName[property.0.name] = index }
+        return properties.enumerated().compactMap { index, property in
+            lastIndexByName[property.0.name] == index ? property : nil
+        }
+    }
+
+    private static func effectiveRelationships(_ relationships: [Schema.Relationship]) -> [Schema.Relationship] {
+        var lastIndexByName: [String: Int] = [:]
+        for (index, relationship) in relationships.enumerated() { lastIndexByName[relationship.name] = index }
+        return relationships.enumerated().compactMap { index, relationship in
+            lastIndexByName[relationship.name] == index ? relationship : nil
+        }
+    }
+
+    private static func isAncestorModel(
+        _ ancestorName: String, of modelName: String, among types: [any PersistentModel.Type]
+    ) -> Bool {
+        let typesByName = Dictionary(
+            uniqueKeysWithValues: types.map { (unqualifiedTypeName(String(describing: $0)), $0) })
+        var current = typesByName[modelName]
+        var visited = Set<String>()
+        while let model = current, let parent = model.parentModel {
+            let parentName = unqualifiedTypeName(String(describing: parent))
+            guard visited.insert(parentName).inserted else { return false }
+            if parentName == ancestorName { return true }
+            current = typesByName[parentName]
+        }
+        return false
+    }
+
+    package static func relationshipDestination(
+        _ destinationName: String, matchesLogicalOwner ownerName: String,
+        among types: [any PersistentModel.Type]
+    ) -> Bool {
+        destinationName == ownerName || isAncestorModel(destinationName, of: ownerName, among: types)
+    }
+
+    private static func modelTypesIncludingAncestors(
+        of requestedTypes: [any PersistentModel.Type]
+    ) -> [any PersistentModel.Type] {
+        var ordered: [any PersistentModel.Type] = []
+        var visited = Set<ObjectIdentifier>()
+        func append(_ type: any PersistentModel.Type) {
+            guard visited.insert(ObjectIdentifier(type)).inserted else { return }
+            if let parent = type.parentModel { append(parent) }
+            ordered.append(type)
+        }
+        for type in requestedTypes { append(type) }
+        return ordered
     }
 
     private static func unqualifiedTypeName(_ type: String) -> String {

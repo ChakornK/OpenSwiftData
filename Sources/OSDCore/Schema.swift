@@ -14,6 +14,16 @@ public enum RuntimeSchemaVersionState: Sendable {
 
 /// Describes the entities and version metadata in a persistent store.
 public struct Schema: Sendable {
+    /// Describes the logical declaration and physical root storage for one relationship.
+    package struct RelationshipStorageMapping: Sendable, Hashable {
+        package let modelEntityName: String
+        package let relationshipName: String
+        package let declaringEntityName: String
+        package let ownerRootEntityName: String
+        package let destinationEntityName: String
+        package let destinationRootEntityName: String
+    }
+
     /// Returns deterministic entity identifiers in root-first inheritance order.
     package var entityIDsByName: [String: Int] {
         let orderedEntities = entities.sorted {
@@ -201,6 +211,8 @@ public struct Schema: Sendable {
         public let maximumModelCount: Int?
         /// The original relationship name used for renaming.
         public let originalName: String?
+        /// The model entity that originally declares this relationship.
+        package let declaringEntityName: String?
 
         /// Creates metadata describing relationship options without property details.
         public init(
@@ -219,6 +231,7 @@ public struct Schema: Sendable {
             self.minimumModelCount = minimumModelCount
             self.maximumModelCount = maximumModelCount
             self.originalName = originalName
+            declaringEntityName = nil
         }
 
         private static func inversePropertyName(_ keyPath: AnyKeyPath) -> String? {
@@ -242,7 +255,8 @@ public struct Schema: Sendable {
             deleteRule: DeleteRule = .nullify,
             minimumModelCount: Int? = nil,
             maximumModelCount: Int? = nil,
-            originalName: String? = nil
+            originalName: String? = nil,
+            declaringEntityName: String? = nil
         ) {
             self.name = name
             self.destination = destination
@@ -252,6 +266,7 @@ public struct Schema: Sendable {
             self.minimumModelCount = minimumModelCount
             self.maximumModelCount = maximumModelCount
             self.originalName = originalName
+            self.declaringEntityName = declaringEntityName
         }
     }
 
@@ -381,5 +396,36 @@ public struct Schema: Sendable {
     /// Finds an entity by its stable name.
     public func entity(forName name: String) -> Entity? {
         entities.first { $0.name == name }
+    }
+
+    package func relationshipStorageMapping(
+        modelEntityName: String, relationshipName: String
+    ) -> RelationshipStorageMapping? {
+        guard let modelEntity = entity(forName: modelEntityName),
+            let relationship = modelEntity.relationships.first(where: { $0.name == relationshipName })
+        else { return nil }
+        let declaringEntityName = relationship.declaringEntityName ?? modelEntity.name
+        guard entity(forName: declaringEntityName) != nil,
+            entity(forName: relationship.destination) != nil,
+            let ownerRootEntityName = rootEntityName(for: declaringEntityName),
+            let destinationRootEntityName = rootEntityName(for: relationship.destination)
+        else { return nil }
+        return RelationshipStorageMapping(
+            modelEntityName: modelEntity.name,
+            relationshipName: relationship.name,
+            declaringEntityName: declaringEntityName,
+            ownerRootEntityName: ownerRootEntityName,
+            destinationEntityName: relationship.destination,
+            destinationRootEntityName: destinationRootEntityName)
+    }
+
+    private func rootEntityName(for entityName: String) -> String? {
+        var current = entity(forName: entityName)
+        var visited = Set<String>()
+        while let entity = current, visited.insert(entity.name).inserted {
+            guard let parentName = entity.superentityName else { return entity.name }
+            current = self.entity(forName: parentName)
+        }
+        return nil
     }
 }

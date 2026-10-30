@@ -296,6 +296,83 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(child.items.isEmpty)
     }
 
+    @MainActor
+    func testInheritedRelationshipStorageMappingRetainsLogicalOwner() throws {
+        let container = try ModelContainer(
+            for: InheritanceRelationshipBaseFixture.self,
+            InheritanceRelationshipChildFixture.self,
+            InheritanceRelationshipItemFixture.self)
+
+        let mapping = try XCTUnwrap(
+            container.schema.relationshipStorageMapping(
+                modelEntityName: "InheritanceRelationshipChildFixture", relationshipName: "items"))
+        XCTAssertEqual(mapping.modelEntityName, "InheritanceRelationshipChildFixture")
+        XCTAssertEqual(mapping.declaringEntityName, "InheritanceRelationshipBaseFixture")
+        XCTAssertEqual(mapping.ownerRootEntityName, "InheritanceRelationshipBaseFixture")
+        XCTAssertEqual(mapping.destinationEntityName, "InheritanceRelationshipItemFixture")
+        XCTAssertEqual(mapping.destinationRootEntityName, "InheritanceRelationshipItemFixture")
+    }
+
+    func testRelationshipInverseDestinationAcceptsLogicalOwnerAncestors() {
+        let types: [any PersistentModel.Type] = [
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+        ]
+        XCTAssertTrue(
+            ModelContainer.relationshipDestination(
+                "InheritanceMacroBaseFixture", matchesLogicalOwner: "InheritanceMacroChildFixture", among: types))
+        XCTAssertTrue(
+            ModelContainer.relationshipDestination(
+                "InheritanceMacroChildFixture", matchesLogicalOwner: "InheritanceMacroChildFixture", among: types))
+        XCTAssertFalse(
+            ModelContainer.relationshipDestination(
+                "InheritanceMacroGrandchildFixture", matchesLogicalOwner: "InheritanceMacroBaseFixture", among: types))
+    }
+
+    @MainActor
+    func testContainerAutomaticallyIncludesModelAncestors() throws {
+        let implicit = try ModelContainer(
+            for: [InheritanceRelationshipChildFixture.self, InheritanceRelationshipItemFixture.self])
+        let explicit = try ModelContainer(
+            for: [
+                InheritanceRelationshipBaseFixture.self,
+                InheritanceRelationshipChildFixture.self,
+                InheritanceRelationshipItemFixture.self,
+            ])
+        let reversed = try ModelContainer(
+            for: [
+                InheritanceRelationshipItemFixture.self,
+                InheritanceRelationshipChildFixture.self,
+                InheritanceRelationshipBaseFixture.self,
+            ])
+
+        XCTAssertEqual(implicit.schema.entities, explicit.schema.entities)
+        XCTAssertEqual(reversed.schema.entityIDsByName, explicit.schema.entityIDsByName)
+        XCTAssertNotNil(implicit.schema.entity(forName: "InheritanceRelationshipBaseFixture"))
+        XCTAssertEqual(
+            implicit.schema.relationshipStorageMapping(
+                modelEntityName: "InheritanceRelationshipChildFixture", relationshipName: "items")?
+                .declaringEntityName,
+            "InheritanceRelationshipBaseFixture")
+    }
+
+    @MainActor
+    func testSQLiteContainerAutomaticallyIncludesModelAncestors() throws {
+        let implicit = try ModelContainer(
+            for: [InheritanceMacroChildFixture.self],
+            configurations: [.sqliteMemory("inheritance-implicit-ancestor")])
+        let explicit = try ModelContainer(
+            for: [InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self],
+            configurations: [.sqliteMemory("inheritance-explicit-ancestor")])
+
+        XCTAssertEqual(implicit.schema.entities, explicit.schema.entities)
+        let tables = try XCTUnwrap(implicit.store).read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'Z%'", arguments: [])
+        }
+        XCTAssertEqual(tables, [[.text("Z_PRIMARYKEY")], [.text("ZINHERITANCEMACROBASEFIXTURE")]])
+    }
+
     private final class ObservationFlag: @unchecked Sendable {
         private let lock = NSLock()
         private var storage = false

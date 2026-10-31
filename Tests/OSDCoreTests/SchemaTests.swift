@@ -178,6 +178,47 @@ final class SchemaTests: XCTestCase {
         XCTAssertNil(schema.entity(forName: "Unknown"))
     }
 
+    func testReconciledEntityIDsPreserveStoredIDsAndAppendNewHierarchyEntities() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Zebra", superentityName: "Animal"),
+            Schema.Entity(name: "Cat", superentityName: "Animal"),
+            Schema.Entity(name: "Kitten", superentityName: "Cat"),
+        ])
+
+        let reconciled = try schema.reconciled(with: ["Animal": 1, "Dog": 2, "Zebra": 3])
+
+        XCTAssertEqual(
+            reconciled.entityIDsByName,
+            ["Animal": 1, "Dog": 2, "Zebra": 3, "Cat": 4, "Kitten": 5])
+        XCTAssertEqual(Schema(schema.entities).entityIDsByName["Cat"], 2)
+        XCTAssertEqual(try schema.reconciled(with: [:]).entityIDsByName, schema.entityIDsByName)
+    }
+
+    func testReconciledEntityIDsRejectInvalidStoredMaps() {
+        let schema = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Child", superentityName: "Base"),
+        ])
+
+        XCTAssertThrowsError(try schema.reconciled(with: ["Base": 1, "Unknown": 2]))
+        XCTAssertThrowsError(try schema.reconciled(with: ["Base": 1, "Child": 1]))
+        XCTAssertThrowsError(try schema.reconciled(with: ["Base": 0, "Child": 2]))
+
+        let orphanSchema = Schema([Schema.Entity(name: "Orphan", superentityName: "MissingParent")])
+        XCTAssertThrowsError(try orphanSchema.reconciled(with: ["Base": 1]))
+
+        let cyclicSchema = Schema([
+            Schema.Entity(name: "First", superentityName: "Second"),
+            Schema.Entity(name: "Second", superentityName: "First"),
+        ])
+        XCTAssertThrowsError(try cyclicSchema.reconciled(with: ["First": 1, "Second": 2]))
+
+        let duplicateSchema = Schema([Schema.Entity(name: "Base"), Schema.Entity(name: "Base")])
+        XCTAssertThrowsError(try duplicateSchema.reconciled(with: ["Base": 1]))
+    }
+
     func testEntityPreservesAttributeAndRelationshipDeclarationOrder() {
         let entity = Schema.Entity(
             name: "Trip",

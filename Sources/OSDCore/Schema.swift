@@ -26,28 +26,11 @@ public struct Schema: Sendable {
     }
 
     /// Returns deterministic entity identifiers in root-first inheritance order.
+    private let persistedEntityIDs: [String: Int]?
+
     package var entityIDsByName: [String: Int] {
-        let orderedEntities = entities.sorted {
-            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
-        }
-        let childrenByParent = Dictionary(
-            grouping: orderedEntities.compactMap { entity -> (String, Entity)? in
-                guard let parent = entity.superentityName else { return nil }
-                return (parent, entity)
-            }, by: \.0
-        ).mapValues { pairs in
-            pairs.map(\.1).sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
-        }
-        var ordered: [Entity] = []
-        var visited = Set<String>()
-        func append(_ entity: Entity) {
-            guard visited.insert(entity.name).inserted else { return }
-            ordered.append(entity)
-            for child in childrenByParent[entity.name] ?? [] { append(child) }
-        }
-        for root in orderedEntities where root.superentityName == nil { append(root) }
-        for entity in orderedEntities where !visited.contains(entity.name) { append(entity) }
-        return Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.name, $0 + 1) })
+        if let persistedEntityIDs { return persistedEntityIDs }
+        return Dictionary(uniqueKeysWithValues: Self.rootFirstEntities(entities).enumerated().map { ($1.name, $0 + 1) })
     }
 
     /// An ordered index over entity attributes.
@@ -413,6 +396,102 @@ public struct Schema: Sendable {
     public init(_ entities: [Entity], version: Version? = nil) {
         self.entities = entities.sorted { $0.name < $1.name }
         self.version = version
+        persistedEntityIDs = nil
+    }
+
+    package init(_ entities: [Entity], version: Version? = nil, entityIDs: [String: Int]) throws {
+        self.entities = entities.sorted { $0.name < $1.name }
+        self.version = version
+        try Self.validateEntityIdentifiers(entityIDs, entities: entities, requiresCompleteMap: true)
+        persistedEntityIDs = entityIDs
+    }
+
+    package func reconciled(with storedEntityIDs: [String: Int]) throws -> Schema {
+        guard !storedEntityIDs.isEmpty else { return self }
+        try Self.validateEntityIdentifiers(storedEntityIDs, entities: entities, requiresCompleteMap: false)
+
+        var resolved = storedEntityIDs
+        let orderedEntities = Self.rootFirstEntities(entities)
+        let newEntities = orderedEntities.filter { resolved[$0.name] == nil }
+        var nextIdentifier: Int?
+        for (index, entity) in newEntities.enumerated() {
+            if let parentName = entity.superentityName, resolved[parentName] == nil {
+                throw SwiftDataError.migrationUnsupported(
+                    "New entity '\(entity.name)' has no stored or reconciled parent identifier.")
+            }
+            if nextIdentifier == nil {
+                let (firstIdentifier, overflow) = (storedEntityIDs.values.max() ?? 0).addingReportingOverflow(1)
+                guard !overflow else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Stored entity identifiers leave no appendable identifier space.")
+                }
+                nextIdentifier = firstIdentifier
+            }
+            guard let identifier = nextIdentifier else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored entity identifiers leave no appendable identifier space.")
+            }
+            resolved[entity.name] = identifier
+            let (followingIdentifier, overflow) = identifier.addingReportingOverflow(1)
+            guard !overflow || index == newEntities.count - 1 else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored entity identifiers leave no appendable identifier space.")
+            }
+            nextIdentifier = overflow ? nil : followingIdentifier
+        }
+        return try Schema(entities, version: version, entityIDs: resolved)
+    }
+
+    private static func validateEntityIdentifiers(
+        _ identifiers: [String: Int], entities: [Entity], requiresCompleteMap: Bool
+    ) throws {
+        let entityNames = Set(entities.map(\.name))
+        guard entityNames.count == entities.count,
+            (requiresCompleteMap
+                ? Set(identifiers.keys) == entityNames : Set(identifiers.keys).isSubset(of: entityNames)),
+            identifiers.values.allSatisfy({ $0 > 0 }),
+            Set(identifiers.values).count == identifiers.count
+        else {
+            throw SwiftDataError.migrationUnsupported("Persisted entity identifier map is invalid.")
+        }
+        let entitiesByName = Dictionary(uniqueKeysWithValues: entities.map { ($0.name, $0) })
+        for candidate in entities {
+            var current = candidate
+            var visited = Set<String>()
+            while let parentName = current.superentityName {
+                guard visited.insert(current.name).inserted,
+                    let parent = entitiesByName[parentName]
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Schema inheritance contains a missing parent or cycle for '\(candidate.name)'.")
+                }
+                current = parent
+            }
+        }
+    }
+
+    private static func rootFirstEntities(_ entities: [Entity]) -> [Entity] {
+        let orderedEntities = entities.sorted {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }
+        let childrenByParent = Dictionary(
+            grouping: orderedEntities.compactMap { entity -> (String, Entity)? in
+                guard let parent = entity.superentityName else { return nil }
+                return (parent, entity)
+            }, by: \.0
+        ).mapValues { pairs in
+            pairs.map(\.1).sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+        }
+        var result: [Entity] = []
+        var visited = Set<String>()
+        func append(_ entity: Entity) {
+            guard visited.insert(entity.name).inserted else { return }
+            result.append(entity)
+            for child in childrenByParent[entity.name] ?? [] { append(child) }
+        }
+        for root in orderedEntities where root.superentityName == nil { append(root) }
+        for entity in orderedEntities where !visited.contains(entity.name) { append(entity) }
+        return result
     }
 
     /// Finds an entity by its stable name.

@@ -298,6 +298,23 @@ package enum SQLCompiler {
                     $0.ownerEntityName == entity && $0.propertyName == property
                 })
             {
+                if relationship.queriesInverseToOne {
+                    guard let inverseOwnerRoot = relationship.inverseOwnerRootEntityName,
+                        Self.validIdentifier(inverseOwnerRoot),
+                        !relationship.inverseOwnerEntityIDs.isEmpty,
+                        Self.validIdentifier(relationship.foreignKeyColumnName)
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Inverse to-one relationship has incomplete foreign-key metadata")
+                    }
+                    let placeholders = Array(repeating: "?", count: relationship.inverseOwnerEntityIDs.count)
+                        .joined(separator: ", ")
+                    arguments.append(contentsOf: relationship.inverseOwnerEntityIDs.map { .int(Int64($0)) })
+                    return
+                        "(SELECT t1.Z_PK FROM Z\(inverseOwnerRoot.uppercased()) AS t1 "
+                        + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(tableAlias).Z_PK "
+                        + "AND t1.Z_ENT IN (\(placeholders)) ORDER BY t1.Z_PK ASC LIMIT 1)"
+                }
                 return "t0.Z\(relationship.foreignKeyColumnName.uppercased())"
             }
             guard path.count == 1 else {
@@ -334,11 +351,10 @@ package enum SQLCompiler {
                     let ownerRelationship = relationships.first(where: {
                         $0.ownerEntityName == collectionOwnerEntityName && $0.propertyName == hop
                     }),
-                    !ownerRelationship.isToMany,
-                    !ownerRelationship.queriesInverseToOne
+                    !ownerRelationship.isToMany
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Nested collection predicates require owning to-one relationships before the collection.")
+                        "Nested collection predicates require to-one relationships before the collection.")
                 }
                 collectionOwnerEntityName = ownerRelationship.destinationEntityName
             }
@@ -353,12 +369,61 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate(
                     "SequenceContainsWhere requires supported to-many relationship storage.")
             }
-            let ownerPrimaryKeySQL =
-                ownerPath.isEmpty
-                ? "\(tableAlias).Z_PK"
-                : try render(
-                    .keyPath(ownerPath), arguments: &arguments, entity: entity,
-                    relationships: relationships, tableAlias: tableAlias)
+            func renderOwnerPrimaryKey(
+                _ index: Int,
+                ownerEntityName: String,
+                ownerAlias: String
+            ) throws -> String {
+                guard index < ownerPath.count else { return "\(ownerAlias).Z_PK" }
+                guard
+                    let ownerRelationship = relationships.first(where: {
+                        $0.ownerEntityName == ownerEntityName && $0.propertyName == ownerPath[index]
+                    }),
+                    !ownerRelationship.isToMany,
+                    Self.validIdentifier(ownerRelationship.foreignKeyColumnName)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Nested collection predicates require resolved to-one owner hops.")
+                }
+                let alias = "osd_collection_owner_\(index + 1)"
+                let selected = try renderOwnerPrimaryKey(
+                    index + 1,
+                    ownerEntityName: ownerRelationship.destinationEntityName,
+                    ownerAlias: alias)
+                if ownerRelationship.queriesInverseToOne {
+                    guard let inverseOwnerRoot = ownerRelationship.inverseOwnerRootEntityName,
+                        Self.validIdentifier(inverseOwnerRoot),
+                        !ownerRelationship.inverseOwnerEntityIDs.isEmpty
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Nested inverse collection owner has incomplete metadata.")
+                    }
+                    let placeholders = Array(repeating: "?", count: ownerRelationship.inverseOwnerEntityIDs.count)
+                        .joined(separator: ", ")
+                    arguments.append(
+                        contentsOf: ownerRelationship.inverseOwnerEntityIDs.map { .int(Int64($0)) })
+                    return
+                        "(SELECT \(selected) FROM Z\(inverseOwnerRoot.uppercased()) AS \(alias) "
+                        + "WHERE \(alias).Z\(ownerRelationship.foreignKeyColumnName.uppercased()) = \(ownerAlias).Z_PK "
+                        + "AND \(alias).Z_ENT IN (\(placeholders)) ORDER BY \(alias).Z_PK ASC LIMIT 1)"
+                }
+                guard Self.validIdentifier(ownerRelationship.destinationRootEntityName),
+                    !ownerRelationship.destinationEntityIDs.isEmpty
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Nested collection owner has incomplete destination metadata.")
+                }
+                let placeholders = Array(repeating: "?", count: ownerRelationship.destinationEntityIDs.count)
+                    .joined(separator: ", ")
+                arguments.append(
+                    contentsOf: ownerRelationship.destinationEntityIDs.map { .int(Int64($0)) })
+                return
+                    "(SELECT \(selected) FROM Z\(ownerRelationship.destinationRootEntityName.uppercased()) AS \(alias) "
+                    + "WHERE \(alias).Z_PK = \(ownerAlias).Z\(ownerRelationship.foreignKeyColumnName.uppercased()) "
+                    + "AND \(alias).Z_ENT IN (\(placeholders)) LIMIT 1)"
+            }
+            let ownerPrimaryKeySQL = try renderOwnerPrimaryKey(
+                0, ownerEntityName: entity, ownerAlias: tableAlias)
             let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
                 .joined(separator: ", ")
             arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })

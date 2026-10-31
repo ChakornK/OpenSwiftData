@@ -52,7 +52,11 @@ package enum PredicateRuntimeTreeBuilder {
         ) throws -> (names: [String], entity: Schema.Entity, modelType: any PersistentModel.Type)? {
             switch node {
             case let .property(reference):
-                let components = reference.name.split(separator: ".").map(String.init)
+                var components = reference.name.split(separator: ".").map(String.init)
+                let scopePrefix = activeRelationshipName?.split(separator: ".").map(String.init) ?? []
+                if !scopePrefix.isEmpty, components.starts(with: scopePrefix) {
+                    components = Array(components.dropFirst(scopePrefix.count))
+                }
                 var currentEntity = ownerEntity
                 var currentModelType: (any PersistentModel.Type)?
                 for name in components {
@@ -251,7 +255,11 @@ package enum PredicateRuntimeTreeBuilder {
                 let previousPredicateRootType = activePredicateRootType
                 activeModelType = traversal.modelType
                 activeEntity = traversal.entity
-                activeRelationshipName = traversal.names.joined(separator: ".")
+                let previousPath = previousRelationshipName?.split(separator: ".").map(String.init) ?? []
+                let fullPath =
+                    traversal.names.starts(with: previousPath)
+                    ? traversal.names : previousPath + traversal.names
+                activeRelationshipName = fullPath.joined(separator: ".")
                 activePredicateRootType = traversal.modelType
                 let transformNode: RuntimePredicateNode
                 do {

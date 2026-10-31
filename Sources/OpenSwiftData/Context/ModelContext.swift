@@ -2066,13 +2066,13 @@ public final class ModelContext {
                         let relationship = containerStorage?.relationshipAdapterTable[
                             ObjectIdentifier(type(of: relationshipOwner))
                         ]?.first(where: { $0.name == ownerProperty && !$0.isToMany }),
-                        relationship.metadata != nil,
-                        let schema = containerStorage?.schema,
-                        schema.relationshipStorageMapping(
-                            modelEntityName: modelEntityName(of: relationshipOwner) ?? "",
-                            relationshipName: ownerProperty) != nil,
-                        let endpoint = relationship.read(relationshipOwner)?.first
+                        relationship.metadata != nil
                     else {
+                        ownerIsMissing = true
+                        break
+                    }
+                    let endpoints = try pendingRelationshipEndpoints(relationship, owner: relationshipOwner)
+                    guard let endpoint = endpoints.first else {
                         ownerIsMissing = true
                         break
                     }
@@ -2109,36 +2109,11 @@ public final class ModelContext {
                     "Pending predicate relationship '\(name)' has no typed adapter.")
             }
             if !adapter.isToMany {
-                guard let metadata = adapter.metadata else {
+                guard adapter.metadata != nil else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Pending to-one predicate relationship '\(name)' cannot be resolved.")
                 }
-                let isInverseView: Bool
-                if let inverseName = metadata.inverse,
-                    let schema = containerStorage?.schema,
-                    let inverse = schema.relationshipDeclaration(
-                        named: inverseName, onOrBelow: metadata.destination),
-                    !inverse.relationship.isToMany
-                {
-                    isInverseView =
-                        schema.relationshipStorageMapping(
-                            modelEntityName: modelEntityName(of: model) ?? "",
-                            relationshipName: name) == nil
-                } else {
-                    isInverseView = false
-                }
-                let endpoints: [any PersistentModel]
-                if isInverseView {
-                    guard let keyPath = type(of: model).schemaMetadata().first(where: { $0.name == name })?.keypath,
-                        let resolver = try relationshipResolver()
-                    else {
-                        throw SwiftDataError.unsupportedPredicate(
-                            "Pending inverse to-one predicate relationship '\(name)' cannot be resolved.")
-                    }
-                    endpoints = try adapter.endpoints(in: resolver.resolve(owner: model, keyPath: keyPath))
-                } else {
-                    endpoints = adapter.read(model) ?? []
-                }
+                let endpoints = try pendingRelationshipEndpoints(adapter, owner: model)
                 if let endpoint = endpoints.first {
                     let endpointValues = try runtimeValues(for: endpoint, selecting: properties)
                     for property in properties {
@@ -2234,6 +2209,30 @@ public final class ModelContext {
         return values
     }
 
+    private func pendingRelationshipEndpoints(
+        _ adapter: any AnyRelationshipAdapterBox,
+        owner: any PersistentModel
+    ) throws -> [any PersistentModel] {
+        guard !adapter.isToMany, let metadata = adapter.metadata,
+            let inverseName = metadata.inverse,
+            let schema = containerStorage?.schema,
+            let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: metadata.destination),
+            !inverse.relationship.isToMany,
+            schema.relationshipStorageMapping(
+                modelEntityName: modelEntityName(of: owner) ?? "",
+                relationshipName: adapter.name) == nil
+        else {
+            return adapter.read(owner) ?? []
+        }
+        guard let keyPath = type(of: owner).schemaMetadata().first(where: { $0.name == adapter.name })?.keypath,
+            let resolver = try relationshipResolver()
+        else {
+            throw SwiftDataError.unsupportedPredicate(
+                "Pending inverse to-one predicate relationship '\(adapter.name)' cannot be resolved.")
+        }
+        return try adapter.endpoints(in: resolver.resolve(owner: owner, keyPath: keyPath))
+    }
+
     private func runtimeValue(
         on model: any PersistentModel,
         path: [String],
@@ -2255,7 +2254,7 @@ public final class ModelContext {
             throw SwiftDataError.unsupportedPredicate(
                 "Nested predicate path '\(fullPath)' requires owning to-one relationships.")
         }
-        guard let endpoint = relationship.read(model)?.first else { return .null }
+        guard let endpoint = try pendingRelationshipEndpoints(relationship, owner: model).first else { return .null }
         return try runtimeValue(on: endpoint, path: Array(path.dropFirst()), fullPath: fullPath)
     }
 

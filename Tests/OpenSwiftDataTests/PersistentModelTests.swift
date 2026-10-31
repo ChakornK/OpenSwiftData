@@ -247,11 +247,27 @@ final class NestedInverseBranchFixture {
     var name: String
     var middle: NestedInverseMiddleFixture?
     @Relationship(inverse: nil) var leaf: NestedInverseLeafFixture?
+    @Relationship(inverse: nil) var items: [NestedInverseItemFixture]
 
-    init(name: String, middle: NestedInverseMiddleFixture?, leaf: NestedInverseLeafFixture?) {
+    init(
+        name: String,
+        middle: NestedInverseMiddleFixture?,
+        leaf: NestedInverseLeafFixture?,
+        items: [NestedInverseItemFixture] = []
+    ) {
         self.name = name
         self.middle = middle
         self.leaf = leaf
+        self.items = items
+    }
+}
+
+@Model
+final class NestedInverseItemFixture {
+    var title: String
+
+    init(title: String) {
+        self.title = title
     }
 }
 
@@ -2047,13 +2063,19 @@ final class PersistentModelTests: XCTestCase {
             NestedInverseMiddleFixture.self,
             NestedInverseBranchFixture.self,
             NestedInverseLeafFixture.self,
+            NestedInverseItemFixture.self,
             configurations: .sqliteMemory("nested-inverse-to-one-path"))
         let context = container.mainContext
         let leaf = NestedInverseLeafFixture(title: "selected")
-        let branch = NestedInverseBranchFixture(name: "branch", middle: nil, leaf: leaf)
+        let selectedItem = NestedInverseItemFixture(title: "collection-match")
+        let otherItem = NestedInverseItemFixture(title: "collection-other")
+        let branch = NestedInverseBranchFixture(
+            name: "branch", middle: nil, leaf: leaf, items: [selectedItem, otherItem])
         let middle = NestedInverseMiddleFixture(name: "middle", branch: nil)
         let root = NestedInverseRootFixture(name: "root", middle: nil)
         context.insert(leaf)
+        context.insert(selectedItem)
+        context.insert(otherItem)
         context.insert(branch)
         context.insert(middle)
         context.insert(root)
@@ -2089,6 +2111,35 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["root"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [root.persistentModelID])
+
+        let collectionNeedle = "collection-match"
+        let collectionDescriptor = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.contains(where: { $0.title == collectionNeedle })
+                    }
+                } ?? false
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(collectionDescriptor).map(\.name), ["root"])
+        XCTAssertEqual(try context.fetchCount(collectionDescriptor), 1)
+
+        let pendingItem = NestedInverseItemFixture(title: "pending-collection")
+        context.insert(pendingItem)
+        branch.items.append(pendingItem)
+        let pendingCollectionNeedle = "pending-collection"
+        let pendingCollectionDescriptor = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.contains(where: { $0.title == pendingCollectionNeedle })
+                    }
+                } ?? false
+            })
+        XCTAssertEqual(try context.fetch(pendingCollectionDescriptor).map(\.name), ["root"])
+        XCTAssertEqual(try context.fetchCount(pendingCollectionDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingCollectionDescriptor), [root.persistentModelID])
     }
 
     @MainActor

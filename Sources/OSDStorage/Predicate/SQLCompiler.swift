@@ -486,16 +486,20 @@ package enum SQLCompiler {
             let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
                 .joined(separator: ", ")
             arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+            let nestedAliasIndex = nextAliasIndex(after: tableAlias)
+            let destinationAlias = "t\(nestedAliasIndex)"
+            let joinAlias = "j\(nestedAliasIndex)"
             let bodySQL = try render(
                 body, arguments: &arguments, entity: relationship.destinationEntityName,
-                relationships: relationships, tableAlias: "t1")
+                relationships: relationships, tableAlias: destinationAlias)
             if relationship.storesForeignKeyOnDestination {
                 guard Self.validIdentifier(relationship.foreignKeyColumnName) else {
                     throw SwiftDataError.unsupportedPredicate("Invalid inverse relationship foreign-key column")
                 }
-                return "EXISTS (SELECT 1 FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
-                    + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
-                    + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
+                return
+                    "EXISTS (SELECT 1 FROM Z\(relationship.destinationRootEntityName.uppercased()) AS \(destinationAlias) "
+                    + "WHERE \(destinationAlias).Z\(relationship.foreignKeyColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
+                    + "AND \(destinationAlias).Z_ENT IN (\(placeholders)) AND \(bodySQL))"
             }
             guard let joinTable = relationship.joinTableName, Self.validIdentifier(joinTable),
                 Self.validIdentifier(relationship.ownerJoinColumnName),
@@ -504,11 +508,11 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate(
                     "SequenceContainsWhere requires a supported to-many relationship join table.")
             }
-            return "EXISTS (SELECT 1 FROM \(joinTable.uppercased()) AS j "
-                + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
-                + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
-                + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
-                + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
+            return "EXISTS (SELECT 1 FROM \(joinTable.uppercased()) AS \(joinAlias) "
+                + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS \(destinationAlias) "
+                + "ON \(destinationAlias).Z_PK = \(joinAlias).\(relationship.destinationJoinColumnName.uppercased()) "
+                + "WHERE \(joinAlias).\(relationship.ownerJoinColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
+                + "AND \(destinationAlias).Z_ENT IN (\(placeholders)) AND \(bodySQL))"
         case let .relationshipCount(name):
             guard
                 let relationship = relationships.first(where: {
@@ -609,6 +613,11 @@ package enum SQLCompiler {
             && value.utf8.allSatisfy { byte in
                 (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
             }
+    }
+
+    private static func nextAliasIndex(after alias: String) -> Int {
+        guard alias.first == "t", let index = Int(alias.dropFirst()) else { return 1 }
+        return index + 1
     }
 
     private struct Plan: Sendable {

@@ -423,6 +423,18 @@ final class OptionalToOneDateOwnerFixture {
 }
 
 @Model
+final class CollectionRangeElementFixture {
+    var rank: Int
+    init(rank: Int) { self.rank = rank }
+}
+
+@Model
+final class CollectionRangeOwnerFixture {
+    @Relationship(inverse: nil) var elements: [CollectionRangeElementFixture]
+    init(elements: [CollectionRangeElementFixture]) { self.elements = elements }
+}
+
+@Model
 final class PlainHierarchyTargetSiblingFixture: PlainHierarchyTargetBaseFixture {
     var label: String
     init(name: String, label: String) {
@@ -1642,6 +1654,65 @@ final class PersistentModelTests: XCTestCase {
         let pendingMatches = try context.fetch(pendingDescriptor)
         XCTAssertEqual(pendingMatches.map(\.name), ["selected", "other"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testToManyPredicateSupportsIntegerRangeOnElement() throws {
+        let container = try ModelContainer(
+            for: CollectionRangeOwnerFixture.self,
+            CollectionRangeElementFixture.self,
+            configurations: .sqliteMemory("to-many-range-predicate"))
+        let context = container.mainContext
+        let inRangeElement = CollectionRangeElementFixture(rank: 6)
+        let lowerBoundElement = CollectionRangeElementFixture(rank: 4)
+        let upperBoundElement = CollectionRangeElementFixture(rank: 10)
+        let outsideElement = CollectionRangeElementFixture(rank: 12)
+        context.insert(inRangeElement)
+        context.insert(lowerBoundElement)
+        context.insert(upperBoundElement)
+        context.insert(outsideElement)
+        let inRangeOwner = CollectionRangeOwnerFixture(elements: [inRangeElement])
+        context.insert(inRangeOwner)
+        context.insert(CollectionRangeOwnerFixture(elements: [lowerBoundElement]))
+        context.insert(CollectionRangeOwnerFixture(elements: [upperBoundElement]))
+        context.insert(CollectionRangeOwnerFixture(elements: [outsideElement]))
+        context.insert(CollectionRangeOwnerFixture(elements: []))
+        try context.save()
+
+        let descriptor = FetchDescriptor<CollectionRangeOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.elements.contains(where: { element in (4..<10).contains(element.rank) })
+            },
+            includePendingChanges: false)
+        let storedMatches = try context.fetch(descriptor)
+        XCTAssertEqual(storedMatches.count, 2)
+        XCTAssertEqual(
+            Set(storedMatches.map(\.persistentModelID)),
+            Set([
+                inRangeOwner.persistentModelID,
+                try XCTUnwrap(
+                    try context.fetch(FetchDescriptor<CollectionRangeOwnerFixture>())
+                        .first(where: { $0.elements.first === lowerBoundElement })
+                ).persistentModelID,
+            ]))
+        XCTAssertEqual(storedMatches.first?.persistentModelID, inRangeOwner.persistentModelID)
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), storedMatches.map(\.persistentModelID))
+
+        inRangeElement.rank = 12
+        XCTAssertTrue(inRangeElement.hasChanges)
+        XCTAssertTrue(context.hasChanges)
+        let pendingDescriptor = FetchDescriptor<CollectionRangeOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.elements.contains(where: { element in (4..<10).contains(element.rank) })
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        let lowerBoundOwner = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<CollectionRangeOwnerFixture>())
+                .first(where: { $0.elements.first === lowerBoundElement }))
+        XCTAssertEqual(pendingMatches.map(\.persistentModelID), [lowerBoundOwner.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
     }
 

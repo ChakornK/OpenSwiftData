@@ -2874,6 +2874,9 @@ final class PersistentModelTests: XCTestCase {
             })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching-owner", "other-owner"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matchingOwner.persistentModelID, otherOwner.persistentModelID]))
 
         let depthThreeDescriptor = FetchDescriptor<QuantifierOwnerFixture>(
             predicate: #Predicate {

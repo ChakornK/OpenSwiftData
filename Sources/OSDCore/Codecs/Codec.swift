@@ -56,7 +56,10 @@ internal enum Codec {
         if let value = value as? Float { return .double(Double(value)) }
         if let value = value as? Double { return .double(value) }
         if let value = value as? URL { return .text(value.absoluteString) }
-        if let value = value as? Decimal { return .text(value.description) }
+        if let value = value as? Decimal {
+            guard !value.isNaN else { throw CodecError.invalidRepresentation }
+            return .text(value.description)
+        }
         if let value = value as? String { return .text(value) }
         if let value = value as? Data { return .blob(Array(value)) }
         if let value = value as? Int { return .int(Int64(value)) }

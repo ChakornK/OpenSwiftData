@@ -42,6 +42,11 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(try PersistentValue.decode(Decimal.self, from: stored), decimal)
     }
 
+    func testDecimalNaNIsRejectedByPersistenceAndPredicateCodecs() {
+        XCTAssertThrowsError(try PersistentValue.encode(Decimal.nan))
+        XCTAssertThrowsError(try StoredValue(predicateScalar: Decimal.nan))
+    }
+
     func testURLUsesAbsoluteString() throws {
         let url = URL(string: "https://example.com/a?b=c")!
         let stored = try PersistentValue.encode(url)

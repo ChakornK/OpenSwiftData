@@ -37,6 +37,14 @@ package enum PredicatePlanBuilder {
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .comparison(runtimeOperator(op), lhs, rhs)
         case let .decimalComparison(op, lhs, rhs):
+            if (op == .equal || op == .notEqual), case .value(.null) = rhs {
+                guard let lhsPlan = build(lhs) else { return nil }
+                return .isNull(lhsPlan, negated: op == .notEqual)
+            }
+            if (op == .equal || op == .notEqual), case .value(.null) = lhs {
+                guard let rhsPlan = build(rhs) else { return nil }
+                return .isNull(rhsPlan, negated: op == .notEqual)
+            }
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .decimalComparison(runtimeOperator(op), lhs, rhs)
         case let .arithmetic(op, lhs, rhs):
@@ -158,6 +166,16 @@ package enum SQLCompiler {
                 rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
             return "(\(lhsSQL) \(comparisonSymbol(op)) \(rhsSQL))"
         case let .decimalComparison(op, lhs, rhs):
+            if case .value(.null) = rhs, op == .equal || op == .notEqual {
+                let lhsSQL = try render(
+                    lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+                return "(\(lhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
+            }
+            if case .value(.null) = lhs, op == .equal || op == .notEqual {
+                let rhsSQL = try render(
+                    rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+                return "(\(rhsSQL) IS \(op == .notEqual ? "NOT " : "")NULL)"
+            }
             let lhsSQL = try render(
                 lhs, arguments: &arguments, entity: entity, relationships: relationships,
                 tableAlias: tableAlias)

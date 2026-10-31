@@ -1699,12 +1699,15 @@ final class PersistentModelTests: XCTestCase {
         let target = OptionalToOneDecimalTargetFixture(amount: Decimal(string: "10")!)
         let negativeOne = OptionalToOneDecimalTargetFixture(amount: Decimal(string: "-1")!)
         let negativeTwo = OptionalToOneDecimalTargetFixture(amount: Decimal(string: "-2")!)
+        let equivalentDecimal = OptionalToOneDecimalTargetFixture(amount: Decimal(string: "1.00")!)
         context.insert(target)
         context.insert(negativeOne)
         context.insert(negativeTwo)
+        context.insert(equivalentDecimal)
         context.insert(OptionalToOneDecimalOwnerFixture(target: target))
         context.insert(OptionalToOneDecimalOwnerFixture(target: negativeOne))
         context.insert(OptionalToOneDecimalOwnerFixture(target: negativeTwo))
+        context.insert(OptionalToOneDecimalOwnerFixture(target: equivalentDecimal))
         context.insert(OptionalToOneDecimalOwnerFixture(target: nil))
         try context.save()
 
@@ -1713,7 +1716,7 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(
             try context.fetch(decimalSort).map(\.amount),
-            [Decimal(string: "-2")!, Decimal(string: "-1")!, Decimal(string: "10")!])
+            [Decimal(string: "-2")!, Decimal(string: "-1")!, Decimal(string: "1.00")!, Decimal(string: "10")!])
 
         let threshold = Decimal(string: "9")!
         let storedDescriptor = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
@@ -1731,16 +1734,21 @@ final class PersistentModelTests: XCTestCase {
                     $0.target?.amount == Decimal(string: "-1")!
                 }
             ).persistentModelID,
+            try XCTUnwrap(
+                try context.fetch(FetchDescriptor<OptionalToOneDecimalOwnerFixture>()).first {
+                    $0.target?.amount == Decimal(string: "1.00")!
+                }
+            ).persistentModelID,
         ]
         XCTAssertEqual(Set(storedMatches.map(\.persistentModelID)), expectedStoredIDs)
-        XCTAssertEqual(try context.fetchCount(storedDescriptor), 2)
+        XCTAssertEqual(try context.fetchCount(storedDescriptor), 3)
         XCTAssertEqual(try context.fetchIdentifiers(storedDescriptor), storedMatches.map(\.persistentModelID))
 
         negativeOne.amount = Decimal(string: "-3")!
         let pendingDecimalSort = FetchDescriptor<OptionalToOneDecimalTargetFixture>(sortBy: [SortDescriptor(\.amount)])
         XCTAssertEqual(
             try context.fetch(pendingDecimalSort).map(\.amount),
-            [Decimal(string: "-3")!, Decimal(string: "-2")!, Decimal(string: "10")!])
+            [Decimal(string: "-3")!, Decimal(string: "-2")!, Decimal(string: "1.00")!, Decimal(string: "10")!])
         let pendingThreshold = Decimal(string: "-2")!
         let pendingDescriptor = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
             predicate: #Predicate { $0.target.flatMap { $0.amount < pendingThreshold } ?? false })
@@ -1758,6 +1766,15 @@ final class PersistentModelTests: XCTestCase {
         let coalescedPending = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
             predicate: #Predicate { ($0.target?.amount ?? zero) < smallThreshold })
         XCTAssertEqual(try context.fetch(coalescedPending).count, 3)
+
+        let one = Decimal(string: "1.0")!
+        let equivalentDescriptor = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
+            predicate: #Predicate { $0.target?.amount == one },
+            includePendingChanges: false)
+        let equivalentMatches = try context.fetch(equivalentDescriptor)
+        XCTAssertEqual(equivalentMatches.count, 1)
+        XCTAssertEqual(try context.fetchCount(equivalentDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(equivalentDescriptor), equivalentMatches.map(\.persistentModelID))
     }
 
     @MainActor

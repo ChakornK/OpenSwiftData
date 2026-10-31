@@ -74,10 +74,10 @@ package enum PredicateIRBuilder {
                 let op = try comparisonOperator(operatorNode)
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                if isOrderingOperator(op),
-                    (referencesDecimal(lhs, attributeTypes: attributeTypes)
-                        || referencesDecimal(rhs, attributeTypes: attributeTypes))
+                if referencesDecimal(lhs, attributeTypes: attributeTypes)
+                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
                 {
+                    try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
                     return .decimalComparison(op, lhs, rhs)
                 }
                 try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
@@ -100,11 +100,21 @@ package enum PredicateIRBuilder {
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
                 try validateFlattenedBlobComparison(.equal, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
+                if referencesDecimal(lhs, attributeTypes: attributeTypes)
+                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
+                {
+                    return .decimalComparison(.equal, lhs, rhs)
+                }
                 return .comparison(.equal, lhs, rhs)
             case "NotEqual":
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
                 try validateFlattenedBlobComparison(.notEqual, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
+                if referencesDecimal(lhs, attributeTypes: attributeTypes)
+                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
+                {
+                    return .decimalComparison(.notEqual, lhs, rhs)
+                }
                 return .comparison(.notEqual, lhs, rhs)
             case "NilLiteral":
                 return .value(.null)
@@ -321,10 +331,6 @@ package enum PredicateIRBuilder {
             throw SwiftDataError.unsupportedPredicate(
                 "Ordering comparisons on flattened BLOB components are unsupported")
         }
-    }
-
-    private static func isOrderingOperator(_ op: PredicateIR.ComparisonOperator) -> Bool {
-        op != .equal && op != .notEqual
     }
 
     private static func referencesDecimal(_ ir: PredicateIR, attributeTypes: [String: String]) -> Bool {

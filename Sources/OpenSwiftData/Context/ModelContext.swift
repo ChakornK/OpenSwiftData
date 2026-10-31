@@ -924,7 +924,14 @@ public final class ModelContext {
         var relationships: [String: [any PersistentModel]] = [:]
         for relationship in entity.relationships {
             var endpoints: [any PersistentModel] = []
-            let relatedIdentifiers = snapshot.relationships[relationship.name] ?? []
+            let suppliedIdentifiers = snapshot.relationships[relationship.name] ?? []
+            let relatedIdentifiers: [PersistentIdentifier]
+            if relationship.isToMany {
+                var seen = Set<PersistentIdentifier>()
+                relatedIdentifiers = suppliedIdentifiers.filter { seen.insert($0).inserted }
+            } else {
+                relatedIdentifiers = suppliedIdentifiers
+            }
             guard relationship.isToMany || relatedIdentifiers.count <= 1 else {
                 throw SwiftDataError.unsupportedStore(
                     "DataStore returned multiple targets for to-one relationship '\(entity.name).\(relationship.name)'."

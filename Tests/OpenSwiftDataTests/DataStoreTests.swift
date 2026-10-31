@@ -335,7 +335,11 @@ private struct MultipleTargetsForToManyDataStore: DataStore {
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomDataStoreCollectionOwner",
                     values: ["name": .text("owner")],
-                    relationships: ["destinations": [firstTargetIdentifier, secondTargetIdentifier]])
+                    relationships: [
+                        "destinations": [
+                            firstTargetIdentifier, firstTargetIdentifier, secondTargetIdentifier,
+                        ]
+                    ])
             ])
     }
 
@@ -757,7 +761,16 @@ final class DataStoreTests: XCTestCase {
 
         let owner = try XCTUnwrap(
             container.mainContext.fetch(FetchDescriptor<CustomDataStoreCollectionOwner>()).first)
-        XCTAssertEqual(owner.destinations.map(\.title), ["target", "target"])
+        XCTAssertEqual(
+            owner.destinations.map(\.persistentModelID),
+            [
+                PersistentIdentifier(
+                    storeIdentifier: "custom.store.multiple-to-many-targets",
+                    entityName: "CustomDataStoreCollectionDestination", primaryKey: 2),
+                PersistentIdentifier(
+                    storeIdentifier: "custom.store.multiple-to-many-targets",
+                    entityName: "CustomDataStoreCollectionDestination", primaryKey: 3),
+            ])
     }
 
     @MainActor

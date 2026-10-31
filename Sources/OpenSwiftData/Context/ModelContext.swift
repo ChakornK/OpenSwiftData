@@ -1798,9 +1798,16 @@ public final class ModelContext {
                 let destination = schema.entity(forName: relationship.destination)
             else { return nil }
             if relationship.isToMany {
-                guard relationship.inverse == nil,
+                let inverseIsToMany =
+                    relationship.inverse.flatMap { inverseName in
+                        schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)?
+                            .relationship
+                            .isToMany
+                    } ?? true
+                guard inverseIsToMany,
                     let joinTable = joinTableName(for: entity, relationship)
                 else { return nil }
+                let relationshipIsSideAOwner = joinSideAOwner(entity, relationship)
                 return RuntimePredicateRelationship(
                     ownerEntityName: entity.name,
                     propertyName: relationship.name,
@@ -1809,7 +1816,9 @@ public final class ModelContext {
                     foreignKeyColumnName: "",
                     destinationEntityIDs: descendantEntityIDs(for: destination),
                     isToMany: true,
-                    joinTableName: joinTable)
+                    joinTableName: joinTable,
+                    ownerJoinColumnName: relationshipIsSideAOwner ? "Z_A" : "Z_B",
+                    destinationJoinColumnName: relationshipIsSideAOwner ? "Z_B" : "Z_A")
             }
             guard isToOneStorageOwner(entity, relationship),
                 let mapping = schema.relationshipStorageMapping(
@@ -1962,7 +1971,57 @@ public final class ModelContext {
                 throw SwiftDataError.unsupportedPredicate(
                     "Pending predicate relationship '\(name)' is not a to-many relationship.")
             }
-            let endpoints = adapter.read(model) ?? []
+            var endpoints = adapter.read(model) ?? []
+            if let metadata = adapter.metadata,
+                let inverseName = metadata.inverse,
+                let schema = containerStorage?.schema,
+                let destination = schema.entity(forName: metadata.destination),
+                schema.relationshipDeclaration(named: inverseName, onOrBelow: destination.name)?.relationship.isToMany
+                    == true
+            {
+                if let resolver = try relationshipResolver(),
+                    let property = type(of: model).schemaMetadata().first(where: { $0.name == name }),
+                    let keyPath = property.keypath
+                {
+                    let resolvedValue = try resolver.resolve(owner: model, keyPath: keyPath)
+                    endpoints = try adapter.endpoints(in: resolvedValue)
+                }
+                var endpointModels = endpoints.reduce(into: [PersistentIdentifier: any PersistentModel]()) {
+                    $0[$1.persistentModelID] = $1
+                }
+                let destinationIDs = Set(descendantEntityIDs(for: destination))
+                for pendingOwner in state.insertedModels + state.changedModels {
+                    guard let pendingEntityName = modelEntityName(of: pendingOwner),
+                        let pendingEntityID = schema.entityIDsByName[pendingEntityName],
+                        destinationIDs.contains(pendingEntityID),
+                        let inverseAdapter = relationshipAdapter(for: pendingOwner, property: inverseName)
+                    else { continue }
+                    let isRelated = (inverseAdapter.read(pendingOwner) ?? []).contains { $0 === model }
+                    let identifier = pendingOwner.persistentModelID
+                    if isRelated {
+                        endpointModels[identifier] = pendingOwner
+                    } else {
+                        endpointModels.removeValue(forKey: identifier)
+                    }
+                }
+                let ownerID = model.persistentModelID
+                for event in state.relationshipMutations
+                where event.property == inverseName
+                    && event.relationship.inverse == name
+                {
+                    let containsOwner = event.newEndpointIDs.contains(ownerID)
+                    let previouslyContainedOwner = event.oldEndpointIDs.contains(ownerID)
+                    let identifier = event.owner.persistentModelID
+                    if containsOwner {
+                        endpointModels[identifier] = event.owner
+                    } else if previouslyContainedOwner {
+                        endpointModels.removeValue(forKey: identifier)
+                    }
+                }
+                let deleted = Set(state.deletedModels.map(\.persistentModelID))
+                for identifier in deleted { endpointModels.removeValue(forKey: identifier) }
+                endpoints = Array(endpointModels.values)
+            }
             relationshipValues[name] = try endpoints.map { endpoint in
                 try runtimeValues(for: endpoint, selecting: properties)
             }

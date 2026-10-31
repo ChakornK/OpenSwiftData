@@ -1750,6 +1750,69 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateTraversesInverseManyToManyCollection() throws {
+        let container = try ModelContainer(
+            for: InheritedManyToManyTagFixture.self,
+            InheritedManyToManyChildFixture.self,
+            configurations: .sqliteMemory("inverse-many-to-many-predicate"))
+        let context = container.mainContext
+        let matchingTag = InheritedManyToManyTagFixture(title: "selected")
+        let otherTag = InheritedManyToManyTagFixture(title: "other")
+        let selectedOwner = InheritedManyToManyChildFixture(name: "selected-owner", tags: [matchingTag])
+        let otherOwner = InheritedManyToManyChildFixture(name: "other-owner", tags: [otherTag])
+        context.insert(matchingTag)
+        context.insert(otherTag)
+        context.insert(selectedOwner)
+        context.insert(otherOwner)
+        try context.save()
+
+        let selectedName = "selected-owner"
+        let storedDescriptor = FetchDescriptor<InheritedManyToManyTagFixture>(
+            predicate: #Predicate { tag in
+                tag.owners.contains(where: { owner in owner.name == selectedName })
+            },
+            includePendingChanges: false)
+        let storedMatches = try context.fetch(storedDescriptor)
+        XCTAssertEqual(storedMatches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(storedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(storedDescriptor), storedMatches.map(\.persistentModelID))
+
+        selectedOwner.name = "renamed-owner"
+        let renamedName = "renamed-owner"
+        let renamedDescriptor = FetchDescriptor<InheritedManyToManyTagFixture>(
+            predicate: #Predicate { tag in
+                tag.owners.contains(where: { owner in owner.name == renamedName })
+            })
+        let renamedMatches = try context.fetch(renamedDescriptor)
+        XCTAssertEqual(renamedMatches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(renamedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(renamedDescriptor), renamedMatches.map(\.persistentModelID))
+
+        let pendingOwner = InheritedManyToManyChildFixture(name: "pending-owner", tags: [matchingTag])
+        context.insert(pendingOwner)
+        let pendingName = "pending-owner"
+        let pendingDescriptor = FetchDescriptor<InheritedManyToManyTagFixture>(
+            predicate: #Predicate { tag in
+                tag.owners.contains(where: { owner in owner.name == pendingName })
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+
+        matchingTag.owners = [otherOwner]
+        XCTAssertEqual(matchingTag.owners.map(\.name), ["other-owner"])
+        let removedName = "renamed-owner"
+        let removedDescriptor = FetchDescriptor<InheritedManyToManyTagFixture>(
+            predicate: #Predicate { tag in
+                tag.owners.contains(where: { owner in owner.name == removedName })
+            })
+        XCTAssertTrue(try context.fetch(removedDescriptor).isEmpty)
+        XCTAssertEqual(try context.fetchCount(removedDescriptor), 0)
+        XCTAssertTrue(try context.fetchIdentifiers(removedDescriptor).isEmpty)
+    }
+
+    @MainActor
     func testPredicateMatchesInheritedNoInverseToManyRelationship() throws {
         let container = try ModelContainer(
             for: InheritedToManyChildFixture.self,

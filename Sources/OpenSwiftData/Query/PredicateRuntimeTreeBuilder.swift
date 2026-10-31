@@ -115,8 +115,9 @@ package enum PredicateRuntimeTreeBuilder {
                     capturePathRewrites: capturePathRewrites)
                 guard case let .property(sequenceProperty) = sequenceNode,
                     let relationship = activeEntity.relationships.first(where: {
-                        $0.name == sequenceProperty.name && $0.isToMany && $0.inverse == nil
+                        $0.name == sequenceProperty.name && $0.isToMany
                     }),
+                    supportsCollectionPredicate(relationship, schema: schema),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {
@@ -361,6 +362,12 @@ package enum PredicateRuntimeTreeBuilder {
             ?? ownerEntity.name
         let inverseOwnerName = "\(inverse.entityName).\(inverse.relationship.name)"
         return ownerName.utf8.lexicographicallyPrecedes(inverseOwnerName.utf8)
+    }
+
+    private static func supportsCollectionPredicate(_ relationship: Schema.Relationship, schema: Schema) -> Bool {
+        guard let inverseName = relationship.inverse else { return true }
+        return schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)?.relationship
+            .isToMany == true
     }
 
     private static func propertyReference(

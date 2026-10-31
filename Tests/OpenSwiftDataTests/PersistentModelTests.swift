@@ -423,6 +423,18 @@ final class OptionalToOneDateOwnerFixture {
 }
 
 @Model
+final class OptionalToOneDecimalTargetFixture {
+    var amount: Decimal
+    init(amount: Decimal) { self.amount = amount }
+}
+
+@Model
+final class OptionalToOneDecimalOwnerFixture {
+    @Relationship(inverse: nil) var target: OptionalToOneDecimalTargetFixture?
+    init(target: OptionalToOneDecimalTargetFixture?) { self.target = target }
+}
+
+@Model
 final class CollectionRangeElementFixture {
     var rank: Int
     init(rank: Int) { self.rank = rank }
@@ -1675,6 +1687,54 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(pendingMatches.map(\.name), ["selected", "other"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testOptionalToOneDecimalOrderingFailsClosedForStoredAndPendingFetches() throws {
+        let container = try ModelContainer(
+            for: OptionalToOneDecimalOwnerFixture.self,
+            OptionalToOneDecimalTargetFixture.self,
+            configurations: .sqliteMemory("optional-to-one-decimal-ordering"))
+        let context = container.mainContext
+        let target = OptionalToOneDecimalTargetFixture(amount: Decimal(string: "10")!)
+        context.insert(target)
+        context.insert(OptionalToOneDecimalOwnerFixture(target: target))
+        try context.save()
+
+        let threshold = Decimal(string: "9")!
+        let storedDescriptor = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
+            predicate: #Predicate { $0.target.flatMap { $0.amount < threshold } ?? false },
+            includePendingChanges: false)
+        XCTAssertThrowsError(try context.fetch(storedDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+
+        let pendingDescriptor = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
+            predicate: #Predicate { $0.target.flatMap { $0.amount < threshold } ?? false })
+        XCTAssertThrowsError(try context.fetch(pendingDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+
+        let zero = Decimal.zero
+        let coalescedStored = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
+            predicate: #Predicate { ($0.target?.amount ?? zero) < threshold },
+            includePendingChanges: false)
+        XCTAssertThrowsError(try context.fetch(coalescedStored)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+        let coalescedPending = FetchDescriptor<OptionalToOneDecimalOwnerFixture>(
+            predicate: #Predicate { ($0.target?.amount ?? zero) < threshold })
+        XCTAssertThrowsError(try context.fetch(coalescedPending)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
     }
 
     @MainActor

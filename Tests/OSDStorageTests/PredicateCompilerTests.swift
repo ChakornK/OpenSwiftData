@@ -122,6 +122,42 @@ final class PredicateCompilerTests: XCTestCase {
                 return XCTFail("Expected unsupportedPredicate, got \(error)")
             }
         }
+
+        let coalesced = PredicateMirrorWalker.Node.expression(
+            name: "Comparison",
+            children: [
+                ("op", .capture(typeName: "ComparisonOperator", description: "lessThan")),
+                (
+                    "lhs",
+                    .expression(
+                        name: "NilCoalesce",
+                        children: [
+                            ("lhs", .propertyReference("target.amount")),
+                            ("rhs", .typedValue(.text("0"))),
+                        ])
+                ),
+                ("rhs", .typedValue(.text("10"))),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(coalesced, attributeTypes: ["target.amount": "Foundation.Decimal"]))
+    }
+
+    func testDecimalOrderingPredicateFailsClosed() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Comparison",
+            children: [
+                ("op", .capture(typeName: "ComparisonOperator", description: "lessThan")),
+                ("lhs", .propertyReference("target.amount")),
+                ("rhs", .typedValue(.text("10"))),
+            ])
+
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["target.amount": "Decimal"])
+        ) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
     }
 
     func testCompilesComparisonAndRebindsStructuralCache() throws {

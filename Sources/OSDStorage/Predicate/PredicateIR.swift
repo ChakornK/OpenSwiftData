@@ -73,6 +73,7 @@ package enum PredicateIRBuilder {
                 let op = try comparisonOperator(operatorNode)
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                try validateDecimalOrdering(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
                 try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
                 return .comparison(
                     op, lhs, rhs)
@@ -311,6 +312,45 @@ package enum PredicateIRBuilder {
         if referencesBlob, op != .equal, op != .notEqual {
             throw SwiftDataError.unsupportedPredicate(
                 "Ordering comparisons on flattened BLOB components are unsupported")
+        }
+    }
+
+    private static func validateDecimalOrdering(
+        _ op: PredicateIR.ComparisonOperator,
+        lhs: PredicateIR,
+        rhs: PredicateIR,
+        attributeTypes: [String: String]
+    ) throws {
+        guard op != .equal, op != .notEqual else { return }
+        if referencesDecimal(lhs, attributeTypes: attributeTypes)
+            || referencesDecimal(rhs, attributeTypes: attributeTypes)
+        {
+            throw SwiftDataError.unsupportedPredicate(
+                "Ordering comparisons on Decimal attributes are unsupported until numeric SQL semantics are available.")
+        }
+    }
+
+    private static func referencesDecimal(_ ir: PredicateIR, attributeTypes: [String: String]) -> Bool {
+        switch ir {
+        case let .keyPath(path):
+            guard let type = attributeTypes[path.joined(separator: ".")] else { return false }
+            let unwrapped = type.hasSuffix("?") ? String(type.dropLast()) : type
+            return unwrapped == "Decimal" || unwrapped == "Foundation.Decimal"
+        case let .comparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .nilCoalesce(lhs, rhs),
+            let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
+            let .stringStartsWith(lhs, rhs), let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
+            return referencesDecimal(lhs, attributeTypes: attributeTypes)
+                || referencesDecimal(rhs, attributeTypes: attributeTypes)
+        case let .conditional(test, trueBranch, falseBranch):
+            return referencesDecimal(test, attributeTypes: attributeTypes)
+                || referencesDecimal(trueBranch, attributeTypes: attributeTypes)
+                || referencesDecimal(falseBranch, attributeTypes: attributeTypes)
+        case let .negation(value):
+            return referencesDecimal(value, attributeTypes: attributeTypes)
+        case let .relationshipContains(_, body):
+            return referencesDecimal(body, attributeTypes: attributeTypes)
+        case .sequenceContains, .value:
+            return false
         }
     }
 

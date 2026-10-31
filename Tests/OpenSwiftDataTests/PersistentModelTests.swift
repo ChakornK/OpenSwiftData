@@ -2488,6 +2488,13 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["two"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
 
+        let minimumCount = 2
+        let minimumDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.count >= minimumCount },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(minimumDescriptor).map(\.name), ["two"])
+        XCTAssertEqual(try context.fetchCount(minimumDescriptor), 1)
+
         one.items.append(second)
         let pendingDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
             predicate: #Predicate { $0.items.count == expectedCount })

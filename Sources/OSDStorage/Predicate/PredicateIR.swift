@@ -121,15 +121,15 @@ package enum PredicateIRBuilder {
                 guard
                     case let .keyPath(relationshipPath) = try field(
                         "wrapped", from: fields, attributeTypes: attributeTypes),
-                    case let .keyPath(propertyPath) = try field(
-                        "transform", from: fields, attributeTypes: attributeTypes),
-                    relationshipPath.count == 1,
-                    propertyPath.count == 1
+                    relationshipPath.count == 1
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Optional relationship predicates support one direct to-one scalar traversal.")
                 }
-                return .keyPath(relationshipPath + propertyPath)
+                return try prefixRelationshipPath(
+                    field("transform", from: fields, attributeTypes: attributeTypes),
+                    relationship: relationshipPath[0],
+                    attributeTypes: attributeTypes)
             case "Conditional":
                 return .conditional(
                     try field("test", from: fields, attributeTypes: attributeTypes),
@@ -142,7 +142,7 @@ package enum PredicateIRBuilder {
             case "CollectionContainsCollection":
                 let base = try field("base", from: fields, attributeTypes: attributeTypes)
                 guard case let .keyPath(path) = base, path.count == 1,
-                    isStringAttribute(attributeTypes[path[0]])
+                    hasStringType(for: path, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate("Only direct persisted string contains is supported")
                 }
@@ -150,7 +150,7 @@ package enum PredicateIRBuilder {
             case "SequenceStartsWith":
                 let base = try field("base", from: fields, attributeTypes: attributeTypes)
                 guard case let .keyPath(path) = base, path.count == 1,
-                    isStringAttribute(attributeTypes[path[0]])
+                    hasStringType(for: path, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate("Only direct persisted string prefixes are supported")
                 }
@@ -158,7 +158,7 @@ package enum PredicateIRBuilder {
             case "RangeExpressionContains":
                 let element = try field("element", from: fields, attributeTypes: attributeTypes)
                 guard case let .keyPath(path) = element, path.count == 1,
-                    isIntegerAttribute(attributeTypes[path[0]]),
+                    hasIntegerType(for: path, attributeTypes: attributeTypes),
                     case let .expression(rangeName, rangeChildren) = fields["range"]
                 else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -200,6 +200,88 @@ package enum PredicateIRBuilder {
                 throw SwiftDataError.unsupportedPredicate(name)
             }
         }
+    }
+
+    private static func prefixRelationshipPath(
+        _ ir: PredicateIR,
+        relationship: String,
+        attributeTypes: [String: String]
+    ) throws -> PredicateIR {
+        switch ir {
+        case let .keyPath(path):
+            guard path.count == 1,
+                let property = path.first,
+                isSupportedElementScalar(attributeTypes["\(relationship).\(property)"])
+            else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Optional relationship predicates support one direct scalar destination property.")
+            }
+            return .keyPath([relationship, property])
+        case let .value(value):
+            return .value(value)
+        case let .comparison(op, lhs, rhs):
+            return .comparison(
+                op,
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .arithmetic(op, lhs, rhs):
+            return .arithmetic(
+                op,
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .nilCoalesce(lhs, rhs):
+            return .nilCoalesce(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .conditional(test, trueBranch, falseBranch):
+            return .conditional(
+                try prefixRelationshipPath(test, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(trueBranch, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(falseBranch, relationship: relationship, attributeTypes: attributeTypes))
+        case let .localizedStandardContains(lhs, rhs):
+            return .localizedStandardContains(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .stringContains(lhs, rhs):
+            return .stringContains(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .stringStartsWith(lhs, rhs):
+            return .stringStartsWith(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .conjunction(lhs, rhs):
+            return .conjunction(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .disjunction(lhs, rhs):
+            return .disjunction(
+                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .negation(value):
+            return .negation(
+                try prefixRelationshipPath(value, relationship: relationship, attributeTypes: attributeTypes))
+        case .sequenceContains, .relationshipContains:
+            throw SwiftDataError.unsupportedPredicate("Nested relationship predicates are unsupported.")
+        }
+    }
+
+    private static func hasStringType(for path: [String], attributeTypes: [String: String]) -> Bool {
+        guard !path.isEmpty else { return false }
+        if isStringAttribute(attributeTypes[path.joined(separator: ".")]) { return true }
+        return path.count == 1
+            && attributeTypes.contains { key, type in
+                key.hasSuffix(".\(path[0])") && isStringAttribute(type)
+            }
+    }
+
+    private static func hasIntegerType(for path: [String], attributeTypes: [String: String]) -> Bool {
+        guard !path.isEmpty else { return false }
+        if isIntegerAttribute(attributeTypes[path.joined(separator: ".")]) { return true }
+        return path.count == 1
+            && attributeTypes.contains { key, type in
+                key.hasSuffix(".\(path[0])") && isIntegerAttribute(type)
+            }
     }
 
     private static func validateFlattenedBlobComparison(
@@ -287,7 +369,8 @@ package enum PredicateIRBuilder {
         _ ir: PredicateIR,
         attributeTypes: [String: String]
     ) throws {
-        guard case let .keyPath(path) = ir, path.count == 1, isStringAttribute(attributeTypes[path[0]]) else {
+        guard case let .keyPath(path) = ir, path.count == 1, hasStringType(for: path, attributeTypes: attributeTypes)
+        else {
             throw SwiftDataError.unsupportedPredicate("String predicate requires a direct persisted String attribute")
         }
     }

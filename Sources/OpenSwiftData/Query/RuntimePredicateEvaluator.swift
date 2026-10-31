@@ -228,6 +228,7 @@ package enum RuntimePredicateEvaluator {
             let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
             let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
+                if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("localizedStandardContains requires string operands")
             }
             return .int(OSDStringMatch.localizedStandardContains(haystack, needle) ? 1 : 0)
@@ -235,6 +236,7 @@ package enum RuntimePredicateEvaluator {
             let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
             let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
+                if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("String contains requires string operands")
             }
             return .int(OSDStringMatch.contains(haystack, needle) ? 1 : 0)
@@ -242,6 +244,7 @@ package enum RuntimePredicateEvaluator {
             let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
             let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
             guard case let .text(value) = lhsValue, case let .text(prefix) = rhsValue else {
+                if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("String prefix requires string operands")
             }
             return .int(OSDStringMatch.startsWith(value, prefix) ? 1 : 0)

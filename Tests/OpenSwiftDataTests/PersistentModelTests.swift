@@ -1428,6 +1428,22 @@ final class PersistentModelTests: XCTestCase {
         let nilTarget = try context.fetch(
             FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(predicate: #Predicate { $0.target?.name == nil }))
         XCTAssertEqual(nilTarget.map(\.name), ["nil"])
+
+        let containsNeedle = "lect"
+        let relationshipContains = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.contains(containsNeedle) == true },
+            includePendingChanges: false)
+        let containedOwners = try context.fetch(relationshipContains)
+        XCTAssertEqual(containedOwners.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(relationshipContains), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(relationshipContains), containedOwners.map(\.persistentModelID))
+
+        let prefix = "sel"
+        let relationshipPrefix = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.starts(with: prefix) == true },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(relationshipPrefix).map(\.name), ["matched"])
+
         let insertedTarget = PlainHierarchyTargetChildFixture(name: "selected", detail: "pending")
         let insertedOwner = HierarchyToHierarchyOwnerChildFixture(name: "pending", target: insertedTarget, rank: 4)
         context.insert(insertedTarget)

@@ -650,6 +650,73 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyLeafMigrationAddsSubtypeIndexesAndExpandsAncestorIndexScope() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Cat",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String", isOptional: true, options: [.unique]),
+                    Schema.Attribute(name: "label", type: "String", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["label"])],
+                superentityName: "Child"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let identifiers = try XCTUnwrap(
+            migrated.read {
+                try LightweightMigration.storedEntityIDs(schema: destination, connection: $0)
+            })
+        let childID = try XCTUnwrap(identifiers["Child"])
+        let catID = try XCTUnwrap(identifiers["Cat"])
+        let expectedIndexStatements = try SchemaBuilder.build(destination).statements.filter {
+            $0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")
+        }.map { $0.hasSuffix(";") ? String($0.dropLast()) : $0 }.sorted()
+        let storedIndexRows = try migrated.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%' ORDER BY name")
+        }
+        XCTAssertEqual(
+            storedIndexRows.compactMap { row -> String? in
+                guard case let .text(statement)? = row.first else { return nil }
+                return statement
+            }.sorted(),
+            expectedIndexStatements)
+
+        let ancestorIndex = try migrated.read {
+            try $0.rows(
+                "SELECT sql FROM sqlite_master WHERE name = ?",
+                [.text("ZBASE_CHILD_ZAGE_INDEX")]
+            ).first?.first
+        }
+        XCTAssertEqual(
+            ancestorIndex,
+            .text(
+                "CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (ZAGE) WHERE Z_ENT IN (\(childID), \(catID))"))
+        let catIndexes = expectedIndexStatements.filter { $0.contains("CAT") }
+        XCTAssertEqual(catIndexes.count, 2)
+        try migrated.close()
+    }
+
     func testAddingFirstLeafSubclassToFlatRootTable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

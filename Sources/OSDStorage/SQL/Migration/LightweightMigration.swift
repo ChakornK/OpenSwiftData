@@ -303,6 +303,40 @@ package enum LightweightMigration {
             })
     }
 
+    private static func reconcileHierarchyIndexes(
+        sourceStatements: [String], destinationStatements: [String], connection: SQLConnection
+    ) throws {
+        func indexStatements(_ statements: [String]) throws -> [String: String] {
+            var result: [String: String] = [:]
+            for statement in statements
+            where statement.hasPrefix("CREATE INDEX") || statement.hasPrefix("CREATE UNIQUE INDEX") {
+                let tokens = statement.split(separator: " ")
+                guard let indexPosition = tokens.firstIndex(of: "INDEX"), tokens.indices.contains(indexPosition + 1)
+                else {
+                    throw SwiftDataError.migrationUnsupported("Unable to parse a generated hierarchy index statement.")
+                }
+                let name = String(tokens[indexPosition + 1])
+                guard result.updateValue(statement, forKey: name.uppercased()) == nil else {
+                    throw SwiftDataError.migrationUnsupported("Hierarchy index names are not unique.")
+                }
+            }
+            return result
+        }
+        let sourceIndexes = try indexStatements(sourceStatements)
+        let destinationIndexes = try indexStatements(destinationStatements)
+        guard Set(sourceIndexes.keys).isSubset(of: Set(destinationIndexes.keys)) else {
+            throw SwiftDataError.migrationUnsupported("Hierarchy migration cannot remove existing indexes.")
+        }
+        for name in destinationIndexes.keys.sorted() {
+            guard let statement = destinationIndexes[name] else { continue }
+            if sourceIndexes[name] == statement { continue }
+            if sourceIndexes[name] != nil {
+                try connection.execute("DROP INDEX \(name)")
+            }
+            try connection.execute(statement)
+        }
+    }
+
     private static func initialize(_ schema: Schema, connection: SQLConnection) throws {
         let built = try SchemaBuilder.build(schema)
         try connection.execute("SAVEPOINT osd_schema_initialization")
@@ -439,8 +473,11 @@ package enum LightweightMigration {
         connection: SQLConnection,
         destinationHasInheritance: Bool
     ) throws {
+        let sourceBuilt: BuiltSchema
+        let destinationBuilt: BuiltSchema
         do {
-            _ = try SchemaBuilder.build(destination)
+            sourceBuilt = try SchemaBuilder.build(source)
+            destinationBuilt = try SchemaBuilder.build(destination)
         } catch {
             throw SwiftDataError.migrationUnsupported(
                 "Destination hierarchy schema is invalid for lightweight migration: \(error)")
@@ -540,7 +577,6 @@ package enum LightweightMigration {
         }
         for entity in newEntities {
             guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
-                entity.indexes.isEmpty,
                 !destination.entities.contains(where: { $0.superentityName == entity.name })
             else {
                 throw SwiftDataError.migrationUnsupported(
@@ -706,7 +742,7 @@ package enum LightweightMigration {
                 }
                 guard attribute.isOptional, attribute.defaultValue == nil,
                     attribute.originalName == nil,
-                    !attribute.options.contains(.unique),
+                    (!attribute.options.contains(.unique) || sourceEntity == nil),
                     !attribute.options.contains(.externalStorage),
                     !attribute.options.contains(.flattened),
                     attribute.components.isEmpty,
@@ -841,16 +877,13 @@ package enum LightweightMigration {
                     "Added hierarchy relationship column \(table).\(physicalColumn) has an incompatible definition."
                 )
             }
-            let indexName = "Z\(root.uppercased())_\(physicalColumn)_INDEX"
-            try connection.execute(
-                "CREATE INDEX \(indexName) ON \(table) (\(physicalColumn));")
         }
         for joinTable in joinTableAdditions.sorted(by: less) {
             try connection.execute("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
-            try connection.execute(
-                "CREATE UNIQUE INDEX \(joinTable)_UNIQUE_INDEX ON \(joinTable) (Z_A, Z_B);")
-            try connection.execute("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B);")
         }
+        try reconcileHierarchyIndexes(
+            sourceStatements: sourceBuilt.statements, destinationStatements: destinationBuilt.statements,
+            connection: connection)
         for entity in newEntities.sorted(by: {
             destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]
         }) {

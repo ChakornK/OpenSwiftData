@@ -816,7 +816,7 @@ package enum SchemaBuilder {
         return bytewiseLess(other, current)
     }
 
-    private static func joinTableName(
+    package static func joinTableName(
         for entity: Schema.Entity, relationship: Schema.Relationship, schema: Schema
     ) -> String? {
         guard relationship.isToMany else { return nil }

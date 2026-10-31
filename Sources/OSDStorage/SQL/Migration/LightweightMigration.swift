@@ -471,40 +471,6 @@ package enum LightweightMigration {
 
         let sourceByName = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        let newEntities = destination.entities.filter { sourceByName[$0.name] == nil }
-        for entity in newEntities {
-            guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
-                entity.indexes.isEmpty,
-                !destination.entities.contains(where: { $0.superentityName == entity.name })
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy migration only adds leaf subclasses beneath existing entities."
-                )
-            }
-            for relationship in entity.relationships {
-                guard !relationship.isToMany, relationship.isOptional, relationship.inverse == nil,
-                    relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
-                    relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
-                    relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
-                    source.entity(forName: relationship.destination) != nil
-                else {
-                    throw SwiftDataError.migrationUnsupported(
-                        "New hierarchy leaves support only optional no-inverse to-one relationships to existing entities."
-                    )
-                }
-            }
-        }
-        for sourceEntity in source.entities {
-            guard let destinationEntity = destinationByName[sourceEntity.name],
-                sourceEntity.superentityName == destinationEntity.superentityName,
-                sourceEntity.relationships == destinationEntity.relationships,
-                sourceEntity.indexes == destinationEntity.indexes
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy migration cannot change topology, relationships, or constraints.")
-            }
-        }
-
         func rootName(for entityName: String, schema: Schema) throws -> String {
             var current = schema.entity(forName: entityName)
             var visited = Set<String>()
@@ -521,6 +487,62 @@ package enum LightweightMigration {
             }
             return root.name
         }
+        let newEntities = destination.entities.filter { sourceByName[$0.name] == nil }
+        for entity in newEntities {
+            guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
+                entity.indexes.isEmpty,
+                !destination.entities.contains(where: { $0.superentityName == entity.name })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration only adds leaf subclasses beneath existing entities."
+                )
+            }
+            for relationship in entity.relationships {
+                guard relationship.inverse == nil,
+                    relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                    source.entity(forName: relationship.destination) != nil
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "New hierarchy relationships must be no-inverse and target existing entities with nullify or noAction delete rules."
+                    )
+                }
+                if relationship.isToMany {
+                    let targetEntity = source.entity(forName: relationship.destination)
+                    let ownerRootName = try rootName(for: entity.name, schema: destination)
+                    let destinationHasHierarchy = source.entities.contains {
+                        $0.superentityName == relationship.destination
+                    }
+                    guard relationship.minimumModelCount == nil, relationship.maximumModelCount == nil,
+                        let targetEntity, targetEntity.superentityName == nil, !destinationHasHierarchy,
+                        ownerRootName != relationship.destination
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New hierarchy to-many relationships require an existing flat destination with no cardinality constraints."
+                        )
+                    }
+                } else {
+                    guard relationship.isOptional,
+                        relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                        relationship.maximumModelCount == nil || relationship.maximumModelCount == 1
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New hierarchy to-one relationships must be optional and unconstrained."
+                        )
+                    }
+                }
+            }
+        }
+        for sourceEntity in source.entities {
+            guard let destinationEntity = destinationByName[sourceEntity.name],
+                sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.relationships == destinationEntity.relationships,
+                sourceEntity.indexes == destinationEntity.indexes
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration cannot change topology, relationships, or constraints.")
+            }
+        }
+
         func isAncestor(_ ancestorName: String, of entityName: String, schema: Schema) -> Bool {
             var current = schema.entity(forName: entityName)
             var visited = Set<String>()
@@ -553,6 +575,7 @@ package enum LightweightMigration {
         var additionsByRootAndColumn: [String: (root: String, column: String, attribute: Schema.Attribute)] = [:]
         var additionOwnersByRootAndColumn: [String: [String]] = [:]
         var relationshipAdditionsByRootAndColumn: [String: (root: String, column: String)] = [:]
+        var joinTableAdditions: Set<String> = []
         for destinationEntity in destination.entities {
             let sourceEntity = sourceByName[destinationEntity.name]
             let sourceAttributes = Dictionary(
@@ -628,6 +651,34 @@ package enum LightweightMigration {
 
         for entity in newEntities {
             for relationship in entity.relationships {
+                if relationship.isToMany {
+                    guard
+                        let joinTable = SchemaBuilder.joinTableName(
+                            for: entity, relationship: relationship, schema: destination)
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New hierarchy to-many relationship has no join-table mapping.")
+                    }
+                    let sourceJoinTables = source.entities.flatMap { sourceEntity in
+                        sourceEntity.relationships.compactMap { sourceRelationship in
+                            SchemaBuilder.joinTableName(
+                                for: sourceEntity, relationship: sourceRelationship, schema: source)
+                        }
+                    }
+                    let tableAlreadyExists =
+                        try connection.rows(
+                            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE LIMIT 1",
+                            [.text(joinTable)]
+                        ).isEmpty == false
+                    guard !sourceJoinTables.contains(where: { $0.caseInsensitiveCompare(joinTable) == .orderedSame }),
+                        !tableAlreadyExists
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New hierarchy join table collides with existing storage.")
+                    }
+                    joinTableAdditions.insert(joinTable)
+                    continue
+                }
                 guard
                     let mapping = destination.relationshipStorageMapping(
                         modelEntityName: entity.name, relationshipName: relationship.name),
@@ -692,6 +743,12 @@ package enum LightweightMigration {
             let indexName = "Z\(root.uppercased())_\(physicalColumn)_INDEX"
             try connection.execute(
                 "CREATE INDEX \(indexName) ON \(table) (\(physicalColumn));")
+        }
+        for joinTable in joinTableAdditions.sorted(by: less) {
+            try connection.execute("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
+            try connection.execute(
+                "CREATE UNIQUE INDEX \(joinTable)_UNIQUE_INDEX ON \(joinTable) (Z_A, Z_B);")
+            try connection.execute("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B);")
         }
         for entity in newEntities.sorted(by: {
             destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]

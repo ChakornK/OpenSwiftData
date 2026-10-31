@@ -1039,7 +1039,7 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
-    func testHierarchyLeafRelationshipMigrationRejectsRequiredAndToManyRelationships() throws {
+    func testHierarchyLeafRelationshipMigrationRejectsRequiredToOneRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1056,10 +1056,6 @@ final class SchemaMigrationTests: XCTestCase {
                 relationships: [
                     Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: false)
                 ],
-                superentityName: "Base"),
-            Schema.Entity(
-                name: "CollectionChild",
-                relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)],
                 superentityName: "Base"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -1079,6 +1075,45 @@ final class SchemaMigrationTests: XCTestCase {
             sourceIDs)
         let primaryKeys = try reopened.read { try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") }
         XCTAssertEqual(primaryKeys, [[.text("Base")], [.text("Target")]])
+        try reopened.close()
+    }
+
+    func testHierarchyLeafRelationshipMigrationRejectsCascadeToOneRelationship() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Target"),
+            Schema.Entity(
+                name: "CascadeChild",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", isToMany: false, isOptional: true,
+                        deleteRule: .cascade)
+                ],
+                superentityName: "Base"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try initial.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
         try reopened.close()
     }
 

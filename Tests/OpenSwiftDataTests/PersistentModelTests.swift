@@ -111,6 +111,22 @@ final class InheritedToOneMigrationChildFixture: InheritedToOneMigrationBaseFixt
 }
 
 @Model
+final class InheritedToManyMigrationItemFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+final class InheritedToManyMigrationChildFixture: InheritanceMacroBaseFixture {
+    @Relationship(inverse: nil) var items: [InheritedToManyMigrationItemFixture]
+
+    init(name: String, items: [InheritedToManyMigrationItemFixture]) {
+        self.items = items
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritanceRelationshipBaseFixture {
     @Relationship(inverse: nil) var items: [InheritanceRelationshipItemFixture]
     init(items: [InheritanceRelationshipItemFixture]) { self.items = items }
@@ -4688,6 +4704,58 @@ final class PersistentModelTests: XCTestCase {
         let refreshedChild = try XCTUnwrap(
             container.makeContext().fetch(FetchDescriptor<InheritedToOneMigrationChildFixture>()).first)
         XCTAssertNil(refreshedChild.target)
+    }
+
+    @MainActor
+    func testAddingLeafToManyRelationshipMigratesJoinTable() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "leaf-to-many-relationship-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritedToManyMigrationItemFixture.self,
+            configurations: configuration)
+        let firstItem = InheritedToManyMigrationItemFixture(title: "first")
+        let secondItem = InheritedToManyMigrationItemFixture(title: "second")
+        sourceContainer.mainContext.insert(InheritanceMacroBaseFixture(name: "base"))
+        sourceContainer.mainContext.insert(firstItem)
+        sourceContainer.mainContext.insert(secondItem)
+        try sourceContainer.mainContext.save()
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritedToManyMigrationItemFixture.self,
+            InheritedToManyMigrationChildFixture.self,
+            configurations: configuration)
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            sourceIDs["InheritanceMacroBaseFixture"])
+        let childID = try XCTUnwrap(container.schema.entityIDsByName["InheritedToManyMigrationChildFixture"])
+        XCTAssertGreaterThan(childID, try XCTUnwrap(sourceIDs.values.max()))
+
+        let child = InheritedToManyMigrationChildFixture(name: "child", items: [firstItem, secondItem])
+        container.mainContext.insert(child)
+        try container.mainContext.save()
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritedToManyMigrationChildFixture>()).first)
+        XCTAssertEqual(Set(fetched.items.map(\.title)), ["first", "second"])
+        fetched.items.removeAll { $0.title == "first" }
+        try reader.save()
+        let refreshed = try XCTUnwrap(
+            container.makeContext().fetch(FetchDescriptor<InheritedToManyMigrationChildFixture>()).first)
+        XCTAssertEqual(refreshed.items.map(\.title), ["second"])
+        let joinTables = try container.store?.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'Z_%'", arguments: [])
+        }
+        XCTAssertTrue(
+            joinTables?.contains {
+                $0 == [.text("Z_INHERITEDTOMANYMIGRATIONCHILDFIXTURE_ITEMS_INHERITEDTOMANYMIGRATIONITEMFIXTURE")]
+            } == true)
     }
 
     @MainActor

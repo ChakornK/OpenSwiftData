@@ -52,6 +52,39 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertTrue(notNilPlan.arguments.isEmpty)
     }
 
+    func testNestedToOnePredicateBindsDiscriminatorsInSQLOrder() throws {
+        let ir = PredicateIR.comparison(
+            .equal,
+            .keyPath(["middle", "leaf", "title"]),
+            .value(.text("match")))
+        let relationships = [
+            RuntimePredicateRelationship(
+                ownerEntityName: "Root",
+                propertyName: "middle",
+                destinationEntityName: "Middle",
+                destinationRootEntityName: "Middle",
+                foreignKeyColumnName: "middle",
+                destinationEntityIDs: [11]),
+            RuntimePredicateRelationship(
+                ownerEntityName: "Middle",
+                propertyName: "leaf",
+                destinationEntityName: "Leaf",
+                destinationRootEntityName: "Leaf",
+                foreignKeyColumnName: "leaf",
+                destinationEntityIDs: [22]),
+        ]
+
+        let compiled = try SQLCompiler.compile(ir, entity: "Root", relationships: relationships)
+
+        XCTAssertEqual(
+            compiled.sql,
+            "((SELECT (SELECT osd_rel_2.ZTITLE FROM ZLEAF AS osd_rel_2 "
+                + "WHERE osd_rel_2.Z_PK = osd_rel_1.ZLEAF AND osd_rel_2.Z_ENT IN (?) LIMIT 1) "
+                + "FROM ZMIDDLE AS osd_rel_1 WHERE osd_rel_1.Z_PK = t0.ZMIDDLE AND osd_rel_1.Z_ENT IN (?) LIMIT 1) = ?)"
+        )
+        XCTAssertEqual(compiled.arguments, [.int(22), .int(11), .text("match")])
+    }
+
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Equal",

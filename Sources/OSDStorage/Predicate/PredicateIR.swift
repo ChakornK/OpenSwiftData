@@ -138,14 +138,14 @@ package enum PredicateIRBuilder {
                 guard
                     case let .keyPath(relationshipPath) = try field(
                         "wrapped", from: fields, attributeTypes: attributeTypes),
-                    relationshipPath.count == 1
+                    !relationshipPath.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Optional relationship predicates support one direct to-one scalar traversal.")
+                        "Optional relationship predicates require a to-one relationship path.")
                 }
                 return try prefixRelationshipPath(
                     field("transform", from: fields, attributeTypes: attributeTypes),
-                    relationship: relationshipPath[0],
+                    relationships: relationshipPath,
                     attributeTypes: attributeTypes)
             case "Conditional":
                 return .conditional(
@@ -221,72 +221,81 @@ package enum PredicateIRBuilder {
 
     private static func prefixRelationshipPath(
         _ ir: PredicateIR,
-        relationship: String,
+        relationships: [String],
         attributeTypes: [String: String]
     ) throws -> PredicateIR {
+        let normalizedRelationships = relationships.flatMap { $0.split(separator: ".").map(String.init) }
         switch ir {
         case let .keyPath(path):
-            guard path.count == 1, let rawProperty = path.first else {
+            guard !path.isEmpty else {
                 throw SwiftDataError.unsupportedPredicate(
-                    "Optional relationship predicates support one direct scalar destination property.")
+                    "Optional relationship predicates require a destination property path.")
             }
-            let property =
-                rawProperty.hasPrefix("\(relationship).")
-                ? String(rawProperty.dropFirst(relationship.count + 1))
-                : rawProperty
-            guard !property.isEmpty, !property.contains("."),
-                isSupportedElementScalar(attributeTypes["\(relationship).\(property)"])
-            else {
+            let relationshipPrefix = normalizedRelationships.joined(separator: ".") + "."
+            let normalizedPath: [String]
+            if path.count == 1, path[0].hasPrefix(relationshipPrefix) {
+                normalizedPath = String(path[0].dropFirst(relationshipPrefix.count))
+                    .split(separator: ".")
+                    .map(String.init)
+            } else {
+                normalizedPath = path.flatMap { $0.split(separator: ".").map(String.init) }
+            }
+            let fullPath = normalizedRelationships + normalizedPath
+            let fullName = fullPath.joined(separator: ".")
+            if attributeTypes[fullName] == "OSDRelationship" {
+                return .keyPath(fullPath)
+            }
+            guard isSupportedElementScalar(attributeTypes[fullName]) else {
                 throw SwiftDataError.unsupportedPredicate(
-                    "Optional relationship predicates support one direct scalar destination property.")
+                    "Optional relationship predicates must end in a persisted scalar property.")
             }
-            return .keyPath([relationship, property])
+            return .keyPath(fullPath)
         case let .value(value):
             return .value(value)
         case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):
             let prefixedLHS = try prefixRelationshipPath(
-                lhs, relationship: relationship, attributeTypes: attributeTypes)
+                lhs, relationships: relationships, attributeTypes: attributeTypes)
             let prefixedRHS = try prefixRelationshipPath(
-                rhs, relationship: relationship, attributeTypes: attributeTypes)
+                rhs, relationships: relationships, attributeTypes: attributeTypes)
             if case .decimalComparison = ir { return .decimalComparison(op, prefixedLHS, prefixedRHS) }
             return .comparison(op, prefixedLHS, prefixedRHS)
         case let .arithmetic(op, lhs, rhs):
             return .arithmetic(
                 op,
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .nilCoalesce(lhs, rhs):
             return .nilCoalesce(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .conditional(test, trueBranch, falseBranch):
             return .conditional(
-                try prefixRelationshipPath(test, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(trueBranch, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(falseBranch, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(test, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(trueBranch, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(falseBranch, relationships: relationships, attributeTypes: attributeTypes))
         case let .localizedStandardContains(lhs, rhs):
             return .localizedStandardContains(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .stringContains(lhs, rhs):
             return .stringContains(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .stringStartsWith(lhs, rhs):
             return .stringStartsWith(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .conjunction(lhs, rhs):
             return .conjunction(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .disjunction(lhs, rhs):
             return .disjunction(
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .negation(value):
             return .negation(
-                try prefixRelationshipPath(value, relationship: relationship, attributeTypes: attributeTypes))
+                try prefixRelationshipPath(value, relationships: relationships, attributeTypes: attributeTypes))
         case .sequenceContains, .relationshipContains:
             throw SwiftDataError.unsupportedPredicate("Nested relationship predicates are unsupported.")
         }

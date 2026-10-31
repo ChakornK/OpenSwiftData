@@ -198,6 +198,38 @@ package enum SQLCompiler {
             guard let property = path.last, Self.validIdentifier(property) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid key path")
             }
+            if path.count > 2 {
+                let relationshipNames = Array(path.dropLast())
+                func renderHop(_ index: Int, ownerEntityName: String, ownerAlias: String) throws -> String {
+                    guard index < relationshipNames.count,
+                        let relationship = relationships.first(where: {
+                            $0.ownerEntityName == ownerEntityName && $0.propertyName == relationshipNames[index]
+                        }),
+                        !relationship.isToMany,
+                        !relationship.queriesInverseToOne,
+                        Self.validIdentifier(relationship.destinationRootEntityName),
+                        Self.validIdentifier(relationship.foreignKeyColumnName),
+                        !relationship.destinationEntityIDs.isEmpty
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Nested relationship predicate requires owning to-one foreign keys.")
+                    }
+                    let destination = relationship.destinationEntityName
+                    let alias = "osd_rel_\(index + 1)"
+                    let selected =
+                        index + 1 == relationshipNames.count
+                        ? "\(alias).Z\(property.uppercased())"
+                        : try renderHop(index + 1, ownerEntityName: destination, ownerAlias: alias)
+                    let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
+                        .joined(separator: ", ")
+                    arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+                    return
+                        "(SELECT \(selected) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS \(alias) "
+                        + "WHERE \(alias).Z_PK = \(ownerAlias).Z\(relationship.foreignKeyColumnName.uppercased()) "
+                        + "AND \(alias).Z_ENT IN (\(placeholders)) LIMIT 1)"
+                }
+                return try renderHop(0, ownerEntityName: entity, ownerAlias: tableAlias)
+            }
             if path.count == 2,
                 let relationship = relationships.first(where: {
                     $0.ownerEntityName == entity && $0.propertyName == path[0]

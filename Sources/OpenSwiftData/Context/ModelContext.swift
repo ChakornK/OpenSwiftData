@@ -1795,7 +1795,10 @@ public final class ModelContext {
             modelTypeForEntity: { [weak container] entityName in
                 container?.modelType(forEntityName: entityName)
             })
-        let relationshipPaths = entity.relationships.compactMap { relationship -> RuntimePredicateRelationship? in
+        func relationshipDescriptor(
+            ownerEntity: Schema.Entity,
+            relationship: Schema.Relationship
+        ) -> RuntimePredicateRelationship? {
             guard let schema = containerStorage?.schema,
                 let destination = schema.entity(forName: relationship.destination)
             else { return nil }
@@ -1809,7 +1812,7 @@ public final class ModelContext {
                             modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name)
                     else { return nil }
                     return RuntimePredicateRelationship(
-                        ownerEntityName: entity.name,
+                        ownerEntityName: ownerEntity.name,
                         propertyName: relationship.name,
                         destinationEntityName: relationship.destination,
                         destinationRootEntityName: rootEntity(for: destination).name,
@@ -1819,11 +1822,11 @@ public final class ModelContext {
                         storesForeignKeyOnDestination: true)
                 }
                 guard relationship.inverse == nil || inverse?.relationship.isToMany == true,
-                    let joinTable = joinTableName(for: entity, relationship)
+                    let joinTable = joinTableName(for: ownerEntity, relationship)
                 else { return nil }
-                let relationshipIsSideAOwner = joinSideAOwner(entity, relationship)
+                let relationshipIsSideAOwner = joinSideAOwner(ownerEntity, relationship)
                 return RuntimePredicateRelationship(
-                    ownerEntityName: entity.name,
+                    ownerEntityName: ownerEntity.name,
                     propertyName: relationship.name,
                     destinationEntityName: relationship.destination,
                     destinationRootEntityName: rootEntity(for: destination).name,
@@ -1834,12 +1837,12 @@ public final class ModelContext {
                     ownerJoinColumnName: relationshipIsSideAOwner ? "Z_A" : "Z_B",
                     destinationJoinColumnName: relationshipIsSideAOwner ? "Z_B" : "Z_A")
             }
-            if isToOneStorageOwner(entity, relationship),
+            if isToOneStorageOwner(ownerEntity, relationship),
                 let mapping = schema.relationshipStorageMapping(
-                    modelEntityName: entity.name, relationshipName: relationship.name)
+                    modelEntityName: ownerEntity.name, relationshipName: relationship.name)
             {
                 return RuntimePredicateRelationship(
-                    ownerEntityName: entity.name,
+                    ownerEntityName: ownerEntity.name,
                     propertyName: relationship.name,
                     destinationEntityName: relationship.destination,
                     destinationRootEntityName: rootEntity(for: destination).name,
@@ -1854,7 +1857,7 @@ public final class ModelContext {
                 let inverseOwner = schema.entity(forName: inverse.entityName)
             else { return nil }
             return RuntimePredicateRelationship(
-                ownerEntityName: entity.name,
+                ownerEntityName: ownerEntity.name,
                 propertyName: relationship.name,
                 destinationEntityName: relationship.destination,
                 destinationRootEntityName: rootEntity(for: destination).name,
@@ -1864,27 +1867,65 @@ public final class ModelContext {
                 inverseOwnerRootEntityName: rootEntity(for: inverseOwner).name,
                 inverseOwnerEntityIDs: descendantEntityIDs(for: inverseOwner))
         }
+        let relationshipPaths =
+            containerStorage?.schema.entities.flatMap { ownerEntity in
+                ownerEntity.relationships.compactMap {
+                    relationshipDescriptor(ownerEntity: ownerEntity, relationship: $0)
+                }
+            } ?? []
         let flattenedAttributes = entity.attributes.flatMap { attribute in
             attribute.components.map { ($0.columnName, $0.type) }
         }
         var attributeTypes = Dictionary(
             uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) } + flattenedAttributes)
         var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
-        for relationshipPath in relationshipPaths {
-            attributeNames.insert(relationshipPath.propertyName)
-            guard let destination = containerStorage?.schema.entity(forName: relationshipPath.destinationEntityName)
-            else { continue }
+        for relationship in entity.relationships where relationship.isToMany {
+            attributeNames.insert(relationship.name)
+            guard let destination = containerStorage?.schema.entity(forName: relationship.destination) else { continue }
             for attribute in destination.attributes where !attribute.options.contains(.flattened) {
-                if relationshipPath.isToMany {
-                    let path = "\(relationshipPath.propertyName)[].\(attribute.name)"
-                    attributeNames.insert(path)
-                    attributeTypes[path] = attribute.type
-                } else {
-                    let path = "\(relationshipPath.propertyName).\(attribute.name)"
-                    attributeNames.insert(path)
-                    attributeTypes[path] = attribute.type
+                let path = "\(relationship.name)[].\(attribute.name)"
+                attributeNames.insert(path)
+                attributeTypes[path] = attribute.type
+            }
+        }
+        if let schema = containerStorage?.schema {
+            func hasDescendants(_ candidate: Schema.Entity) -> Bool {
+                schema.entities.contains { descendant in
+                    descendant.name != candidate.name && rootEntity(for: descendant).name == candidate.name
                 }
             }
+
+            func addRelationshipPaths(
+                ownerEntity: Schema.Entity,
+                prefix: [String],
+                visited: Set<String>
+            ) {
+                guard prefix.count < schema.entities.count else { return }
+                for relationship in ownerEntity.relationships where !relationship.isToMany {
+                    guard
+                        relationshipPaths.contains(where: {
+                            $0.ownerEntityName == ownerEntity.name && $0.propertyName == relationship.name
+                        }),
+                        let destination = schema.entity(forName: relationship.destination)
+                    else { continue }
+                    let path = prefix + [relationship.name]
+                    let relationshipPath = path.joined(separator: ".")
+                    attributeNames.insert(relationshipPath)
+                    attributeTypes[relationshipPath] = "OSDRelationship"
+                    guard path.count == 1 || !hasDescendants(destination) else { continue }
+                    for attribute in destination.attributes where !attribute.options.contains(.flattened) {
+                        let scalarPath = "\(relationshipPath).\(attribute.name)"
+                        attributeNames.insert(scalarPath)
+                        attributeTypes[scalarPath] = attribute.type
+                    }
+                    guard !visited.contains(destination.name) else { continue }
+                    addRelationshipPaths(
+                        ownerEntity: destination,
+                        prefix: path,
+                        visited: visited.union([destination.name]))
+                }
+            }
+            addRelationshipPaths(ownerEntity: entity, prefix: [], visited: [entity.name])
         }
         return try compiler.compile(
             RuntimePredicateRequest(
@@ -2125,22 +2166,35 @@ public final class ModelContext {
         }
         for name in names ?? [] {
             let components = name.split(separator: ".").map(String.init)
-            guard components.count == 2,
-                let relationship = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
-                    .first(where: { $0.name == components[0] && !$0.isToMany })
-            else { continue }
-            guard let endpoint = relationship.read(model)?.first else {
-                values[name] = .null
-                continue
-            }
-            let propertyAdapters = type(of: endpoint).erasedPersistenceAdapters()
-            guard let property = propertyAdapters.first(where: { $0.name == components[1] }) else {
-                throw SwiftDataError.unsupportedPredicate(
-                    "Relationship predicate path references unknown property '\(name)'.")
-            }
-            values[name] = runtimeValue(try property.encoded(endpoint))
+            guard components.count >= 2 else { continue }
+            values[name] = try runtimeValue(on: model, path: components, fullPath: name)
         }
         return values
+    }
+
+    private func runtimeValue(
+        on model: any PersistentModel,
+        path: [String],
+        fullPath: String
+    ) throws -> RuntimeValue {
+        guard let first = path.first else { return .null }
+        if path.count == 1 {
+            let property = type(of: model).erasedPersistenceAdapters().first(where: { $0.name == first })
+            guard let property else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Relationship predicate path references unknown property '\(fullPath)'.")
+            }
+            return runtimeValue(try property.encoded(model))
+        }
+        guard
+            let relationship = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
+                .first(where: { $0.name == first && !$0.isToMany })
+        else {
+            throw SwiftDataError.unsupportedPredicate(
+                "Nested predicate path '\(fullPath)' requires owning to-one relationships.")
+        }
+        guard let endpoint = relationship.read(model)?.first else { return .null }
+        return try runtimeValue(on: endpoint, path: Array(path.dropFirst()), fullPath: fullPath)
     }
 
     private func modelValues<Model: PersistentModel>(_ model: Model) throws -> [String: StoredValue] {

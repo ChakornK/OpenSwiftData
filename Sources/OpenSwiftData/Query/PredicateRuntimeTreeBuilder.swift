@@ -46,6 +46,56 @@ package enum PredicateRuntimeTreeBuilder {
         var activeCollectionName: String?
         var activeRelationshipName: String?
         var activePredicateRootType: Any.Type = Model.self
+        func relationshipTraversal(
+            _ node: RuntimePredicateNode,
+            from ownerEntity: Schema.Entity
+        ) throws -> (names: [String], entity: Schema.Entity, modelType: any PersistentModel.Type)? {
+            switch node {
+            case let .property(reference):
+                let components = reference.name.split(separator: ".").map(String.init)
+                var currentEntity = ownerEntity
+                var currentModelType: (any PersistentModel.Type)?
+                for name in components {
+                    guard let schema,
+                        let relationship = currentEntity.relationships.first(where: {
+                            $0.name == name && !$0.isToMany
+                        }),
+                        supportsToOnePredicate(relationship, ownerEntity: currentEntity, schema: schema),
+                        let destinationEntity = schema.entity(forName: relationship.destination),
+                        let destinationModelType = modelTypeForEntity(destinationEntity.name)
+                    else { return nil }
+                    currentEntity = destinationEntity
+                    currentModelType = destinationModelType
+                }
+                guard let currentModelType else { return nil }
+                return (components, currentEntity, currentModelType)
+            case let .expression(name, children) where name == "OptionalFlatMap":
+                guard let wrapped = children.first(where: { $0.0 == "wrapped" })?.1,
+                    let transform = children.first(where: { $0.0 == "transform" })?.1,
+                    let base = try relationshipTraversal(wrapped, from: ownerEntity)
+                else { return nil }
+                if case let .property(transformProperty) = transform,
+                    let relationshipName = transformProperty.name.split(separator: ".").last.map(String.init),
+                    let relationship = base.entity.relationships.first(where: {
+                        $0.name == relationshipName && !$0.isToMany
+                    }),
+                    let schema,
+                    supportsToOnePredicate(relationship, ownerEntity: base.entity, schema: schema),
+                    let destinationEntity = schema.entity(forName: relationship.destination),
+                    let destinationModelType = modelTypeForEntity(destinationEntity.name)
+                {
+                    return (base.names + [relationship.name], destinationEntity, destinationModelType)
+                }
+                if case .expression(name: "OptionalFlatMap", children: _) = transform,
+                    let nested = try relationshipTraversal(transform, from: base.entity)
+                {
+                    return (base.names + nested.names, nested.entity, nested.modelType)
+                }
+                return base
+            default:
+                return nil
+            }
+        }
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -153,8 +203,10 @@ package enum PredicateRuntimeTreeBuilder {
                     children: [("sequence", sequenceNode), ("test", testNode)])
             }
             if name == "OptionalFlatMap" {
-                guard let schema,
-                    let wrapped = children.first(where: { $0.label == "wrapped" })?.value,
+                guard schema != nil else {
+                    throw SwiftDataError.unsupportedPredicate("Malformed OptionalFlatMap relationship predicate")
+                }
+                guard let wrapped = children.first(where: { $0.label == "wrapped" })?.value,
                     let transform = children.first(where: { $0.label == "transform" })?.value,
                     let variable = children.first(where: { $0.label == "variable" })?.value,
                     variableIdentifier(variable) != nil
@@ -164,25 +216,18 @@ package enum PredicateRuntimeTreeBuilder {
                 let wrappedNode = try visit(
                     wrapped, path: path + ["wrapped"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
-                guard case let .property(relationshipProperty) = wrappedNode,
-                    let relationship = activeEntity.relationships.first(where: {
-                        $0.name == relationshipProperty.name && !$0.isToMany
-                    }),
-                    supportsToOnePredicate(relationship, ownerEntity: activeEntity, schema: schema),
-                    let destinationEntity = schema.entity(forName: relationship.destination),
-                    let destinationModelType = modelTypeForEntity(destinationEntity.name)
-                else {
+                guard let traversal = try relationshipTraversal(wrappedNode, from: activeEntity) else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "OptionalFlatMap requires a direct owning to-one relationship.")
+                        "OptionalFlatMap requires a supported to-one relationship path.")
                 }
                 let previousModelType = activeModelType
                 let previousEntity = activeEntity
                 let previousRelationshipName = activeRelationshipName
                 let previousPredicateRootType = activePredicateRootType
-                activeModelType = destinationModelType
-                activeEntity = destinationEntity
-                activeRelationshipName = relationship.name
-                activePredicateRootType = destinationModelType
+                activeModelType = traversal.modelType
+                activeEntity = traversal.entity
+                activeRelationshipName = traversal.names.joined(separator: ".")
+                activePredicateRootType = traversal.modelType
                 let transformNode: RuntimePredicateNode
                 do {
                     transformNode = try visit(
@@ -408,7 +453,9 @@ package enum PredicateRuntimeTreeBuilder {
             property.isRelationship,
             entity.relationships.contains(where: { $0.name == property.name })
         {
-            return .property(RuntimePropertyReference(name: property.name))
+            return .property(
+                RuntimePropertyReference(
+                    name: relationshipName.map { "\($0).\(property.name)" } ?? property.name))
         }
         if let propertyName = modelType.propertyName(forKeyPath: keyPath),
             let property = metadata.first(where: { $0.name == propertyName }),

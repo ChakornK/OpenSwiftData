@@ -22,6 +22,7 @@ final class DecimalTextTests: XCTestCase {
         XCTAssertEqual(DecimalText.compare("0012.300", "12.3"), .orderedSame)
         XCTAssertEqual(DecimalText.compare("-0", "0e99999999999999999999"), .orderedSame)
         XCTAssertEqual(DecimalText.compare("0.0100", "0.01"), .orderedSame)
+        XCTAssertEqual(DecimalText.compare("000.000", "-0e99999999999999999999"), .orderedSame)
         XCTAssertEqual(
             DecimalText.compare("123456789012345678901234567890", "123456789012345678901234567891"),
             .orderedAscending)

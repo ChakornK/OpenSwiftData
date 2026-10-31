@@ -209,8 +209,15 @@ package enum PredicateIRBuilder {
     ) throws -> PredicateIR {
         switch ir {
         case let .keyPath(path):
-            guard path.count == 1,
-                let property = path.first,
+            guard path.count == 1, let rawProperty = path.first else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Optional relationship predicates support one direct scalar destination property.")
+            }
+            let property =
+                rawProperty.hasPrefix("\(relationship).")
+                ? String(rawProperty.dropFirst(relationship.count + 1))
+                : rawProperty
+            guard !property.isEmpty, !property.contains("."),
                 isSupportedElementScalar(attributeTypes["\(relationship).\(property)"])
             else {
                 throw SwiftDataError.unsupportedPredicate(

@@ -44,6 +44,8 @@ package enum PredicateRuntimeTreeBuilder {
         var activeModelType: any PersistentModel.Type = modelType
         var activeEntity = entity
         var activeCollectionName: String?
+        var activeRelationshipName: String?
+        var activePredicateRootType: Any.Type = Model.self
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -54,7 +56,8 @@ package enum PredicateRuntimeTreeBuilder {
             if let keyPath = value as? AnyKeyPath {
                 return try propertyReference(
                     for: keyPath, modelType: activeModelType, entity: activeEntity, schema: schema,
-                    collectionName: activeCollectionName)
+                    collectionName: activeCollectionName, relationshipName: activeRelationshipName,
+                    expectedRootType: activePredicateRootType)
             }
 
             let mirror = Mirror(reflecting: value)
@@ -123,9 +126,11 @@ package enum PredicateRuntimeTreeBuilder {
                 let previousModelType = activeModelType
                 let previousEntity = activeEntity
                 let previousCollectionName = activeCollectionName
+                let previousPredicateRootType = activePredicateRootType
                 activeModelType = destinationModelType
                 activeEntity = destinationEntity
                 activeCollectionName = sequenceProperty.name
+                activePredicateRootType = destinationModelType
                 let testNode: RuntimePredicateNode
                 do {
                     testNode = try visit(
@@ -135,21 +140,84 @@ package enum PredicateRuntimeTreeBuilder {
                     activeModelType = previousModelType
                     activeEntity = previousEntity
                     activeCollectionName = previousCollectionName
+                    activePredicateRootType = previousPredicateRootType
                     throw error
                 }
                 activeModelType = previousModelType
                 activeEntity = previousEntity
                 activeCollectionName = previousCollectionName
+                activePredicateRootType = previousPredicateRootType
                 return .expression(
                     name: "OSDSequenceContainsWhere",
                     children: [("sequence", sequenceNode), ("test", testNode)])
+            }
+            if name == "OptionalFlatMap" {
+                guard let schema,
+                    let wrapped = children.first(where: { $0.label == "wrapped" })?.value,
+                    let transform = children.first(where: { $0.label == "transform" })?.value,
+                    let variable = children.first(where: { $0.label == "variable" })?.value,
+                    variableIdentifier(variable) != nil
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Malformed OptionalFlatMap relationship predicate")
+                }
+                let wrappedNode = try visit(
+                    wrapped, path: path + ["wrapped"], bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+                guard case let .property(relationshipProperty) = wrappedNode,
+                    let relationship = activeEntity.relationships.first(where: {
+                        $0.name == relationshipProperty.name && !$0.isToMany
+                    }),
+                    supportsOwningToOnePredicate(relationship, ownerEntity: activeEntity, schema: schema),
+                    let destinationEntity = schema.entity(forName: relationship.destination),
+                    let destinationModelType = modelTypeForEntity(destinationEntity.name)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "OptionalFlatMap requires a direct owning to-one relationship.")
+                }
+                let previousModelType = activeModelType
+                let previousEntity = activeEntity
+                let previousRelationshipName = activeRelationshipName
+                let previousPredicateRootType = activePredicateRootType
+                activeModelType = destinationModelType
+                activeEntity = destinationEntity
+                activeRelationshipName = relationship.name
+                activePredicateRootType = destinationModelType
+                let transformNode: RuntimePredicateNode
+                do {
+                    transformNode = try visit(
+                        transform, path: path + ["transform"], bindings: bindings,
+                        capturePathRewrites: capturePathRewrites)
+                } catch {
+                    activeModelType = previousModelType
+                    activeEntity = previousEntity
+                    activeRelationshipName = previousRelationshipName
+                    activePredicateRootType = previousPredicateRootType
+                    throw error
+                }
+                activeModelType = previousModelType
+                activeEntity = previousEntity
+                activeRelationshipName = previousRelationshipName
+                activePredicateRootType = previousPredicateRootType
+                return .expression(
+                    name: name,
+                    children: [
+                        ("wrapped", wrappedNode),
+                        ("transform", transformNode),
+                        (
+                            "variable",
+                            try visit(
+                                variable, path: path + ["variable"], bindings: bindings,
+                                capturePathRewrites: capturePathRewrites)
+                        ),
+                    ])
             }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath
             {
                 return try propertyReference(
                     for: keyPath, modelType: activeModelType, entity: activeEntity, schema: schema,
-                    collectionName: activeCollectionName)
+                    collectionName: activeCollectionName, relationshipName: activeRelationshipName,
+                    expectedRootType: activePredicateRootType)
             }
             if name == "KeyPath" {
                 throw SwiftDataError.unsupportedPredicate(
@@ -278,13 +346,50 @@ package enum PredicateRuntimeTreeBuilder {
         return id as? UInt
     }
 
+    private static func supportsOwningToOnePredicate(
+        _ relationship: Schema.Relationship,
+        ownerEntity: Schema.Entity,
+        schema: Schema
+    ) -> Bool {
+        guard let inverseName = relationship.inverse,
+            let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination),
+            !inverse.relationship.isToMany
+        else { return true }
+        let ownerName =
+            schema.relationshipStorageMapping(
+                modelEntityName: ownerEntity.name, relationshipName: relationship.name)?.declaringEntityName
+            ?? ownerEntity.name
+        let inverseOwnerName = "\(inverse.entityName).\(inverse.relationship.name)"
+        return ownerName.utf8.lexicographicallyPrecedes(inverseOwnerName.utf8)
+    }
+
     private static func propertyReference(
         for keyPath: AnyKeyPath,
         modelType: any PersistentModel.Type,
         entity: Schema.Entity,
         schema: Schema?,
-        collectionName: String? = nil
+        collectionName: String? = nil,
+        relationshipName: String? = nil,
+        expectedRootType: Any.Type
     ) throws -> RuntimePredicateNode {
+        let keyPathRootType = type(of: keyPath).rootType
+        if let schema,
+            ObjectIdentifier(keyPathRootType) == ObjectIdentifier(expectedRootType),
+            let destinationModelType = keyPathRootType as? any PersistentModel.Type,
+            let destinationEntityName = String(describing: destinationModelType).split(separator: ".").last.map(
+                String.init),
+            let destination = schema.entity(forName: destinationEntityName),
+            let property = destinationModelType.schemaMetadata().first(where: { $0.keypath == keyPath }),
+            !property.isRelationship,
+            destination.attributes.contains(where: { $0.name == property.name }),
+            destination.attributes.first(where: { $0.name == property.name })?.options.contains(.flattened) != true
+        {
+            return .property(
+                RuntimePropertyReference(
+                    name: collectionName.map { "\($0)[].\(property.name)" }
+                        ?? relationshipName.map { "\($0).\(property.name)" }
+                        ?? property.name))
+        }
         let metadata = modelType.schemaMetadata()
         if let propertyName = modelType.propertyName(forKeyPath: keyPath),
             let property = metadata.first(where: { $0.name == propertyName }),
@@ -301,7 +406,9 @@ package enum PredicateRuntimeTreeBuilder {
         {
             return .property(
                 RuntimePropertyReference(
-                    name: collectionName.map { "\($0)[].\(property.name)" } ?? property.name))
+                    name: collectionName.map { "\($0)[].\(property.name)" }
+                        ?? relationshipName.map { "\($0).\(property.name)" }
+                        ?? property.name))
         }
         if let component = modelType.flattenedPropertyAdapters().first(where: {
             $0.componentKeyPath == keyPath || $0.localComponentKeyPath == keyPath
@@ -312,17 +419,9 @@ package enum PredicateRuntimeTreeBuilder {
         {
             return .property(RuntimePropertyReference(name: component.columnName))
         }
-        if let schema,
-            let destinationModelType = type(of: keyPath).rootType as? any PersistentModel.Type,
-            let destinationEntityName = String(describing: destinationModelType).split(separator: ".").last.map(
-                String.init),
-            let destination = schema.entity(forName: destinationEntityName),
-            let property = destinationModelType.schemaMetadata().first(where: { $0.keypath == keyPath }),
-            !property.isRelationship,
-            destination.attributes.contains(where: { $0.name == property.name }),
-            destination.attributes.first(where: { $0.name == property.name })?.options.contains(.flattened) != true
-        {
-            return .property(RuntimePropertyReference(name: property.name))
+        if ObjectIdentifier(keyPathRootType) != ObjectIdentifier(expectedRootType) {
+            throw SwiftDataError.unsupportedPredicate(
+                "Predicate key path root does not match its active model scope.")
         }
         let pathParts = String(describing: keyPath).split(separator: ".").map(String.init)
         if pathParts.count == 2,

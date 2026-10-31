@@ -379,6 +379,18 @@ final class PlainHierarchyTargetGrandchildFixture: PlainHierarchyTargetChildFixt
 }
 
 @Model
+final class PlainHierarchyChildTargetOwnerFixture {
+    var name: String
+    var detail: String
+    @Relationship(inverse: nil) var target: PlainHierarchyTargetChildFixture?
+    init(name: String, detail: String, target: PlainHierarchyTargetChildFixture?) {
+        self.name = name
+        self.detail = detail
+        self.target = target
+    }
+}
+
+@Model
 final class PlainHierarchyTargetSiblingFixture: PlainHierarchyTargetBaseFixture {
     var label: String
     init(name: String, label: String) {
@@ -1468,6 +1480,31 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(renamedOwners.map(\.name), ["matched"])
         XCTAssertEqual(try context.fetchCount(renamedDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(renamedDescriptor), renamedOwners.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testPredicateUsesSubtypeToOneDestinationDiscriminator() throws {
+        let container = try ModelContainer(
+            for: PlainHierarchyChildTargetOwnerFixture.self,
+            PlainHierarchyTargetGrandchildFixture.self,
+            PlainHierarchyTargetSiblingFixture.self,
+            configurations: .sqliteMemory("subtype-to-one-predicate"))
+        let context = container.mainContext
+        let grandchild = PlainHierarchyTargetGrandchildFixture(name: "target", detail: "needle", rank: 7)
+        context.insert(grandchild)
+        context.insert(
+            PlainHierarchyChildTargetOwnerFixture(name: "matched", detail: "owner-mismatch", target: grandchild))
+        context.insert(PlainHierarchyChildTargetOwnerFixture(name: "nil", detail: "needle", target: nil))
+        try context.save()
+
+        let needle = "needle"
+        let descriptor = FetchDescriptor<PlainHierarchyChildTargetOwnerFixture>(
+            predicate: #Predicate { $0.target?.detail.contains(needle) == true },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
     }
 
     @MainActor

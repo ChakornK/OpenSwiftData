@@ -188,6 +188,21 @@ final class QualifiedOptionalScalarFixture {
 }
 
 @Model
+final class CodableStringCollectionFixture {
+    var name: String
+    @Attribute(.codable) var tags: [String]
+    @Attribute(.codable) var numbers: [Int]
+    @Attribute(.codable) var flags: [Bool]
+
+    init(name: String, tags: [String], numbers: [Int] = [], flags: [Bool] = []) {
+        self.name = name
+        self.tags = tags
+        self.numbers = numbers
+        self.flags = flags
+    }
+}
+
+@Model
 final class NestedToOneRootFixture {
     var name: String
     @Relationship(inverse: nil) var middle: NestedToOneMiddleFixture?
@@ -2500,6 +2515,93 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.items.count == expectedCount })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["one", "two"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+    }
+
+    @MainActor
+    func testPredicateMatchesCodableStringCollectionElements() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-string-collection-contains"))
+        let context = container.mainContext
+        let matching = CodableStringCollectionFixture(
+            name: "matching", tags: ["swift", "portable"], numbers: [7], flags: [true])
+        let other = CodableStringCollectionFixture(name: "other", tags: ["database"], numbers: [3], flags: [false])
+        context.insert(matching)
+        context.insert(other)
+        try context.save()
+
+        let needle = "portable"
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.contains(needle) },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let number = 7
+        let numberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.numbers.contains(number) },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(numberDescriptor).map(\.name), ["matching"])
+
+        let flag = true
+        let flagDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.flags.contains(flag) },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(flagDescriptor).map(\.name), ["matching"])
+
+        matching.tags = []
+        other.tags = [needle]
+        matching.numbers = []
+        other.numbers = [number]
+        matching.flags = []
+        other.flags = [flag]
+        let pendingDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.contains(needle) })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["other"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [other.persistentModelID])
+
+        let pendingNumberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.numbers.contains(number) })
+        XCTAssertEqual(try context.fetch(pendingNumberDescriptor).map(\.name), ["other"])
+
+        let pendingFlagDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.flags.contains(flag) })
+        XCTAssertEqual(try context.fetch(pendingFlagDescriptor).map(\.name), ["other"])
+    }
+
+    @MainActor
+    func testBoolCollectionMembershipRejectsNumericJSONPayload() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-bool-collection-type-check"))
+        let context = container.mainContext
+        let model = CodableStringCollectionFixture(name: "numeric-payload", tags: [], flags: [true])
+        context.insert(model)
+        try context.save()
+        let primaryKey = try XCTUnwrap(model.persistentModelID.primaryKey)
+        try XCTUnwrap(container.store).write { connection in
+            try connection.execute(
+                "UPDATE ZCODABLESTRINGCOLLECTIONFIXTURE SET ZFLAGS = ? WHERE Z_PK = ?",
+                arguments: [.blob(Array("[1]".utf8)), .int(primaryKey)])
+        }
+
+        let reader = container.makeContext()
+        let trueValue = true
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.flags.contains(trueValue) },
+            includePendingChanges: false)
+        XCTAssertTrue(try reader.fetch(descriptor).isEmpty)
+        XCTAssertEqual(try reader.fetchCount(descriptor), 0)
+    }
+
+    func testPendingBoolCollectionMembershipRejectsNumericJSONPayload() throws {
+        let plan = PredicatePlan.collectionContains("flags", "Bool", .value(.int(1)))
+        let matches = try RuntimePredicateEvaluator.matches(
+            plan, values: ["flags": .blob(Array("[1]".utf8))])
+        XCTAssertFalse(matches)
     }
 
     @MainActor

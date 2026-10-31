@@ -71,6 +71,9 @@ package enum PredicatePlanBuilder {
         case let .stringStartsWith(lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .stringStartsWith(lhs, rhs)
+        case let .collectionContains(name, elementType, element):
+            guard let element = build(element) else { return nil }
+            return .collectionContains(name, elementType, element)
         case let .relationshipContains(name, body):
             guard let body = build(body) else { return nil }
             return .relationshipContains(name, body)
@@ -341,6 +344,20 @@ package enum SQLCompiler {
         case let .stringStartsWith(lhs, rhs):
             return
                 "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
+        case let .collectionContains(name, elementType, element):
+            guard Self.validIdentifier(name),
+                [
+                    "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
+                    "UInt64",
+                ]
+                .contains(elementType)
+            else {
+                throw SwiftDataError.unsupportedPredicate("Unsupported scalar collection membership type")
+            }
+            let elementSQL = try render(
+                element, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+            arguments.append(.text(elementType))
+            return "osd_json_array_contains(\(tableAlias).Z\(name.uppercased()), \(elementSQL), ?)"
         case let .relationshipContains(name, body):
             let path = name.split(separator: ".").map(String.init)
             guard let collectionName = path.last else {
@@ -533,6 +550,8 @@ package enum SQLCompiler {
         case let .localizedStandardContains(lhs, rhs): "localizedContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringContains(lhs, rhs): "stringContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"
+        case let .collectionContains(name, elementType, element):
+            "collectionContains(\(name),\(elementType),\(structure(element)))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
         case let .relationshipCount(name): "relationshipCount(\(name))"

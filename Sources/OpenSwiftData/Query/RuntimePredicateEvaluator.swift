@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 package enum RuntimePredicateEvaluator {
     package enum TruthValue: Equatable {
@@ -22,6 +23,8 @@ package enum RuntimePredicateEvaluator {
             let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             referencedProperties(in: lhs).union(referencedProperties(in: rhs))
+        case let .collectionContains(name, _, element):
+            Set([name]).union(referencedProperties(in: element))
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
                 referencedProperties(in: falseBranch))
@@ -42,6 +45,8 @@ package enum RuntimePredicateEvaluator {
         switch plan {
         case let .relationshipContains(name, body):
             return [name: referencedProperties(in: body)]
+        case let .collectionContains(_, _, element):
+            return relationshipProperties(in: element)
         case let .collectionCount(name):
             return [name: []]
         case let .property(name):
@@ -139,6 +144,14 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
             }
             return .no
+        case .collectionContains:
+            let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
+            guard value != .null else { return .unknown }
+            guard case let .int(integer) = value else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Scalar collection membership does not evaluate to a boolean value")
+            }
+            return integer == 0 ? .no : .yes
         case .property, .value, .coalesce, .collectionCount:
             let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard case let .int(integer) = value else {
@@ -226,6 +239,37 @@ package enum RuntimePredicateEvaluator {
             return value
         case let .collectionCount(name):
             return .int(Int64(relationshipValues[name]?.count ?? 0))
+        case let .collectionContains(name, elementType, element):
+            let collectionValue = try evaluateValue(
+                .property(name), values: values, relationshipValues: relationshipValues)
+            guard case let .blob(bytes) = collectionValue else { return .null }
+            let elementValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
+                throw SwiftDataError.unsupportedPredicate("Codable collection contains malformed JSON data")
+            }
+            let contains: Bool
+            switch (elementType, elementValue) {
+            case ("String", let .text(needle)):
+                contains = array.contains { ($0 as? String) == needle }
+            case ("Bool", let .int(needle)):
+                contains = array.contains { value in
+                    guard let number = value as? NSNumber,
+                        CFGetTypeID(number) == CFBooleanGetTypeID()
+                    else { return false }
+                    return number.boolValue == (needle != 0)
+                }
+            case (_, let .int(needle)):
+                contains = array.contains { value in
+                    guard let number = value as? NSNumber,
+                        CFGetTypeID(number) != CFBooleanGetTypeID()
+                    else { return false }
+                    return Int64(number.stringValue) == needle
+                }
+            default:
+                throw SwiftDataError.unsupportedPredicate(
+                    "Pending scalar collection membership received an incompatible element value")
+            }
+            return .int(contains ? 1 : 0)
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):

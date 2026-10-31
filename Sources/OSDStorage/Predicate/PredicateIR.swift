@@ -13,6 +13,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case nilCoalesce(PredicateIR, PredicateIR)
     case conditional(PredicateIR, PredicateIR, PredicateIR)
     case sequenceContains(PredicateIR, PredicateIR)
+    case collectionContains(String, String, PredicateIR)
     case relationshipContains(String, PredicateIR)
     case relationshipCount(String)
     case localizedStandardContains(PredicateIR, PredicateIR)
@@ -198,9 +199,19 @@ package enum PredicateIRBuilder {
                         element,
                         upper))
             case "SequenceContains":
-                return .sequenceContains(
-                    try field("sequence", from: fields, attributeTypes: attributeTypes),
-                    try field("element", from: fields, attributeTypes: attributeTypes))
+                let sequence = try field("sequence", from: fields, attributeTypes: attributeTypes)
+                let element = try field("element", from: fields, attributeTypes: attributeTypes)
+                guard case let .keyPath(path) = sequence, path.count == 1,
+                    let elementType = scalarCollectionElementType(attributeTypes[path[0]])
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContains requires a direct Codable collection of supported scalar values.")
+                }
+                guard case .value = element else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContains requires a captured scalar element value.")
+                }
+                return .collectionContains(path[0], elementType, element)
             case "OSDSequenceContainsWhere":
                 guard case let .keyPath(path) = try field("sequence", from: fields, attributeTypes: attributeTypes),
                     !path.isEmpty
@@ -347,6 +358,12 @@ package enum PredicateIRBuilder {
                 ? name
                 : (normalizedRelationships + relationshipParts).joined(separator: ".")
             return .relationshipContains(fullName, body)
+        case let .collectionContains(name, elementType, element):
+            guard relationships.isEmpty else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Scalar collection membership inside relationship predicates is unsupported.")
+            }
+            return .collectionContains(name, elementType, element)
         case let .relationshipCount(name):
             let relationshipParts = name.split(separator: ".").map(String.init)
             let fullName =
@@ -420,6 +437,8 @@ package enum PredicateIRBuilder {
             return referencesDecimal(value, attributeTypes: attributeTypes)
         case let .relationshipContains(_, body):
             return referencesDecimal(body, attributeTypes: attributeTypes)
+        case let .collectionContains(_, _, element):
+            return referencesDecimal(element, attributeTypes: attributeTypes)
         case .sequenceContains, .relationshipCount, .value:
             return false
         }
@@ -519,6 +538,23 @@ package enum PredicateIRBuilder {
             "Float", "Swift.Float", "Double", "Swift.Double", "Decimal", "Foundation.Decimal", "Date",
             "Foundation.Date", "URL", "Foundation.URL",
         ].contains(unwrapped)
+    }
+
+    private static func scalarCollectionElementType(_ typeName: String?) -> String? {
+        guard let typeName,
+            let opening = typeName.firstIndex(of: "<"), typeName.last == ">"
+        else { return nil }
+        let collectionName = typeName[..<opening].split(separator: ".").last.map(String.init) ?? ""
+        guard collectionName == "Array" || collectionName == "Set" else { return nil }
+        let rawElement = String(typeName[typeName.index(after: opening)..<typeName.index(before: typeName.endIndex)])
+        let element = rawElement.split(separator: ".").last.map(String.init) ?? rawElement
+        guard
+            [
+                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                "UInt32", "UInt64",
+            ].contains(element)
+        else { return nil }
+        return element
     }
 
     private static func validateStringOperand(

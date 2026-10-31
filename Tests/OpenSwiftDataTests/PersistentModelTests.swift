@@ -1706,6 +1706,26 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
 
+        let titleFragment = "lect"
+        let containsDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title.contains(titleFragment) })
+            },
+            includePendingChanges: false)
+        let containsMatches = try context.fetch(containsDescriptor)
+        XCTAssertEqual(containsMatches.map(\.persistentModelID), matches.map(\.persistentModelID))
+        XCTAssertEqual(try context.fetchCount(containsDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(containsDescriptor), containsMatches.map(\.persistentModelID))
+
+        let titlePrefix = "sel"
+        let startsWithDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title.starts(with: titlePrefix) })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(
+            try context.fetch(startsWithDescriptor).map(\.persistentModelID), matches.map(\.persistentModelID))
+
         let pendingTitle = "pending-title"
         selectedItem.title = pendingTitle
         let pendingDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
@@ -1716,6 +1736,17 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(pendingMatches.count, 1)
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+
+        let pendingFragment = "pending"
+        let pendingContainsDescriptor = FetchDescriptor<InheritanceRelationshipBaseFixture>(
+            predicate: #Predicate { base in
+                base.items.contains(where: { item in item.title.contains(pendingFragment) })
+            })
+        let pendingContainsMatches = try context.fetch(pendingContainsDescriptor)
+        XCTAssertEqual(pendingContainsMatches.map(\.persistentModelID), [baseOwner.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(pendingContainsDescriptor), 1)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(pendingContainsDescriptor), pendingContainsMatches.map(\.persistentModelID))
 
         let disjunction = FetchDescriptor<InheritanceRelationshipBaseFixture>(
             predicate: #Predicate { base in

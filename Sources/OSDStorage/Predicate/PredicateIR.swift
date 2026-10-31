@@ -354,9 +354,42 @@ package enum PredicateIRBuilder {
         case let .negation(value):
             return .negation(
                 try elementPredicate(value, relationship: relationship, attributeTypes: attributeTypes))
+        case let .localizedStandardContains(lhs, rhs):
+            try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
+            return .localizedStandardContains(
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .stringContains(lhs, rhs):
+            try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
+            return .stringContains(
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .stringStartsWith(lhs, rhs):
+            try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
+            return .stringStartsWith(
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
         default:
             throw SwiftDataError.unsupportedPredicate(
                 "Collection predicate bodies support scalar comparisons and boolean combinations only.")
+        }
+    }
+
+    private static func validateElementStringOperand(
+        _ ir: PredicateIR,
+        relationship: String,
+        attributeTypes: [String: String]
+    ) throws {
+        guard case let .keyPath(path) = ir, path.count == 1 else {
+            throw SwiftDataError.unsupportedPredicate(
+                "Collection string predicates require a direct persisted String element property.")
+        }
+        let components = path[0].components(separatedBy: "[].")
+        guard components.count == 2, components[0] == relationship,
+            isStringAttribute(attributeTypes[path[0]])
+        else {
+            throw SwiftDataError.unsupportedPredicate(
+                "Collection string predicates require a direct persisted String element property.")
         }
     }
 

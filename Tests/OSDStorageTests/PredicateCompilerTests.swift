@@ -99,6 +99,31 @@ final class PredicateCompilerTests: XCTestCase {
         }
     }
 
+    func testCollectionStringPredicateRejectsNonStringElementAttribute() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "OSDSequenceContainsWhere",
+            children: [
+                ("sequence", .propertyReference("items")),
+                (
+                    "test",
+                    .expression(
+                        name: "CollectionContainsCollection",
+                        children: [
+                            ("base", .propertyReference("items[].rank")),
+                            ("other", .typedValue(.text("1"))),
+                        ])
+                ),
+            ])
+
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["items[].rank": "Int"])
+        ) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+    }
+
     func testCompilesComparisonAndRebindsStructuralCache() throws {
         let first = #Predicate<CompilerRow> { $0.age > 18 }
         let second = #Predicate<CompilerRow> { $0.age > 65 }

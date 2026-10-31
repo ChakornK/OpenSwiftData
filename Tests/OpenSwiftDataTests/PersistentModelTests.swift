@@ -194,13 +194,22 @@ final class CodableStringCollectionFixture {
     var optionalTags: [String]?
     var numbers: [Int]
     var flags: [Bool]
+    var optionalNumbers: Set<Int>?
 
-    init(name: String, tags: [String], optionalTags: [String]? = nil, numbers: [Int] = [], flags: [Bool] = []) {
+    init(
+        name: String,
+        tags: [String],
+        optionalTags: [String]? = nil,
+        numbers: [Int] = [],
+        flags: [Bool] = [],
+        optionalNumbers: Set<Int>? = nil
+    ) {
         self.name = name
         self.tags = tags
         self.optionalTags = optionalTags
         self.numbers = numbers
         self.flags = flags
+        self.optionalNumbers = optionalNumbers
     }
 }
 
@@ -2559,10 +2568,14 @@ final class PersistentModelTests: XCTestCase {
             configurations: .sqliteMemory("codable-string-collection-contains"))
         let context = container.mainContext
         let matching = CodableStringCollectionFixture(
-            name: "matching", tags: ["swift", "portable"], optionalTags: ["optional"], numbers: [7], flags: [true])
-        let other = CodableStringCollectionFixture(name: "other", tags: ["database"], numbers: [3], flags: [false])
+            name: "matching", tags: ["swift", "portable"], optionalTags: ["optional"], numbers: [7], flags: [true],
+            optionalNumbers: [11])
+        let other = CodableStringCollectionFixture(
+            name: "other", tags: ["database"], numbers: [3], flags: [false], optionalNumbers: nil)
+        let emptySet = CodableStringCollectionFixture(name: "empty-set", tags: [], optionalNumbers: [])
         context.insert(matching)
         context.insert(other)
+        context.insert(emptySet)
         try context.save()
 
         let needle = "portable"
@@ -2592,9 +2605,17 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(optionalDescriptor).map(\.name), ["matching"])
 
+        let optionalNumber = 11
+        let optionalNumberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalNumbers.flatMap { $0.contains(optionalNumber) } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(optionalNumberDescriptor).map(\.name), ["matching"])
+
         matching.tags = []
         matching.optionalTags = nil
+        matching.optionalNumbers = nil
         other.tags = [needle]
+        other.optionalNumbers = [optionalNumber]
         matching.numbers = []
         other.numbers = [number]
         matching.flags = []
@@ -2612,6 +2633,10 @@ final class PersistentModelTests: XCTestCase {
         let pendingFlagDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
             predicate: #Predicate { $0.flags.contains(flag) })
         XCTAssertEqual(try context.fetch(pendingFlagDescriptor).map(\.name), ["other"])
+
+        let pendingOptionalNumberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalNumbers.flatMap { $0.contains(optionalNumber) } ?? false })
+        XCTAssertEqual(try context.fetch(pendingOptionalNumberDescriptor).map(\.name), ["other"])
     }
 
     @MainActor

@@ -14,6 +14,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case conditional(PredicateIR, PredicateIR, PredicateIR)
     case sequenceContains(PredicateIR, PredicateIR)
     case relationshipContains(String, PredicateIR)
+    case relationshipCount(String)
     case localizedStandardContains(PredicateIR, PredicateIR)
     case stringContains(PredicateIR, PredicateIR)
     case stringStartsWith(PredicateIR, PredicateIR)
@@ -238,6 +239,16 @@ package enum PredicateIRBuilder {
                 return .conjunction(
                     .comparison(.notEqual, .keyPath(ownerPath), .value(.null)),
                     isEmpty)
+            case "OSDSequenceCount":
+                guard
+                    case let .keyPath(path) = try field(
+                        "sequence", from: fields, attributeTypes: attributeTypes), !path.isEmpty
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Collection count requires a relationship path.")
+                }
+                return .relationshipCount(
+                    path.flatMap { $0.split(separator: ".").map(String.init) }
+                        .joined(separator: "."))
             case "OSDSequenceAllSatisfy":
                 guard
                     case let .keyPath(path) = try field(
@@ -336,6 +347,13 @@ package enum PredicateIRBuilder {
                 ? name
                 : (normalizedRelationships + relationshipParts).joined(separator: ".")
             return .relationshipContains(fullName, body)
+        case let .relationshipCount(name):
+            let relationshipParts = name.split(separator: ".").map(String.init)
+            let fullName =
+                relationshipParts.starts(with: normalizedRelationships)
+                ? name
+                : (normalizedRelationships + relationshipParts).joined(separator: ".")
+            return .relationshipCount(fullName)
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate("Nested relationship predicates are unsupported.")
         }
@@ -402,7 +420,7 @@ package enum PredicateIRBuilder {
             return referencesDecimal(value, attributeTypes: attributeTypes)
         case let .relationshipContains(_, body):
             return referencesDecimal(body, attributeTypes: attributeTypes)
-        case .sequenceContains, .value:
+        case .sequenceContains, .relationshipCount, .value:
             return false
         }
     }
@@ -547,6 +565,7 @@ package enum PredicateIRBuilder {
         case "OSDSequenceContainsWhere": ["sequence", "test"]
         case "OSDSequenceAllSatisfy": ["sequence", "test"]
         case "OSDSequenceIsEmpty": ["sequence"]
+        case "OSDSequenceCount": ["sequence"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]
         case "NilLiteral": []

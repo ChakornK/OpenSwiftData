@@ -31,7 +31,7 @@ package enum RuntimePredicateEvaluator {
             referencedProperties(in: value)
         case let .property(name):
             [name]
-        case .relationshipContains:
+        case .relationshipContains, .collectionCount:
             []
         case .value:
             []
@@ -42,6 +42,8 @@ package enum RuntimePredicateEvaluator {
         switch plan {
         case let .relationshipContains(name, body):
             return [name: referencedProperties(in: body)]
+        case let .collectionCount(name):
+            return [name: []]
         case let .property(name):
             let components = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard components.count == 2 else { return [:] }
@@ -137,7 +139,7 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
             }
             return .no
-        case .property, .value, .coalesce:
+        case .property, .value, .coalesce, .collectionCount:
             let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate("Predicate expression does not evaluate to a boolean value")
@@ -222,6 +224,8 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("Pending model has no encoded predicate property '\(name)'")
             }
             return value
+        case let .collectionCount(name):
+            return .int(Int64(relationshipValues[name]?.count ?? 0))
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):

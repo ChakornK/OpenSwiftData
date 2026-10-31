@@ -294,6 +294,7 @@ package enum PredicateRuntimeTreeBuilder {
                 let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath,
                 ObjectIdentifier(type(of: keyPath).valueType) == ObjectIdentifier(Bool.self),
+                isArrayOrSetType(type(of: keyPath).rootType),
                 let root = children.first(where: { $0.label == "root" })?.value
             {
                 let rootNode = try visit(
@@ -311,6 +312,30 @@ package enum PredicateRuntimeTreeBuilder {
                     ObjectIdentifier(type(of: metadata).valueType) == ObjectIdentifier(type(of: keyPath).rootType)
                 {
                     return .expression(name: "OSDSequenceIsEmpty", children: [("sequence", rootNode)])
+                }
+            }
+            if name == "KeyPath",
+                let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
+                let keyPath = keyPathValue as? AnyKeyPath,
+                ObjectIdentifier(type(of: keyPath).valueType) == ObjectIdentifier(Int.self),
+                isArrayOrSetType(type(of: keyPath).rootType),
+                let root = children.first(where: { $0.label == "root" })?.value
+            {
+                let rootNode = try visit(
+                    root, path: path + ["root"], bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+                if case let .property(reference) = rootNode,
+                    let collectionName = reference.name.split(separator: ".").last.map(String.init),
+                    let relationship = activeEntity.relationships.first(where: {
+                        $0.name == collectionName && $0.isToMany
+                    }),
+                    let schema,
+                    supportsCollectionPredicate(relationship, schema: schema),
+                    let metadata = activeModelType.schemaMetadata().first(where: { $0.name == collectionName })?
+                        .keypath,
+                    ObjectIdentifier(type(of: metadata).valueType) == ObjectIdentifier(type(of: keyPath).rootType)
+                {
+                    return .expression(name: "OSDSequenceCount", children: [("sequence", rootNode)])
                 }
             }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
@@ -446,6 +471,11 @@ package enum PredicateRuntimeTreeBuilder {
             let id = Mirror(reflecting: key).children.first(where: { $0.label == "id" })?.value
         else { return nil }
         return id as? UInt
+    }
+
+    private static func isArrayOrSetType(_ type: Any.Type) -> Bool {
+        let name = String(reflecting: type)
+        return name.hasPrefix("Swift.Array<") || name.hasPrefix("Swift.Set<")
     }
 
     private static func supportsToOnePredicate(

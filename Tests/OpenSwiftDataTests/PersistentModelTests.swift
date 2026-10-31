@@ -2091,6 +2091,13 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(matches.map(\.persistentModelID), [emptyOwner.persistentModelID])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let oneTarget = 1
+        let countDescriptor = FetchDescriptor<InferredSetOwnerFixture>(
+            predicate: #Predicate { $0.targets.count == oneTarget },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(countDescriptor).map(\.persistentModelID), [populatedOwner.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(countDescriptor), 1)
     }
 
     @MainActor
@@ -2453,6 +2460,39 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.items.allSatisfy { $0.title == expectedTitle } })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["all-accepted", "mixed", "empty"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
+    func testPredicateComparesToManyRelationshipCount() throws {
+        let container = try ModelContainer(
+            for: NestedToManyMiddleFixture.self,
+            NestedToManyItemFixture.self,
+            configurations: .sqliteMemory("to-many-count-predicate"))
+        let context = container.mainContext
+        let first = NestedToManyItemFixture(title: "first")
+        let second = NestedToManyItemFixture(title: "second")
+        let empty = NestedToManyMiddleFixture(name: "empty", items: [])
+        let one = NestedToManyMiddleFixture(name: "one", items: [first])
+        let two = NestedToManyMiddleFixture(name: "two", items: [first, second])
+        context.insert(first)
+        context.insert(second)
+        context.insert(empty)
+        context.insert(one)
+        context.insert(two)
+        try context.save()
+
+        let expectedCount = 2
+        let descriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.count == expectedCount },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["two"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+
+        one.items.append(second)
+        let pendingDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.count == expectedCount })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["one", "two"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
     }
 
     @MainActor

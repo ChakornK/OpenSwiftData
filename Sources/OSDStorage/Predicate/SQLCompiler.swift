@@ -74,6 +74,8 @@ package enum PredicatePlanBuilder {
         case let .relationshipContains(name, body):
             guard let body = build(body) else { return nil }
             return .relationshipContains(name, body)
+        case let .relationshipCount(name):
+            return .collectionCount(name)
         case .sequenceContains:
             return nil
         }
@@ -450,6 +452,39 @@ package enum SQLCompiler {
                 + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
                 + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
                 + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
+        case let .relationshipCount(name):
+            guard
+                let relationship = relationships.first(where: {
+                    $0.ownerEntityName == entity && $0.propertyName == name && $0.isToMany
+                }),
+                Self.validIdentifier(relationship.destinationRootEntityName),
+                !relationship.destinationEntityIDs.isEmpty
+            else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Collection count requires supported direct to-many relationship storage.")
+            }
+            let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
+                .joined(separator: ", ")
+            arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+            if relationship.storesForeignKeyOnDestination {
+                guard Self.validIdentifier(relationship.foreignKeyColumnName) else {
+                    throw SwiftDataError.unsupportedPredicate("Invalid inverse relationship foreign-key column")
+                }
+                return "(SELECT COUNT(*) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                    + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(tableAlias).Z_PK "
+                    + "AND t1.Z_ENT IN (\(placeholders)))"
+            }
+            guard let joinTable = relationship.joinTableName, Self.validIdentifier(joinTable),
+                Self.validIdentifier(relationship.ownerJoinColumnName),
+                Self.validIdentifier(relationship.destinationJoinColumnName)
+            else {
+                throw SwiftDataError.unsupportedPredicate("Collection count requires a supported join table.")
+            }
+            return "(SELECT COUNT(*) FROM \(joinTable.uppercased()) AS j "
+                + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
+                + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(tableAlias).Z_PK "
+                + "AND t1.Z_ENT IN (\(placeholders)))"
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate(
                 "SequenceContains SQL compilation requires collection encoding metadata")
@@ -500,6 +535,7 @@ package enum SQLCompiler {
         case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
+        case let .relationshipCount(name): "relationshipCount(\(name))"
         }
     }
 

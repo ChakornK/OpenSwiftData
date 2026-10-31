@@ -732,6 +732,43 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testFirstSubclassAdditionRejectsExistingRelationshipColumnRenameAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let ownerRelationship = Schema.Relationship(
+            name: "target", destination: "Target", isToMany: false, isOptional: true)
+        let source = Schema([
+            Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
+            Schema.Entity(name: "OwnerChild", superentityName: "Owner"),
+            Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceColumns = try initial.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(sourceColumns.contains { $0.count > 1 && $0[1] == .text("ZTARGET") })
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let columns = try reopened.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZTARGET") })
+        XCTAssertFalse(columns.contains { $0.count > 1 && $0[1] == .text("ZOWNER_TARGET") })
+        let primaryKeys = try reopened.read {
+            try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        XCTAssertEqual(primaryKeys, [[.text("Owner")], [.text("Target")]])
+        try reopened.close()
+    }
+
     func testHierarchyLeafSubclassAdditionRejectsRequiredAttributesAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

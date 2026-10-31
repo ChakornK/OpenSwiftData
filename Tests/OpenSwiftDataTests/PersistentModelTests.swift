@@ -2326,6 +2326,20 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(collectionDescriptor).map(\.name), ["root"])
         XCTAssertEqual(try context.fetchCount(collectionDescriptor), 1)
 
+        let inverseAllSatisfyDescriptor = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.allSatisfy { $0.title == collectionNeedle }
+                    }
+                } ?? false
+            })
+        XCTAssertThrowsError(try context.fetch(inverseAllSatisfyDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupported multi-hop allSatisfy, got \(error)")
+            }
+        }
+
         let pendingItem = NestedInverseItemFixture(title: "pending-collection")
         context.insert(pendingItem)
         branch.items.append(pendingItem)
@@ -2492,6 +2506,54 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.middle.flatMap { $0.items.isEmpty } ?? false })
         XCTAssertTrue(try context.fetch(pendingEmptyDescriptor).isEmpty)
         XCTAssertEqual(try context.fetchCount(pendingEmptyDescriptor), 0)
+    }
+
+    @MainActor
+    func testAllSatisfyTraversesToManyCollectionThroughToOne() throws {
+        let container = try ModelContainer(
+            for: NestedToManyRootFixture.self,
+            NestedToManyMiddleFixture.self,
+            NestedToManyItemFixture.self,
+            configurations: .sqliteMemory("nested-to-one-all-satisfy"))
+        let context = container.mainContext
+        let accepted = NestedToManyItemFixture(title: "accepted")
+        let rejected = NestedToManyItemFixture(title: "rejected")
+        let allAccepted = NestedToManyMiddleFixture(name: "all-accepted", items: [accepted])
+        let mixed = NestedToManyMiddleFixture(name: "mixed", items: [accepted, rejected])
+        let empty = NestedToManyMiddleFixture(name: "empty", items: [])
+        let acceptedRoot = NestedToManyRootFixture(name: "accepted-root", middle: allAccepted)
+        let mixedRoot = NestedToManyRootFixture(name: "mixed-root", middle: mixed)
+        let emptyRoot = NestedToManyRootFixture(name: "empty-root", middle: empty)
+        let nilRoot = NestedToManyRootFixture(name: "nil-root", middle: nil)
+        context.insert(accepted)
+        context.insert(rejected)
+        context.insert(allAccepted)
+        context.insert(mixed)
+        context.insert(empty)
+        context.insert(acceptedRoot)
+        context.insert(mixedRoot)
+        context.insert(emptyRoot)
+        context.insert(nilRoot)
+        try context.save()
+
+        let expected = "accepted"
+        let descriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in middle.items.allSatisfy { $0.title == expected } } ?? false
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["accepted-root", "empty-root"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+
+        rejected.title = expected
+        let pendingDescriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in middle.items.allSatisfy { $0.title == expected } } ?? false
+            })
+        XCTAssertEqual(
+            Set(try context.fetch(pendingDescriptor).map(\.name)),
+            ["accepted-root", "mixed-root", "empty-root"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
     }
 
     @MainActor

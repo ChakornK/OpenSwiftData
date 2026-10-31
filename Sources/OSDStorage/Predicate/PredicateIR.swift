@@ -155,10 +155,20 @@ package enum PredicateIRBuilder {
                     throw SwiftDataError.unsupportedPredicate(
                         "Optional predicates require a supported to-one relationship or Codable collection path.")
                 }
-                return try prefixRelationshipPath(
+                let prefixedTransform = try prefixRelationshipPath(
                     transform,
                     relationships: relationshipPath,
                     attributeTypes: attributeTypes)
+                if relationshipPath.count > 1, isNegatedRelationshipContains(transform) {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Optional allSatisfy through multi-hop relationships is unsupported.")
+                }
+                if relationshipPath.count == 1, isNegatedRelationshipContains(transform) {
+                    return .conjunction(
+                        .comparison(.notEqual, .keyPath(relationshipPath), .value(.null)),
+                        prefixedTransform)
+                }
+                return prefixedTransform
             case "Conditional":
                 return .conditional(
                     try field("test", from: fields, attributeTypes: attributeTypes),
@@ -452,6 +462,11 @@ package enum PredicateIRBuilder {
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate("Nested relationship predicates are unsupported.")
         }
+    }
+
+    private static func isNegatedRelationshipContains(_ ir: PredicateIR) -> Bool {
+        guard case let .negation(value) = ir, case .relationshipContains = value else { return false }
+        return true
     }
 
     private static func hasStringType(for path: [String], attributeTypes: [String: String]) -> Bool {

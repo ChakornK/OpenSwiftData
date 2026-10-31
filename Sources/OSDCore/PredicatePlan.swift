@@ -15,6 +15,7 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case stringContains(PredicatePlan, PredicatePlan)
     case stringStartsWith(PredicatePlan, PredicatePlan)
     case collectionContains(String, String, PredicatePlan)
+    case collectionAllEqual(String, String, PredicatePlan)
     case relationshipContains(String, PredicatePlan)
     case collectionCount(String)
 }

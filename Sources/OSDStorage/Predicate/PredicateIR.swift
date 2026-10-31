@@ -14,6 +14,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case conditional(PredicateIR, PredicateIR, PredicateIR)
     case sequenceContains(PredicateIR, PredicateIR)
     case collectionContains(String, String, PredicateIR)
+    case collectionAllEqual(String, String, PredicateIR)
     case relationshipContains(String, PredicateIR)
     case relationshipCount(String)
     case localizedStandardContains(PredicateIR, PredicateIR)
@@ -266,6 +267,17 @@ package enum PredicateIRBuilder {
                 return .relationshipCount(
                     path.flatMap { $0.split(separator: ".").map(String.init) }
                         .joined(separator: "."))
+            case "OSDScalarCollectionAllEqual":
+                guard
+                    case let .keyPath(path) = try field(
+                        "sequence", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                    let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
+                    case let .value(value) = try field("value", from: fields, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable collection allSatisfy requires a direct scalar collection and capture.")
+                }
+                return .collectionAllEqual(path[0], elementType, .value(value))
             case "OSDSequenceAllSatisfy":
                 guard
                     case let .keyPath(path) = try field(
@@ -370,6 +382,12 @@ package enum PredicateIRBuilder {
                     "Scalar collection membership inside relationship predicates is unsupported.")
             }
             return .collectionContains(name, elementType, element)
+        case let .collectionAllEqual(name, elementType, element):
+            guard relationships.isEmpty else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Scalar collection allSatisfy inside relationship predicates is unsupported.")
+            }
+            return .collectionAllEqual(name, elementType, element)
         case let .relationshipCount(name):
             let relationshipParts = name.split(separator: ".").map(String.init)
             let fullName =
@@ -444,6 +462,8 @@ package enum PredicateIRBuilder {
         case let .relationshipContains(_, body):
             return referencesDecimal(body, attributeTypes: attributeTypes)
         case let .collectionContains(_, _, element):
+            return referencesDecimal(element, attributeTypes: attributeTypes)
+        case let .collectionAllEqual(_, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case .sequenceContains, .relationshipCount, .value:
             return false
@@ -606,6 +626,7 @@ package enum PredicateIRBuilder {
         case "SequenceContains": ["sequence", "element"]
         case "OSDSequenceContainsWhere": ["sequence", "test"]
         case "OSDSequenceAllSatisfy": ["sequence", "test"]
+        case "OSDScalarCollectionAllEqual": ["sequence", "value"]
         case "OSDSequenceIsEmpty": ["sequence"]
         case "OSDSequenceCount": ["sequence"]
         case "RangeExpressionContains": ["range", "element"]

@@ -2602,6 +2602,40 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateAllSatisfyOnCodableScalarCollection() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-scalar-all-satisfy"))
+        let context = container.mainContext
+        let expected = "accepted"
+        let matching = CodableStringCollectionFixture(name: "matching", tags: [expected, expected])
+        let mixed = CodableStringCollectionFixture(name: "mixed", tags: [expected, "rejected"])
+        let empty = CodableStringCollectionFixture(name: "empty", tags: [])
+        context.insert(matching)
+        context.insert(mixed)
+        context.insert(empty)
+        try context.save()
+
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.allSatisfy { $0 == expected } },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["matching", "empty"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+
+        let rejected = "rejected"
+        let notEqualDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.allSatisfy { $0 != rejected } },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(notEqualDescriptor).map(\.name)), ["matching", "empty"])
+
+        mixed.tags = [expected]
+        let pendingDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.allSatisfy { $0 == expected } })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching", "mixed", "empty"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
     func testInferredAndExplicitCodableCollectionsHaveEquivalentSchema() throws {
         let inferredContainer = try ModelContainer(
             for: CodableStringCollectionFixture.self,

@@ -25,6 +25,8 @@ package enum RuntimePredicateEvaluator {
             referencedProperties(in: lhs).union(referencedProperties(in: rhs))
         case let .collectionContains(name, _, element):
             Set([name]).union(referencedProperties(in: element))
+        case let .collectionAllEqual(name, _, element):
+            Set([name]).union(referencedProperties(in: element))
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
                 referencedProperties(in: falseBranch))
@@ -46,6 +48,8 @@ package enum RuntimePredicateEvaluator {
         case let .relationshipContains(name, body):
             return [name: referencedProperties(in: body)]
         case let .collectionContains(_, _, element):
+            return relationshipProperties(in: element)
+        case let .collectionAllEqual(_, _, element):
             return relationshipProperties(in: element)
         case let .collectionCount(name):
             return [name: []]
@@ -144,7 +148,7 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
             }
             return .no
-        case .collectionContains:
+        case .collectionContains, .collectionAllEqual:
             let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard value != .null else { return .unknown }
             guard case let .int(integer) = value else {
@@ -270,6 +274,37 @@ package enum RuntimePredicateEvaluator {
                     "Pending scalar collection membership received an incompatible element value")
             }
             return .int(contains ? 1 : 0)
+        case let .collectionAllEqual(name, elementType, element):
+            let collectionValue = try evaluateValue(
+                .property(name), values: values, relationshipValues: relationshipValues)
+            guard case let .blob(bytes) = collectionValue else { return .null }
+            let elementValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
+                throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received malformed JSON data")
+            }
+            let allMatch: Bool
+            switch (elementType, elementValue) {
+            case ("String", let .text(expected)):
+                allMatch = array.allSatisfy { ($0 as? String) == expected }
+            case ("Bool", let .int(expected)):
+                allMatch = array.allSatisfy { value in
+                    guard let number = value as? NSNumber,
+                        CFGetTypeID(number) == CFBooleanGetTypeID()
+                    else { return false }
+                    return number.boolValue == (expected != 0)
+                }
+            case (_, let .int(expected)):
+                allMatch = array.allSatisfy { value in
+                    guard let number = value as? NSNumber,
+                        CFGetTypeID(number) != CFBooleanGetTypeID()
+                    else { return false }
+                    return Int64(number.stringValue) == expected
+                }
+            default:
+                throw SwiftDataError.unsupportedPredicate(
+                    "Pending scalar collection allSatisfy received an incompatible element value")
+            }
+            return .int(allMatch ? 1 : 0)
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):

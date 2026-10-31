@@ -159,7 +159,7 @@ package enum PredicateRuntimeTreeBuilder {
                     let sequence = children.first(where: { $0.label == "sequence" })?.value,
                     let test = children.first(where: { $0.label == "test" })?.value,
                     let variable = children.first(where: { $0.label == "variable" })?.value,
-                    variableIdentifier(variable) != nil
+                    let sequenceVariableID = variableIdentifier(variable)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Collection quantifiers require a to-many relationship.")
@@ -180,6 +180,46 @@ package enum PredicateRuntimeTreeBuilder {
                 let localOwnerParts =
                     ownerParts.starts(with: activePrefix)
                     ? Array(ownerParts.dropFirst(activePrefix.count)) : ownerParts
+                if name == "SequenceAllSatisfy", localOwnerParts.isEmpty,
+                    codableCollectionName(sequenceNode, entity: activeEntity) == collectionName
+                {
+                    let testTypeName = String(reflecting: type(of: test))
+                    guard let comparison = PredicateNodeMetadata.entry(for: testTypeName),
+                        comparison.name == "Equal" || comparison.name == "NotEqual"
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Codable collection allSatisfy supports direct equality comparisons only.")
+                    }
+                    let testFields = Dictionary(
+                        uniqueKeysWithValues: Mirror(reflecting: test).children.compactMap { child in
+                            child.label.map { ($0, child.value) }
+                        })
+                    guard let lhs = testFields["lhs"], let rhs = testFields["rhs"] else {
+                        throw SwiftDataError.unsupportedPredicate("Malformed scalar collection allSatisfy body.")
+                    }
+                    let value: Any
+                    if variableIdentifier(lhs) == sequenceVariableID, variableIdentifier(rhs) == nil {
+                        value = rhs
+                    } else if variableIdentifier(rhs) == sequenceVariableID, variableIdentifier(lhs) == nil {
+                        value = lhs
+                    } else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Codable collection allSatisfy must compare its element to one captured scalar.")
+                    }
+                    let valuePath = comparison.name == "Equal" ? path + ["value"] : path + ["wrapped", "element"]
+                    let valueNode = try visit(
+                        value, path: valuePath, bindings: bindings,
+                        capturePathRewrites: capturePathRewrites)
+                    if comparison.name == "Equal" {
+                        return .expression(
+                            name: "OSDScalarCollectionAllEqual",
+                            children: [("sequence", sequenceNode), ("value", valueNode)])
+                    }
+                    let contains = RuntimePredicateNode.expression(
+                        name: "SequenceContains",
+                        children: [("sequence", sequenceNode), ("element", valueNode)])
+                    return .expression(name: "Negation", children: [("wrapped", contains)])
+                }
                 let collectionOwner: (entity: Schema.Entity, modelType: any PersistentModel.Type)
                 if localOwnerParts.isEmpty {
                     collectionOwner = (activeEntity, activeModelType)

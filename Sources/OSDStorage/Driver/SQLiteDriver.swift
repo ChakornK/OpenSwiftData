@@ -165,33 +165,11 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                 })
             database.add(
                 function: DatabaseFunction("osd_json_array_contains", argumentCount: 3, pure: true) { values in
-                    guard let data = Data.fromDatabaseValue(values[0]),
-                        let elementType = String.fromDatabaseValue(values[2]),
-                        let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
-                    else { return nil }
-                    switch elementType {
-                    case "String":
-                        guard let needle = String.fromDatabaseValue(values[1]) else { return nil }
-                        return array.contains { ($0 as? String) == needle } ? 1 : 0
-                    case "Bool":
-                        guard let needle = Bool.fromDatabaseValue(values[1]) else { return nil }
-                        return array.contains { value in
-                            guard let number = value as? NSNumber,
-                                CFGetTypeID(number) == CFBooleanGetTypeID()
-                            else { return false }
-                            return number.boolValue == needle
-                        } ? 1 : 0
-                    case "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64":
-                        guard let needle = Int64.fromDatabaseValue(values[1]) else { return nil }
-                        return array.contains { value in
-                            guard let number = value as? NSNumber,
-                                CFGetTypeID(number) != CFBooleanGetTypeID()
-                            else { return false }
-                            return Int64(number.stringValue) == needle
-                        } ? 1 : 0
-                    default:
-                        return nil
-                    }
+                    Self.jsonArrayMembership(values, all: false)
+                })
+            database.add(
+                function: DatabaseFunction("osd_json_array_all_equal", argumentCount: 3, pure: true) { values in
+                    Self.jsonArrayMembership(values, all: true)
                 })
             for (name, operation) in [
                 ("osd_int_add", IntegerOperation.add),
@@ -241,5 +219,39 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             result = rhs == 0 || (lhs == .min && rhs == -1) ? nil : lhs % rhs
         }
         return result
+    }
+
+    private static func jsonArrayMembership(_ values: [DatabaseValue], all: Bool) -> Int? {
+        guard values.count == 3,
+            let data = Data.fromDatabaseValue(values[0]),
+            let elementType = String.fromDatabaseValue(values[2]),
+            let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
+        else { return nil }
+        switch elementType {
+        case "String":
+            guard let needle = String.fromDatabaseValue(values[1]) else { return nil }
+            let matches = array.map { ($0 as? String) == needle }
+            return (all ? matches.allSatisfy { $0 } : matches.contains(true)) ? 1 : 0
+        case "Bool":
+            guard let needle = Bool.fromDatabaseValue(values[1]) else { return nil }
+            let matches = array.map { value -> Bool in
+                guard let number = value as? NSNumber,
+                    CFGetTypeID(number) == CFBooleanGetTypeID()
+                else { return false }
+                return number.boolValue == needle
+            }
+            return (all ? matches.allSatisfy { $0 } : matches.contains(true)) ? 1 : 0
+        case "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64":
+            guard let needle = Int64.fromDatabaseValue(values[1]) else { return nil }
+            let matches = array.map { value -> Bool in
+                guard let number = value as? NSNumber,
+                    CFGetTypeID(number) != CFBooleanGetTypeID()
+                else { return false }
+                return Int64(number.stringValue) == needle
+            }
+            return (all ? matches.allSatisfy { $0 } : matches.contains(true)) ? 1 : 0
+        default:
+            return nil
+        }
     }
 }

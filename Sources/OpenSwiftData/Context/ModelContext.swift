@@ -262,7 +262,8 @@ public final class ModelContext {
             }
             let managed = Model.createManagedBackingData(
                 values: insertionSnapshot.values, context: self,
-                storeIdentifier: storeIdentifier, entityID: entityID(for: String(describing: Model.self)),
+                storeIdentifier: storeIdentifier,
+                entityID: containerStorage?.schema.entityIDsByName[String(describing: Model.self)] ?? 0,
                 identifier: insertionSnapshot.identifier)
             model.persistentBackingData = managed
             model.anyBackingData.attach(to: self, model: model)
@@ -759,8 +760,7 @@ public final class ModelContext {
                 guard row.count >= 3, case let .int(rawEntityID) = row[2],
                     let concreteID = Int(exactly: rawEntityID),
                     let registration = container.modelRegistration(forEntityID: concreteID),
-                    let resolvedEntity = container.schema.entities.indices.contains(concreteID - 1)
-                        ? Optional(container.schema.entities[concreteID - 1]) : nil,
+                    let resolvedEntity = container.schema.entity(forID: concreteID),
                     registration.type is Model.Type
                 else {
                     throw SwiftDataError.unsupportedStore("Hierarchy row has an unknown or incompatible Z_ENT.")
@@ -1115,9 +1115,9 @@ public final class ModelContext {
             if hasHierarchy {
                 guard row.count > 1, case let .int(rawEntityID) = row[1],
                     let concreteID = Int(exactly: rawEntityID),
-                    container.schema.entities.indices.contains(concreteID - 1)
+                    let concreteEntity = container.schema.entity(forID: concreteID)
                 else { return nil }
-                concreteEntityName = container.schema.entities[concreteID - 1].name
+                concreteEntityName = concreteEntity.name
             } else {
                 concreteEntityName = entity.name
             }
@@ -1236,8 +1236,9 @@ public final class ModelContext {
                 || concreteEntity.superentityName != nil,
             rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
             requestedEntity.name == concreteEntity.name
-                || descendantEntityIDs(for: requestedEntity).contains(
-                    container.schema.entityIDsByName[concreteEntity.name] ?? 0)
+                || (container.schema.entityIDsByName[concreteEntity.name].map {
+                    descendantEntityIDs(for: requestedEntity).contains($0)
+                } == true)
         {
             guard let store = container.store else { throw unsupportedStore("Model lookup") }
             let root = rootEntity(for: concreteEntity)
@@ -1254,8 +1255,7 @@ public final class ModelContext {
                 case let .int(rawEntityID) = row[2],
                 let concreteID = Int(exactly: rawEntityID),
                 container.schema.entityIDsByName[concreteEntity.name] == concreteID,
-                container.schema.entities.indices.contains(concreteID - 1),
-                container.schema.entities[concreteID - 1].name == identifier.entityName,
+                container.schema.entity(forID: concreteID)?.name == identifier.entityName,
                 let registration = container.modelRegistration(forEntityID: concreteID),
                 registration.type is Model.Type
             else { return nil }
@@ -1376,10 +1376,10 @@ public final class ModelContext {
             identifier.storeIdentifier == storeIdentifier,
             let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
             let concreteEntity = container.schema.entity(forName: identifier.entityName),
+            let concreteEntityID = container.schema.entityIDsByName[concreteEntity.name],
             rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
             requestedEntity.name == concreteEntity.name
-                || descendantEntityIDs(for: requestedEntity).contains(
-                    container.schema.entityIDsByName[concreteEntity.name] ?? 0)
+                || descendantEntityIDs(for: requestedEntity).contains(concreteEntityID)
         else { return nil }
         guard
             let model = identityMap.model(
@@ -1704,7 +1704,10 @@ public final class ModelContext {
         guard let container else { throw unsupportedStore("Hierarchy schema lookup") }
         let identifiers = Set(descendantEntityIDs(for: entity))
         var attributesByName: [String: Schema.Attribute] = [:]
-        for (index, candidate) in container.schema.entities.enumerated() where identifiers.contains(index + 1) {
+        for candidate in container.schema.entities
+        where container.schema.entityIDsByName[candidate.name].map(
+            identifiers.contains) == true
+        {
             for attribute in candidate.attributes {
                 let key = attribute.name.uppercased()
                 if let existing = attributesByName[key], existing != attribute {
@@ -2485,7 +2488,7 @@ public final class ModelContext {
             : [:]
         let backing = ManagedBackingData<Model.Model>(
             metadata: Model.schemaMetadata(), values: managedValues, context: self,
-            storeIdentifier: storeIdentifier, entityID: entityID(for: entity.name), primaryKey: primaryKey,
+            storeIdentifier: storeIdentifier, entityID: try entityID(for: entity.name), primaryKey: primaryKey,
             version: version,
             identifier: PersistentIdentifier(
                 storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
@@ -3266,8 +3269,11 @@ public final class ModelContext {
         }
     }
 
-    private func entityID(for name: String) -> Int {
-        containerStorage?.schema.entityIDsByName[name] ?? 0
+    private func entityID(for name: String) throws -> Int {
+        guard let identifier = containerStorage?.schema.entityIDsByName[name] else {
+            throw SwiftDataError.unsupportedSchemaProperty("Schema has no entity identifier for '\(name)'.")
+        }
+        return identifier
     }
 
     private func rootEntity(for entity: Schema.Entity) -> Schema.Entity {
@@ -3478,7 +3484,7 @@ public final class ModelContext {
                 detachModel(replacedModel)
             }
             model.markPersistedLifecycle(
-                storeIdentifier: storeIdentifier, entityName: entityName, entityID: entityID(for: entityName),
+                storeIdentifier: storeIdentifier, entityName: entityName, entityID: try entityID(for: entityName),
                 primaryKey: result.primaryKey, version: result.version)
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
             identityMap.register(
@@ -3644,7 +3650,7 @@ public final class ModelContext {
             {
                 model.markPersistedLifecycle(
                     storeIdentifier: identifier.storeIdentifier, entityName: identifier.entityName,
-                    entityID: entityID(for: identifier.entityName),
+                    entityID: try entityID(for: identifier.entityName),
                     primaryKey: primaryKey, version: 1)
             } else {
                 model.markSavedLifecycle()
@@ -4061,8 +4067,8 @@ public final class ModelContext {
                 guard let endpointEntityName = modelEntityName(of: endpoint),
                     let endpointEntity = container.schema.entity(forName: endpointEntityName),
                     let destinationEntity = container.schema.entity(forName: relationship.destination),
-                    descendantEntityIDs(for: destinationEntity).contains(
-                        container.schema.entityIDsByName[endpointEntity.name] ?? 0)
+                    let endpointEntityID = container.schema.entityIDsByName[endpointEntity.name],
+                    descendantEntityIDs(for: destinationEntity).contains(endpointEntityID)
                 else {
                     throw SwiftDataError.unsupportedStore(
                         "Relationship '\(entity.name).\(relationship.name)' received endpoint type "

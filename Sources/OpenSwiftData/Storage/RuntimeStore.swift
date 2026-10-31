@@ -17,6 +17,10 @@ public protocol RuntimeStore: Sendable {
     ) throws -> T
 }
 
+package protocol RuntimeSchemaProvidingStore: RuntimeStore {
+    var runtimeSchema: Schema { get }
+}
+
 public extension RuntimeStore {
     func dataVersion() throws -> Int64? { nil }
     func writeWithExternalData<T>(

@@ -162,7 +162,7 @@ package final class ContextState: @unchecked Sendable {
             capture(model, current: snapshot)
         }
         for endpoint in detachedEndpoints {
-            insertRelationshipDestination(endpoint, in: context)
+            try insertRelationshipDestination(endpoint, in: context)
         }
         do {
             try mutation(owner)
@@ -181,7 +181,9 @@ package final class ContextState: @unchecked Sendable {
         }
     }
 
-    private func insertRelationshipDestination<Model: PersistentModel>(_ model: Model, in context: ModelContext) {
+    private func insertRelationshipDestination<Model: PersistentModel>(
+        _ model: Model, in context: ModelContext
+    ) throws {
         let snapshot = model.snapshotLifecycle()
         let entityName = String(describing: type(of: model))
         guard let entity = entitiesByName[entityName] else {
@@ -189,6 +191,9 @@ package final class ContextState: @unchecked Sendable {
             model.setInsertionChanged()
             insert(model, snapshot: snapshot)
             return
+        }
+        guard let entityID = entityIDsByName[entity.name] else {
+            throw SwiftDataError.unsupportedSchemaProperty("Schema has no entity identifier for '\(entity.name)'.")
         }
         var values = snapshot.values
         for adapter in relationshipAdaptersByModel[ObjectIdentifier(type(of: model))] ?? [] {
@@ -205,7 +210,7 @@ package final class ContextState: @unchecked Sendable {
             values: values,
             context: context,
             storeIdentifier: storeIdentifier,
-            entityID: entityIDsByName[entity.name] ?? 0,
+            entityID: entityID,
             identifier: identifier)
         model.persistentBackingData = backing
         model.anyBackingData.attach(to: context, model: model)

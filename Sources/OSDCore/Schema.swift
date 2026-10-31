@@ -499,6 +499,11 @@ public struct Schema: Sendable {
         entities.first { $0.name == name }
     }
 
+    package func entity(forID identifier: Int) -> Entity? {
+        guard let name = entityIDsByName.first(where: { $0.value == identifier })?.key else { return nil }
+        return entity(forName: name)
+    }
+
     package func relationshipStorageMapping(
         modelEntityName: String, relationshipName: String
     ) -> RelationshipStorageMapping? {

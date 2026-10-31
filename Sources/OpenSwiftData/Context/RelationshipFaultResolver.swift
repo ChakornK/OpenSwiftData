@@ -375,7 +375,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                 concreteEntity = entity
                 candidate = try registration.materialize(
                     context: context, entity: entity, attributes: attributes, row: row,
-                    storeIdentifier: storeIdentifier, entityID: entityID(for: entityName),
+                    storeIdentifier: storeIdentifier, entityID: try entityID(for: entityName),
                     primaryKey: primaryKey, version: version)
             }
             concreteRegistration.installRelationshipFaults(on: candidate, entity: concreteEntity, resolver: self)
@@ -417,8 +417,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         model.anyBackingData.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: value)
     }
 
-    private func entityID(for name: String) -> Int {
-        schema.entityIDsByName[name] ?? 0
+    private func entityID(for name: String) throws -> Int {
+        guard let identifier = schema.entityIDsByName[name] else {
+            throw SwiftDataError.unsupportedSchemaProperty("Schema has no entity identifier for '\(name)'.")
+        }
+        return identifier
     }
 
     private func descendantEntityIDs(for entity: Schema.Entity) -> [Int] {

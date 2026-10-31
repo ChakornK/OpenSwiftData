@@ -354,45 +354,64 @@ public final class ModelContainer: Sendable {
         }
         let schema = Schema(inferredEntities)
         try schema.validateRelationshipStorageMappings()
-        self.schema = schema
+        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedStore = try Self.openStore(schema: schema, configurations: configurations)
+        let runtimeSchema: Schema
+        let registrations: [String: ModelTypeRegistration]
+        let registrationsByID: [Int: ModelTypeRegistration]
+        let adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
+        do {
+            runtimeSchema = try Self.runtimeSchema(requested: schema, store: openedStore)
+            try runtimeSchema.validateRelationshipStorageMappings()
+            try Self.validateDataStoreInheritanceSupport(schema: runtimeSchema, dataStore: openedDataStore)
+            var resolvedRegistrations: [String: ModelTypeRegistration] = [:]
+            var resolvedRegistrationsByID: [Int: ModelTypeRegistration] = [:]
+            for (modelType, entityName) in zip(types, entityNames) {
+                let registration = ModelTypeRegistration(type: modelType)
+                resolvedRegistrations[entityName] = registration
+                if let entityID = runtimeSchema.entityIDsByName[entityName] {
+                    resolvedRegistrationsByID[entityID] = registration
+                }
+            }
+            registrations = resolvedRegistrations
+            registrationsByID = resolvedRegistrationsByID
+            var resolvedAdapters: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
+            for modelType in types {
+                resolvedAdapters[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
+                    for: modelType, schema: runtimeSchema)
+            }
+            adaptersByModel = resolvedAdapters
+        } catch {
+            try? openedStore?.close()
+            throw error
+        }
+        self.schema = runtimeSchema
         self.configurations = configurations
-        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
-        store = try Self.openStore(schema: schema, configurations: configurations)
-        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
-        var registrations: [String: ModelTypeRegistration] = [:]
-        for (modelType, entityName) in zip(types, entityNames) {
-            registrations[entityName] = ModelTypeRegistration(type: modelType)
-        }
+        dataStore = openedDataStore
+        store = openedStore
         modelTypesByEntityName = registrations
-        let resolvedSchema = schema
-        let registrationsByID: [Int: ModelTypeRegistration] = Dictionary(
-            uniqueKeysWithValues: zip(types, entityNames).compactMap { pair -> (Int, ModelTypeRegistration)? in
-                let (_, entityName) = pair
-                guard
-                    let entityID = resolvedSchema.entityIDsByName[entityName],
-                    let registration = registrations[entityName]
-                else { return nil }
-                return (entityID, registration)
-            })
         modelTypesByEntityID = registrationsByID
-        var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
-        for modelType in types {
-            adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
-                for: modelType,
-                schema: schema
-            )
-        }
         relationshipAdapterTable = adaptersByModel
     }
 
     /// Creates a container for an existing schema.
     public init(for schema: Schema, configurations: [ModelConfiguration] = []) throws {
         try schema.validateRelationshipStorageMappings()
-        self.schema = schema
+        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedStore = try Self.openStore(schema: schema, configurations: configurations)
+        let runtimeSchema: Schema
+        do {
+            runtimeSchema = try Self.runtimeSchema(requested: schema, store: openedStore)
+            try runtimeSchema.validateRelationshipStorageMappings()
+            try Self.validateDataStoreInheritanceSupport(schema: runtimeSchema, dataStore: openedDataStore)
+        } catch {
+            try? openedStore?.close()
+            throw error
+        }
+        self.schema = runtimeSchema
         self.configurations = configurations
-        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
-        store = try Self.openStore(schema: schema, configurations: configurations)
-        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
+        dataStore = openedDataStore
+        store = openedStore
         modelTypesByEntityName = [:]
         modelTypesByEntityID = [:]
         relationshipAdapterTable = [:]
@@ -405,34 +424,47 @@ public final class ModelContainer: Sendable {
         configurations: [ModelConfiguration] = []
     ) throws {
         try schema.validateRelationshipStorageMappings()
-        self.schema = schema
-        self.configurations = configurations
-        dataStore = try Self.openDataStore(schema: schema, configurations: configurations)
-        store = try Self.openStore(schema: schema, configurations: configurations)
-        try Self.validateDataStoreInheritanceSupport(schema: schema, dataStore: dataStore)
-        var registrations: [String: ModelTypeRegistration] = [:]
-        for modelType in types {
-            let entityName = Self.unqualifiedTypeName(String(describing: modelType))
-            if schema.entities.contains(where: { $0.name == entityName }) {
-                registrations[entityName] = ModelTypeRegistration(type: modelType)
-            }
-        }
-        modelTypesByEntityName = registrations
-        modelTypesByEntityID = Dictionary(
-            uniqueKeysWithValues: registrations.compactMap { name, registration in
-                guard let entityID = schema.entityIDsByName[name] else {
-                    return nil
+        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedStore = try Self.openStore(schema: schema, configurations: configurations)
+        let runtimeSchema: Schema
+        let registrations: [String: ModelTypeRegistration]
+        let registrationsByID: [Int: ModelTypeRegistration]
+        let adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
+        do {
+            runtimeSchema = try Self.runtimeSchema(requested: schema, store: openedStore)
+            try runtimeSchema.validateRelationshipStorageMappings()
+            try Self.validateDataStoreInheritanceSupport(schema: runtimeSchema, dataStore: openedDataStore)
+            var resolvedRegistrations: [String: ModelTypeRegistration] = [:]
+            for modelType in types {
+                let name = Self.unqualifiedTypeName(String(describing: modelType))
+                if runtimeSchema.entities.contains(where: { $0.name == name }) {
+                    resolvedRegistrations[name] = ModelTypeRegistration(type: modelType)
                 }
-                return (entityID, registration)
-            })
-        var adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
-        for modelType in types {
-            adaptersByModel[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
-                for: modelType,
-                schema: schema,
-                requiresCompatibleCandidates: true
-            )
+            }
+            registrations = resolvedRegistrations
+            var resolvedRegistrationsByID: [Int: ModelTypeRegistration] = [:]
+            for (name, registration) in registrations {
+                if let entityID = runtimeSchema.entityIDsByName[name] {
+                    resolvedRegistrationsByID[entityID] = registration
+                }
+            }
+            registrationsByID = resolvedRegistrationsByID
+            var resolvedAdapters: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:]
+            for modelType in types {
+                resolvedAdapters[ObjectIdentifier(modelType)] = try Self.bindRelationshipAdapters(
+                    for: modelType, schema: runtimeSchema, requiresCompatibleCandidates: true)
+            }
+            adaptersByModel = resolvedAdapters
+        } catch {
+            try? openedStore?.close()
+            throw error
         }
+        self.schema = runtimeSchema
+        self.configurations = configurations
+        dataStore = openedDataStore
+        store = openedStore
+        modelTypesByEntityName = registrations
+        modelTypesByEntityID = registrationsByID
         relationshipAdapterTable = adaptersByModel
     }
 
@@ -763,6 +795,17 @@ public final class ModelContainer: Sendable {
         else { return }
         throw SwiftDataError.unsupportedStore(
             "The configured DataStore does not support model inheritance.")
+    }
+
+    private static func runtimeSchema(requested: Schema, store: (any RuntimeStore)?) throws -> Schema {
+        guard let provider = store as? any RuntimeSchemaProvidingStore else { return requested }
+        let resolved = provider.runtimeSchema
+        guard resolved.entities == requested.entities, resolved.version == requested.version
+        else {
+            throw SwiftDataError.unsupportedStore(
+                "The runtime store returned a schema incompatible with the requested model types.")
+        }
+        return resolved
     }
 
     private static func openDataStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any DataStore)? {

@@ -3,9 +3,10 @@ import OpenSwiftData
 import OSDCore
 import OSDStorage
 
-private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore {
+private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, RuntimeSchemaProvidingStore {
     let driver: GRDBSQLiteDriver
     let externalDataColumns: Set<String>
+    let runtimeSchema: Schema
 
     func read<T>(_ body: (any RuntimeConnection) throws -> T) throws -> T {
         try driver.read { connection in
@@ -308,8 +309,17 @@ public enum OpenSwiftDataSQLite {
             })
         let driver = try LightweightMigration.openStore(
             location: driverLocation, schema: schema, externalColumns: externalDataColumns)
-        let store = SQLiteRuntimeStore(driver: driver, externalDataColumns: externalDataColumns)
-        return store
+        do {
+            let entityIDs = try driver.read { connection in
+                try LightweightMigration.storedEntityIDs(schema: schema, connection: connection)
+            }
+            let runtimeSchema = try entityIDs.map { try schema.reconciled(with: $0) } ?? schema
+            return SQLiteRuntimeStore(
+                driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema)
+        } catch {
+            try? driver.close()
+            throw error
+        }
     }
 }
 

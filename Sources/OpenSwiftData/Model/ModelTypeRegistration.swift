@@ -99,10 +99,14 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 values[keyPath] = composite
             }
             let identifier = snapshot.persistentIdentifier
+            guard let entityID = context.container?.schema.entityIDsByName[entity.name] else {
+                throw SwiftDataError.unsupportedStore(
+                    "DataStore schema has no entity identifier for \(entity.name).")
+            }
             let backing = ManagedBackingData<Model.Model>(
                 metadata: metadata, values: values, context: context,
                 storeIdentifier: identifier.storeIdentifier,
-                entityID: context.container?.schema.entityIDsByName[entity.name] ?? 0,
+                entityID: entityID,
                 primaryKey: identifier.primaryKey, version: 0, identifier: identifier)
             let model = Model(backingData: backing)
             backing.markSaved()

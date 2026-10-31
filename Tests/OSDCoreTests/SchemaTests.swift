@@ -192,6 +192,8 @@ final class SchemaTests: XCTestCase {
         XCTAssertEqual(
             reconciled.entityIDsByName,
             ["Animal": 1, "Dog": 2, "Zebra": 3, "Cat": 4, "Kitten": 5])
+        XCTAssertEqual(reconciled.entity(forID: 2)?.name, "Dog")
+        XCTAssertEqual(reconciled.entity(forID: 20), nil)
         XCTAssertEqual(Schema(schema.entities).entityIDsByName["Cat"], 2)
         XCTAssertEqual(try schema.reconciled(with: [:]).entityIDsByName, schema.entityIDsByName)
     }

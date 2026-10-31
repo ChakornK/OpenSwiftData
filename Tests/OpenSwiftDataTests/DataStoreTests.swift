@@ -148,6 +148,62 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
     }
 }
 
+private struct ReconciledRuntimeSchemaStore: RuntimeSchemaProvidingStore {
+    let runtimeSchema: Schema
+
+    func read<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only schema provider")
+    }
+
+    func write<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only schema provider")
+    }
+
+    func close() throws {}
+}
+
+private struct PlainRuntimeSchemaStore: RuntimeStore {
+    func read<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only runtime store")
+    }
+
+    func write<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only runtime store")
+    }
+
+    func close() throws {}
+}
+
+private final class ClosingRuntimeSchemaStore: RuntimeSchemaProvidingStore, @unchecked Sendable {
+    let runtimeSchema: Schema
+    private let lock = NSLock()
+    private var wasClosed = false
+
+    init(runtimeSchema: Schema) {
+        self.runtimeSchema = runtimeSchema
+    }
+
+    var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return wasClosed
+    }
+
+    func read<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only schema provider")
+    }
+
+    func write<T>(_ body: (RuntimeConnection) throws -> T) throws -> T {
+        throw SwiftDataError.unsupportedStore("test-only schema provider")
+    }
+
+    func close() throws {
+        lock.lock()
+        wasClosed = true
+        lock.unlock()
+    }
+}
+
 private struct UnsupportedHierarchyDataStore: DataStore {
     let identifier = "custom.flat-only"
 
@@ -538,6 +594,64 @@ final class DataStoreTests: XCTestCase {
                 return XCTFail("Expected unsupportedStore, received \(error)")
             }
         }
+    }
+
+    @MainActor
+    func testContainerAdoptsRuntimeStoreReconciledSchema() throws {
+        let requestedSchema = Schema([
+            Schema.Entity(name: "CustomHierarchyBase"),
+            Schema.Entity(name: "CustomHierarchyChild", superentityName: "CustomHierarchyBase"),
+        ])
+        let runtimeSchema = try Schema(
+            requestedSchema.entities,
+            entityIDs: ["CustomHierarchyBase": 10, "CustomHierarchyChild": 20])
+        let provider = ReconciledRuntimeSchemaStore(runtimeSchema: runtimeSchema)
+        let configuration = ModelConfiguration(
+            "runtime-schema-provider", storeFactory: { _, _ in provider })
+        let container = try ModelContainer(
+            for: [CustomHierarchyBase.self, CustomHierarchyChild.self],
+            schema: requestedSchema,
+            configurations: [configuration])
+
+        XCTAssertEqual(container.schema.entityIDsByName, runtimeSchema.entityIDsByName)
+        XCTAssertEqual(container.schema.entity(forID: 20)?.name, "CustomHierarchyChild")
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(container.modelRegistration(forEntityID: 20)).type),
+            ObjectIdentifier(CustomHierarchyChild.self))
+    }
+
+    @MainActor
+    func testContainerKeepsRequestedSchemaForRuntimeStoresWithoutSchemaCapability() throws {
+        let requestedSchema = Schema([Schema.Entity(name: "CustomDataStoreFixture")])
+        let configuration = ModelConfiguration(
+            "runtime-schema-legacy-store", storeFactory: { _, _ in PlainRuntimeSchemaStore() })
+        let container = try ModelContainer(
+            for: [CustomDataStoreFixture.self], schema: requestedSchema, configurations: [configuration])
+
+        XCTAssertEqual(container.schema.entityIDsByName, requestedSchema.entityIDsByName)
+    }
+
+    @MainActor
+    func testContainerRejectsIncompatibleRuntimeSchemaAndClosesStore() throws {
+        let requestedSchema = Schema([
+            Schema.Entity(name: "CustomDataStoreFixture", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        ])
+        let incompatibleSchema = Schema([
+            Schema.Entity(
+                name: "CustomDataStoreFixture",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int"),
+                    Schema.Attribute(name: "extra", type: "Int"),
+                ])
+        ])
+        let store = ClosingRuntimeSchemaStore(runtimeSchema: incompatibleSchema)
+        let configuration = ModelConfiguration(
+            "runtime-schema-incompatible", storeFactory: { _, _ in store })
+
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: [CustomDataStoreFixture.self], schema: requestedSchema, configurations: [configuration]))
+        XCTAssertTrue(store.isClosed)
     }
 
     @MainActor

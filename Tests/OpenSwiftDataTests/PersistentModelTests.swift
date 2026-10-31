@@ -137,11 +137,31 @@ final class InferredOptionalCollectionOwnerFixture {
 }
 
 @Model
+final class InferredOptionalSetOwnerFixture {
+    var targets: Set<InferredOptionalCollectionTargetFixture>?
+
+    init(targets: Set<InferredOptionalCollectionTargetFixture>?) {
+        self.targets = targets
+    }
+}
+
+@Model
 final class InferredOptionalCollectionTargetFixture {
     var name: String
 
     init(name: String) {
         self.name = name
+    }
+}
+
+extension InferredOptionalCollectionTargetFixture: Hashable {
+    static func == (lhs: InferredOptionalCollectionTargetFixture, rhs: InferredOptionalCollectionTargetFixture) -> Bool
+    {
+        lhs === rhs
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
     }
 }
 
@@ -1811,6 +1831,38 @@ final class PersistentModelTests: XCTestCase {
                 $0.persistentModelID == nilOwner.persistentModelID
             })
         XCTAssertEqual(reloadedOwner.targets?.count, 0)
+    }
+
+    @MainActor
+    func testOptionalInferredModelSetPreservesRelationshipEndpoints() throws {
+        let container = try ModelContainer(
+            for: InferredOptionalSetOwnerFixture.self,
+            InferredOptionalCollectionTargetFixture.self,
+            configurations: .sqliteMemory("optional-inferred-model-set"))
+        let adapter = try XCTUnwrap(
+            container.relationshipAdapters(for: InferredOptionalSetOwnerFixture.self).first)
+        XCTAssertEqual(adapter.name, "targets")
+        XCTAssertEqual(String(describing: adapter.destinationType), "InferredOptionalCollectionTargetFixture")
+        XCTAssertTrue(adapter.isToMany)
+        let context = container.mainContext
+        let owner = InferredOptionalSetOwnerFixture(targets: nil)
+        context.insert(owner)
+        XCTAssertEqual(owner.targets?.count, 0)
+        try context.save()
+
+        let target = InferredOptionalCollectionTargetFixture(name: "set-target")
+        owner.targets = [target]
+        try context.save()
+
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<InferredOptionalSetOwnerFixture>()).first)
+        XCTAssertEqual(fetched.targets?.map(\.name), ["set-target"])
+
+        owner.targets = nil
+        try context.save()
+        let finalReader = container.makeContext()
+        let reloaded = try XCTUnwrap(finalReader.fetch(FetchDescriptor<InferredOptionalSetOwnerFixture>()).first)
+        XCTAssertEqual(reloaded.targets?.count, 0)
     }
 
     @MainActor

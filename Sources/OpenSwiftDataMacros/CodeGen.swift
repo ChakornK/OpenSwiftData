@@ -738,6 +738,15 @@ enum CodeGen {
 
     static func isInferredRelationshipCandidate(_ type: TypeSyntax) -> Bool {
         let relationshipType = type.as(OptionalTypeSyntax.self)?.wrappedType ?? type
+        if let array = relationshipType.as(ArrayTypeSyntax.self) {
+            return isNominalRelationshipElement(array.element)
+        }
+        if let set = relationshipType.as(IdentifierTypeSyntax.self), set.name.text == "Set",
+            let argument = set.genericArgumentClause?.arguments.first?.argument,
+            case let .type(element) = argument
+        {
+            return isNominalRelationshipElement(element)
+        }
         if relationshipType.is(IdentifierTypeSyntax.self) || relationshipType.is(MemberTypeSyntax.self) {
             guard relationshipType.as(IdentifierTypeSyntax.self)?.genericArgumentClause == nil else { return false }
             let simpleName = relationshipType.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
@@ -746,14 +755,7 @@ enum CodeGen {
                 "UInt32", "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
             ].contains(simpleName)
         }
-        guard let array = relationshipType.as(ArrayTypeSyntax.self) else {
-            guard let set = relationshipType.as(IdentifierTypeSyntax.self), set.name.text == "Set",
-                let argument = set.genericArgumentClause?.arguments.first?.argument,
-                case let .type(element) = argument
-            else { return false }
-            return isNominalRelationshipElement(element)
-        }
-        return isNominalRelationshipElement(array.element)
+        return false
     }
 
     private static func isNominalRelationshipElement(_ type: TypeSyntax) -> Bool {

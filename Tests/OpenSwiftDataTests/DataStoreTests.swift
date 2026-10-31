@@ -27,6 +27,23 @@ final class CustomDataStoreDestination {
 }
 
 @Model
+final class CustomDataStoreCollectionOwner {
+    var name: String
+    @Relationship(inverse: nil) var destinations: [CustomDataStoreCollectionDestination]
+
+    init(name: String, destinations: [CustomDataStoreCollectionDestination] = []) {
+        self.name = name
+        self.destinations = destinations
+    }
+}
+
+@Model
+final class CustomDataStoreCollectionDestination {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
 class CustomHierarchyBase {
     var name: String
     init(name: String) { self.name = name }
@@ -236,6 +253,100 @@ private struct InvalidHierarchyRelationshipDataStore: DataStore {
             persistentIdentifier: wrongTargetIdentifier,
             entityName: "CustomDataStoreFixture",
             values: ["value": .int(1)])
+    }
+}
+
+private struct MultipleTargetsForToOneDataStore: DataStore {
+    let identifier = "custom.store.multiple-to-one-targets"
+    private let ownerIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-one-targets", entityName: "CustomDataStoreOwner", primaryKey: 1)
+    private let firstTargetIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-one-targets", entityName: "CustomDataStoreDestination", primaryKey: 2
+    )
+    private let secondTargetIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-one-targets", entityName: "CustomDataStoreDestination", primaryKey: 3
+    )
+
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+        guard request.entity.name == "CustomDataStoreOwner" else { return DataStoreFetchResult(snapshots: []) }
+        return DataStoreFetchResult(
+            snapshots: [
+                DataStoreSnapshot(
+                    persistentIdentifier: ownerIdentifier,
+                    entityName: "CustomDataStoreOwner",
+                    values: ["name": .text("owner")],
+                    relationships: ["destination": [firstTargetIdentifier, secondTargetIdentifier]])
+            ])
+    }
+
+    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+        guard identifier == firstTargetIdentifier || identifier == secondTargetIdentifier else { return nil }
+        return DataStoreSnapshot(
+            persistentIdentifier: identifier,
+            entityName: "CustomDataStoreDestination",
+            values: ["title": .text("target")],
+            relationships: ["owner": []])
+    }
+}
+
+private struct EmptyToOneRelationshipDataStore: DataStore {
+    let identifier = "custom.store.empty-to-one-target"
+    private let ownerIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.empty-to-one-target", entityName: "CustomDataStoreOwner", primaryKey: 1)
+
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+        guard request.entity.name == "CustomDataStoreOwner" else { return DataStoreFetchResult(snapshots: []) }
+        return DataStoreFetchResult(
+            snapshots: [
+                DataStoreSnapshot(
+                    persistentIdentifier: ownerIdentifier,
+                    entityName: "CustomDataStoreOwner",
+                    values: ["name": .text("owner")],
+                    relationships: ["destination": []])
+            ])
+    }
+
+    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+}
+
+private struct MultipleTargetsForToManyDataStore: DataStore {
+    let identifier = "custom.store.multiple-to-many-targets"
+    private let ownerIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-many-targets", entityName: "CustomDataStoreCollectionOwner",
+        primaryKey: 1)
+    private let firstTargetIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-many-targets", entityName: "CustomDataStoreCollectionDestination",
+        primaryKey: 2)
+    private let secondTargetIdentifier = PersistentIdentifier(
+        storeIdentifier: "custom.store.multiple-to-many-targets", entityName: "CustomDataStoreCollectionDestination",
+        primaryKey: 3)
+
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+        guard request.entity.name == "CustomDataStoreCollectionOwner" else {
+            return DataStoreFetchResult(snapshots: [])
+        }
+        return DataStoreFetchResult(
+            snapshots: [
+                DataStoreSnapshot(
+                    persistentIdentifier: ownerIdentifier,
+                    entityName: "CustomDataStoreCollectionOwner",
+                    values: ["name": .text("owner")],
+                    relationships: ["destinations": [firstTargetIdentifier, secondTargetIdentifier]])
+            ])
+    }
+
+    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+        guard identifier == firstTargetIdentifier || identifier == secondTargetIdentifier else { return nil }
+        return DataStoreSnapshot(
+            persistentIdentifier: identifier,
+            entityName: "CustomDataStoreCollectionDestination",
+            values: ["title": .text("target")])
     }
 }
 
@@ -606,6 +717,47 @@ final class DataStoreTests: XCTestCase {
         XCTAssertEqual(
             try container.makeContext().fetch(FetchDescriptor<CustomDataStoreOwner>()).first?.destination?.title,
             "replacement")
+    }
+
+    @MainActor
+    func testDataStoreRejectsMultipleTargetsForToOneRelationship() throws {
+        let configuration = ModelConfiguration(
+            "custom-store-multiple-to-one-targets",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: MultipleTargetsForToOneDataStore()))
+        let container = try ModelContainer(
+            for: CustomDataStoreOwner.self, CustomDataStoreDestination.self, configurations: configuration)
+
+        XCTAssertThrowsError(try container.mainContext.fetch(FetchDescriptor<CustomDataStoreOwner>())) { error in
+            guard case SwiftDataError.unsupportedStore = error else {
+                return XCTFail("Expected unsupportedStore, received \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    func testDataStoreAcceptsEmptyOptionalToOneRelationship() throws {
+        let configuration = ModelConfiguration(
+            "custom-store-empty-to-one-target",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: EmptyToOneRelationshipDataStore()))
+        let container = try ModelContainer(
+            for: CustomDataStoreOwner.self, CustomDataStoreDestination.self, configurations: configuration)
+
+        XCTAssertNil(try container.mainContext.fetch(FetchDescriptor<CustomDataStoreOwner>()).first?.destination)
+    }
+
+    @MainActor
+    func testDataStoreAllowsMultipleTargetsForToManyRelationship() throws {
+        let configuration = ModelConfiguration(
+            "custom-store-multiple-to-many-targets",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: MultipleTargetsForToManyDataStore()))
+        let container = try ModelContainer(
+            for: CustomDataStoreCollectionOwner.self,
+            CustomDataStoreCollectionDestination.self,
+            configurations: configuration)
+
+        let owner = try XCTUnwrap(
+            container.mainContext.fetch(FetchDescriptor<CustomDataStoreCollectionOwner>()).first)
+        XCTAssertEqual(owner.destinations.map(\.title), ["target", "target"])
     }
 
     @MainActor

@@ -17,6 +17,7 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case collectionContains(String, String, PredicatePlan)
     case collectionAllEqual(String, String, PredicatePlan)
     case codableCollectionIsEmpty(String)
+    case codableCollectionCount(String)
     case relationshipContains(String, PredicatePlan)
     case collectionCount(String)
 }

@@ -79,6 +79,8 @@ package enum PredicatePlanBuilder {
             return .collectionAllEqual(name, elementType, element)
         case let .codableCollectionIsEmpty(name):
             return .codableCollectionIsEmpty(name)
+        case let .codableCollectionCount(name):
+            return .codableCollectionCount(name)
         case let .relationshipContains(name, body):
             guard let body = build(body) else { return nil }
             return .relationshipContains(name, body)
@@ -376,6 +378,11 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
             }
             return "osd_json_array_is_empty(\(tableAlias).Z\(name.uppercased()))"
+        case let .codableCollectionCount(name):
+            guard Self.validIdentifier(name) else {
+                throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
+            }
+            return "osd_json_array_count(\(tableAlias).Z\(name.uppercased()))"
         case let .relationshipContains(name, body):
             let path = name.split(separator: ".").map(String.init)
             guard let collectionName = path.last else {
@@ -573,6 +580,7 @@ package enum SQLCompiler {
         case let .collectionAllEqual(name, elementType, element):
             "collectionAllEqual(\(name),\(elementType),\(structure(element)))"
         case let .codableCollectionIsEmpty(name): "codableCollectionIsEmpty(\(name))"
+        case let .codableCollectionCount(name): "codableCollectionCount(\(name))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
         case let .relationshipCount(name): "relationshipCount(\(name))"

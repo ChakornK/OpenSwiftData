@@ -178,6 +178,13 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     else { return nil }
                     return array.isEmpty ? 1 : 0
                 })
+            database.add(
+                function: DatabaseFunction("osd_json_array_count", argumentCount: 1, pure: true) { values in
+                    guard values.count == 1, let data = Data.fromDatabaseValue(values[0]),
+                        let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
+                    else { return nil }
+                    return array.count
+                })
             for (name, operation) in [
                 ("osd_int_add", IntegerOperation.add),
                 ("osd_int_subtract", IntegerOperation.subtract),

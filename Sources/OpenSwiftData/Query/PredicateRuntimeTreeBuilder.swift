@@ -401,6 +401,30 @@ package enum PredicateRuntimeTreeBuilder {
                     root, path: path + ["root"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
                 if case let .property(reference) = rootNode,
+                    let propertyName = reference.name.split(separator: ".").last.map(String.init),
+                    let attribute = activeEntity.attributes.first(where: { $0.name == propertyName }),
+                    attribute.options.contains(.codable),
+                    Self.codableScalarCollectionElementType(attribute.type) != nil,
+                    let propertyKeyPath = activeModelType.schemaMetadata().first(where: { $0.name == propertyName })?
+                        .keypath,
+                    matchesCollectionRoot(
+                        type(of: propertyKeyPath).valueType,
+                        computedRoot: type(of: keyPath).rootType)
+                {
+                    return .expression(name: "OSDCodableCollectionCount", children: [("collection", rootNode)])
+                }
+            }
+            if name == "KeyPath",
+                let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
+                let keyPath = keyPathValue as? AnyKeyPath,
+                ObjectIdentifier(type(of: keyPath).valueType) == ObjectIdentifier(Int.self),
+                isArrayOrSetType(type(of: keyPath).rootType),
+                let root = children.first(where: { $0.label == "root" })?.value
+            {
+                let rootNode = try visit(
+                    root, path: path + ["root"], bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+                if case let .property(reference) = rootNode,
                     let collectionName = reference.name.split(separator: ".").last.map(String.init),
                     let relationship = activeEntity.relationships.first(where: {
                         $0.name == collectionName && $0.isToMany

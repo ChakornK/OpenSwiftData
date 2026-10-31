@@ -16,6 +16,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case collectionContains(String, String, PredicateIR)
     case collectionAllEqual(String, String, PredicateIR)
     case codableCollectionIsEmpty(String)
+    case codableCollectionCount(String)
     case relationshipContains(String, PredicateIR)
     case relationshipCount(String)
     case localizedStandardContains(PredicateIR, PredicateIR)
@@ -289,6 +290,16 @@ package enum PredicateIRBuilder {
                         "Codable collection isEmpty requires a direct scalar collection attribute.")
                 }
                 return .codableCollectionIsEmpty(path[0])
+            case "OSDCodableCollectionCount":
+                guard
+                    case let .keyPath(path) = try field(
+                        "collection", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                    scalarCollectionElementType(attributeTypes[path[0]]) != nil
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable collection count requires a direct scalar collection attribute.")
+                }
+                return .codableCollectionCount(path[0])
             case "OSDSequenceAllSatisfy":
                 guard
                     case let .keyPath(path) = try field(
@@ -401,6 +412,8 @@ package enum PredicateIRBuilder {
             return .collectionAllEqual(name, elementType, element)
         case let .codableCollectionIsEmpty(name):
             return .codableCollectionIsEmpty(name)
+        case let .codableCollectionCount(name):
+            return .codableCollectionCount(name)
         case let .relationshipCount(name):
             let relationshipParts = name.split(separator: ".").map(String.init)
             let fullName =
@@ -479,6 +492,8 @@ package enum PredicateIRBuilder {
         case let .collectionAllEqual(_, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case .codableCollectionIsEmpty:
+            return false
+        case .codableCollectionCount:
             return false
         case .sequenceContains, .relationshipCount, .value:
             return false
@@ -645,6 +660,7 @@ package enum PredicateIRBuilder {
         case "OSDSequenceIsEmpty": ["sequence"]
         case "OSDSequenceCount": ["sequence"]
         case "OSDCodableCollectionIsEmpty": ["collection"]
+        case "OSDCodableCollectionCount": ["collection"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]
         case "NilLiteral": []

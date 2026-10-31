@@ -2685,6 +2685,42 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCodableScalarCollectionCountPredicates() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-scalar-collection-count"))
+        let context = container.mainContext
+        let empty = CodableStringCollectionFixture(name: "empty", tags: [], optionalTags: [], numbers: [])
+        let one = CodableStringCollectionFixture(name: "one", tags: ["one"], optionalTags: ["one"], numbers: [1])
+        let two = CodableStringCollectionFixture(
+            name: "two", tags: ["one", "two"], optionalTags: ["one", "two"], numbers: [1, 2])
+        context.insert(empty)
+        context.insert(one)
+        context.insert(two)
+        try context.save()
+
+        let expectedCount = 2
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.count == expectedCount },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["two"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [two.persistentModelID])
+
+        one.tags.append("two")
+        let pendingDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.count >= expectedCount })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["one", "two"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+
+        let zeroCount = 0
+        let optionalDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalTags.flatMap { $0.count == zeroCount } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(optionalDescriptor).map(\.name), ["empty"])
+    }
+
+    @MainActor
     func testPredicateAllSatisfyOnCodableScalarCollection() throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,

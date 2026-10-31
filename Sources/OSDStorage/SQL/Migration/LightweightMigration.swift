@@ -87,39 +87,27 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("The stored schema hash and description disagree.")
         }
         let destinationHash = SchemaHash.hexDigest(destination)
-        let sourceSchema = persistedSource
-        let sourceHash = SchemaHash.hexDigest(sourceSchema)
+        let sourceHash = SchemaHash.hexDigest(persistedSource)
         guard stored == sourceHash else {
             throw SwiftDataError.migrationUnsupported("The stored schema hash does not match the source schema.")
         }
+        let sourceEntityIDs = try storedEntityIDs(schema: persistedSource, connection: connection)
+        let resolvedSourceEntityIDs = sourceEntityIDs ?? persistedSource.entityIDsByName
+        let sourceSchema = try persistedSource.reconciled(with: resolvedSourceEntityIDs)
         try validatePhysicalSchema(sourceSchema, connection: connection)
-        let sourceEntityIDs = try storedEntityIDs(schema: sourceSchema, connection: connection)
-        let resolvedSourceEntityIDs: [String: Int]
-        if let sourceEntityIDs {
-            guard sourceEntityIDs == sourceSchema.entityIDsByName else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Stored entity identifiers differ from the runtime schema and cannot yet be reconciled at open.")
-            }
-            resolvedSourceEntityIDs = sourceEntityIDs
-        } else {
-            resolvedSourceEntityIDs = sourceSchema.entityIDsByName
-        }
         let reconciledDestination = try destination.reconciled(with: resolvedSourceEntityIDs)
-        guard reconciledDestination.entityIDsByName == destination.entityIDsByName else {
-            throw SwiftDataError.migrationUnsupported(
-                "Destination entity identifiers require runtime reconciliation that is not yet available.")
-        }
-        if sourceEntityIDs == nil {
-            try writeEntityIDs(resolvedSourceEntityIDs, schema: sourceSchema, connection: connection)
-        }
         if stored == destinationHash {
-            try writeSchemaVersion(destination.version, connection: connection)
+            if sourceEntityIDs == nil {
+                try writeSchemaMetadata(reconciledDestination, connection: connection)
+            } else {
+                try writeSchemaVersion(destination.version, connection: connection)
+            }
             return
         }
         try connection.execute("SAVEPOINT osd_schema_migration")
         do {
-            try migrate(source: sourceSchema, destination: destination, connection: connection)
-            try writeSchemaMetadata(destination, connection: connection)
+            try migrate(source: sourceSchema, destination: reconciledDestination, connection: connection)
+            try writeSchemaMetadata(reconciledDestination, connection: connection)
             try connection.execute("RELEASE SAVEPOINT osd_schema_migration")
         } catch {
             try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_migration")
@@ -209,6 +197,29 @@ package enum LightweightMigration {
     }
 
     private static func validatePhysicalSchema(_ schema: Schema, connection: SQLConnection) throws {
+        let entityRows = try connection.rows("SELECT Z_ENT, Z_NAME, Z_SUPER FROM Z_PRIMARYKEY")
+        guard entityRows.count == schema.entities.count else {
+            throw SwiftDataError.migrationUnsupported("Physical entity metadata does not match the stored schema.")
+        }
+        var validatedEntities = Set<String>()
+        for row in entityRows {
+            guard row.count >= 3,
+                case let .int(rawEntityID) = row[0],
+                let entityID = Int(exactly: rawEntityID),
+                case let .text(entityName) = row[1],
+                case let .int(rawSuperEntityID) = row[2],
+                let entity = schema.entity(forName: entityName),
+                validatedEntities.insert(entityName).inserted,
+                schema.entityIDsByName[entityName] == entityID
+            else {
+                throw SwiftDataError.migrationUnsupported("Physical entity metadata contains an invalid row.")
+            }
+            let expectedSuperEntityID = entity.superentityName.flatMap { schema.entityIDsByName[$0] } ?? 0
+            guard rawSuperEntityID == Int64(expectedSuperEntityID) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Physical parent identifier does not match the schema for \(entityName).")
+            }
+        }
         let entitiesByName = Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, $0) })
         func rootName(for entity: Schema.Entity) throws -> String {
             var current = entity
@@ -384,7 +395,7 @@ package enum LightweightMigration {
         if sourceHasInheritance || destinationHasInheritance {
             try applyHierarchyOptionalAttributeAdditions(
                 source: source, destination: destination, connection: connection,
-                sourceHasInheritance: sourceHasInheritance, destinationHasInheritance: destinationHasInheritance)
+                destinationHasInheritance: destinationHasInheritance)
             return
         }
         for schema in [source, destination] {
@@ -426,7 +437,6 @@ package enum LightweightMigration {
         source: Schema,
         destination: Schema,
         connection: SQLConnection,
-        sourceHasInheritance: Bool,
         destinationHasInheritance: Bool
     ) throws {
         func columnKey(_ name: String) -> String { name.uppercased() }
@@ -441,18 +451,32 @@ package enum LightweightMigration {
                 && lhs.originalName == rhs.originalName
                 && lhs.components == rhs.components
         }
-        guard sourceHasInheritance, destinationHasInheritance,
-            Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)),
-            source.entityIDsByName == destination.entityIDsByName
+        let sourceNames = Set(source.entities.map(\.name))
+        let destinationNames = Set(destination.entities.map(\.name))
+        guard destinationHasInheritance,
+            sourceNames.isSubset(of: destinationNames),
+            source.entities.allSatisfy({ source.entityIDsByName[$0.name] == destination.entityIDsByName[$0.name] })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Hierarchy migration requires unchanged entity topology and identifiers.")
+                "Hierarchy migration cannot remove entities or change existing entity identifiers.")
         }
         try source.validateRelationshipStorageMappings()
         try destination.validateRelationshipStorageMappings()
 
         let sourceByName = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        let newEntities = destination.entities.filter { sourceByName[$0.name] == nil }
+        for entity in newEntities {
+            guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
+                entity.relationships.isEmpty,
+                entity.indexes.isEmpty,
+                !destination.entities.contains(where: { $0.superentityName == entity.name })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration only adds leaf subclasses with existing parents and no relationships or indexes."
+                )
+            }
+        }
         for sourceEntity in source.entities {
             guard let destinationEntity = destinationByName[sourceEntity.name],
                 sourceEntity.superentityName == destinationEntity.superentityName,
@@ -512,10 +536,9 @@ package enum LightweightMigration {
         var additionsByRootAndColumn: [String: (root: String, column: String, attribute: Schema.Attribute)] = [:]
         var additionOwnersByRootAndColumn: [String: [String]] = [:]
         for destinationEntity in destination.entities {
-            guard let sourceEntity = sourceByName[destinationEntity.name] else {
-                throw SwiftDataError.migrationUnsupported("Hierarchy entity mapping is incomplete.")
-            }
-            let sourceAttributes = Dictionary(uniqueKeysWithValues: sourceEntity.attributes.map { ($0.name, $0) })
+            let sourceEntity = sourceByName[destinationEntity.name]
+            let sourceAttributes = Dictionary(
+                uniqueKeysWithValues: (sourceEntity?.attributes ?? []).map { ($0.name, $0) })
             let destinationAttributesByName = Dictionary(
                 uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
             let destinationParentAttributes =
@@ -524,7 +547,7 @@ package enum LightweightMigration {
                 ?? []
             guard sourceAttributes.allSatisfy({ name, _ in destinationAttributesByName[name] != nil }) else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy migration cannot remove persisted attributes from \(sourceEntity.name).")
+                    "Hierarchy migration cannot remove persisted attributes from \(destinationEntity.name).")
             }
             for attribute in destinationEntity.attributes {
                 if let existing = sourceAttributes[attribute.name] {
@@ -604,6 +627,19 @@ package enum LightweightMigration {
                 throw SwiftDataError.migrationUnsupported(
                     "Added hierarchy column \(table).\(physicalColumn) has an incompatible physical definition.")
             }
+        }
+        for entity in newEntities.sorted(by: {
+            destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]
+        }) {
+            guard let entityID = destination.entityIDsByName[entity.name],
+                let parentName = entity.superentityName,
+                let parentID = destination.entityIDsByName[parentName]
+            else {
+                throw SwiftDataError.migrationUnsupported("New hierarchy entity has incomplete ID metadata.")
+            }
+            try connection.execute(
+                "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, ?, ?)",
+                [.int(Int64(entityID)), .text(entity.name), .int(Int64(parentID)), .int(0)])
         }
         try validatePhysicalSchema(destination, connection: connection)
     }

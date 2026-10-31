@@ -69,6 +69,26 @@ final class InheritanceMacroGrandchildFixture: InheritanceMacroChildFixture {
 }
 
 @Model
+final class InheritanceMacroAardvarkFixture: InheritanceMacroBaseFixture {
+    var color: String?
+
+    init(name: String, color: String?) {
+        self.color = color
+        super.init(name: name)
+    }
+}
+
+@Model
+final class InheritanceMacroPuppyFixture: InheritanceMacroChildFixture {
+    var collar: String?
+
+    init(name: String, age: Int, collar: String?) {
+        self.collar = collar
+        super.init(name: name, age: age)
+    }
+}
+
+@Model
 class InheritanceRelationshipBaseFixture {
     @Relationship(inverse: nil) var items: [InheritanceRelationshipItemFixture]
     init(items: [InheritanceRelationshipItemFixture]) { self.items = items }
@@ -4544,6 +4564,60 @@ final class PersistentModelTests: XCTestCase {
             XCTFail("Reverse root fetch failed: \(error)"); return
         }
         XCTAssertTrue(reverseRoots[1] === reverseChildren[0])
+    }
+
+    @MainActor
+    func testAddingLeafSubclassToExistingSQLiteHierarchyPreservesEntityIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let configuration = ModelConfiguration.sqliteFile("leaf-subclass-addition", url: url)
+        let sourceContainer = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            configurations: configuration)
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        let sourceContext = sourceContainer.mainContext
+        let base = InheritanceMacroBaseFixture(name: "base")
+        let child = InheritanceMacroChildFixture(name: "child", age: 8)
+        sourceContext.insert(base)
+        sourceContext.insert(child)
+        try sourceContext.save()
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroAardvarkFixture.self,
+            InheritanceMacroPuppyFixture.self,
+            configurations: configuration)
+        let runtimeIDs = container.schema.entityIDsByName
+        XCTAssertEqual(runtimeIDs["InheritanceMacroBaseFixture"], sourceIDs["InheritanceMacroBaseFixture"])
+        XCTAssertEqual(runtimeIDs["InheritanceMacroChildFixture"], sourceIDs["InheritanceMacroChildFixture"])
+        XCTAssertGreaterThan(
+            try XCTUnwrap(runtimeIDs["InheritanceMacroAardvarkFixture"]),
+            try XCTUnwrap(sourceIDs.values.max()))
+        XCTAssertGreaterThan(
+            try XCTUnwrap(runtimeIDs["InheritanceMacroPuppyFixture"]),
+            try XCTUnwrap(runtimeIDs["InheritanceMacroAardvarkFixture"]))
+
+        let existingChildren = try container.mainContext.fetch(FetchDescriptor<InheritanceMacroChildFixture>())
+        XCTAssertEqual(existingChildren.map(\.name), ["child"])
+        let puppy = InheritanceMacroPuppyFixture(name: "puppy", age: 1, collar: "red")
+        container.mainContext.insert(puppy)
+        let newLeaf = InheritanceMacroAardvarkFixture(name: "new leaf", color: "black")
+        container.mainContext.insert(newLeaf)
+        try container.mainContext.save()
+        XCTAssertEqual(
+            try container.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name),
+            ["base", "child", "new leaf", "puppy"])
+        let fetchedPuppy = try XCTUnwrap(
+            container.mainContext.fetch(FetchDescriptor<InheritanceMacroChildFixture>())
+                .first(where: { $0.name == "puppy" }))
+        XCTAssertTrue(fetchedPuppy is InheritanceMacroPuppyFixture)
+        XCTAssertEqual((fetchedPuppy as? InheritanceMacroPuppyFixture)?.collar, "red")
+        XCTAssertEqual(newLeaf.persistentModelID.entityName, "InheritanceMacroAardvarkFixture")
     }
 
     @MainActor

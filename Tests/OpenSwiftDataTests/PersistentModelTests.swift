@@ -216,6 +216,17 @@ final class ExplicitCodableStringCollectionFixture {
 }
 
 @Model
+final class OptionalIntegerSetFixture {
+    var name: String
+    var values: Set<Int>?
+
+    init(name: String, values: Set<Int>?) {
+        self.name = name
+        self.values = values
+    }
+}
+
+@Model
 final class OptionalCodableStringCollectionFixture {
     var name: String
     @Attribute(.codable) var tags: [String]?
@@ -2676,6 +2687,35 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.tags.contains(needle) })
         XCTAssertEqual(try inferredContext.fetch(inferredDescriptor).map(\.name), ["inferred"])
         XCTAssertEqual(try explicitContext.fetch(explicitDescriptor).count, 1)
+    }
+
+    @MainActor
+    func testOptionalInferredIntegerSetPersistsAndSupportsMembership() throws {
+        let container = try ModelContainer(
+            for: OptionalIntegerSetFixture.self,
+            configurations: .sqliteMemory("optional-inferred-integer-set"))
+        let context = container.mainContext
+        let matching = OptionalIntegerSetFixture(name: "matching", values: [3, 8])
+        let empty = OptionalIntegerSetFixture(name: "empty", values: [])
+        let nilValue = OptionalIntegerSetFixture(name: "nil", values: nil)
+        context.insert(matching)
+        context.insert(empty)
+        context.insert(nilValue)
+        try context.save()
+
+        let value = 8
+        let descriptor = FetchDescriptor<OptionalIntegerSetFixture>(
+            predicate: #Predicate { $0.values.flatMap { $0.contains(value) } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+
+        matching.values = []
+        nilValue.values = [value]
+        let pendingDescriptor = FetchDescriptor<OptionalIntegerSetFixture>(
+            predicate: #Predicate { $0.values.flatMap { $0.contains(value) } ?? false })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["nil"])
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [nilValue.persistentModelID])
     }
 
     @MainActor

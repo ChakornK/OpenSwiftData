@@ -238,6 +238,19 @@ package enum PredicateIRBuilder {
                 return .conjunction(
                     .comparison(.notEqual, .keyPath(ownerPath), .value(.null)),
                     isEmpty)
+            case "OSDSequenceAllSatisfy":
+                guard
+                    case let .keyPath(path) = try field(
+                        "sequence", from: fields, attributeTypes: attributeTypes), !path.isEmpty
+                else {
+                    throw SwiftDataError.unsupportedPredicate("allSatisfy requires a relationship collection path.")
+                }
+                let relationship = path.joined(separator: ".")
+                let body = try elementPredicate(
+                    field("test", from: fields, attributeTypes: attributeTypes),
+                    relationship: relationship,
+                    attributeTypes: attributeTypes)
+                return .negation(.relationshipContains(relationship, .negation(body)))
             default:
                 throw SwiftDataError.unsupportedPredicate(name)
             }
@@ -532,6 +545,7 @@ package enum PredicateIRBuilder {
         case "SequenceStartsWith": ["base", "prefix"]
         case "SequenceContains": ["sequence", "element"]
         case "OSDSequenceContainsWhere": ["sequence", "test"]
+        case "OSDSequenceAllSatisfy": ["sequence", "test"]
         case "OSDSequenceIsEmpty": ["sequence"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]

@@ -151,9 +151,9 @@ package enum PredicateRuntimeTreeBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Malformed predicate node \(name): expected \(requiredLabels.sorted()), found \(labels.sorted())")
             }
-            if name == "SequenceContainsWhere" {
+            if name == "SequenceContainsWhere" || name == "SequenceAllSatisfy" {
                 guard activeCollectionName == nil else {
-                    throw SwiftDataError.unsupportedPredicate("Nested SequenceContainsWhere is unsupported")
+                    throw SwiftDataError.unsupportedPredicate("Nested collection quantifiers are unsupported")
                 }
                 guard let schema,
                     let sequence = children.first(where: { $0.label == "sequence" })?.value,
@@ -162,18 +162,18 @@ package enum PredicateRuntimeTreeBuilder {
                     variableIdentifier(variable) != nil
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires a direct no-inverse to-many relationship.")
+                        "Collection quantifiers require a to-many relationship.")
                 }
                 let sequenceNode = try visit(
                     sequence, path: path + ["sequence"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
                 guard case let .property(sequenceProperty) = sequenceNode else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires a relationship collection key path.")
+                        "Collection quantifiers require a relationship collection key path.")
                 }
                 let collectionParts = sequenceProperty.name.split(separator: ".").map(String.init)
                 guard let collectionName = collectionParts.last else {
-                    throw SwiftDataError.unsupportedPredicate("SequenceContainsWhere has an empty collection path.")
+                    throw SwiftDataError.unsupportedPredicate("Collection quantifier has an empty collection path.")
                 }
                 let activePrefix = activeRelationshipName?.split(separator: ".").map(String.init) ?? []
                 let ownerParts = Array(collectionParts.dropLast())
@@ -190,7 +190,7 @@ package enum PredicateRuntimeTreeBuilder {
                     collectionOwner = (traversal.entity, traversal.modelType)
                 } else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires owning to-one relationships before the collection.")
+                        "Collection quantifiers require owning to-one relationships before the collection.")
                 }
                 guard
                     let relationship = collectionOwner.entity.relationships.first(where: {
@@ -201,7 +201,7 @@ package enum PredicateRuntimeTreeBuilder {
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires a supported to-many relationship.")
+                        "Collection quantifier requires a supported to-many relationship.")
                 }
                 let previousModelType = activeModelType
                 let previousEntity = activeEntity
@@ -228,7 +228,7 @@ package enum PredicateRuntimeTreeBuilder {
                 activeCollectionName = previousCollectionName
                 activePredicateRootType = previousPredicateRootType
                 return .expression(
-                    name: "OSDSequenceContainsWhere",
+                    name: name == "SequenceAllSatisfy" ? "OSDSequenceAllSatisfy" : "OSDSequenceContainsWhere",
                     children: [("sequence", sequenceNode), ("test", testNode)])
             }
             if name == "OptionalFlatMap" {

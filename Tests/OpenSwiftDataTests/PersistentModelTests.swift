@@ -2421,6 +2421,41 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateAllSatisfyToManyRelationshipElements() throws {
+        let container = try ModelContainer(
+            for: NestedToManyMiddleFixture.self,
+            NestedToManyItemFixture.self,
+            configurations: .sqliteMemory("to-many-all-satisfy-predicate"))
+        let context = container.mainContext
+        let accepted = NestedToManyItemFixture(title: "accepted")
+        let rejected = NestedToManyItemFixture(title: "rejected")
+        let allAccepted = NestedToManyMiddleFixture(name: "all-accepted", items: [accepted])
+        let mixed = NestedToManyMiddleFixture(name: "mixed", items: [accepted, rejected])
+        let empty = NestedToManyMiddleFixture(name: "empty", items: [])
+        context.insert(accepted)
+        context.insert(rejected)
+        context.insert(allAccepted)
+        context.insert(mixed)
+        context.insert(empty)
+        try context.save()
+
+        let expectedTitle = "accepted"
+        let descriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.allSatisfy { $0.title == expectedTitle } },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(Set(matches.map(\.name)), ["all-accepted", "empty"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(Set(try context.fetchIdentifiers(descriptor)), Set(matches.map(\.persistentModelID)))
+
+        rejected.title = "accepted"
+        let pendingDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.allSatisfy { $0.title == expectedTitle } })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["all-accepted", "mixed", "empty"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
     func testQualifiedOptionalScalarTypesRemainScalarAttributes() throws {
         let container = try ModelContainer(
             for: QualifiedOptionalScalarFixture.self,

@@ -562,6 +562,12 @@ final class CodeGenTests: XCTestCase {
                 "set {\n    withMutation(keyPath: \\.name) {\n        self.setValue(forKey: \\.name, to: newValue)\n    }\n}",
             ])
         XCTAssertEqual(CodeGen.peerSources(property: "name"), ["@Transient\nprivate var _name: _SwiftDataNoType"])
+        XCTAssertEqual(
+            CodeGen.peerSources(property: "rank", valueType: "Int", inherited: true),
+            ["@Transient\nprivate var _rank: Int?"])
+        XCTAssertEqual(
+            CodeGen.peerSources(property: "rank", valueType: "Int", inherited: true, initializer: "7"),
+            ["@Transient\nprivate var _rank: Int? = 7"])
     }
 
     func testRelationshipAccessorSourceUsesGraphSetter() {

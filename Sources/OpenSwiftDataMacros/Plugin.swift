@@ -278,8 +278,18 @@ struct PersistedPropertyMacro: AccessorMacro, PeerMacro {
                 else { return nil }
                 return argument.expression.trimmedDescription == "true"
             } ?? false
+        let isRelationship =
+            node.arguments.flatMap { arguments -> Bool? in
+                guard case let .argumentList(list) = arguments,
+                    let argument = list.first(where: { $0.label?.text == "relationship" })
+                else { return nil }
+                return argument.expression.trimmedDescription == "true"
+            } ?? false
         let valueType = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
-        return CodeGen.peerSources(property: property, valueType: valueType, inherited: inherited)
-            .map(DeclSyntax.init(stringLiteral:))
+        let initializer = isRelationship ? nil : binding.initializer?.value.trimmedDescription
+        return CodeGen.peerSources(
+            property: property, valueType: valueType, inherited: inherited, initializer: initializer
+        )
+        .map(DeclSyntax.init(stringLiteral:))
     }
 }

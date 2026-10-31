@@ -887,7 +887,7 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
-    func testHierarchyLeafSubclassAdditionRejectsRequiredAttributesAtomically() throws {
+    func testHierarchyLeafSubclassAdditionAllowsRequiredDefaultedAttributes() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -897,7 +897,7 @@ final class SchemaMigrationTests: XCTestCase {
             Schema.Entity(name: "Animal"),
             Schema.Entity(
                 name: "Cat",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [Schema.Attribute(name: "name", type: "String", defaultValue: "Milo")],
                 superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -906,19 +906,18 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try initial.close()
 
-        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
-            guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected migrationUnsupported, got \(error)")
-            }
-        }
-        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
         XCTAssertEqual(
-            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
-            sourceIDs)
-        XCTAssertFalse(
-            try reopened.read {
-                try $0.rows("PRAGMA table_info(ZANIMAL)").contains { $0.count > 1 && $0[1] == .text("ZNAME") }
-            })
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) }?[
+                "Animal"],
+            sourceIDs["Animal"])
+        let definition = try reopened.read {
+            try $0.rows("PRAGMA table_info(ZANIMAL)").first { $0.count > 5 && $0[1] == .text("ZNAME") }
+        }
+        XCTAssertEqual(definition?[2], .text("VARCHAR"))
+        XCTAssertEqual(definition?[3], .int(0))
+        let rows = try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, ZNAME FROM ZANIMAL") }
+        XCTAssertTrue(rows.isEmpty)
         try reopened.close()
     }
 

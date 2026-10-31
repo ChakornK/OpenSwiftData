@@ -89,6 +89,15 @@ final class InheritanceMacroPuppyFixture: InheritanceMacroChildFixture {
 }
 
 @Model
+final class InheritanceMacroKittenFixture: InheritanceMacroBaseFixture {
+    var rank: Int = 7
+
+    override init(name: String) {
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritedToOneMigrationBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -4683,6 +4692,48 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(fetchedPuppy is InheritanceMacroPuppyFixture)
         XCTAssertEqual((fetchedPuppy as? InheritanceMacroPuppyFixture)?.collar, "red")
         XCTAssertEqual(newLeaf.persistentModelID.entityName, "InheritanceMacroAardvarkFixture")
+    }
+
+    @MainActor
+    func testAddingLeafWithRequiredDefaultMaterializesTypedDefault() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "leaf-required-default-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            configurations: configuration)
+        sourceContainer.mainContext.insert(InheritanceMacroBaseFixture(name: "existing"))
+        try sourceContainer.mainContext.save()
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroKittenFixture.self,
+            configurations: configuration)
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            sourceIDs["InheritanceMacroBaseFixture"])
+        let existing = try XCTUnwrap(
+            container.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        XCTAssertEqual(existing.name, "existing")
+
+        let kitten = InheritanceMacroKittenFixture(name: "kitten")
+        container.mainContext.insert(kitten)
+        XCTAssertEqual(kitten.rank, 7)
+        try container.mainContext.save()
+        let fetched = try XCTUnwrap(
+            container.makeContext().fetch(FetchDescriptor<InheritanceMacroKittenFixture>()).first)
+        XCTAssertEqual(fetched.rank, 7)
+        XCTAssertEqual(fetched.name, "kitten")
+    }
+
+    @MainActor
+    func testInheritedDefaultedPropertyIsReadableBeforeContextInsertion() throws {
+        let kitten = InheritanceMacroKittenFixture(name: "detached")
+        XCTAssertEqual(kitten.rank, 7)
     }
 
     @MainActor

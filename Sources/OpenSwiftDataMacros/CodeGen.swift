@@ -868,10 +868,14 @@ enum CodeGen {
         return ["@Transient\nprivate var _\(property): _SwiftDataNoType\(initializer)"]
     }
 
-    static func peerSources(property: String, valueType: String, inherited: Bool) -> [String] {
-        inherited
-            ? ["@Transient\nprivate var _\(property): \(valueType)?"]
-            : peerSources(property: property, variant: .c)
+    static func peerSources(
+        property: String, valueType: String, inherited: Bool, initializer: String? = nil
+    ) -> [String] {
+        if inherited {
+            let defaultValue = initializer.map { " = \($0)" } ?? ""
+            return ["@Transient\nprivate var _\(property): \(valueType)?\(defaultValue)"]
+        }
+        return peerSources(property: property, variant: .c)
     }
 
     static func peerSources(property: Property, variant: InitializationVariant = .a) -> [String] {

@@ -746,7 +746,8 @@ package enum LightweightMigration {
                     continue
                 }
                 let isNewRoot = sourceEntity == nil && destinationEntity.superentityName == nil
-                guard (isNewRoot || (attribute.isOptional && attribute.defaultValue == nil)),
+                let isNewLeaf = sourceEntity == nil && destinationEntity.superentityName != nil
+                guard isNewRoot || isNewLeaf || (attribute.isOptional && attribute.defaultValue == nil),
                     attribute.originalName == nil,
                     (!attribute.options.contains(.unique) || sourceEntity == nil),
                     !attribute.options.contains(.externalStorage),

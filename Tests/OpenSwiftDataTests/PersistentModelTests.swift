@@ -407,6 +407,22 @@ final class OptionalToOneIntegerOwnerFixture {
 }
 
 @Model
+final class OptionalToOneDateTargetFixture {
+    var timestamp: Date
+    init(timestamp: Date) { self.timestamp = timestamp }
+}
+
+@Model
+final class OptionalToOneDateOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var target: OptionalToOneDateTargetFixture?
+    init(name: String, target: OptionalToOneDateTargetFixture?) {
+        self.name = name
+        self.target = target
+    }
+}
+
+@Model
 final class PlainHierarchyTargetSiblingFixture: PlainHierarchyTargetBaseFixture {
     var label: String
     init(name: String, label: String) {
@@ -1592,6 +1608,41 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 0)
         XCTAssertTrue(try context.fetchIdentifiers(pendingDescriptor).isEmpty)
+    }
+
+    @MainActor
+    func testOptionalToOneDatePredicateMatchesStoredAndPendingValues() throws {
+        let container = try ModelContainer(
+            for: OptionalToOneDateOwnerFixture.self,
+            OptionalToOneDateTargetFixture.self,
+            configurations: .sqliteMemory("optional-to-one-date-predicate"))
+        let context = container.mainContext
+        let selectedDate = Date(timeIntervalSinceReferenceDate: 12.5)
+        let otherDate = Date(timeIntervalSinceReferenceDate: 42.25)
+        let selectedTarget = OptionalToOneDateTargetFixture(timestamp: selectedDate)
+        let otherTarget = OptionalToOneDateTargetFixture(timestamp: otherDate)
+        context.insert(selectedTarget)
+        context.insert(otherTarget)
+        context.insert(OptionalToOneDateOwnerFixture(name: "selected", target: selectedTarget))
+        context.insert(OptionalToOneDateOwnerFixture(name: "other", target: otherTarget))
+        context.insert(OptionalToOneDateOwnerFixture(name: "nil", target: nil))
+        try context.save()
+
+        let storedDescriptor = FetchDescriptor<OptionalToOneDateOwnerFixture>(
+            predicate: #Predicate { $0.target?.timestamp == selectedDate },
+            includePendingChanges: false)
+        let storedMatches = try context.fetch(storedDescriptor)
+        XCTAssertEqual(storedMatches.map(\.name), ["selected"])
+        XCTAssertEqual(try context.fetchCount(storedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(storedDescriptor), storedMatches.map(\.persistentModelID))
+
+        selectedTarget.timestamp = otherDate
+        let pendingDescriptor = FetchDescriptor<OptionalToOneDateOwnerFixture>(
+            predicate: #Predicate { $0.target?.timestamp == otherDate })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.map(\.name), ["selected", "other"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
     }
 
     @MainActor

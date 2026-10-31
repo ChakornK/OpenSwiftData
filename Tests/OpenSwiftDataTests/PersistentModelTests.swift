@@ -89,6 +89,28 @@ final class InheritanceMacroPuppyFixture: InheritanceMacroChildFixture {
 }
 
 @Model
+class InheritedToOneMigrationBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class InheritedToOneMigrationTargetFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+final class InheritedToOneMigrationChildFixture: InheritedToOneMigrationBaseFixture {
+    @Relationship(inverse: nil) var target: InheritedToOneMigrationTargetFixture?
+
+    init(name: String, target: InheritedToOneMigrationTargetFixture?) {
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritanceRelationshipBaseFixture {
     @Relationship(inverse: nil) var items: [InheritanceRelationshipItemFixture]
     init(items: [InheritanceRelationshipItemFixture]) { self.items = items }
@@ -4618,6 +4640,54 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(fetchedPuppy is InheritanceMacroPuppyFixture)
         XCTAssertEqual((fetchedPuppy as? InheritanceMacroPuppyFixture)?.collar, "red")
         XCTAssertEqual(newLeaf.persistentModelID.entityName, "InheritanceMacroAardvarkFixture")
+    }
+
+    @MainActor
+    func testAddingLeafToOneRelationshipMigratesQualifiedRootColumn() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "leaf-to-one-relationship-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InheritedToOneMigrationBaseFixture.self,
+            InheritedToOneMigrationTargetFixture.self,
+            configurations: configuration)
+        let originalBase = InheritedToOneMigrationBaseFixture(name: "base")
+        let target = InheritedToOneMigrationTargetFixture(title: "target")
+        sourceContainer.mainContext.insert(originalBase)
+        sourceContainer.mainContext.insert(target)
+        try sourceContainer.mainContext.save()
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: InheritedToOneMigrationBaseFixture.self,
+            InheritedToOneMigrationTargetFixture.self,
+            InheritedToOneMigrationChildFixture.self,
+            configurations: configuration)
+        XCTAssertEqual(
+            container.schema.relationshipStorageMapping(
+                modelEntityName: "InheritedToOneMigrationChildFixture", relationshipName: "target")?
+                .storageColumnName,
+            "InheritedToOneMigrationChildFixture_target")
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InheritedToOneMigrationBaseFixture"],
+            sourceIDs["InheritedToOneMigrationBaseFixture"])
+
+        let child = InheritedToOneMigrationChildFixture(name: "child", target: target)
+        container.mainContext.insert(child)
+        try container.mainContext.save()
+        let reader = container.makeContext()
+        let fetchedChild = try XCTUnwrap(reader.fetch(FetchDescriptor<InheritedToOneMigrationChildFixture>()).first)
+        XCTAssertEqual(fetchedChild.target?.title, "target")
+        XCTAssertEqual(try reader.fetchCount(FetchDescriptor<InheritedToOneMigrationBaseFixture>()), 2)
+
+        fetchedChild.target = nil
+        try reader.save()
+        let refreshedChild = try XCTUnwrap(
+            container.makeContext().fetch(FetchDescriptor<InheritedToOneMigrationChildFixture>()).first)
+        XCTAssertNil(refreshedChild.target)
     }
 
     @MainActor

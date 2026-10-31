@@ -439,6 +439,12 @@ package enum LightweightMigration {
         connection: SQLConnection,
         destinationHasInheritance: Bool
     ) throws {
+        do {
+            _ = try SchemaBuilder.build(destination)
+        } catch {
+            throw SwiftDataError.migrationUnsupported(
+                "Destination hierarchy schema is invalid for lightweight migration: \(error)")
+        }
         func columnKey(_ name: String) -> String { name.uppercased() }
         func less(_ lhs: String, _ rhs: String) -> Bool {
             lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
@@ -468,13 +474,24 @@ package enum LightweightMigration {
         let newEntities = destination.entities.filter { sourceByName[$0.name] == nil }
         for entity in newEntities {
             guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
-                entity.relationships.isEmpty,
                 entity.indexes.isEmpty,
                 !destination.entities.contains(where: { $0.superentityName == entity.name })
             else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy migration only adds leaf subclasses with existing parents and no relationships or indexes."
+                    "Hierarchy migration only adds leaf subclasses beneath existing entities."
                 )
+            }
+            for relationship in entity.relationships {
+                guard !relationship.isToMany, relationship.isOptional, relationship.inverse == nil,
+                    relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                    relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                    relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                    source.entity(forName: relationship.destination) != nil
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "New hierarchy leaves support only optional no-inverse to-one relationships to existing entities."
+                    )
+                }
             }
         }
         for sourceEntity in source.entities {
@@ -535,6 +552,7 @@ package enum LightweightMigration {
 
         var additionsByRootAndColumn: [String: (root: String, column: String, attribute: Schema.Attribute)] = [:]
         var additionOwnersByRootAndColumn: [String: [String]] = [:]
+        var relationshipAdditionsByRootAndColumn: [String: (root: String, column: String)] = [:]
         for destinationEntity in destination.entities {
             let sourceEntity = sourceByName[destinationEntity.name]
             let sourceAttributes = Dictionary(
@@ -608,6 +626,33 @@ package enum LightweightMigration {
             }
         }
 
+        for entity in newEntities {
+            for relationship in entity.relationships {
+                guard
+                    let mapping = destination.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name),
+                    mapping.declaringEntityName == entity.name,
+                    mapping.ownerRootEntityName == (try rootName(for: entity.name, schema: destination))
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "New hierarchy to-one relationship has incomplete storage metadata.")
+                }
+                let root = mapping.ownerRootEntityName
+                let column = "Z\(mapping.storageColumnName)"
+                let normalizedColumn = columnKey(column)
+                let key = "\(root):\(normalizedColumn)"
+                guard !sourceColumnsByRoot[root, default: []].contains(normalizedColumn),
+                    additionsByRootAndColumn[key] == nil,
+                    relationshipAdditionsByRootAndColumn[key] == nil
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "New hierarchy relationship column collides with existing storage."
+                    )
+                }
+                relationshipAdditionsByRootAndColumn[key] = (root, column)
+            }
+        }
+
         for (root, column, attribute) in additionsByRootAndColumn.values.sorted(by: {
             if $0.root != $1.root { return less($0.root, $1.root) }
             return less($0.column, $1.column)
@@ -627,6 +672,26 @@ package enum LightweightMigration {
                 throw SwiftDataError.migrationUnsupported(
                     "Added hierarchy column \(table).\(physicalColumn) has an incompatible physical definition.")
             }
+        }
+        for (root, column) in relationshipAdditionsByRootAndColumn.values.sorted(by: {
+            if $0.root != $1.root { return less($0.root, $1.root) }
+            return less($0.column, $1.column)
+        }) {
+            let table = "Z\(root.uppercased())"
+            let physicalColumn = column.uppercased()
+            try connection.execute("ALTER TABLE \(table) ADD COLUMN \(physicalColumn) INTEGER")
+            let definition = try connection.rows("PRAGMA table_info(\(table))").first {
+                $0.count > 4 && $0[1] == .text(physicalColumn)
+            }
+            guard let definition, definition[2] == .text("INTEGER"), definition[3] == .int(0), definition[4] == .null
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Added hierarchy relationship column \(table).\(physicalColumn) has an incompatible definition."
+                )
+            }
+            let indexName = "Z\(root.uppercased())_\(physicalColumn)_INDEX"
+            try connection.execute(
+                "CREATE INDEX \(indexName) ON \(table) (\(physicalColumn));")
         }
         for entity in newEntities.sorted(by: {
             destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]

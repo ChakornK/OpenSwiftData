@@ -991,8 +991,11 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testHierarchyEntityAdditionWithRelationshipFailsBeforeWrites() throws {
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-entity-add"))
+    func testHierarchyLeafAdditionMigratesOptionalOwningToOneRelationship() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
         let source = Schema([
             Schema.Entity(name: "Base"),
             Schema.Entity(name: "Child", superentityName: "Base"),
@@ -1002,24 +1005,124 @@ final class SchemaMigrationTests: XCTestCase {
             Schema.Entity(name: "Child", superentityName: "Base"),
             Schema.Entity(
                 name: "Sibling",
-                relationships: [Schema.Relationship(name: "mentor", destination: "Base", isToMany: false)],
+                relationships: [
+                    Schema.Relationship(name: "mentor", destination: "Base", isToMany: false, isOptional: true)
+                ],
                 superentityName: "Base"),
         ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try initial.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
+        }
+        try initial.close()
 
-        XCTAssertThrowsError(
-            try driver.write { connection in
-                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
-            }
-        ) { error in
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try migrated.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: destination, connection: $0))
+        }
+        let siblingID = try XCTUnwrap(destinationIDs["Sibling"])
+        XCTAssertEqual(destinationIDs["Base"], sourceIDs["Base"])
+        XCTAssertEqual(destinationIDs["Child"], sourceIDs["Child"])
+        XCTAssertGreaterThan(siblingID, try XCTUnwrap(sourceIDs.values.max()))
+        let columns = try migrated.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZSIBLING_MENTOR") })
+        let indexes = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
+        }
+        XCTAssertTrue(indexes.contains([.text("ZBASE_ZSIBLING_MENTOR_INDEX")]))
+        let metadata: StoredValue? = try migrated.read {
+            try $0.rows(
+                "SELECT Z_SUPER FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(siblingID))]
+            ).first?.first
+        }
+        XCTAssertEqual(metadata, .int(Int64(try XCTUnwrap(destinationIDs["Base"]))))
+        try migrated.close()
+    }
+
+    func testHierarchyLeafRelationshipMigrationRejectsRequiredAndToManyRelationships() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(name: "Target"),
+            Schema.Entity(
+                name: "RequiredChild",
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: false)
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "CollectionChild",
+                relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)],
+                superentityName: "Base"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try initial.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
-        let tables = try driver.read {
-            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        let primaryKeys = try reopened.read { try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") }
+        XCTAssertEqual(primaryKeys, [[.text("Base")], [.text("Target")]])
+        try reopened.close()
+    }
+
+    func testHierarchyLeafRelationshipMigrationRejectsIndexNameCollisionBeforeWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "A"),
+            Schema.Entity(name: "A_ZB"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "A"),
+            Schema.Entity(name: "A_ZB"),
+            Schema.Entity(name: "Target"),
+            Schema.Entity(
+                name: "B",
+                relationships: [
+                    Schema.Relationship(name: "ZLeaf1_Rel", destination: "Target", isOptional: true)
+                ],
+                superentityName: "A"),
+            Schema.Entity(
+                name: "Leaf1",
+                relationships: [Schema.Relationship(name: "Rel", destination: "Target", isOptional: true)],
+                superentityName: "A_ZB"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
         }
-        XCTAssertTrue(tables.isEmpty)
-        try driver.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let primaryKeys = try reopened.read { try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") }
+        XCTAssertEqual(primaryKeys, [[.text("A")], [.text("A_ZB")], [.text("Target")]])
+        let indexes = try reopened.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
+        }
+        XCTAssertFalse(indexes.contains([.text("ZA_ZB_ZLEAF1_REL_INDEX")]))
+        try reopened.close()
     }
 
     func testHierarchyAttributeAdditionRejectsRelationshipColumnCollision() throws {

@@ -2626,6 +2626,11 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [other.persistentModelID])
 
+        let emptyTagsDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.isEmpty },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(emptyTagsDescriptor).map(\.name)), ["empty-set"])
+
         let pendingNumberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
             predicate: #Predicate { $0.numbers.contains(number) })
         XCTAssertEqual(try context.fetch(pendingNumberDescriptor).map(\.name), ["other"])
@@ -2637,6 +2642,46 @@ final class PersistentModelTests: XCTestCase {
         let pendingOptionalNumberDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
             predicate: #Predicate { $0.optionalNumbers.flatMap { $0.contains(optionalNumber) } ?? false })
         XCTAssertEqual(try context.fetch(pendingOptionalNumberDescriptor).map(\.name), ["other"])
+    }
+
+    @MainActor
+    func testCodableScalarCollectionIsEmptyPredicates() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-scalar-collection-empty"))
+        let context = container.mainContext
+        let empty = CodableStringCollectionFixture(name: "empty", tags: [])
+        let populated = CodableStringCollectionFixture(name: "populated", tags: ["value"])
+        let nilOptional = CodableStringCollectionFixture(name: "nil", tags: [], optionalTags: nil)
+        let emptyOptional = CodableStringCollectionFixture(name: "empty-optional", tags: [], optionalTags: [])
+        let populatedOptional = CodableStringCollectionFixture(
+            name: "populated-optional", tags: [], optionalTags: ["value"])
+        context.insert(empty)
+        context.insert(populated)
+        context.insert(nilOptional)
+        context.insert(emptyOptional)
+        context.insert(populatedOptional)
+        try context.save()
+
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.isEmpty },
+            includePendingChanges: false)
+        XCTAssertEqual(
+            Set(try context.fetch(descriptor).map(\.name)), ["empty", "nil", "empty-optional", "populated-optional"])
+
+        let optionalDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalTags.flatMap { $0.isEmpty } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(optionalDescriptor).map(\.name)), ["empty-optional"])
+
+        populated.tags = []
+        populatedOptional.optionalTags = []
+        let pendingDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.isEmpty })
+        XCTAssertTrue(try context.fetch(pendingDescriptor).contains { $0 === populated })
+        let pendingOptionalDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalTags.flatMap { $0.isEmpty } ?? false })
+        XCTAssertTrue(try context.fetch(pendingOptionalDescriptor).contains { $0 === populatedOptional })
     }
 
     @MainActor

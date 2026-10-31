@@ -27,6 +27,8 @@ package enum RuntimePredicateEvaluator {
             Set([name]).union(referencedProperties(in: element))
         case let .collectionAllEqual(name, _, element):
             Set([name]).union(referencedProperties(in: element))
+        case let .codableCollectionIsEmpty(name):
+            [name]
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
                 referencedProperties(in: falseBranch))
@@ -51,6 +53,8 @@ package enum RuntimePredicateEvaluator {
             return relationshipProperties(in: element)
         case let .collectionAllEqual(_, _, element):
             return relationshipProperties(in: element)
+        case .codableCollectionIsEmpty:
+            return [:]
         case let .collectionCount(name):
             return [name: []]
         case let .property(name):
@@ -148,7 +152,7 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
             }
             return .no
-        case .collectionContains, .collectionAllEqual:
+        case .collectionContains, .collectionAllEqual, .codableCollectionIsEmpty:
             let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard value != .null else { return .unknown }
             guard case let .int(integer) = value else {
@@ -305,6 +309,13 @@ package enum RuntimePredicateEvaluator {
                     "Pending scalar collection allSatisfy received an incompatible element value")
             }
             return .int(allMatch ? 1 : 0)
+        case let .codableCollectionIsEmpty(name):
+            let value = try evaluateValue(.property(name), values: values, relationshipValues: relationshipValues)
+            guard case let .blob(bytes) = value else { return .null }
+            guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
+                throw SwiftDataError.unsupportedPredicate("Codable collection isEmpty received malformed JSON data")
+            }
+            return .int(array.isEmpty ? 1 : 0)
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):

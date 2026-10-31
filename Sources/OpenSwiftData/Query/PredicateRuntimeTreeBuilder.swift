@@ -363,6 +363,19 @@ package enum PredicateRuntimeTreeBuilder {
                     root, path: path + ["root"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
                 if case let .property(reference) = rootNode,
+                    let propertyName = reference.name.split(separator: ".").last.map(String.init),
+                    let attribute = activeEntity.attributes.first(where: { $0.name == propertyName }),
+                    attribute.options.contains(.codable),
+                    Self.codableScalarCollectionElementType(attribute.type) != nil,
+                    let propertyKeyPath = activeModelType.schemaMetadata().first(where: { $0.name == propertyName })?
+                        .keypath,
+                    matchesCollectionRoot(
+                        type(of: propertyKeyPath).valueType,
+                        computedRoot: type(of: keyPath).rootType)
+                {
+                    return .expression(name: "OSDCodableCollectionIsEmpty", children: [("collection", rootNode)])
+                }
+                if case let .property(reference) = rootNode,
                     let collectionName = reference.name.split(separator: ".").last.map(String.init),
                     let relationship = activeEntity.relationships.first(where: {
                         $0.name == collectionName && $0.isToMany
@@ -371,7 +384,8 @@ package enum PredicateRuntimeTreeBuilder {
                     supportsCollectionPredicate(relationship, schema: schema),
                     let metadata = activeModelType.schemaMetadata().first(where: { $0.name == collectionName })?
                         .keypath,
-                    ObjectIdentifier(type(of: metadata).valueType) == ObjectIdentifier(type(of: keyPath).rootType)
+                    matchesCollectionRoot(
+                        type(of: metadata).valueType, computedRoot: type(of: keyPath).rootType)
                 {
                     return .expression(name: "OSDSequenceIsEmpty", children: [("sequence", rootNode)])
                 }
@@ -538,6 +552,13 @@ package enum PredicateRuntimeTreeBuilder {
     private static func isArrayOrSetType(_ type: Any.Type) -> Bool {
         let name = String(reflecting: type)
         return name.hasPrefix("Swift.Array<") || name.hasPrefix("Swift.Set<")
+    }
+
+    private static func matchesCollectionRoot(_ valueType: Any.Type, computedRoot: Any.Type) -> Bool {
+        let valueName = String(reflecting: valueType)
+        let rootName = String(reflecting: computedRoot)
+        if valueName == rootName { return true }
+        return valueName == "Swift.Optional<\(rootName)>"
     }
 
     private static func supportsToOnePredicate(

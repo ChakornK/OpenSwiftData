@@ -77,12 +77,17 @@ public final class ModelContainer: Sendable {
                 let typedRelationship = metadata.metadata?.base as? Schema.Relationship
                 let parsedType = Self.parseType(propertyType)
                 let destinationType = Self.unqualifiedTypeName(parsedType.collectionElement ?? parsedType.name)
+                let isInferredModelType = metadata.isInferredRelationship && modelNames.contains(destinationType)
                 let isLegacyExplicitCollection =
                     metadata.isExplicitRelationship && parsedType.collectionElement != nil
                     && modelNames.contains(destinationType) && !relationshipModelNames.contains(destinationType)
                 let isModelType = modelNames.contains(Self.unqualifiedTypeName(propertyType))
-                guard (!metadata.isRelationship || isLegacyExplicitCollection), typedRelationship == nil,
-                    !isModelType || isLegacyExplicitCollection
+                guard
+                    (!metadata.isRelationship || isLegacyExplicitCollection || metadata.isExplicitAttribute
+                        || (metadata.isInferredRelationship && !isInferredModelType)),
+                    typedRelationship == nil,
+                    !isModelType || isLegacyExplicitCollection || metadata.isExplicitAttribute,
+                    !isInferredModelType || metadata.isExplicitAttribute
                 else {
                     return nil
                 }
@@ -171,11 +176,11 @@ public final class ModelContainer: Sendable {
                     declaringEntityName
                     ?? Self.unqualifiedTypeName(String(describing: modelType))
                 let isInferredModelCollection =
-                    !metadata.isExplicitRelationship && isToMany
+                    !metadata.isExplicitRelationship && !metadata.isExplicitAttribute && isToMany
                     && parsedType.collectionElement.map { modelNames.contains(Self.unqualifiedTypeName($0)) } == true
                 guard
                     typedRelationship != nil || isInferredModelCollection
-                        || modelNames.contains(Self.unqualifiedTypeName(destination))
+                        || (!metadata.isExplicitAttribute && modelNames.contains(Self.unqualifiedTypeName(destination)))
                 else {
                     return nil
                 }
@@ -223,9 +228,10 @@ public final class ModelContainer: Sendable {
                         inverseMetadata.0.keypath.map {
                             String(reflecting: type(of: $0).valueType)
                         } ?? ""
+                    let (normalizedInversePropertyType, _) = Self.normalizedPropertyType(inversePropertyRawType)
                     guard
                         inverseMetadata.0.isRelationship || inverseMetadata.0.metadata?.base is Schema.Relationship
-                            || (Self.relationshipDestination(inversePropertyRawType).map {
+                            || (Self.relationshipDestination(normalizedInversePropertyType).map {
                                 modelNames.contains(Self.unqualifiedTypeName($0))
                             } ?? false)
                     else {

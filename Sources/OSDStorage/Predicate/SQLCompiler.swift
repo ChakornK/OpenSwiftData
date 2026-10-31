@@ -203,6 +203,23 @@ package enum SQLCompiler {
                     $0.ownerEntityName == entity && $0.propertyName == path[0]
                 })
             {
+                if relationship.queriesInverseToOne {
+                    guard let inverseOwnerRoot = relationship.inverseOwnerRootEntityName,
+                        !relationship.inverseOwnerEntityIDs.isEmpty,
+                        Self.validIdentifier(inverseOwnerRoot),
+                        Self.validIdentifier(relationship.foreignKeyColumnName)
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Inverse to-one predicate has incomplete foreign-key metadata")
+                    }
+                    let placeholders = Array(repeating: "?", count: relationship.inverseOwnerEntityIDs.count)
+                        .joined(separator: ", ")
+                    arguments.append(contentsOf: relationship.inverseOwnerEntityIDs.map { .int(Int64($0)) })
+                    return
+                        "(SELECT t1.Z\(property.uppercased()) FROM Z\(inverseOwnerRoot.uppercased()) AS t1 "
+                        + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = t0.Z_PK "
+                        + "AND t1.Z_ENT IN (\(placeholders)) ORDER BY t1.Z_PK ASC LIMIT 1)"
+                }
                 let destinationIDs = relationship.destinationEntityIDs
                 guard !destinationIDs.isEmpty else {
                     throw SwiftDataError.unsupportedPredicate("Relationship predicate has no destination entities")

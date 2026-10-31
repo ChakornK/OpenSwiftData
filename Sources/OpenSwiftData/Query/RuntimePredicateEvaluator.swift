@@ -41,23 +41,27 @@ package enum RuntimePredicateEvaluator {
     package static func relationshipProperties(in plan: PredicatePlan) -> [String: Set<String>] {
         switch plan {
         case let .relationshipContains(name, body):
-            [name: referencedProperties(in: body)]
+            return [name: referencedProperties(in: body)]
+        case let .property(name):
+            let components = name.split(separator: ".", maxSplits: 1).map(String.init)
+            guard components.count == 2 else { return [:] }
+            return [components[0]: [components[1]]]
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
-            merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
+            return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
         case let .negation(value), let .isNull(value, _):
-            relationshipProperties(in: value)
+            return relationshipProperties(in: value)
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
             let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
-            merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
+            return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
         case let .conditional(test, trueBranch, falseBranch):
-            merge(
+            return merge(
                 relationshipProperties(in: test),
                 merge(
                     relationshipProperties(in: trueBranch), relationshipProperties(in: falseBranch)))
-        case .property, .value:
-            [:]
+        case .value:
+            return [:]
         }
     }
 

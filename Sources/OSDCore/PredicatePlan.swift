@@ -52,6 +52,12 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
     public let storesForeignKeyOnDestination: Bool
     /// Whether the relationship contains multiple destinations.
     public let isToMany: Bool
+    /// Whether a scalar inverse traversal finds its endpoint through a foreign key on the inverse owner.
+    public let queriesInverseToOne: Bool
+    /// The root entity storing the inverse to-one foreign key.
+    public let inverseOwnerRootEntityName: String?
+    /// Concrete entity identifiers allowed by the inverse owner's inheritance subtree.
+    public let inverseOwnerEntityIDs: [Int]
     /// The join table used for direct or many-to-many collection relationships.
     public let joinTableName: String?
     /// The owner primary-key column in the join table.
@@ -71,6 +77,9 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
         destinationEntityIDs: [Int],
         isToMany: Bool = false,
         storesForeignKeyOnDestination: Bool = false,
+        queriesInverseToOne: Bool = false,
+        inverseOwnerRootEntityName: String? = nil,
+        inverseOwnerEntityIDs: [Int] = [],
         joinTableName: String? = nil,
         ownerJoinColumnName: String = "Z_A",
         destinationJoinColumnName: String = "Z_B"
@@ -83,6 +92,9 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
         self.storesForeignKeyOnDestination = storesForeignKeyOnDestination
         self.destinationEntityIDs = destinationEntityIDs
         self.isToMany = isToMany
+        self.queriesInverseToOne = queriesInverseToOne
+        self.inverseOwnerRootEntityName = inverseOwnerRootEntityName
+        self.inverseOwnerEntityIDs = inverseOwnerEntityIDs
         self.joinTableName = joinTableName
         self.ownerJoinColumnName = ownerJoinColumnName
         self.destinationJoinColumnName = destinationJoinColumnName

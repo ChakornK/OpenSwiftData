@@ -90,6 +90,75 @@ final class InheritanceRelationshipItemFixture {
 }
 
 @Model
+final class InferredToOneLeftFixture {
+    var title: String
+    @Relationship(inverse: \InferredToOneRightFixture.left)
+    var right: InferredToOneRightFixture?
+
+    init(title: String, right: InferredToOneRightFixture? = nil) {
+        self.title = title
+        self.right = right
+    }
+}
+
+@Model
+final class InferredToOneRightFixture {
+    var name: String
+    var left: InferredToOneLeftFixture?
+
+    init(name: String, left: InferredToOneLeftFixture? = nil) {
+        self.name = name
+        self.left = left
+    }
+}
+
+struct CodableRelationshipFallbackValue: Codable, Equatable, Hashable {
+    var value: String
+}
+
+@Model
+final class InferredRelationshipCodableFallbackFixture {
+    var values: Set<CodableRelationshipFallbackValue>
+    var optionalValues: [CodableRelationshipFallbackValue]?
+
+    init(values: Set<CodableRelationshipFallbackValue>, optionalValues: [CodableRelationshipFallbackValue]?) {
+        self.values = values
+        self.optionalValues = optionalValues
+    }
+}
+
+@Model
+final class InferredOptionalCollectionOwnerFixture {
+    var targets: [InferredOptionalCollectionTargetFixture]?
+
+    init(targets: [InferredOptionalCollectionTargetFixture]?) {
+        self.targets = targets
+    }
+}
+
+@Model
+final class InferredOptionalCollectionTargetFixture {
+    var name: String
+
+    init(name: String) {
+        self.name = name
+    }
+}
+
+@Model
+final class QualifiedOptionalScalarFixture {
+    var id: Foundation.UUID?
+    var link: Foundation.URL?
+    var amount: Foundation.Decimal?
+
+    init(id: Foundation.UUID?, link: Foundation.URL?, amount: Foundation.Decimal?) {
+        self.id = id
+        self.link = link
+        self.amount = amount
+    }
+}
+
+@Model
 final class ToManyHierarchyOwnerFixture {
     @Relationship(inverse: nil) var targets: [ToManyHierarchyTargetChildFixture]
     init(targets: [ToManyHierarchyTargetChildFixture]) { self.targets = targets }
@@ -1598,6 +1667,172 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.target?.name.contains(needle) == true })
         XCTAssertEqual(owner.name, "owner")
         XCTAssertEqual(try reader.fetch(descriptor).map(\.name), ["owner"])
+    }
+
+    @MainActor
+    func testOneSidedInverseInfersReciprocalOptionalToOneAdapter() throws {
+        let container = try ModelContainer(
+            for: InferredToOneLeftFixture.self,
+            InferredToOneRightFixture.self,
+            configurations: .sqliteMemory("inferred-reciprocal-to-one"))
+        let context = container.mainContext
+        let left = InferredToOneLeftFixture(title: "left")
+        let right = InferredToOneRightFixture(name: "right")
+        context.insert(left)
+        context.insert(right)
+        left.right = right
+        try context.save()
+
+        let rightRelationship = try XCTUnwrap(
+            container.schema.entity(forName: "InferredToOneRightFixture")?.relationships
+                .first(where: { $0.name == "left" }))
+        XCTAssertEqual(rightRelationship.inverse, "right")
+        let rightAdapters = container.relationshipAdapters(for: InferredToOneRightFixture.self)
+        let leftAdapters = container.relationshipAdapters(for: InferredToOneLeftFixture.self)
+        XCTAssertEqual(rightAdapters.map(\.name), ["left"])
+        XCTAssertEqual(leftAdapters.map(\.name), ["right"])
+        XCTAssertEqual(rightAdapters.first?.keyPath, \InferredToOneRightFixture.left)
+        XCTAssertEqual(rightAdapters.first?.metadata?.inverse, "right")
+        XCTAssertEqual(right.left?.persistentModelID, left.persistentModelID)
+
+        let selectedTitle = "left"
+        let descriptor = FetchDescriptor<InferredToOneRightFixture>(
+            predicate: #Predicate { $0.left?.title == selectedTitle },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["right"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let secondLeft = InferredToOneLeftFixture(title: "second")
+        context.insert(secondLeft)
+        try context.save()
+        try XCTUnwrap(container.store).write { connection in
+            try connection.execute(
+                "UPDATE ZINFERREDTOONELEFTFIXTURE SET ZRIGHT = ? WHERE Z_PK = ?",
+                arguments: [.int(1), .int(2)])
+        }
+
+        let duplicateReader = container.makeContext()
+        let duplicateRight = try XCTUnwrap(
+            duplicateReader.fetch(FetchDescriptor<InferredToOneRightFixture>()).first)
+        XCTAssertEqual(duplicateRight.left?.title, "left")
+        let duplicateTitle = "second"
+        let duplicateDescriptor = FetchDescriptor<InferredToOneRightFixture>(
+            predicate: #Predicate { $0.left?.title == duplicateTitle },
+            includePendingChanges: false)
+        XCTAssertTrue(try duplicateReader.fetch(duplicateDescriptor).isEmpty)
+        XCTAssertEqual(try duplicateReader.fetchCount(duplicateDescriptor), 0)
+
+        let pendingFirst = InferredToOneLeftFixture(title: "pending-first")
+        let pendingLast = InferredToOneLeftFixture(title: "pending-last")
+        context.insert(pendingFirst)
+        context.insert(pendingLast)
+        pendingFirst.right = right
+        pendingLast.right = right
+        let pendingLastTitle = "pending-last"
+        let pendingInverseDescriptor = FetchDescriptor<InferredToOneRightFixture>(
+            predicate: #Predicate { $0.left?.title == pendingLastTitle })
+        XCTAssertEqual(try context.fetch(pendingInverseDescriptor).map(\.name), ["right"])
+        let pendingFirstTitle = "pending-first"
+        let displacedInverseDescriptor = FetchDescriptor<InferredToOneRightFixture>(
+            predicate: #Predicate { $0.left?.title == pendingFirstTitle })
+        XCTAssertTrue(try context.fetch(displacedInverseDescriptor).isEmpty)
+
+        right.left = nil
+        XCTAssertTrue(context.hasChanges)
+        try context.save()
+        XCTAssertNil(left.right)
+
+        let pendingTitle = "reassigned"
+        let replacement = InferredToOneLeftFixture(title: pendingTitle)
+        context.insert(replacement)
+        replacement.right = right
+        let pendingDescriptor = FetchDescriptor<InferredToOneRightFixture>(
+            predicate: #Predicate { $0.left?.title == pendingTitle })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["right"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [right.persistentModelID])
+    }
+
+    @MainActor
+    func testUnregisteredCodableCollectionsRemainAttributesWithInferenceEnabled() throws {
+        let container = try ModelContainer(
+            for: InferredRelationshipCodableFallbackFixture.self,
+            configurations: .sqliteMemory("inferred-codable-collection-fallback"))
+        let attributes = try XCTUnwrap(
+            container.schema.entity(forName: "InferredRelationshipCodableFallbackFixture")
+        )
+        .attributes
+        XCTAssertEqual(Set(attributes.map(\.name)), ["values", "optionalValues"])
+
+        let context = container.mainContext
+        let model = InferredRelationshipCodableFallbackFixture(
+            values: [CodableRelationshipFallbackValue(value: "stored")],
+            optionalValues: [CodableRelationshipFallbackValue(value: "optional")])
+        context.insert(model)
+        try context.save()
+        let fetched = try XCTUnwrap(context.fetch(FetchDescriptor<InferredRelationshipCodableFallbackFixture>()).first)
+        XCTAssertEqual(fetched.values, model.values)
+        XCTAssertEqual(fetched.optionalValues, model.optionalValues)
+    }
+
+    @MainActor
+    func testOptionalInferredModelCollectionPreservesNilAndEmptyValues() throws {
+        let container = try ModelContainer(
+            for: InferredOptionalCollectionOwnerFixture.self,
+            InferredOptionalCollectionTargetFixture.self,
+            configurations: .sqliteMemory("optional-inferred-model-collection"))
+        let context = container.mainContext
+        let nilOwner = InferredOptionalCollectionOwnerFixture(targets: nil)
+        let emptyOwner = InferredOptionalCollectionOwnerFixture(targets: [])
+        context.insert(nilOwner)
+        context.insert(emptyOwner)
+        XCTAssertEqual(nilOwner.targets?.count, 0)
+        XCTAssertEqual(emptyOwner.targets?.count, 0)
+        try context.save()
+
+        let reader = container.makeContext()
+        let storedOwners = try reader.fetch(FetchDescriptor<InferredOptionalCollectionOwnerFixture>())
+        XCTAssertEqual(storedOwners.count, 2)
+        XCTAssertTrue(storedOwners.allSatisfy { $0.targets?.isEmpty == true })
+
+        let target = InferredOptionalCollectionTargetFixture(name: "target")
+        nilOwner.targets = [target]
+        XCTAssertTrue(context.hasChanges)
+        try context.save()
+        XCTAssertEqual(nilOwner.targets?.map(\.name), ["target"])
+
+        nilOwner.targets = nil
+        try context.save()
+        let finalReader = container.makeContext()
+        let reloadedOwner = try XCTUnwrap(
+            finalReader.fetch(FetchDescriptor<InferredOptionalCollectionOwnerFixture>()).first {
+                $0.persistentModelID == nilOwner.persistentModelID
+            })
+        XCTAssertEqual(reloadedOwner.targets?.count, 0)
+    }
+
+    @MainActor
+    func testQualifiedOptionalScalarTypesRemainScalarAttributes() throws {
+        let container = try ModelContainer(
+            for: QualifiedOptionalScalarFixture.self,
+            configurations: .sqliteMemory("qualified-optional-scalars"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "QualifiedOptionalScalarFixture"))
+        XCTAssertEqual(Set(entity.attributes.map(\.name)), ["id", "link", "amount"])
+        XCTAssertTrue(entity.relationships.isEmpty)
+
+        let context = container.mainContext
+        let model = QualifiedOptionalScalarFixture(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
+            link: URL(string: "https://example.com/item"),
+            amount: Decimal(string: "12.50"))
+        context.insert(model)
+        try context.save()
+        let fetched = try XCTUnwrap(context.fetch(FetchDescriptor<QualifiedOptionalScalarFixture>()).first)
+        XCTAssertEqual(fetched.id, model.id)
+        XCTAssertEqual(fetched.link, model.link)
+        XCTAssertEqual(fetched.amount, model.amount)
     }
 
     @MainActor

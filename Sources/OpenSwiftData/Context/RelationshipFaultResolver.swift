@@ -105,7 +105,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                 if wasRelated && !isRelated {
                     endpointIDs.removeAll { $0 == otherID }
                 } else if isRelated && !wasRelated {
-                    if !endpointIDs.contains(otherID) { endpointIDs.append(otherID) }
+                    if relationship.isToMany {
+                        if !endpointIDs.contains(otherID) { endpointIDs.append(otherID) }
+                    } else {
+                        endpointIDs = [otherID]
+                    }
                     modelsByIdentifier[otherID] = event.owner
                 }
             }
@@ -205,6 +209,27 @@ final class RelationshipFaultResolver: @unchecked Sendable {
                     case let .int(primaryKey)? = row.first
                 else { return [] }
                 return [primaryKey]
+            }
+        }
+        if !relationship.isToMany, let inverseName = relationship.inverse,
+            let inverse = schema.relationshipDeclaration(
+                named: inverseName, onOrBelow: relationship.destination),
+            !inverse.relationship.isToMany
+        {
+            let inverseEntity = schema.entity(forName: inverse.entityName) ?? destination
+            let storage = relationshipStorageLocation(inverseEntity, inverse.relationship)
+            let inverseEntityIDs = descendantEntityIDs(for: inverseEntity)
+            guard !inverseEntityIDs.isEmpty else { return [] }
+            let placeholders = Array(repeating: "?", count: inverseEntityIDs.count).joined(separator: ", ")
+            return try store.read { connection in
+                try connection.rows(
+                    "SELECT Z_PK FROM Z\(storage.tableName) WHERE Z\(storage.columnName) = ? "
+                        + "AND Z_ENT IN (\(placeholders)) ORDER BY Z_PK ASC LIMIT 1",
+                    arguments: [.int(ownerPrimaryKey)] + inverseEntityIDs.map { .int(Int64($0)) }
+                ).compactMap { row in
+                    guard case let .int(primaryKey)? = row.first else { return nil }
+                    return primaryKey
+                }
             }
         }
         if relationship.isToMany, let inverseName = relationship.inverse,

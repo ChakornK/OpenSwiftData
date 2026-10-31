@@ -168,7 +168,7 @@ package enum PredicateRuntimeTreeBuilder {
                     let relationship = activeEntity.relationships.first(where: {
                         $0.name == relationshipProperty.name && !$0.isToMany
                     }),
-                    supportsOwningToOnePredicate(relationship, ownerEntity: activeEntity, schema: schema),
+                    supportsToOnePredicate(relationship, ownerEntity: activeEntity, schema: schema),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {
@@ -347,21 +347,23 @@ package enum PredicateRuntimeTreeBuilder {
         return id as? UInt
     }
 
-    private static func supportsOwningToOnePredicate(
+    private static func supportsToOnePredicate(
         _ relationship: Schema.Relationship,
         ownerEntity: Schema.Entity,
         schema: Schema
     ) -> Bool {
-        guard let inverseName = relationship.inverse,
-            let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination),
+        guard let inverseName = relationship.inverse else { return true }
+        guard let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination),
             !inverse.relationship.isToMany
-        else { return true }
+        else { return false }
         let ownerName =
             schema.relationshipStorageMapping(
                 modelEntityName: ownerEntity.name, relationshipName: relationship.name)?.declaringEntityName
             ?? ownerEntity.name
         let inverseOwnerName = "\(inverse.entityName).\(inverse.relationship.name)"
         return ownerName.utf8.lexicographicallyPrecedes(inverseOwnerName.utf8)
+            || schema.relationshipStorageMapping(
+                modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name) != nil
     }
 
     private static func supportsCollectionPredicate(_ relationship: Schema.Relationship, schema: Schema) -> Bool {

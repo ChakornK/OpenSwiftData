@@ -384,7 +384,10 @@ final class CodeGenTests: XCTestCase {
             }
             """)
         let generated = CodeGen.memberSources(declaration).joined(separator: "\n")
-        XCTAssertTrue(generated.contains("isExplicitRelationship: false, options: [\"externalStorage\"]"), generated)
+        XCTAssertTrue(
+            generated.contains(
+                "isExplicitRelationship: false, isExplicitAttribute: true, options: [\"externalStorage\"]"),
+            generated)
     }
 
     func testExplicitAttributeCustomTypesGetAdaptersAndRelationshipsDoNot() throws {
@@ -470,6 +473,44 @@ final class CodeGenTests: XCTestCase {
         XCTAssertFalse(inferred.contains("strings"))
         XCTAssertFalse(inferred.contains("stringSet"))
         XCTAssertNil(CodeGen.persistedProperties(in: declaration).first { $0.name == "pets" }?.metadata)
+    }
+
+    func testRelationshipAdaptersInferOptionalToOneCandidatesThroughFactory() throws {
+        let declaration = try parseClass(
+            """
+            final class Household {
+                var favoritePet: Pet?
+                var payload: Payload?
+                var pets: Set<Pet>
+                var optionalPets: [Pet]?
+                var label: String?
+            }
+            """)
+
+        let sources = CodeGen.memberSources(declaration)
+        let generated = sources.joined(separator: "\n")
+        let candidates = try XCTUnwrap(sources.first { $0.contains("inferredRelationshipAdapterCandidates()") })
+        XCTAssertTrue(candidates.contains("RelationshipAdapterFactory.inferredCandidates"))
+        XCTAssertTrue(candidates.contains("keyPath: \\Household.favoritePet"))
+        XCTAssertTrue(candidates.contains("keyPath: \\Household.payload"))
+        XCTAssertTrue(candidates.contains("keyPath: \\Household.pets"))
+        XCTAssertTrue(candidates.contains("keyPath: \\Household.optionalPets"))
+        XCTAssertFalse(candidates.contains("keyPath: \\Household.label"))
+        XCTAssertTrue(generated.contains("isInferredRelationship: true"))
+        XCTAssertTrue(generated.contains("metadata: Schema.Attribute(.codable)"))
+    }
+
+    func testExplicitAttributeMetadataIsNotInferredAsRelationship() throws {
+        let declaration = try parseClass(
+            """
+            final class Parcel {
+                @Attribute(.codable) var payload: Payload
+            }
+            """)
+
+        let generated = CodeGen.memberSources(declaration).joined(separator: "\n")
+        XCTAssertTrue(generated.contains("isExplicitAttribute: true"))
+        XCTAssertFalse(generated.contains("isInferredRelationship: true"))
     }
 
     func testUnsupportedScalarRelationshipHasNoGeneratedAdapterCandidate() throws {

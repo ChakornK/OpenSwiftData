@@ -1834,9 +1834,24 @@ public final class ModelContext {
                     ownerJoinColumnName: relationshipIsSideAOwner ? "Z_A" : "Z_B",
                     destinationJoinColumnName: relationshipIsSideAOwner ? "Z_B" : "Z_A")
             }
-            guard isToOneStorageOwner(entity, relationship),
+            if isToOneStorageOwner(entity, relationship),
                 let mapping = schema.relationshipStorageMapping(
                     modelEntityName: entity.name, relationshipName: relationship.name)
+            {
+                return RuntimePredicateRelationship(
+                    ownerEntityName: entity.name,
+                    propertyName: relationship.name,
+                    destinationEntityName: relationship.destination,
+                    destinationRootEntityName: rootEntity(for: destination).name,
+                    foreignKeyColumnName: mapping.storageColumnName,
+                    destinationEntityIDs: descendantEntityIDs(for: destination))
+            }
+            guard let inverseName = relationship.inverse,
+                let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination),
+                !inverse.relationship.isToMany,
+                let mapping = schema.relationshipStorageMapping(
+                    modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name),
+                let inverseOwner = schema.entity(forName: inverse.entityName)
             else { return nil }
             return RuntimePredicateRelationship(
                 ownerEntityName: entity.name,
@@ -1844,7 +1859,10 @@ public final class ModelContext {
                 destinationEntityName: relationship.destination,
                 destinationRootEntityName: rootEntity(for: destination).name,
                 foreignKeyColumnName: mapping.storageColumnName,
-                destinationEntityIDs: descendantEntityIDs(for: destination))
+                destinationEntityIDs: descendantEntityIDs(for: destination),
+                queriesInverseToOne: true,
+                inverseOwnerRootEntityName: rootEntity(for: inverseOwner).name,
+                inverseOwnerEntityIDs: descendantEntityIDs(for: inverseOwner))
         }
         let flattenedAttributes = entity.attributes.flatMap { attribute in
             attribute.components.map { ($0.columnName, $0.type) }
@@ -1977,14 +1995,56 @@ public final class ModelContext {
         let propertyNames = RuntimePredicateEvaluator.referencedProperties(in: plan)
         let values = try runtimeValues(for: model, selecting: propertyNames)
         let relationshipProperties = RuntimePredicateEvaluator.relationshipProperties(in: plan)
+        var evaluatedValues = values
         var relationshipValues: [String: [[String: RuntimeValue]]] = [:]
         for (name, properties) in relationshipProperties {
             guard
                 let adapter = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
-                    .first(where: { $0.name == name && $0.isToMany })
+                    .first(where: { $0.name == name })
             else {
                 throw SwiftDataError.unsupportedPredicate(
-                    "Pending predicate relationship '\(name)' is not a to-many relationship.")
+                    "Pending predicate relationship '\(name)' has no typed adapter.")
+            }
+            if !adapter.isToMany {
+                guard let metadata = adapter.metadata else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Pending to-one predicate relationship '\(name)' cannot be resolved.")
+                }
+                let isInverseView: Bool
+                if let inverseName = metadata.inverse,
+                    let schema = containerStorage?.schema,
+                    let inverse = schema.relationshipDeclaration(
+                        named: inverseName, onOrBelow: metadata.destination),
+                    !inverse.relationship.isToMany
+                {
+                    isInverseView =
+                        schema.relationshipStorageMapping(
+                            modelEntityName: modelEntityName(of: model) ?? "",
+                            relationshipName: name) == nil
+                } else {
+                    isInverseView = false
+                }
+                let endpoints: [any PersistentModel]
+                if isInverseView {
+                    guard let keyPath = type(of: model).schemaMetadata().first(where: { $0.name == name })?.keypath,
+                        let resolver = try relationshipResolver()
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Pending inverse to-one predicate relationship '\(name)' cannot be resolved.")
+                    }
+                    endpoints = try adapter.endpoints(in: resolver.resolve(owner: model, keyPath: keyPath))
+                } else {
+                    endpoints = adapter.read(model) ?? []
+                }
+                if let endpoint = endpoints.first {
+                    let endpointValues = try runtimeValues(for: endpoint, selecting: properties)
+                    for property in properties {
+                        evaluatedValues["\(name).\(property)"] = endpointValues[property] ?? .null
+                    }
+                } else {
+                    for property in properties { evaluatedValues["\(name).\(property)"] = .null }
+                }
+                continue
             }
             var endpoints = adapter.read(model) ?? []
             if let metadata = adapter.metadata,
@@ -2040,7 +2100,8 @@ public final class ModelContext {
                 try runtimeValues(for: endpoint, selecting: properties)
             }
         }
-        return try RuntimePredicateEvaluator.matches(plan, values: values, relationshipValues: relationshipValues)
+        return try RuntimePredicateEvaluator.matches(
+            plan, values: evaluatedValues, relationshipValues: relationshipValues)
     }
 
     private func runtimeValues<Model: PersistentModel>(

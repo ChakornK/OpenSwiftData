@@ -57,6 +57,121 @@ public extension RelationshipPropertyAdapter {
     }
 }
 
+/// Builds relationship adapters for model-typed properties inferred from their Swift type.
+public enum RelationshipAdapterFactory {
+    /// Returns an adapter when an optional property contains a persistent model.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, Destination?>,
+        read: @escaping (Owner) -> Destination?
+    ) -> [any AnyRelationshipAdapterBox] {
+        let candidate = TypedRelationshipPropertyAdapter<Owner, Destination?, Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { value in value.map { [$0] } ?? [] },
+            build: { $0.first },
+            isToMany: false)
+        return [RelationshipAdapterBox(candidate)]
+    }
+
+    /// Returns an adapter when a required property contains a persistent model.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, Destination>,
+        read: @escaping (Owner) -> Destination
+    ) -> [any AnyRelationshipAdapterBox] {
+        let candidate = TypedRelationshipPropertyAdapter<Owner, Destination, Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { [$0] },
+            build: { endpoints in
+                guard let endpoint = endpoints.first else {
+                    throw SwiftDataError.unsupportedSchemaProperty(
+                        "Cannot clear nonoptional relationship '\(name)'.")
+                }
+                return endpoint
+            },
+            isToMany: false)
+        return [RelationshipAdapterBox(candidate)]
+    }
+
+    /// Creates a candidate for an array of persistent models.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, [Destination]>,
+        read: @escaping (Owner) -> [Destination]
+    ) -> [any AnyRelationshipAdapterBox] {
+        let adapter = TypedRelationshipPropertyAdapter<Owner, [Destination], Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { $0 },
+            build: { $0 },
+            isToMany: true)
+        return [RelationshipAdapterBox(adapter)]
+    }
+
+    /// Creates a candidate for a set of persistent models.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, Set<Destination>>,
+        read: @escaping (Owner) -> Set<Destination>
+    ) -> [any AnyRelationshipAdapterBox] {
+        let adapter = TypedRelationshipPropertyAdapter<Owner, Set<Destination>, Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { Array($0) },
+            build: { Set($0) },
+            isToMany: true)
+        return [RelationshipAdapterBox(adapter)]
+    }
+
+    /// Creates a candidate for an optional array of persistent models.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, [Destination]?>,
+        read: @escaping (Owner) -> [Destination]?
+    ) -> [any AnyRelationshipAdapterBox] {
+        let adapter = TypedRelationshipPropertyAdapter<Owner, [Destination]?, Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { $0 ?? [] },
+            build: { Optional($0) },
+            isToMany: true)
+        return [RelationshipAdapterBox(adapter)]
+    }
+
+    /// Creates a candidate for an optional set of persistent models.
+    public static func inferredCandidates<Owner: PersistentModel, Destination: PersistentModel>(
+        name: String,
+        keyPath: KeyPath<Owner, Set<Destination>?>,
+        read: @escaping (Owner) -> Set<Destination>?
+    ) -> [any AnyRelationshipAdapterBox] {
+        let adapter = TypedRelationshipPropertyAdapter<Owner, Set<Destination>?, Destination>(
+            name,
+            keyPath: keyPath,
+            read: read,
+            endpoints: { $0.map(Array.init) ?? [] },
+            build: { Optional(Set($0)) },
+            isToMany: true)
+        return [RelationshipAdapterBox(adapter)]
+    }
+
+    /// Returns no adapter when a property is not a persistent-model relationship.
+    public static func inferredCandidates<Owner: PersistentModel, Value>(
+        name: String,
+        keyPath: KeyPath<Owner, Value>,
+        read: @escaping (Owner) -> Value
+    ) -> [any AnyRelationshipAdapterBox] {
+        _ = (name, keyPath, read)
+        return []
+    }
+}
+
 /// A generated typed adapter for one optional or collection relationship property.
 public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, Destination: PersistentModel>:
     RelationshipPropertyAdapter

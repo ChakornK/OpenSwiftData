@@ -67,13 +67,19 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         let propertyName =
             rawPropertyName.first == "`" && rawPropertyName.last == "`"
             ? String(rawPropertyName.dropFirst().dropLast()) : rawPropertyName
-        guard
-            let slot = CodeGen.persistedProperties(in: classDeclaration).firstIndex(where: { $0.name == propertyName })
+        let properties = CodeGen.persistedProperties(in: classDeclaration)
+        guard let property = properties.first(where: { $0.name == propertyName }),
+            let slot = properties.firstIndex(where: { $0.name == propertyName })
         else { return [] }
-        let isRelationship = variable.attributes.contains { element in
+        let hasExplicitRelationship = variable.attributes.contains { element in
             guard case let .attribute(attribute) = element else { return false }
             return attribute.attributeName.trimmedDescription == "Relationship"
         }
+        let isInferredRelationship =
+            !property.hasExplicitAttribute && !property.isFlattened
+            && CodeGen.propertyType(propertyName, in: classDeclaration).map(CodeGen.isInferredRelationshipCandidate)
+                == true
+        let isRelationship = hasExplicitRelationship || isInferredRelationship
         let isInheritedModel = classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
         let modelName = classDeclaration.name.text
         return [

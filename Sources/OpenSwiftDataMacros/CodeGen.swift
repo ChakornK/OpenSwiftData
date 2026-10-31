@@ -401,9 +401,16 @@ enum CodeGen {
             } else {
                 isSimpleModelType = destination.is(MemberTypeSyntax.self)
             }
-            guard isSimpleModelType, !isSupportedScalarType(destination),
-                explicitRelationship || (isCollection && !explicitAttribute)
-            else { return nil }
+            guard isSimpleModelType, !isSupportedScalarType(destination) else { return nil }
+            if !explicitRelationship, !isCollection, !explicitAttribute {
+                return
+                    "inferredFactory|RelationshipAdapterFactory.inferredCandidates(name: \"\(property.name)\", keyPath: \\\(modelName).\(property.name), read: { model in model.\(property.name) })"
+            }
+            if !explicitRelationship, isCollection, !explicitAttribute {
+                return
+                    "inferredFactory|RelationshipAdapterFactory.inferredCandidates(name: \"\(property.name)\", keyPath: \\\(modelName).\(property.name), read: { model in model.\(property.name) })"
+            }
+            guard explicitRelationship || (isCollection && !explicitAttribute) else { return nil }
             let endpointClosure =
                 isCollection
                 ? (isOptional ? "{ value in value.map { Array($0) } ?? [] }" : "{ value in value }")
@@ -438,14 +445,19 @@ enum CodeGen {
         let explicitRelationshipRows = relationshipRows.compactMap {
             $0.hasPrefix("explicit|") ? String($0.dropFirst(9)) : nil
         }
-        let inferredRelationshipRows = relationshipRows.compactMap {
-            $0.hasPrefix("inferred|") ? String($0.dropFirst(9)) : nil
+        let inferredRelationshipRows = relationshipRows.compactMap { row -> String? in
+            if row.hasPrefix("inferredFactory|") { return String(row.dropFirst("inferredFactory|".count)) }
+            return row.hasPrefix("inferred|") ? String(row.dropFirst(9)) : nil
         }
         let explicitBoxRows = explicitRelationshipRows.map {
             "        RelationshipAdapterBox<\(modelName)>(\($0.trimmingWhitespace()))"
         }
-        let inferredBoxRows = inferredRelationshipRows.map {
-            "        RelationshipAdapterBox<\(modelName)>(\($0.trimmingWhitespace()))"
+        let inferredCandidateArrays = inferredRelationshipRows.map { row in
+            let candidate = row.trimmingWhitespace()
+            if candidate.hasPrefix("RelationshipAdapterFactory.") {
+                return "        \(candidate)"
+            }
+            return "        [RelationshipAdapterBox<\(modelName)>(\(candidate))]"
         }
         let relationshipAdapterSource: String? = {
             let own = "[\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]"
@@ -458,12 +470,13 @@ enum CodeGen {
                 "\(typeDeclarationAccess) func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    \(own)\n}"
         }()
         let inferredRelationshipAdapterSource: String? = {
-            let own = "[\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]"
+            let own =
+                "Array([[any AnyRelationshipAdapterBox]]([\n\(inferredCandidateArrays.joined(separator: ",\n"))\n    ]).joined())"
             if isSubclass {
                 return
                     "\(typeOverrideAccess) class func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.inferredRelationshipAdapterCandidates() + \(own) }"
             }
-            guard !inferredBoxRows.isEmpty || !isFinal else { return nil }
+            guard !inferredCandidateArrays.isEmpty || !isFinal else { return nil }
             return
                 "\(typeDeclarationAccess) func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    \(own)\n}"
         }()
@@ -476,7 +489,7 @@ enum CodeGen {
             let metadata = property.metadata ?? "nil"
             let isOptional = propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) != nil
             let codableMetadata =
-                !property.isFlattened && !property.hasExplicitRelationship
+                !property.isFlattened && !property.hasExplicitRelationship && !property.hasExplicitAttribute
                     && propertyType(property.name, in: declaration).map { type in
                         !isSupportedScalarType(type)
                             && !(isOptional
@@ -485,11 +498,18 @@ enum CodeGen {
                                 } == true)
                     } == true
                 ? "Schema.Attribute(.codable)" : metadata
+            let inferredRelationship =
+                !property.hasExplicitRelationship && !property.hasExplicitAttribute && !property.isFlattened
+                && propertyType(property.name, in: declaration).map(isInferredRelationshipCandidate) == true
+            let inferredRelationshipArgument = inferredRelationship ? ", isInferredRelationship: true" : ""
+            let explicitAttributeArgument =
+                property.hasExplicitAttribute && !property.hasExplicitRelationship
+                ? ", isExplicitAttribute: true" : ""
             let options =
                 property.attributeOptionNames.isEmpty
                 ? "" : ", options: [" + property.attributeOptionNames.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
             return
-                "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(options)\(components))"
+                "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(inferredRelationshipArgument)\(explicitAttributeArgument)\(options)\(components))"
         }
         let ownMetadata = "[\n        \(metadataRows.joined(separator: ",\n        "))\n    ]"
         let metadataBody =
@@ -563,7 +583,7 @@ enum CodeGen {
                 erasedAdapterRows: adapterRows,
                 flattenedAdapterRows: flattenedAdapterRows,
                 explicitBoxRows: explicitBoxRows,
-                inferredBoxRows: inferredBoxRows,
+                inferredCandidateArrays: inferredCandidateArrays,
                 keyPathTableBuilder: keyPathTableBuilder ?? "",
                 keyPathNameResolver: keyPathNameResolver ?? "",
                 typeMemberAccess: typeMemberAccess,
@@ -609,7 +629,7 @@ enum CodeGen {
         erasedAdapterRows: [String],
         flattenedAdapterRows: [String],
         explicitBoxRows: [String],
-        inferredBoxRows: [String],
+        inferredCandidateArrays: [String],
         keyPathTableBuilder: String,
         keyPathNameResolver: String,
         typeMemberAccess: String,
@@ -633,7 +653,8 @@ enum CodeGen {
         let ownRelationships = "[\n\(explicitBoxRows.joined(separator: ",\n"))\n    ]"
         let relationships =
             "\(typeOverrideAccess) class func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.relationshipAdapterCandidates() + \(ownRelationships) }"
-        let ownInferredRelationships = "[\n\(inferredBoxRows.joined(separator: ",\n"))\n    ]"
+        let ownInferredRelationships =
+            "Array([[any AnyRelationshipAdapterBox]]([\n\(inferredCandidateArrays.joined(separator: ",\n"))\n    ]).joined())"
         let inferredRelationships =
             "\(typeOverrideAccess) class func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.inferredRelationshipAdapterCandidates() + \(ownInferredRelationships) }"
         let inheritedIndexes =
@@ -692,7 +713,7 @@ enum CodeGen {
         return "\(overrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() + \(own) }"
     }
 
-    private static func isSupportedScalarType(_ type: TypeSyntax) -> Bool {
+    static func isSupportedScalarType(_ type: TypeSyntax) -> Bool {
         if let optional = type.as(OptionalTypeSyntax.self) { return isSupportedScalarType(optional.wrappedType) }
         if let array = type.as(ArrayTypeSyntax.self) { return isSupportedScalarType(array.element) }
         guard let identifier = type.as(IdentifierTypeSyntax.self), identifier.genericArgumentClause == nil else {
@@ -704,7 +725,7 @@ enum CodeGen {
         ].contains(identifier.name.text)
     }
 
-    private static func propertyType(_ name: String, in declaration: ClassDeclSyntax) -> TypeSyntax? {
+    static func propertyType(_ name: String, in declaration: ClassDeclSyntax) -> TypeSyntax? {
         declaration.memberBlock.members.compactMap { member -> TypeSyntax? in
             guard let variable = member.decl.as(VariableDeclSyntax.self) else { return nil }
             return variable.bindings.first(where: {
@@ -713,6 +734,38 @@ enum CodeGen {
                 return normalized == name
             })?.typeAnnotation?.type
         }.first
+    }
+
+    static func isInferredRelationshipCandidate(_ type: TypeSyntax) -> Bool {
+        let relationshipType = type.as(OptionalTypeSyntax.self)?.wrappedType ?? type
+        if relationshipType.is(IdentifierTypeSyntax.self) || relationshipType.is(MemberTypeSyntax.self) {
+            guard relationshipType.as(IdentifierTypeSyntax.self)?.genericArgumentClause == nil else { return false }
+            let simpleName = relationshipType.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
+            return ![
+                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                "UInt32", "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
+            ].contains(simpleName)
+        }
+        guard let array = relationshipType.as(ArrayTypeSyntax.self) else {
+            guard let set = relationshipType.as(IdentifierTypeSyntax.self), set.name.text == "Set",
+                let argument = set.genericArgumentClause?.arguments.first?.argument,
+                case let .type(element) = argument
+            else { return false }
+            return isNominalRelationshipElement(element)
+        }
+        return isNominalRelationshipElement(array.element)
+    }
+
+    private static func isNominalRelationshipElement(_ type: TypeSyntax) -> Bool {
+        let isNominal =
+            type.as(IdentifierTypeSyntax.self)?.genericArgumentClause == nil
+            || type.is(MemberTypeSyntax.self)
+        let simpleName = type.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
+        let isScalar = [
+            "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
+            "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
+        ].contains(simpleName)
+        return isNominal && !isScalar
     }
 
     private static func simpleTypeIdentifier(_ typeName: String) -> String {

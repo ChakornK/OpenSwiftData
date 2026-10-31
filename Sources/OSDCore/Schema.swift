@@ -319,6 +319,10 @@ public struct Schema: Sendable {
         public let isRelationship: Bool
         /// Whether the relationship annotation was explicitly declared.
         public let isExplicitRelationship: Bool
+        /// Whether the property type may identify an inferred model relationship.
+        public let isInferredRelationship: Bool
+        /// Whether the property explicitly declares attribute storage.
+        public let isExplicitAttribute: Bool
         /// A textual default value, if provided.
         public let defaultValue: String?
         /// Property-specific options.
@@ -332,6 +336,8 @@ public struct Schema: Sendable {
             lhs.name == rhs.name && lhs.keypath == rhs.keypath && lhs.metadata == rhs.metadata
                 && lhs.isRelationship == rhs.isRelationship
                 && lhs.isExplicitRelationship == rhs.isExplicitRelationship
+                && lhs.isInferredRelationship == rhs.isInferredRelationship
+                && lhs.isExplicitAttribute == rhs.isExplicitAttribute
                 && lhs.defaultValue == rhs.defaultValue
                 && lhs.options == rhs.options
                 && lhs.flattenedComponents == rhs.flattenedComponents
@@ -344,6 +350,8 @@ public struct Schema: Sendable {
             hasher.combine(metadata)
             hasher.combine(isRelationship)
             hasher.combine(isExplicitRelationship)
+            hasher.combine(isInferredRelationship)
+            hasher.combine(isExplicitAttribute)
             hasher.combine(defaultValue)
             hasher.combine(options)
             hasher.combine(flattenedComponents)
@@ -356,14 +364,20 @@ public struct Schema: Sendable {
             defaultValue: Value? = nil,
             metadata: AnyHashable? = nil,
             isExplicitRelationship: Bool = false,
+            isInferredRelationship: Bool = false,
+            isExplicitAttribute: Bool = false,
             options: [String] = [],
             flattenedComponents: [Schema.Attribute.Component] = []
         ) {
             self.name = name
             self.keypath = keypath
             self.metadata = metadata
-            self.isRelationship = metadata?.base is Schema.Relationship || isExplicitRelationship
+            self.isRelationship =
+                metadata?.base is Schema.Relationship || isExplicitRelationship
+                || isInferredRelationship
             self.isExplicitRelationship = isExplicitRelationship
+            self.isInferredRelationship = isInferredRelationship
+            self.isExplicitAttribute = isExplicitAttribute
             self.defaultValue = defaultValue.map { String(describing: $0) }
             self.options = options
             self.flattenedComponents = flattenedComponents
@@ -381,6 +395,8 @@ public struct Schema: Sendable {
             self.metadata = nil
             self.isRelationship = isRelationship
             self.isExplicitRelationship = isRelationship
+            isInferredRelationship = false
+            isExplicitAttribute = false
             self.defaultValue = defaultValue
             self.options = options
             flattenedComponents = []

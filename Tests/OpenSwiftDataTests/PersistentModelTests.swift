@@ -1456,17 +1456,28 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(relationshipPrefix).map(\.name), ["matched"])
 
-        let insertedTarget = PlainHierarchyTargetChildFixture(name: "selected", detail: "pending")
+        selectedTarget.name = "pending-selected"
+        let pendingString = "selected"
+        let pendingContains = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.contains(pendingString) == true })
+        let pendingContainedOwners = try context.fetch(pendingContains)
+        XCTAssertEqual(pendingContainedOwners.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(pendingContains), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingContains), pendingContainedOwners.map(\.persistentModelID))
+
+        let insertedTarget = PlainHierarchyTargetChildFixture(name: "pending-selected", detail: "pending")
         let insertedOwner = HierarchyToHierarchyOwnerChildFixture(name: "pending", target: insertedTarget, rank: 4)
         context.insert(insertedTarget)
         context.insert(insertedOwner)
-        let pendingMatches = try context.fetch(descriptor)
+        let pendingDescriptor = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name == "pending-selected" })
+        let pendingMatches = try context.fetch(pendingDescriptor)
         XCTAssertEqual(pendingMatches.map(\.name), ["matched", "pending"])
-        XCTAssertEqual(try context.fetchCount(descriptor), 2)
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor), pendingMatches.map(\.persistentModelID))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
         let pendingPage = try context.fetch(
             FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
-                predicate: #Predicate { $0.target?.name == "selected" },
+                predicate: #Predicate { $0.target?.name == "pending-selected" },
                 sortBy: [SortDescriptor(\HierarchyToHierarchyOwnerChildFixture.name)],
                 fetchLimit: 1,
                 fetchOffset: 1,
@@ -1505,6 +1516,32 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(matches.map(\.name), ["matched"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testPendingToOneStringPredicateResolvesUnloadedDestination() throws {
+        let container = try ModelContainer(
+            for: HierarchyToHierarchyOwnerChildFixture.self,
+            PlainHierarchyTargetGrandchildFixture.self,
+            configurations: .sqliteMemory("pending-to-one-string-fault"))
+        let writer = container.mainContext
+        let target = PlainHierarchyTargetGrandchildFixture(name: "before", detail: "detail", rank: 1)
+        writer.insert(target)
+        writer.insert(HierarchyToHierarchyOwnerChildFixture(name: "owner", target: target, rank: 1))
+        try writer.save()
+
+        let reader = container.makeContext()
+        let owner = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>()).first)
+        let targetID = target.persistentModelID
+        let readerTargetValue: PlainHierarchyTargetGrandchildFixture? = try reader.model(for: targetID)
+        let readerTarget = try XCTUnwrap(readerTargetValue)
+        readerTarget.name = "pending-match"
+        let needle = "match"
+        let descriptor = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.contains(needle) == true })
+        XCTAssertEqual(owner.name, "owner")
+        XCTAssertEqual(try reader.fetch(descriptor).map(\.name), ["owner"])
     }
 
     @MainActor

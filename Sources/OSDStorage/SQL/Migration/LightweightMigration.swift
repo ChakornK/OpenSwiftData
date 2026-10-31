@@ -576,12 +576,17 @@ package enum LightweightMigration {
             return true
         }
         for entity in newEntities {
-            guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
-                !destination.entities.contains(where: { $0.superentityName == entity.name })
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy migration only adds leaf subclasses beneath existing entities."
-                )
+            let hasNewDescendants = destination.entities.contains { $0.superentityName == entity.name }
+            if let parentName = entity.superentityName {
+                guard sourceByName[parentName] != nil, !hasNewDescendants else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration only adds leaf subclasses beneath existing entities.")
+                }
+            } else {
+                guard !hasNewDescendants, entity.relationships.isEmpty else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration only adds independent roots without relationships or descendants.")
+                }
             }
             for relationship in entity.relationships {
                 if relationship.isToMany, relationship.inverse != nil {
@@ -740,7 +745,8 @@ package enum LightweightMigration {
                     }
                     continue
                 }
-                guard attribute.isOptional, attribute.defaultValue == nil,
+                let isNewRoot = sourceEntity == nil && destinationEntity.superentityName == nil
+                guard (isNewRoot || (attribute.isOptional && attribute.defaultValue == nil)),
                     attribute.originalName == nil,
                     (!attribute.options.contains(.unique) || sourceEntity == nil),
                     !attribute.options.contains(.externalStorage),
@@ -751,6 +757,7 @@ package enum LightweightMigration {
                     throw SwiftDataError.migrationUnsupported(
                         "Hierarchy migration only adds optional scalar attributes without defaults.")
                 }
+                if sourceEntity == nil, destinationEntity.superentityName == nil { continue }
                 let root = try rootName(for: destinationEntity.name, schema: destination)
                 let keyName = columnKey("Z\(attribute.name)")
                 guard !sourceColumnsByRoot[root, default: []].contains(keyName) else {
@@ -861,6 +868,23 @@ package enum LightweightMigration {
                     "Added hierarchy column \(table).\(physicalColumn) has an incompatible physical definition.")
             }
         }
+        for entity in newEntities where entity.superentityName == nil {
+            let tableName = "Z\(entity.name.uppercased())"
+            let existingTable =
+                try connection.rows(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE LIMIT 1",
+                    [.text(tableName)]
+                ).isEmpty == false
+            guard !existingTable,
+                let statement = destinationBuilt.statements.first(where: {
+                    $0.hasPrefix("CREATE TABLE \(tableName) (")
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "New root entity table collides with existing storage or lacks a DDL definition.")
+            }
+            try connection.execute(statement)
+        }
         for (root, column) in relationshipAdditionsByRootAndColumn.values.sorted(by: {
             if $0.root != $1.root { return less($0.root, $1.root) }
             return less($0.column, $1.column)
@@ -887,11 +911,12 @@ package enum LightweightMigration {
         for entity in newEntities.sorted(by: {
             destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]
         }) {
-            guard let entityID = destination.entityIDsByName[entity.name],
-                let parentName = entity.superentityName,
-                let parentID = destination.entityIDsByName[parentName]
-            else {
+            guard let entityID = destination.entityIDsByName[entity.name] else {
                 throw SwiftDataError.migrationUnsupported("New hierarchy entity has incomplete ID metadata.")
+            }
+            let parentID = entity.superentityName.flatMap { destination.entityIDsByName[$0] } ?? 0
+            guard entity.superentityName == nil || parentID > 0 else {
+                throw SwiftDataError.migrationUnsupported("New hierarchy entity has incomplete parent ID metadata.")
             }
             try connection.execute(
                 "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, ?, ?)",

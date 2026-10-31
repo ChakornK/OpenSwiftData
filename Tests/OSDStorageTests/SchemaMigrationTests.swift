@@ -762,6 +762,57 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testHierarchyMigrationAddsIndependentRootWithoutRenumberingEntities() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Aardvark", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 1)", [.int(Int64(sourceIDs["Dog"]!))])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        XCTAssertEqual(destinationIDs["Animal"], sourceIDs["Animal"])
+        XCTAssertEqual(destinationIDs["Dog"], sourceIDs["Dog"])
+        let rootID = try XCTUnwrap(destinationIDs["Aardvark"])
+        XCTAssertGreaterThan(rootID, try XCTUnwrap(sourceIDs.values.max()))
+        let rootMetadata: [StoredValue]? = try migrated.read {
+            try $0.rows(
+                "SELECT Z_SUPER, Z_MAX FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(rootID))]
+            ).first
+        }
+        XCTAssertEqual(rootMetadata, [.int(0), .int(0)])
+        let oldRows = try migrated.read { try $0.rows("SELECT Z_ENT, Z_PK FROM ZANIMAL") }
+        XCTAssertEqual(oldRows, [[.int(Int64(sourceIDs["Dog"]!)), .int(1)]])
+        let newRootRows = try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, ZLABEL FROM ZAARDVARK") }
+        XCTAssertTrue(newRootRows.isEmpty)
+
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZLABEL) VALUES (?, 1, ?)",
+                [.int(Int64(rootID)), .text("new root")])
+        }
+        let inserted = try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, ZLABEL FROM ZAARDVARK") }
+        XCTAssertEqual(inserted, [[.int(1), .int(Int64(rootID)), .text("new root")]])
+        try migrated.close()
+    }
+
     func testAddingLeafSubclassBelowExistingSubtype() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1943,7 +1994,7 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
-    func testOpeningStoreFailsClosedWhenAddingNewHierarchyRoot() throws {
+    func testOpeningStoreFailsClosedWhenAddingNewRootWithRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1955,7 +2006,9 @@ final class SchemaMigrationTests: XCTestCase {
         let destination = Schema([
             Schema.Entity(name: "Animal"),
             Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Vehicle"),
+            Schema.Entity(
+                name: "Vehicle",
+                relationships: [Schema.Relationship(name: "owner", destination: "Animal", isOptional: true)]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let originalIDs = try initial.read {

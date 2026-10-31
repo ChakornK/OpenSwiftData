@@ -238,13 +238,35 @@ package enum PredicateRuntimeTreeBuilder {
                 guard let wrapped = children.first(where: { $0.label == "wrapped" })?.value,
                     let transform = children.first(where: { $0.label == "transform" })?.value,
                     let variable = children.first(where: { $0.label == "variable" })?.value,
-                    variableIdentifier(variable) != nil
+                    let variableID = variableIdentifier(variable)
                 else {
                     throw SwiftDataError.unsupportedPredicate("Malformed OptionalFlatMap relationship predicate")
                 }
                 let wrappedNode = try visit(
                     wrapped, path: path + ["wrapped"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
+                if codableCollectionName(wrappedNode, entity: activeEntity) != nil {
+                    var scopedBindings = bindings
+                    scopedBindings[variableID] = ExpressionBinding(
+                        value: wrapped,
+                        outerBindings: bindings,
+                        capturePathRewrites: capturePathRewrites)
+                    let transformNode = try visit(
+                        transform, path: path + ["transform"], bindings: scopedBindings,
+                        capturePathRewrites: capturePathRewrites)
+                    return .expression(
+                        name: name,
+                        children: [
+                            ("wrapped", wrappedNode),
+                            ("transform", transformNode),
+                            (
+                                "variable",
+                                try visit(
+                                    variable, path: path + ["variable"], bindings: bindings,
+                                    capturePathRewrites: capturePathRewrites)
+                            ),
+                        ])
+                }
                 guard let traversal = try relationshipTraversal(wrappedNode, from: activeEntity) else {
                     throw SwiftDataError.unsupportedPredicate(
                         "OptionalFlatMap requires a supported to-one relationship path.")
@@ -504,6 +526,36 @@ package enum PredicateRuntimeTreeBuilder {
         if inverse.relationship.isToMany { return true }
         return schema.relationshipStorageMapping(
             modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name) != nil
+    }
+
+    private static func codableCollectionName(
+        _ node: RuntimePredicateNode,
+        entity: Schema.Entity
+    ) -> String? {
+        guard case let .property(reference) = node,
+            let propertyName = reference.name.split(separator: ".").last.map(String.init),
+            let attribute = entity.attributes.first(where: { $0.name == propertyName }),
+            attribute.options.contains(.codable),
+            codableScalarCollectionElementType(attribute.type) != nil
+        else { return nil }
+        return propertyName
+    }
+
+    private static func codableScalarCollectionElementType(_ typeName: String) -> String? {
+        let unwrapped = typeName.hasSuffix("?") ? String(typeName.dropLast()) : typeName
+        guard let opening = unwrapped.firstIndex(of: "<"), unwrapped.last == ">" else { return nil }
+        let collectionName = unwrapped[..<opening].split(separator: ".").last.map(String.init) ?? ""
+        guard collectionName == "Array" || collectionName == "Set" else { return nil }
+        let rawElement = String(
+            unwrapped[unwrapped.index(after: opening)..<unwrapped.index(before: unwrapped.endIndex)])
+        let elementName = rawElement.split(separator: ".").last.map(String.init) ?? rawElement
+        guard
+            [
+                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                "UInt32", "UInt64",
+            ].contains(elementName)
+        else { return nil }
+        return elementName
     }
 
     private static func propertyReference(

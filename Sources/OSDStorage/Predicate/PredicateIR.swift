@@ -137,16 +137,22 @@ package enum PredicateIRBuilder {
                     try field("lhs", from: fields, attributeTypes: attributeTypes),
                     try field("rhs", from: fields, attributeTypes: attributeTypes))
             case "OptionalFlatMap":
-                guard
-                    case let .keyPath(relationshipPath) = try field(
-                        "wrapped", from: fields, attributeTypes: attributeTypes),
-                    !relationshipPath.isEmpty
+                let wrapped = try field("wrapped", from: fields, attributeTypes: attributeTypes)
+                let transform = try field("transform", from: fields, attributeTypes: attributeTypes)
+                if case let .keyPath(path) = wrapped, path.count == 1,
+                    let collectionElement = scalarCollectionElementType(attributeTypes[path[0]]),
+                    case let .collectionContains(name, elementType, element) = transform,
+                    name == path[0], elementType == collectionElement
+                {
+                    return .collectionContains(name, elementType, element)
+                }
+                guard case let .keyPath(relationshipPath) = wrapped, !relationshipPath.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Optional relationship predicates require a to-one relationship path.")
+                        "Optional predicates require a supported to-one relationship or Codable collection path.")
                 }
                 return try prefixRelationshipPath(
-                    field("transform", from: fields, attributeTypes: attributeTypes),
+                    transform,
                     relationships: relationshipPath,
                     attributeTypes: attributeTypes)
             case "Conditional":

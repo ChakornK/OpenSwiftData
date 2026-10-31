@@ -203,6 +203,17 @@ final class CodableStringCollectionFixture {
 }
 
 @Model
+final class OptionalCodableStringCollectionFixture {
+    var name: String
+    @Attribute(.codable) var tags: [String]?
+
+    init(name: String, tags: [String]?) {
+        self.name = name
+        self.tags = tags
+    }
+}
+
+@Model
 final class NestedToOneRootFixture {
     var name: String
     @Relationship(inverse: nil) var middle: NestedToOneMiddleFixture?
@@ -2595,6 +2606,36 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertTrue(try reader.fetch(descriptor).isEmpty)
         XCTAssertEqual(try reader.fetchCount(descriptor), 0)
+    }
+
+    @MainActor
+    func testOptionalCodableCollectionMembershipSupportsNilAndPendingValues() throws {
+        let container = try ModelContainer(
+            for: OptionalCodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("optional-codable-string-collection"))
+        let context = container.mainContext
+        let matching = OptionalCodableStringCollectionFixture(name: "matching", tags: ["swift"])
+        let empty = OptionalCodableStringCollectionFixture(name: "empty", tags: [])
+        let nilValue = OptionalCodableStringCollectionFixture(name: "nil", tags: nil)
+        context.insert(matching)
+        context.insert(empty)
+        context.insert(nilValue)
+        try context.save()
+
+        let needle = "swift"
+        let descriptor = FetchDescriptor<OptionalCodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.flatMap { $0.contains(needle) } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+
+        matching.tags = []
+        nilValue.tags = [needle]
+        let pendingDescriptor = FetchDescriptor<OptionalCodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.flatMap { $0.contains(needle) } ?? false })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["nil"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [nilValue.persistentModelID])
     }
 
     func testPendingBoolCollectionMembershipRejectsNumericJSONPayload() throws {

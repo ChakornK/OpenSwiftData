@@ -583,9 +583,9 @@ package enum LightweightMigration {
                         "Hierarchy migration only adds leaf subclasses beneath existing entities.")
                 }
             } else {
-                guard !hasNewDescendants, entity.relationships.isEmpty else {
+                guard !hasNewDescendants else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Hierarchy migration only adds independent roots without relationships or descendants.")
+                        "Hierarchy migration only adds independent roots without descendants.")
                 }
             }
             for relationship in entity.relationships {
@@ -791,6 +791,18 @@ package enum LightweightMigration {
 
         for entity in newEntities {
             for relationship in entity.relationships {
+                if entity.superentityName == nil {
+                    guard !relationship.isToMany,
+                        let mapping = destination.relationshipStorageMapping(
+                            modelEntityName: entity.name, relationshipName: relationship.name),
+                        mapping.declaringEntityName == entity.name,
+                        mapping.ownerRootEntityName == entity.name
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New root relationships must use directly owned to-one storage.")
+                    }
+                    continue
+                }
                 if relationship.isToMany {
                     if relationship.inverse != nil,
                         SchemaBuilder.isNonOwner(entity, relationship, schema: destination)

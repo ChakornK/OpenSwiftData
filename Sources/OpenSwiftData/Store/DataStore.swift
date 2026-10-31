@@ -50,8 +50,8 @@ public struct DataStoreSnapshot: Sendable, Equatable {
     /// Related model identifiers keyed by relationship property name.
     public let relationships: [String: [PersistentIdentifier]]
 
-    /// Creates a snapshot. The current ModelContext fetch adapter supports scalar attributes and flattened values;
-    /// relationship snapshots are encoded and saved, but fetching relationship-bearing entities is not yet supported.
+    /// Creates a snapshot with scalar values and related persistent identifiers.
+    /// ModelContext resolves related snapshots recursively during fetch; partial-property fetches are unsupported.
     public init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,

@@ -586,13 +586,18 @@ final class DataStoreTests: XCTestCase {
         let context = container.mainContext
         let destination = CustomDataStoreDestination(title: "destination")
         let owner = CustomDataStoreOwner(name: "owner", destination: destination)
+        let secondOwner = CustomDataStoreOwner(name: "second owner", destination: destination)
         context.insert(owner)
+        context.insert(secondOwner)
         try context.save()
 
         let reader = container.makeContext()
-        let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<CustomDataStoreOwner>()).first)
+        let fetchedOwners = try reader.fetch(FetchDescriptor<CustomDataStoreOwner>())
+        let fetched = try XCTUnwrap(fetchedOwners.first(where: { $0.name == "owner" }))
+        let fetchedSecondOwner = try XCTUnwrap(fetchedOwners.first(where: { $0.name == "second owner" }))
         XCTAssertFalse(fetched.destination === destination)
         XCTAssertEqual(fetched.destination?.title, "destination")
+        XCTAssertTrue(fetched.destination === fetchedSecondOwner.destination)
 
         let replacement = CustomDataStoreDestination(title: "replacement")
         context.insert(replacement)

@@ -5,7 +5,28 @@ package enum LightweightMigration {
     package static let schemaHashKey = "schema.hash.v1"
     package static let schemaDescriptionKey = "schema.definition.v1"
     package static let schemaVersionKey = "schema.version.v1"
+    package static let entityIDsKey = "schema.entity-ids.v1"
     package static let pendingMigrationKey = "schema.migration.pending.v1"
+
+    package static func storedEntityIDs(schema: Schema, connection: SQLConnection) throws -> [String: Int]? {
+        guard
+            let row = try connection.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(entityIDsKey)]
+            ).first
+        else { return nil }
+        guard case let .blob(bytes)? = row.first else {
+            throw SwiftDataError.migrationUnsupported("Stored entity identifier map has an invalid storage type.")
+        }
+        return try EntityIDMapCodec.decode(bytes, for: schema)
+    }
+
+    package static func writeEntityIDs(
+        _ identifiers: [String: Int], schema: Schema, connection: SQLConnection
+    ) throws {
+        try connection.execute(
+            "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [.text(entityIDsKey), .blob(try EntityIDMapCodec.encode(identifiers, for: schema))])
+    }
 
     package static func storedSchemaVersion(connection: SQLConnection) throws -> RuntimeSchemaVersionState {
         let metadataTable = try connection.rows(

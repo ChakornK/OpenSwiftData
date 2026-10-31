@@ -1239,6 +1239,87 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(SchemaHash.digest(schema), SchemaHash.digest(decoded))
     }
 
+    func testEntityIDMapCodecUsesDeterministicVersionedEncoding() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Zebra", superentityName: "Animal"),
+        ])
+        let first = try EntityIDMapCodec.encode(["Zebra": 3, "Animal": 1, "Dog": 2], for: schema)
+        let second = try EntityIDMapCodec.encode(["Dog": 2, "Zebra": 3, "Animal": 1], for: schema)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(
+            String(decoding: first, as: UTF8.self),
+            "{\"entries\":[{\"identifier\":1,\"name\":\"Animal\"},{\"identifier\":2,\"name\":\"Dog\"},{\"identifier\":3,\"name\":\"Zebra\"}],\"format\":\"entity-id-map.v1\"}"
+        )
+    }
+
+    func testEntityIDMapMetadataRoundTripsWithoutChangingSchemaHash() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Zebra", superentityName: "Animal"),
+        ])
+        let reconciled = try schema.reconciled(with: ["Animal": 4, "Dog": 7, "Zebra": 9])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-id-map-roundtrip"))
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);")
+            XCTAssertNil(try LightweightMigration.storedEntityIDs(schema: schema, connection: connection))
+            try LightweightMigration.writeEntityIDs(
+                reconciled.entityIDsByName, schema: schema, connection: connection)
+            XCTAssertEqual(
+                try LightweightMigration.storedEntityIDs(schema: schema, connection: connection),
+                reconciled.entityIDsByName)
+        }
+
+        XCTAssertEqual(SchemaHash.hexDigest(schema), SchemaHash.hexDigest(reconciled))
+        XCTAssertEqual(SchemaHash.canonicalDescription(of: schema), SchemaHash.canonicalDescription(of: reconciled))
+        try driver.close()
+    }
+
+    func testEntityIDMapMetadataRejectsInvalidStorageType() throws {
+        let schema = Schema([Schema.Entity(name: "Record")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-id-map-invalid-storage-type"))
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);")
+            try connection.execute(
+                "INSERT INTO _osd_meta (key, value) VALUES (?, ?)",
+                [.text(LightweightMigration.entityIDsKey), .text("not a blob")])
+            XCTAssertThrowsError(
+                try LightweightMigration.storedEntityIDs(schema: schema, connection: connection)
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+        }
+        try driver.close()
+    }
+
+    func testEntityIDMapCodecRejectsMalformedOrIncompatibleMaps() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let invalidDocuments = [
+            "{\"entries\":[],\"format\":\"entity-id-map.v2\"}",
+            "{\"entries\":[{\"identifier\":1,\"name\":\"Animal\"},{\"identifier\":1,\"name\":\"Dog\"}],\"format\":\"entity-id-map.v1\"}",
+            "{\"entries\":[{\"identifier\":1,\"name\":\"Animal\"},{\"identifier\":2,\"name\":\"Other\"}],\"format\":\"entity-id-map.v1\"}",
+        ]
+
+        for document in invalidDocuments {
+            XCTAssertThrowsError(
+                try EntityIDMapCodec.decode(Array(document.utf8), for: schema)
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+        }
+        XCTAssertThrowsError(try EntityIDMapCodec.encode(["Animal": 1, "Dog": 1], for: schema))
+    }
+
     func testOpeningExistingStoreAutomaticallyMigratesFromPersistedSchemaDefinition() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

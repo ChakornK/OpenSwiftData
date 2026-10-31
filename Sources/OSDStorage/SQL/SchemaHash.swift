@@ -361,6 +361,53 @@ package enum SchemaHash {
     }
 }
 
+package enum EntityIDMapCodec {
+    private static let format = "entity-id-map.v1"
+
+    package static func encode(_ identifiers: [String: Int], for schema: Schema) throws -> [UInt8] {
+        _ = try Schema(schema.entities, version: schema.version, entityIDs: identifiers)
+        let entries = identifiers.map { Entry(name: $0.key, identifier: $0.value) }
+            .sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return Array(try encoder.encode(Document(format: format, entries: entries)))
+    }
+
+    package static func decode(_ bytes: [UInt8], for schema: Schema) throws -> [String: Int] {
+        let document: Document
+        do {
+            document = try JSONDecoder().decode(Document.self, from: Data(bytes))
+        } catch {
+            throw SwiftDataError.migrationUnsupported("Invalid stored entity identifier map.")
+        }
+        guard document.format == format else {
+            throw SwiftDataError.migrationUnsupported("Unsupported stored entity identifier map format.")
+        }
+        var identifiers: [String: Int] = [:]
+        for entry in document.entries {
+            guard identifiers.updateValue(entry.identifier, forKey: entry.name) == nil else {
+                throw SwiftDataError.migrationUnsupported("Stored entity identifier map has duplicate entities.")
+            }
+        }
+        do {
+            _ = try Schema(schema.entities, version: schema.version, entityIDs: identifiers)
+        } catch {
+            throw SwiftDataError.migrationUnsupported("Stored entity identifier map does not match the schema.")
+        }
+        return identifiers
+    }
+
+    private struct Document: Codable {
+        let format: String
+        let entries: [Entry]
+    }
+
+    private struct Entry: Codable {
+        let name: String
+        let identifier: Int
+    }
+}
+
 private extension Schema.Attribute.Option {
     var canonicalName: String {
         switch self {

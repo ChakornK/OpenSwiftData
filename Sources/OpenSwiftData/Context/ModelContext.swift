@@ -1889,12 +1889,6 @@ public final class ModelContext {
             }
         }
         if let schema = containerStorage?.schema {
-            func hasDescendants(_ candidate: Schema.Entity) -> Bool {
-                schema.entities.contains { descendant in
-                    descendant.name != candidate.name && rootEntity(for: descendant).name == candidate.name
-                }
-            }
-
             func addRelationshipPaths(
                 ownerEntity: Schema.Entity,
                 prefix: [String],
@@ -1912,7 +1906,6 @@ public final class ModelContext {
                     let relationshipPath = path.joined(separator: ".")
                     attributeNames.insert(relationshipPath)
                     attributeTypes[relationshipPath] = "OSDRelationship"
-                    guard path.count == 1 || !hasDescendants(destination) else { continue }
                     for attribute in destination.attributes where !attribute.options.contains(.flattened) {
                         let scalarPath = "\(relationshipPath).\(attribute.name)"
                         attributeNames.insert(scalarPath)

@@ -221,6 +221,68 @@ final class NestedToOneLeafFixture {
 }
 
 @Model
+class NestedHierarchyMiddleBaseFixture {
+    var name: String
+
+    init(name: String) {
+        self.name = name
+    }
+}
+
+@Model
+class NestedHierarchyMiddleChildFixture: NestedHierarchyMiddleBaseFixture {
+    @Relationship(inverse: nil) var leaf: NestedToOneLeafFixture?
+
+    init(name: String, leaf: NestedToOneLeafFixture?) {
+        super.init(name: name)
+        self.leaf = leaf
+    }
+}
+
+@Model
+final class NestedHierarchyMiddleGrandchildFixture: NestedHierarchyMiddleChildFixture {
+    var rank: Int
+
+    init(name: String, leaf: NestedToOneLeafFixture?, rank: Int) {
+        self.rank = rank
+        super.init(name: name, leaf: leaf)
+    }
+}
+
+@Model
+final class NestedHierarchyRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var middle: NestedHierarchyMiddleChildFixture?
+
+    init(name: String, middle: NestedHierarchyMiddleChildFixture?) {
+        self.name = name
+        self.middle = middle
+    }
+}
+
+@Model
+final class NestedHierarchyPathRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var middle: NestedHierarchyPathMiddleFixture?
+
+    init(name: String, middle: NestedHierarchyPathMiddleFixture?) {
+        self.name = name
+        self.middle = middle
+    }
+}
+
+@Model
+final class NestedHierarchyPathMiddleFixture {
+    var name: String
+    @Relationship(inverse: nil) var target: NestedHierarchyMiddleChildFixture?
+
+    init(name: String, target: NestedHierarchyMiddleChildFixture?) {
+        self.name = name
+        self.target = target
+    }
+}
+
+@Model
 final class NestedInverseRootFixture {
     var name: String
     @Relationship(inverse: nil) var middle: NestedInverseMiddleFixture?
@@ -2140,6 +2202,86 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingCollectionDescriptor).map(\.name), ["root"])
         XCTAssertEqual(try context.fetchCount(pendingCollectionDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingCollectionDescriptor), [root.persistentModelID])
+    }
+
+    @MainActor
+    func testPredicateTraversesNestedToOneIntoHierarchyDestination() throws {
+        let container = try ModelContainer(
+            for: NestedHierarchyRootFixture.self,
+            NestedHierarchyMiddleChildFixture.self,
+            NestedToOneLeafFixture.self,
+            configurations: .sqliteMemory("nested-hierarchy-to-one-path"))
+        let context = container.mainContext
+        let leaf = NestedToOneLeafFixture(title: "selected")
+        let middle = NestedHierarchyMiddleChildFixture(name: "middle", leaf: leaf)
+        let matchingRoot = NestedHierarchyRootFixture(name: "matching", middle: middle)
+        let siblingRoot = NestedHierarchyRootFixture(name: "sibling", middle: nil)
+        context.insert(leaf)
+        context.insert(middle)
+        context.insert(matchingRoot)
+        context.insert(siblingRoot)
+        try context.save()
+
+        let selectedTitle = "selected"
+        let descriptor = FetchDescriptor<NestedHierarchyRootFixture>(
+            predicate: #Predicate { $0.middle?.leaf?.title == selectedTitle },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+
+        leaf.title = "pending-selected"
+        let pendingTitle = "pending-selected"
+        let pendingDescriptor = FetchDescriptor<NestedHierarchyRootFixture>(
+            predicate: #Predicate { $0.middle?.leaf?.title == pendingTitle })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [matchingRoot.persistentModelID])
+    }
+
+    @MainActor
+    func testNestedToOnePathTraversesHierarchyRootTables() throws {
+        let container = try ModelContainer(
+            for: NestedHierarchyPathRootFixture.self,
+            NestedHierarchyPathMiddleFixture.self,
+            NestedHierarchyMiddleGrandchildFixture.self,
+            NestedToOneLeafFixture.self,
+            configurations: .sqliteMemory("nested-hierarchy-root-table-path"))
+        let context = container.mainContext
+        let selectedLeaf = NestedToOneLeafFixture(title: "selected")
+        let otherLeaf = NestedToOneLeafFixture(title: "other")
+        let matchingTarget = NestedHierarchyMiddleGrandchildFixture(
+            name: "matching-target", leaf: selectedLeaf, rank: 2)
+        let otherTarget = NestedHierarchyMiddleGrandchildFixture(name: "other-target", leaf: otherLeaf, rank: 3)
+        let matchingMiddle = NestedHierarchyPathMiddleFixture(name: "matching-middle", target: matchingTarget)
+        let otherMiddle = NestedHierarchyPathMiddleFixture(name: "other-middle", target: otherTarget)
+        let matchingRoot = NestedHierarchyPathRootFixture(name: "matching-root", middle: matchingMiddle)
+        let otherRoot = NestedHierarchyPathRootFixture(name: "other-root", middle: otherMiddle)
+        context.insert(selectedLeaf)
+        context.insert(otherLeaf)
+        context.insert(matchingTarget)
+        context.insert(otherTarget)
+        context.insert(matchingMiddle)
+        context.insert(otherMiddle)
+        context.insert(matchingRoot)
+        context.insert(otherRoot)
+        try context.save()
+
+        let selectedTitle = "selected"
+        let descriptor = FetchDescriptor<NestedHierarchyPathRootFixture>(
+            predicate: #Predicate { $0.middle?.target?.leaf?.title == selectedTitle },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["matching-root"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        selectedLeaf.title = "pending-selected"
+        let pendingTitle = "pending-selected"
+        let pendingDescriptor = FetchDescriptor<NestedHierarchyPathRootFixture>(
+            predicate: #Predicate { $0.middle?.target?.leaf?.title == pendingTitle })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["matching-root"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [matchingRoot.persistentModelID])
     }
 
     @MainActor

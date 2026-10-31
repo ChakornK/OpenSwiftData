@@ -1888,6 +1888,23 @@ public final class ModelContext {
                 attributeNames.insert(path)
                 attributeTypes[path] = attribute.type
             }
+            for nestedRelationship in destination.relationships where nestedRelationship.isToMany {
+                guard
+                    relationshipPaths.contains(where: {
+                        $0.ownerEntityName == destination.name && $0.propertyName == nestedRelationship.name
+                    }),
+                    let nestedDestination = containerStorage?.schema.entity(
+                        forName: nestedRelationship.destination)
+                else { continue }
+                let nestedPath = "\(relationship.name)[].\(nestedRelationship.name)"
+                attributeNames.insert(nestedPath)
+                attributeTypes[nestedPath] = "OSDToManyRelationship"
+                for attribute in nestedDestination.attributes where !attribute.options.contains(.flattened) {
+                    let nestedElementPath = "\(nestedPath)[].\(attribute.name)"
+                    attributeNames.insert(nestedElementPath)
+                    attributeTypes[nestedElementPath] = attribute.type
+                }
+            }
         }
         if let schema = containerStorage?.schema {
             func addRelationshipPaths(
@@ -1927,6 +1944,24 @@ public final class ModelContext {
                             let elementPath = "\(collectionPath)[].\(attribute.name)"
                             attributeNames.insert(elementPath)
                             attributeTypes[elementPath] = attribute.type
+                        }
+                        for nestedCollection in relationshipPaths
+                        where nestedCollection.ownerEntityName == collectionDestination.name
+                            && nestedCollection.isToMany
+                        {
+                            guard
+                                let nestedDestination = schema.entity(
+                                    forName: nestedCollection.destinationEntityName)
+                            else { continue }
+                            let nestedPath = "\(collectionPath)[].\(nestedCollection.propertyName)"
+                            attributeNames.insert(nestedPath)
+                            attributeTypes[nestedPath] = "OSDToManyRelationship"
+                            for attribute in nestedDestination.attributes where !attribute.options.contains(.flattened)
+                            {
+                                let nestedElementPath = "\(nestedPath)[].\(attribute.name)"
+                                attributeNames.insert(nestedElementPath)
+                                attributeTypes[nestedElementPath] = attribute.type
+                            }
                         }
                     }
                     guard !visited.contains(destination.name) else { continue }
@@ -2044,6 +2079,63 @@ public final class ModelContext {
         _ model: Model,
         matches plan: PredicatePlan
     ) throws -> Bool {
+        if !RuntimePredicateEvaluator.nestedRelationshipNames(in: plan).isEmpty {
+            func context(
+                for model: any PersistentModel,
+                evaluating plan: PredicatePlan,
+                depth: Int
+            ) throws -> RuntimePredicateEvaluator.Context {
+                guard depth <= 2 else {
+                    throw SwiftDataError.unsupportedPredicate("Collection predicates support at most two levels.")
+                }
+                let nestedNames = RuntimePredicateEvaluator.nestedRelationshipNames(in: plan)
+                let allNames = RuntimePredicateEvaluator.referencedProperties(in: plan)
+                let scalarNames = allNames.filter { name in
+                    !nestedNames.contains(name) && !name.contains("[].")
+                }
+                let values = try runtimeValues(for: model, selecting: scalarNames)
+                var relationships: [String: [RuntimePredicateEvaluator.Context]] = [:]
+                func collect(_ current: PredicatePlan) throws {
+                    switch current {
+                    case let .relationshipContains(name, body):
+                        guard !name.contains("."),
+                            let adapter = containerStorage?.relationshipAdapterTable[
+                                ObjectIdentifier(type(of: model))
+                            ]?.first(where: { $0.name == name && $0.isToMany }),
+                            adapter.metadata?.inverse == nil
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Nested collection evaluation requires direct no-inverse relationships.")
+                        }
+                        let endpoints = adapter.read(model) ?? []
+                        relationships[name] = try endpoints.map {
+                            try context(for: $0, evaluating: body, depth: depth + 1)
+                        }
+                    case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
+                        let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+                        let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs),
+                        let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
+                        try collect(lhs)
+                        try collect(rhs)
+                    case let .negation(value), let .isNull(value, _):
+                        try collect(value)
+                    case let .conditional(test, yes, no):
+                        try collect(test)
+                        try collect(yes)
+                        try collect(no)
+                    case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
+                        let .collectionAllCompare(_, _, _, value):
+                        try collect(value)
+                    case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+                        break
+                    }
+                }
+                try collect(plan)
+                return RuntimePredicateEvaluator.Context(values: values, relationships: relationships)
+            }
+            return try RuntimePredicateEvaluator.matches(
+                plan, context: context(for: model, evaluating: plan, depth: 0))
+        }
         let propertyNames = RuntimePredicateEvaluator.referencedProperties(in: plan)
         let values = try runtimeValues(for: model, selecting: propertyNames)
         let relationshipProperties = RuntimePredicateEvaluator.relationshipProperties(in: plan)

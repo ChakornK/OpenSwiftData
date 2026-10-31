@@ -533,7 +533,8 @@ package enum PredicateIRBuilder {
     private static func elementPredicate(
         _ ir: PredicateIR,
         relationship: String,
-        attributeTypes: [String: String]
+        attributeTypes: [String: String],
+        depth: Int = 0
     ) throws -> PredicateIR {
         switch ir {
         case let .keyPath(path):
@@ -541,8 +542,15 @@ package enum PredicateIRBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Collection predicate bodies support direct scalar properties of the related model.")
             }
-            let elementPath = path[0].components(separatedBy: "[].")
-            guard elementPath.count == 2, elementPath[0] == relationship else {
+            let propertyPath = path[0]
+            let localPath: String
+            if propertyPath.hasPrefix("\(relationship)[].") {
+                localPath = String(propertyPath.dropFirst(relationship.count + 3))
+            } else if let finalScope = relationship.split(separator: ".").last.map(String.init),
+                propertyPath.hasPrefix("\(finalScope)[].")
+            {
+                localPath = String(propertyPath.dropFirst(finalScope.count + 3))
+            } else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Collection predicate bodies support direct scalar properties of the related model.")
             }
@@ -551,12 +559,14 @@ package enum PredicateIRBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Collection predicate bodies require direct persisted scalar attributes.")
             }
-            return .keyPath([elementPath[1]])
+            return .keyPath([localPath])
         case let .value(value):
             return .value(value)
         case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):
-            let normalizedLHS = try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes)
-            let normalizedRHS = try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes)
+            let normalizedLHS = try elementPredicate(
+                lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth)
+            let normalizedRHS = try elementPredicate(
+                rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth)
             if case .decimalComparison = ir {
                 return .decimalComparison(op, normalizedLHS, normalizedRHS)
             }
@@ -564,32 +574,47 @@ package enum PredicateIRBuilder {
                 op,
                 normalizedLHS,
                 normalizedRHS)
+        case let .relationshipContains(name, body):
+            let nestedParts = name.split(separator: ".").map(String.init)
+            let localName: String
+            if depth == 0, nestedParts.count == 2,
+                nestedParts[0].hasSuffix("[]"),
+                String(nestedParts[0].dropLast(2)) == relationship
+            {
+                localName = nestedParts[1]
+            } else if depth == 0, nestedParts.count == 1 {
+                localName = nestedParts[0]
+            } else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Nested collection predicates support one direct inner relationship.")
+            }
+            return .relationshipContains(localName, body)
         case let .conjunction(lhs, rhs):
             return .conjunction(
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .disjunction(lhs, rhs):
             return .disjunction(
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .negation(value):
             return .negation(
-                try elementPredicate(value, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(value, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .localizedStandardContains(lhs, rhs):
             try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
             return .localizedStandardContains(
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .stringContains(lhs, rhs):
             try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
             return .stringContains(
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .stringStartsWith(lhs, rhs):
             try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
             return .stringStartsWith(
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         default:
             throw SwiftDataError.unsupportedPredicate(
                 "Collection predicate bodies support scalar comparisons and boolean combinations only.")

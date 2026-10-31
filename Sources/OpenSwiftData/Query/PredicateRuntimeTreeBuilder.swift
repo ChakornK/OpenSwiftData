@@ -46,6 +46,13 @@ package enum PredicateRuntimeTreeBuilder {
         var activeCollectionName: String?
         var activeRelationshipName: String?
         var activePredicateRootType: Any.Type = Model.self
+        var collectionVariableScopes: [UInt] = []
+        func keyPathRootVariableID(_ value: Any) -> UInt? {
+            guard let root = Mirror(reflecting: value).children.first(where: { $0.label == "root" })?.value else {
+                return nil
+            }
+            return variableIdentifier(root)
+        }
         func relationshipTraversal(
             _ node: RuntimePredicateNode,
             from ownerEntity: Schema.Entity
@@ -152,17 +159,24 @@ package enum PredicateRuntimeTreeBuilder {
                     "Malformed predicate node \(name): expected \(requiredLabels.sorted()), found \(labels.sorted())")
             }
             if name == "SequenceContainsWhere" || name == "SequenceAllSatisfy" {
-                guard activeCollectionName == nil else {
-                    throw SwiftDataError.unsupportedPredicate("Nested collection quantifiers are unsupported")
-                }
                 guard let schema,
                     let sequence = children.first(where: { $0.label == "sequence" })?.value,
                     let test = children.first(where: { $0.label == "test" })?.value,
                     let variable = children.first(where: { $0.label == "variable" })?.value,
-                    let sequenceVariableID = variableIdentifier(variable)
+                    let sequenceVariableID = variableIdentifier(variable),
+                    let sequenceRootID = keyPathRootVariableID(sequence)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Collection quantifiers require a to-many relationship.")
+                }
+                if collectionVariableScopes.isEmpty {
+                    collectionVariableScopes.append(sequenceRootID)
+                }
+                guard collectionVariableScopes.count <= 2,
+                    collectionVariableScopes.last == sequenceRootID
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Nested collection quantifier depth or variable scope is unsupported.")
                 }
                 let sequenceNode = try visit(
                     sequence, path: path + ["sequence"], bindings: bindings,
@@ -180,7 +194,7 @@ package enum PredicateRuntimeTreeBuilder {
                 let localOwnerParts =
                     ownerParts.starts(with: activePrefix)
                     ? Array(ownerParts.dropFirst(activePrefix.count)) : ownerParts
-                if name == "SequenceAllSatisfy", localOwnerParts.isEmpty,
+                if name == "SequenceAllSatisfy", collectionVariableScopes.count == 1, localOwnerParts.isEmpty,
                     codableCollectionName(sequenceNode, entity: activeEntity) == collectionName
                 {
                     let testTypeName = String(reflecting: type(of: test))
@@ -266,6 +280,7 @@ package enum PredicateRuntimeTreeBuilder {
                         $0.name == collectionName && $0.isToMany
                     }),
                     supportsCollectionPredicate(relationship, schema: schema),
+                    collectionVariableScopes.count == 1 || (localOwnerParts.isEmpty && relationship.inverse == nil),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {
@@ -276,29 +291,45 @@ package enum PredicateRuntimeTreeBuilder {
                 let previousEntity = activeEntity
                 let previousCollectionName = activeCollectionName
                 let previousPredicateRootType = activePredicateRootType
+                let fullCollectionPath =
+                    previousCollectionName.map { "\($0)[].\(sequenceProperty.name)" }
+                    ?? sequenceProperty.name
                 activeModelType = destinationModelType
                 activeEntity = destinationEntity
-                activeCollectionName = sequenceProperty.name
+                activeCollectionName = fullCollectionPath
                 activePredicateRootType = destinationModelType
+                collectionVariableScopes.append(sequenceVariableID)
                 let testNode: RuntimePredicateNode
                 do {
                     testNode = try visit(
                         test, path: path + ["test"], bindings: bindings,
                         capturePathRewrites: capturePathRewrites)
                 } catch {
+                    collectionVariableScopes.removeLast()
                     activeModelType = previousModelType
                     activeEntity = previousEntity
                     activeCollectionName = previousCollectionName
                     activePredicateRootType = previousPredicateRootType
                     throw error
                 }
+                collectionVariableScopes.removeLast()
                 activeModelType = previousModelType
                 activeEntity = previousEntity
                 activeCollectionName = previousCollectionName
                 activePredicateRootType = previousPredicateRootType
                 return .expression(
                     name: name == "SequenceAllSatisfy" ? "OSDSequenceAllSatisfy" : "OSDSequenceContainsWhere",
-                    children: [("sequence", sequenceNode), ("test", testNode)])
+                    children: [
+                        (
+                            "sequence",
+                            collectionVariableScopes.count > 1
+                                ? .property(
+                                    RuntimePropertyReference(
+                                        name: fullCollectionPath))
+                                : sequenceNode
+                        ),
+                        ("test", testNode),
+                    ])
             }
             if name == "OptionalFlatMap" {
                 guard schema != nil else {

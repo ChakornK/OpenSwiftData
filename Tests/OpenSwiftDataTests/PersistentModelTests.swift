@@ -214,6 +214,37 @@ final class CodableStringCollectionFixture {
 }
 
 @Model
+final class QuantifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var children: [QuantifierChildFixture]
+
+    init(name: String, children: [QuantifierChildFixture]) {
+        self.name = name
+        self.children = children
+    }
+}
+
+@Model
+final class QuantifierChildFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [QuantifierItemFixture]
+
+    init(name: String, items: [QuantifierItemFixture]) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class QuantifierItemFixture {
+    var value: String
+
+    init(value: String) {
+        self.value = value
+    }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -2794,6 +2825,65 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.numbers.allSatisfy { $0 >= lowerBound } })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["qualifying", "violating", "empty"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
+    func testNestedRelationshipContainsWhereSupportsTwoDirectLevels() throws {
+        let container = try ModelContainer(
+            for: QuantifierOwnerFixture.self,
+            QuantifierChildFixture.self,
+            QuantifierItemFixture.self,
+            configurations: .sqliteMemory("nested-relationship-quantifier-depth-two"))
+        let context = container.mainContext
+        let match = QuantifierItemFixture(value: "match")
+        let other = QuantifierItemFixture(value: "other")
+        let matchingChild = QuantifierChildFixture(name: "matching-child", items: [match])
+        let otherChild = QuantifierChildFixture(name: "other-child", items: [other])
+        let matchingOwner = QuantifierOwnerFixture(name: "matching-owner", children: [matchingChild])
+        let otherOwner = QuantifierOwnerFixture(name: "other-owner", children: [otherChild])
+        let emptyOwner = QuantifierOwnerFixture(name: "empty-owner", children: [])
+        context.insert(match)
+        context.insert(other)
+        context.insert(matchingChild)
+        context.insert(otherChild)
+        context.insert(matchingOwner)
+        context.insert(otherOwner)
+        context.insert(emptyOwner)
+        try context.save()
+
+        let needle = "match"
+        let descriptor = FetchDescriptor<QuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains(where: { child in
+                    child.items.contains(where: { $0.value == needle })
+                })
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching-owner"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [matchingOwner.persistentModelID])
+
+        let pending = QuantifierItemFixture(value: needle)
+        context.insert(pending)
+        otherChild.items.append(pending)
+        let pendingDescriptor = FetchDescriptor<QuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains(where: { child in
+                    child.items.contains(where: { $0.value == needle })
+                })
+            })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching-owner", "other-owner"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+
+        let depthThreeDescriptor = FetchDescriptor<QuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains(where: { child in
+                    child.items.contains(where: { item in
+                        item.value.contains(needle)
+                    })
+                })
+            })
+        XCTAssertThrowsError(try context.fetch(depthThreeDescriptor))
     }
 
     @MainActor

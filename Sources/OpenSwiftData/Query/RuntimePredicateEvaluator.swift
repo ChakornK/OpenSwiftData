@@ -2,6 +2,16 @@ import Foundation
 import CoreFoundation
 
 package enum RuntimePredicateEvaluator {
+    package struct Context {
+        package let values: [String: RuntimeValue]
+        package let relationships: [String: [Context]]
+
+        package init(values: [String: RuntimeValue], relationships: [String: [Context]] = [:]) {
+            self.values = values
+            self.relationships = relationships
+        }
+    }
+
     package enum TruthValue: Equatable {
         case yes
         case no
@@ -13,7 +23,14 @@ package enum RuntimePredicateEvaluator {
         values: [String: RuntimeValue],
         relationshipValues: [String: [[String: RuntimeValue]]] = [:]
     ) throws -> Bool {
-        try evaluateTruth(plan, values: values, relationshipValues: relationshipValues) == .yes
+        let context = Context(
+            values: values,
+            relationships: relationshipValues.mapValues { $0.map { Context(values: $0) } })
+        return try matches(plan, context: context)
+    }
+
+    package static func matches(_ plan: PredicatePlan, context: Context) throws -> Bool {
+        try evaluateTruth(plan, context: context) == .yes
     }
 
     package static func referencedProperties(in plan: PredicatePlan) -> Set<String> {
@@ -88,6 +105,58 @@ package enum RuntimePredicateEvaluator {
         }
     }
 
+    package static func nestedRelationshipNames(in plan: PredicatePlan) -> Set<String> {
+        var names: Set<String> = []
+        func walk(_ plan: PredicatePlan, collectionDepth: Int) {
+            switch plan {
+            case let .relationshipContains(name, body):
+                if collectionDepth > 0 { names.insert(name) }
+                walk(body, collectionDepth: collectionDepth + 1)
+            case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
+                let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+                let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
+                let .stringStartsWith(lhs, rhs):
+                walk(lhs, collectionDepth: collectionDepth)
+                walk(rhs, collectionDepth: collectionDepth)
+            case let .negation(value), let .isNull(value, _):
+                walk(value, collectionDepth: collectionDepth)
+            case let .conditional(test, yes, no):
+                walk(test, collectionDepth: collectionDepth)
+                walk(yes, collectionDepth: collectionDepth)
+                walk(no, collectionDepth: collectionDepth)
+            case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
+                let .collectionAllCompare(_, _, _, value):
+                walk(value, collectionDepth: collectionDepth)
+            case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+                break
+            }
+        }
+        walk(plan, collectionDepth: 0)
+        return names
+    }
+
+    package static func containsNestedRelationship(_ plan: PredicatePlan, depth: Int = 0) -> Bool {
+        switch plan {
+        case let .relationshipContains(_, body):
+            return depth > 0 || containsNestedRelationship(body, depth: depth + 1)
+        case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
+            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
+            let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
+            return containsNestedRelationship(lhs, depth: depth) || containsNestedRelationship(rhs, depth: depth)
+        case let .negation(value), let .isNull(value, _):
+            return containsNestedRelationship(value, depth: depth)
+        case let .conditional(test, yes, no):
+            return containsNestedRelationship(test, depth: depth)
+                || containsNestedRelationship(yes, depth: depth)
+                || containsNestedRelationship(no, depth: depth)
+        case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
+            let .collectionAllCompare(_, _, _, value):
+            return containsNestedRelationship(value, depth: depth)
+        case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+            return false
+        }
+    }
+
     private static func merge(
         _ lhs: [String: Set<String>],
         _ rhs: [String: Set<String>]
@@ -97,35 +166,31 @@ package enum RuntimePredicateEvaluator {
         return result
     }
 
-    private static func evaluateTruth(
-        _ plan: PredicatePlan,
-        values: [String: RuntimeValue],
-        relationshipValues: [String: [[String: RuntimeValue]]]
-    ) throws -> TruthValue {
+    private static func evaluateTruth(_ plan: PredicatePlan, context: Context) throws -> TruthValue {
         switch plan {
         case let .conjunction(lhs, rhs):
             return and(
-                try evaluateTruth(lhs, values: values, relationshipValues: relationshipValues),
-                try evaluateTruth(rhs, values: values, relationshipValues: relationshipValues))
+                try evaluateTruth(lhs, context: context),
+                try evaluateTruth(rhs, context: context))
         case let .disjunction(lhs, rhs):
             return or(
-                try evaluateTruth(lhs, values: values, relationshipValues: relationshipValues),
-                try evaluateTruth(rhs, values: values, relationshipValues: relationshipValues))
+                try evaluateTruth(lhs, context: context),
+                try evaluateTruth(rhs, context: context))
         case let .negation(value):
-            switch try evaluateTruth(value, values: values, relationshipValues: relationshipValues) {
+            switch try evaluateTruth(value, context: context) {
             case .yes: return .no
             case .no: return .yes
             case .unknown: return .unknown
             }
         case let .conditional(test, trueBranch, falseBranch):
-            switch try evaluateTruth(test, values: values, relationshipValues: relationshipValues) {
-            case .yes: return try evaluateTruth(trueBranch, values: values, relationshipValues: relationshipValues)
+            switch try evaluateTruth(test, context: context) {
+            case .yes: return try evaluateTruth(trueBranch, context: context)
             case .no, .unknown:
-                return try evaluateTruth(falseBranch, values: values, relationshipValues: relationshipValues)
+                return try evaluateTruth(falseBranch, context: context)
             }
         case let .comparison(op, lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
+            let rhsValue = try evaluateValue(rhs, context: context)
             guard lhsValue != .null, rhsValue != .null else { return .unknown }
             if case let .double(value) = lhsValue, value.isNaN { return .unknown }
             if case let .double(value) = rhsValue, value.isNaN { return .unknown }
@@ -134,8 +199,8 @@ package enum RuntimePredicateEvaluator {
             }
             return result ? .yes : .no
         case let .decimalComparison(op, lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
+            let rhsValue = try evaluateValue(rhs, context: context)
             guard lhsValue != .null, rhsValue != .null else { return .unknown }
             guard case let .text(left) = lhsValue, case let .text(right) = rhsValue else {
                 throw SwiftDataError.unsupportedPredicate("Decimal comparison requires text operands")
@@ -144,24 +209,21 @@ package enum RuntimePredicateEvaluator {
         case .arithmetic:
             throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
         case let .isNull(value, negated):
-            let isNull = try evaluateValue(value, values: values, relationshipValues: relationshipValues) == .null
+            let isNull = try evaluateValue(value, context: context) == .null
             return isNull != negated ? .yes : .no
         case let .localizedStandardContains(lhs, rhs):
-            return try evaluateStringPredicate(
-                .localizedStandardContains(lhs, rhs), values: values, relationshipValues: relationshipValues)
+            return try evaluateStringPredicate(.localizedStandardContains(lhs, rhs), context: context)
         case let .stringContains(lhs, rhs):
-            return try evaluateStringPredicate(
-                .stringContains(lhs, rhs), values: values, relationshipValues: relationshipValues)
+            return try evaluateStringPredicate(.stringContains(lhs, rhs), context: context)
         case let .stringStartsWith(lhs, rhs):
-            return try evaluateStringPredicate(
-                .stringStartsWith(lhs, rhs), values: values, relationshipValues: relationshipValues)
+            return try evaluateStringPredicate(.stringStartsWith(lhs, rhs), context: context)
         case let .relationshipContains(name, body):
-            for endpointValues in relationshipValues[name] ?? [] {
-                if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
+            for endpointContext in context.relationships[name] ?? [] {
+                if try evaluateTruth(body, context: endpointContext) == .yes { return .yes }
             }
             return .no
         case .collectionContains, .collectionAllEqual, .collectionAllCompare, .codableCollectionIsEmpty:
-            let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
+            let value = try evaluateValue(plan, context: context)
             guard value != .null else { return .unknown }
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate(
@@ -169,7 +231,7 @@ package enum RuntimePredicateEvaluator {
             }
             return integer == 0 ? .no : .yes
         case .property, .value, .coalesce, .collectionCount, .codableCollectionCount:
-            let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
+            let value = try evaluateValue(plan, context: context)
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate("Predicate expression does not evaluate to a boolean value")
             }
@@ -181,11 +243,10 @@ package enum RuntimePredicateEvaluator {
         _ operation: PredicateArithmeticOperator,
         lhs: PredicatePlan,
         rhs: PredicatePlan,
-        values: [String: RuntimeValue],
-        relationshipValues: [String: [[String: RuntimeValue]]]
+        context: Context
     ) throws -> RuntimeValue {
-        let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-        let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+        let lhsValue = try evaluateValue(lhs, context: context)
+        let rhsValue = try evaluateValue(rhs, context: context)
         guard case let .int(left) = lhsValue, case let .int(right) = rhsValue else {
             throw SwiftDataError.unsupportedPredicate("Checked integer arithmetic requires integer operands")
         }
@@ -210,8 +271,7 @@ package enum RuntimePredicateEvaluator {
 
     private static func evaluateStringPredicate(
         _ plan: PredicatePlan,
-        values: [String: RuntimeValue],
-        relationshipValues: [String: [[String: RuntimeValue]]]
+        context: Context
     ) throws -> TruthValue {
         let left: PredicatePlan
         let right: PredicatePlan
@@ -222,8 +282,8 @@ package enum RuntimePredicateEvaluator {
         default:
             throw SwiftDataError.unsupportedPredicate("Expected a string predicate plan")
         }
-        let lhsValue = try evaluateValue(left, values: values, relationshipValues: relationshipValues)
-        let rhsValue = try evaluateValue(right, values: values, relationshipValues: relationshipValues)
+        let lhsValue = try evaluateValue(left, context: context)
+        let rhsValue = try evaluateValue(right, context: context)
         guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
             if lhsValue == .null || rhsValue == .null { return .unknown }
             throw SwiftDataError.unsupportedPredicate("String predicate requires string operands")
@@ -242,24 +302,20 @@ package enum RuntimePredicateEvaluator {
         return result ? .yes : .no
     }
 
-    private static func evaluateValue(
-        _ plan: PredicatePlan,
-        values: [String: RuntimeValue],
-        relationshipValues: [String: [[String: RuntimeValue]]]
-    ) throws -> RuntimeValue {
+    private static func evaluateValue(_ plan: PredicatePlan, context: Context) throws -> RuntimeValue {
         switch plan {
         case let .property(name):
-            guard let value = values[name] else {
+            guard let value = context.values[name] else {
                 throw SwiftDataError.unsupportedPredicate("Pending model has no encoded predicate property '\(name)'")
             }
             return value
         case let .collectionCount(name):
-            return .int(Int64(relationshipValues[name]?.count ?? 0))
+            return .int(Int64(context.relationships[name]?.count ?? 0))
         case let .collectionContains(name, elementType, element):
             let collectionValue = try evaluateValue(
-                .property(name), values: values, relationshipValues: relationshipValues)
+                .property(name), context: context)
             guard case let .blob(bytes) = collectionValue else { return .null }
-            let elementValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            let elementValue = try evaluateValue(element, context: context)
             guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
                 throw SwiftDataError.unsupportedPredicate("Codable collection contains malformed JSON data")
             }
@@ -288,9 +344,9 @@ package enum RuntimePredicateEvaluator {
             return .int(contains ? 1 : 0)
         case let .collectionAllEqual(name, elementType, element):
             let collectionValue = try evaluateValue(
-                .property(name), values: values, relationshipValues: relationshipValues)
+                .property(name), context: context)
             guard case let .blob(bytes) = collectionValue else { return .null }
-            let elementValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            let elementValue = try evaluateValue(element, context: context)
             guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
                 throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received malformed JSON data")
             }
@@ -319,9 +375,9 @@ package enum RuntimePredicateEvaluator {
             return .int(allMatch ? 1 : 0)
         case let .collectionAllCompare(name, elementType, operation, element):
             let collectionValue = try evaluateValue(
-                .property(name), values: values, relationshipValues: relationshipValues)
+                .property(name), context: context)
             guard case let .blob(bytes) = collectionValue else { return .null }
-            let boundValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            let boundValue = try evaluateValue(element, context: context)
             func matches<T: Comparable>(_ value: T, _ bound: T) -> Bool {
                 switch operation {
                 case .lessThan: value < bound
@@ -344,14 +400,14 @@ package enum RuntimePredicateEvaluator {
                     "Codable collection allSatisfy ordering requires a matching integer capture")
             }
         case let .codableCollectionIsEmpty(name):
-            let value = try evaluateValue(.property(name), values: values, relationshipValues: relationshipValues)
+            let value = try evaluateValue(.property(name), context: context)
             guard case let .blob(bytes) = value else { return .null }
             guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
                 throw SwiftDataError.unsupportedPredicate("Codable collection isEmpty received malformed JSON data")
             }
             return .int(array.isEmpty ? 1 : 0)
         case let .codableCollectionCount(name):
-            let value = try evaluateValue(.property(name), values: values, relationshipValues: relationshipValues)
+            let value = try evaluateValue(.property(name), context: context)
             guard case let .blob(bytes) = value else { return .null }
             guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
                 throw SwiftDataError.unsupportedPredicate("Codable collection count received malformed JSON data")
@@ -360,44 +416,44 @@ package enum RuntimePredicateEvaluator {
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
             return lhsValue == .null
-                ? try evaluateValue(rhs, values: values, relationshipValues: relationshipValues) : lhsValue
+                ? try evaluateValue(rhs, context: context) : lhsValue
         case let .arithmetic(op, lhs, rhs):
             return try evaluateArithmetic(
-                op, lhs: lhs, rhs: rhs, values: values, relationshipValues: relationshipValues)
+                op, lhs: lhs, rhs: rhs, context: context)
         case let .conditional(test, trueBranch, falseBranch):
-            switch try evaluateTruth(test, values: values, relationshipValues: relationshipValues) {
-            case .yes: return try evaluateValue(trueBranch, values: values, relationshipValues: relationshipValues)
+            switch try evaluateTruth(test, context: context) {
+            case .yes: return try evaluateValue(trueBranch, context: context)
             case .no, .unknown:
-                return try evaluateValue(falseBranch, values: values, relationshipValues: relationshipValues)
+                return try evaluateValue(falseBranch, context: context)
             }
         case let .localizedStandardContains(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
+            let rhsValue = try evaluateValue(rhs, context: context)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
                 if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("localizedStandardContains requires string operands")
             }
             return .int(OSDStringMatch.localizedStandardContains(haystack, needle) ? 1 : 0)
         case let .stringContains(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
+            let rhsValue = try evaluateValue(rhs, context: context)
             guard case let .text(haystack) = lhsValue, case let .text(needle) = rhsValue else {
                 if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("String contains requires string operands")
             }
             return .int(OSDStringMatch.contains(haystack, needle) ? 1 : 0)
         case let .stringStartsWith(lhs, rhs):
-            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
-            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            let lhsValue = try evaluateValue(lhs, context: context)
+            let rhsValue = try evaluateValue(rhs, context: context)
             guard case let .text(value) = lhsValue, case let .text(prefix) = rhsValue else {
                 if lhsValue == .null || rhsValue == .null { return .null }
                 throw SwiftDataError.unsupportedPredicate("String prefix requires string operands")
             }
             return .int(OSDStringMatch.startsWith(value, prefix) ? 1 : 0)
         case .comparison, .decimalComparison, .conjunction, .disjunction, .negation, .isNull, .relationshipContains:
-            switch try evaluateTruth(plan, values: values, relationshipValues: relationshipValues) {
+            switch try evaluateTruth(plan, context: context) {
             case .yes: return .int(1)
             case .no: return .int(0)
             case .unknown: return .null

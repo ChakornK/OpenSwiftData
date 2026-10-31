@@ -265,6 +265,37 @@ final class NestedInverseLeafFixture {
 }
 
 @Model
+final class NestedToManyRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var middle: NestedToManyMiddleFixture?
+
+    init(name: String, middle: NestedToManyMiddleFixture?) {
+        self.name = name
+        self.middle = middle
+    }
+}
+
+@Model
+final class NestedToManyMiddleFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [NestedToManyItemFixture]
+
+    init(name: String, items: [NestedToManyItemFixture]) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class NestedToManyItemFixture {
+    var title: String
+
+    init(title: String) {
+        self.title = title
+    }
+}
+
+@Model
 final class ToManyHierarchyOwnerFixture {
     @Relationship(inverse: nil) var targets: [ToManyHierarchyTargetChildFixture]
     init(targets: [ToManyHierarchyTargetChildFixture]) { self.targets = targets }
@@ -2058,6 +2089,54 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["root"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [root.persistentModelID])
+    }
+
+    @MainActor
+    func testPredicateTraversesToManyCollectionThroughToOne() throws {
+        let container = try ModelContainer(
+            for: NestedToManyRootFixture.self,
+            NestedToManyMiddleFixture.self,
+            NestedToManyItemFixture.self,
+            configurations: .sqliteMemory("nested-to-many-through-to-one"))
+        let context = container.mainContext
+        let selectedItem = NestedToManyItemFixture(title: "selected")
+        let otherItem = NestedToManyItemFixture(title: "other")
+        let matchingMiddle = NestedToManyMiddleFixture(name: "matching-middle", items: [selectedItem])
+        let otherMiddle = NestedToManyMiddleFixture(name: "other-middle", items: [otherItem])
+        context.insert(selectedItem)
+        context.insert(otherItem)
+        context.insert(matchingMiddle)
+        context.insert(otherMiddle)
+        let matchingRoot = NestedToManyRootFixture(name: "matching-root", middle: matchingMiddle)
+        let otherRoot = NestedToManyRootFixture(name: "other-root", middle: otherMiddle)
+        let nilRoot = NestedToManyRootFixture(name: "nil-root", middle: nil)
+        context.insert(matchingRoot)
+        context.insert(otherRoot)
+        context.insert(nilRoot)
+        try context.save()
+
+        let selectedTitle = "selected"
+        let descriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { $0.items.contains(where: { $0.title == selectedTitle }) } ?? false
+            },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["matching-root"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let pendingItem = NestedToManyItemFixture(title: "pending")
+        context.insert(pendingItem)
+        otherMiddle.items.append(pendingItem)
+        let pendingTitle = "pending"
+        let pendingDescriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { $0.items.contains(where: { $0.title == pendingTitle }) } ?? false
+            })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["other-root"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [otherRoot.persistentModelID])
     }
 
     @MainActor

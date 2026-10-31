@@ -202,12 +202,12 @@ package enum PredicateIRBuilder {
                     try field("element", from: fields, attributeTypes: attributeTypes))
             case "OSDSequenceContainsWhere":
                 guard case let .keyPath(path) = try field("sequence", from: fields, attributeTypes: attributeTypes),
-                    path.count == 1,
-                    let relationship = path.first, !relationship.isEmpty
+                    !path.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires a direct relationship collection key path.")
+                        "SequenceContainsWhere requires a relationship collection key path.")
                 }
+                let relationship = path.joined(separator: ".")
                 return .relationshipContains(
                     relationship,
                     try elementPredicate(
@@ -296,7 +296,14 @@ package enum PredicateIRBuilder {
         case let .negation(value):
             return .negation(
                 try prefixRelationshipPath(value, relationships: relationships, attributeTypes: attributeTypes))
-        case .sequenceContains, .relationshipContains:
+        case let .relationshipContains(name, body):
+            let relationshipParts = name.split(separator: ".").map(String.init)
+            let fullName =
+                relationshipParts.starts(with: normalizedRelationships)
+                ? name
+                : (normalizedRelationships + relationshipParts).joined(separator: ".")
+            return .relationshipContains(fullName, body)
+        case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate("Nested relationship predicates are unsupported.")
         }
     }

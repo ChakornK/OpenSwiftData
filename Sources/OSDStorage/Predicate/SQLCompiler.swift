@@ -323,9 +323,29 @@ package enum SQLCompiler {
             return
                 "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .relationshipContains(name, body):
+            let path = name.split(separator: ".").map(String.init)
+            guard let collectionName = path.last else {
+                throw SwiftDataError.unsupportedPredicate("SequenceContainsWhere has an empty collection path.")
+            }
+            let ownerPath = Array(path.dropLast())
+            var collectionOwnerEntityName = entity
+            for hop in ownerPath {
+                guard
+                    let ownerRelationship = relationships.first(where: {
+                        $0.ownerEntityName == collectionOwnerEntityName && $0.propertyName == hop
+                    }),
+                    !ownerRelationship.isToMany,
+                    !ownerRelationship.queriesInverseToOne
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Nested collection predicates require owning to-one relationships before the collection.")
+                }
+                collectionOwnerEntityName = ownerRelationship.destinationEntityName
+            }
             guard
                 let relationship = relationships.first(where: {
-                    $0.ownerEntityName == entity && $0.propertyName == name && $0.isToMany
+                    $0.ownerEntityName == collectionOwnerEntityName
+                        && $0.propertyName == collectionName && $0.isToMany
                 }),
                 Self.validIdentifier(relationship.destinationRootEntityName),
                 !relationship.destinationEntityIDs.isEmpty
@@ -333,6 +353,12 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate(
                     "SequenceContainsWhere requires supported to-many relationship storage.")
             }
+            let ownerPrimaryKeySQL =
+                ownerPath.isEmpty
+                ? "\(tableAlias).Z_PK"
+                : try render(
+                    .keyPath(ownerPath), arguments: &arguments, entity: entity,
+                    relationships: relationships, tableAlias: tableAlias)
             let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
                 .joined(separator: ", ")
             arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
@@ -344,7 +370,7 @@ package enum SQLCompiler {
                     throw SwiftDataError.unsupportedPredicate("Invalid inverse relationship foreign-key column")
                 }
                 return "EXISTS (SELECT 1 FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
-                    + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(tableAlias).Z_PK "
+                    + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
                     + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
             }
             guard let joinTable = relationship.joinTableName, Self.validIdentifier(joinTable),
@@ -357,7 +383,7 @@ package enum SQLCompiler {
             return "EXISTS (SELECT 1 FROM \(joinTable.uppercased()) AS j "
                 + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
                 + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
-                + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(tableAlias).Z_PK "
+                + "WHERE j.\(relationship.ownerJoinColumnName.uppercased()) = \(ownerPrimaryKeySQL) "
                 + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
         case .sequenceContains:
             throw SwiftDataError.unsupportedPredicate(

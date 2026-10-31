@@ -163,16 +163,41 @@ package enum PredicateRuntimeTreeBuilder {
                 let sequenceNode = try visit(
                     sequence, path: path + ["sequence"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
-                guard case let .property(sequenceProperty) = sequenceNode,
-                    let relationship = activeEntity.relationships.first(where: {
-                        $0.name == sequenceProperty.name && $0.isToMany
+                guard case let .property(sequenceProperty) = sequenceNode else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContainsWhere requires a relationship collection key path.")
+                }
+                let collectionParts = sequenceProperty.name.split(separator: ".").map(String.init)
+                guard let collectionName = collectionParts.last else {
+                    throw SwiftDataError.unsupportedPredicate("SequenceContainsWhere has an empty collection path.")
+                }
+                let activePrefix = activeRelationshipName?.split(separator: ".").map(String.init) ?? []
+                let ownerParts = Array(collectionParts.dropLast())
+                let localOwnerParts =
+                    ownerParts.starts(with: activePrefix)
+                    ? Array(ownerParts.dropFirst(activePrefix.count)) : ownerParts
+                let collectionOwner: (entity: Schema.Entity, modelType: any PersistentModel.Type)
+                if localOwnerParts.isEmpty {
+                    collectionOwner = (activeEntity, activeModelType)
+                } else if let traversal = try relationshipTraversal(
+                    .property(RuntimePropertyReference(name: localOwnerParts.joined(separator: "."))),
+                    from: activeEntity)
+                {
+                    collectionOwner = (traversal.entity, traversal.modelType)
+                } else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContainsWhere requires owning to-one relationships before the collection.")
+                }
+                guard
+                    let relationship = collectionOwner.entity.relationships.first(where: {
+                        $0.name == collectionName && $0.isToMany
                     }),
                     supportsCollectionPredicate(relationship, schema: schema),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContainsWhere requires a direct no-inverse to-many relationship.")
+                        "SequenceContainsWhere requires a supported to-many relationship.")
                 }
                 let previousModelType = activeModelType
                 let previousEntity = activeEntity

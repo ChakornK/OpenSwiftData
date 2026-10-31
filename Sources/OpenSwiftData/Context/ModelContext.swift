@@ -1918,6 +1918,23 @@ public final class ModelContext {
                         attributeNames.insert(scalarPath)
                         attributeTypes[scalarPath] = attribute.type
                     }
+                    for collection in destination.relationships where collection.isToMany {
+                        guard
+                            relationshipPaths.contains(where: {
+                                $0.ownerEntityName == destination.name && $0.propertyName == collection.name
+                            }),
+                            let collectionDestination = schema.entity(forName: collection.destination)
+                        else { continue }
+                        let collectionPath = "\(relationshipPath).\(collection.name)"
+                        attributeNames.insert(collectionPath)
+                        attributeTypes[collectionPath] = "OSDRelationship"
+                        for attribute in collectionDestination.attributes where !attribute.options.contains(.flattened)
+                        {
+                            let elementPath = "\(collectionPath)[].\(attribute.name)"
+                            attributeNames.insert(elementPath)
+                            attributeTypes[elementPath] = attribute.type
+                        }
+                    }
                     guard !visited.contains(destination.name) else { continue }
                     addRelationshipPaths(
                         ownerEntity: destination,
@@ -2039,6 +2056,51 @@ public final class ModelContext {
         var evaluatedValues = values
         var relationshipValues: [String: [[String: RuntimeValue]]] = [:]
         for (name, properties) in relationshipProperties {
+            let relationshipPath = name.split(separator: ".").map(String.init)
+            if relationshipPath.count > 1 {
+                let ownerPath = relationshipPath.dropLast()
+                var relationshipOwner: any PersistentModel = model
+                var ownerIsMissing = false
+                for ownerProperty in ownerPath {
+                    guard
+                        let relationship = containerStorage?.relationshipAdapterTable[
+                            ObjectIdentifier(type(of: relationshipOwner))
+                        ]?.first(where: { $0.name == ownerProperty && !$0.isToMany }),
+                        relationship.metadata != nil,
+                        let schema = containerStorage?.schema,
+                        schema.relationshipStorageMapping(
+                            modelEntityName: modelEntityName(of: relationshipOwner) ?? "",
+                            relationshipName: ownerProperty) != nil,
+                        let endpoint = relationship.read(relationshipOwner)?.first
+                    else {
+                        ownerIsMissing = true
+                        break
+                    }
+                    relationshipOwner = endpoint
+                }
+                if ownerIsMissing {
+                    relationshipValues[name] = []
+                    continue
+                }
+                let collectionName = relationshipPath[relationshipPath.count - 1]
+                guard
+                    let collectionAdapter = containerStorage?.relationshipAdapterTable[
+                        ObjectIdentifier(type(of: relationshipOwner))
+                    ]?.first(where: { $0.name == collectionName && $0.isToMany })
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Pending nested collection relationship '\(name)' has no typed adapter.")
+                }
+                guard collectionAdapter.metadata?.inverse == nil else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Pending nested collection predicates with inverse storage are unsupported.")
+                }
+                let endpoints = collectionAdapter.read(relationshipOwner) ?? []
+                relationshipValues[name] = try endpoints.map { endpoint in
+                    try runtimeValues(for: endpoint, selecting: properties)
+                }
+                continue
+            }
             guard
                 let adapter = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
                     .first(where: { $0.name == name })

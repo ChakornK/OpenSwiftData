@@ -207,9 +207,11 @@ final class CodableStringCollectionFixture {
 @Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
+    @Attribute(.codable) var optionalTags: [String]?
 
-    init(tags: [String]) {
+    init(tags: [String], optionalTags: [String]? = nil) {
         self.tags = tags
+        self.optionalTags = optionalTags
     }
 }
 
@@ -2650,11 +2652,18 @@ final class PersistentModelTests: XCTestCase {
             explicitContainer.schema.entity(forName: "ExplicitCodableStringCollectionFixture")?.attributes
                 .first(where: { $0.name == "tags" }))
         XCTAssertEqual(inferredAttribute, explicitAttribute)
+        let inferredOptionalAttribute = try XCTUnwrap(
+            inferredContainer.schema.entity(forName: "CodableStringCollectionFixture")?.attributes
+                .first(where: { $0.name == "optionalTags" }))
+        let explicitOptionalAttribute = try XCTUnwrap(
+            explicitContainer.schema.entity(forName: "ExplicitCodableStringCollectionFixture")?.attributes
+                .first(where: { $0.name == "optionalTags" }))
+        XCTAssertEqual(inferredOptionalAttribute, explicitOptionalAttribute)
 
         let inferredContext = inferredContainer.mainContext
         let explicitContext = explicitContainer.mainContext
         let inferred = CodableStringCollectionFixture(name: "inferred", tags: ["shared"])
-        let explicit = ExplicitCodableStringCollectionFixture(tags: ["shared"])
+        let explicit = ExplicitCodableStringCollectionFixture(tags: ["shared"], optionalTags: nil)
         inferredContext.insert(inferred)
         explicitContext.insert(explicit)
         try inferredContext.save()

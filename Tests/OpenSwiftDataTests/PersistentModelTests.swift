@@ -236,6 +236,15 @@ final class OptionalIntegerSetFixture {
 }
 
 @Model
+final class UInt64CollectionFixture {
+    @Attribute(.codable) var values: [UInt64]
+
+    init(values: [UInt64]) {
+        self.values = values
+    }
+}
+
+@Model
 final class OptionalCodableStringCollectionFixture {
     var name: String
     @Attribute(.codable) var tags: [String]?
@@ -2752,6 +2761,59 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.tags.allSatisfy { $0 == expected } })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching", "mixed", "empty"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
+    func testPredicateAllSatisfyIntegerComparisonOnCodableCollection() throws {
+        let container = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("codable-integer-all-satisfy-comparison"))
+        let context = container.mainContext
+        let qualifying = CodableStringCollectionFixture(name: "qualifying", tags: [], numbers: [4, 9])
+        let violating = CodableStringCollectionFixture(name: "violating", tags: [], numbers: [3, 9])
+        let empty = CodableStringCollectionFixture(name: "empty", tags: [], numbers: [])
+        context.insert(qualifying)
+        context.insert(violating)
+        context.insert(empty)
+        try context.save()
+
+        let lowerBound = 4
+        let descriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.numbers.allSatisfy { $0 >= lowerBound } },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["qualifying", "empty"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+
+        let reversedDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.numbers.allSatisfy { lowerBound <= $0 } },
+            includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(reversedDescriptor).map(\.name)), ["qualifying", "empty"])
+
+        violating.numbers = [4, 8]
+        let pendingDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.numbers.allSatisfy { $0 >= lowerBound } })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["qualifying", "violating", "empty"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
+    func testUInt64CollectionAllSatisfyOrderingFailsClosed() throws {
+        let container = try ModelContainer(
+            for: UInt64CollectionFixture.self,
+            configurations: .sqliteMemory("uint64-collection-all-satisfy-limit"))
+        let context = container.mainContext
+        let model = UInt64CollectionFixture(values: [UInt64.max])
+        context.insert(model)
+        try context.save()
+
+        let lowerBound = UInt64.max - 1
+        let descriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 > lowerBound } })
+        XCTAssertThrowsError(try context.fetch(descriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected the unsupported UInt64 ordering diagnostic, got \(error)")
+            }
+        }
     }
 
     @MainActor

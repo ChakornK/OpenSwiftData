@@ -172,6 +172,10 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     Self.jsonArrayMembership(values, all: true)
                 })
             database.add(
+                function: DatabaseFunction("osd_json_array_all_compare", argumentCount: 4, pure: true) { values in
+                    Self.jsonArrayAllCompare(values)
+                })
+            database.add(
                 function: DatabaseFunction("osd_json_array_is_empty", argumentCount: 1, pure: true) { values in
                     guard values.count == 1, let data = Data.fromDatabaseValue(values[0]),
                         let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
@@ -264,6 +268,32 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                 return Int64(number.stringValue) == needle
             }
             return (all ? matches.allSatisfy { $0 } : matches.contains(true)) ? 1 : 0
+        default:
+            return nil
+        }
+    }
+
+    private static func jsonArrayAllCompare(_ values: [DatabaseValue]) -> Int? {
+        guard values.count == 4,
+            let data = Data.fromDatabaseValue(values[0]),
+            let elementType = String.fromDatabaseValue(values[2]),
+            let operation = String.fromDatabaseValue(values[3])
+        else { return nil }
+        func matches(_ lhs: Int64, _ rhs: Int64) -> Bool {
+            switch operation {
+            case "lessThan": lhs < rhs
+            case "lessThanOrEqual": lhs <= rhs
+            case "greaterThan": lhs > rhs
+            case "greaterThanOrEqual": lhs >= rhs
+            default: false
+            }
+        }
+        switch elementType {
+        case "Int", "Int8", "Int16", "Int32", "Int64":
+            guard let bound = Int64.fromDatabaseValue(values[1]),
+                let elements = try? JSONDecoder().decode([Int64].self, from: data)
+            else { return nil }
+            return elements.allSatisfy { matches($0, bound) } ? 1 : 0
         default:
             return nil
         }

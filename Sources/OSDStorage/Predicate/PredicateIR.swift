@@ -15,6 +15,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case sequenceContains(PredicateIR, PredicateIR)
     case collectionContains(String, String, PredicateIR)
     case collectionAllEqual(String, String, PredicateIR)
+    case collectionAllCompare(String, String, ComparisonOperator, PredicateIR)
     case codableCollectionIsEmpty(String)
     case codableCollectionCount(String)
     case relationshipContains(String, PredicateIR)
@@ -280,6 +281,27 @@ package enum PredicateIRBuilder {
                         "Codable collection allSatisfy requires a direct scalar collection and capture.")
                 }
                 return .collectionAllEqual(path[0], elementType, .value(value))
+            case "OSDScalarCollectionAllLessThan", "OSDScalarCollectionAllLessThanOrEqual",
+                "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
+                guard
+                    case let .keyPath(path) = try field(
+                        "sequence", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                    let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
+                    ["Int", "Int8", "Int16", "Int32", "Int64"]
+                        .contains(elementType),
+                    case let .value(value) = try field("value", from: fields, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable collection ordering allSatisfy requires an integer collection and capture.")
+                }
+                let operation: PredicateIR.ComparisonOperator
+                switch name {
+                case "OSDScalarCollectionAllLessThan": operation = .lessThan
+                case "OSDScalarCollectionAllLessThanOrEqual": operation = .lessThanOrEqual
+                case "OSDScalarCollectionAllGreaterThan": operation = .greaterThan
+                default: operation = .greaterThanOrEqual
+                }
+                return .collectionAllCompare(path[0], elementType, operation, .value(value))
             case "OSDCodableCollectionIsEmpty":
                 guard
                     case let .keyPath(path) = try field(
@@ -410,6 +432,12 @@ package enum PredicateIRBuilder {
                     "Scalar collection allSatisfy inside relationship predicates is unsupported.")
             }
             return .collectionAllEqual(name, elementType, element)
+        case let .collectionAllCompare(name, elementType, operation, element):
+            guard relationships.isEmpty else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Scalar collection ordering allSatisfy inside relationship predicates is unsupported.")
+            }
+            return .collectionAllCompare(name, elementType, operation, element)
         case let .codableCollectionIsEmpty(name):
             return .codableCollectionIsEmpty(name)
         case let .codableCollectionCount(name):
@@ -490,6 +518,8 @@ package enum PredicateIRBuilder {
         case let .collectionContains(_, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case let .collectionAllEqual(_, _, element):
+            return referencesDecimal(element, attributeTypes: attributeTypes)
+        case let .collectionAllCompare(_, _, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case .codableCollectionIsEmpty:
             return false
@@ -657,6 +687,9 @@ package enum PredicateIRBuilder {
         case "OSDSequenceContainsWhere": ["sequence", "test"]
         case "OSDSequenceAllSatisfy": ["sequence", "test"]
         case "OSDScalarCollectionAllEqual": ["sequence", "value"]
+        case "OSDScalarCollectionAllLessThan", "OSDScalarCollectionAllLessThanOrEqual",
+            "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
+            ["sequence", "value"]
         case "OSDSequenceIsEmpty": ["sequence"]
         case "OSDSequenceCount": ["sequence"]
         case "OSDCodableCollectionIsEmpty": ["collection"]

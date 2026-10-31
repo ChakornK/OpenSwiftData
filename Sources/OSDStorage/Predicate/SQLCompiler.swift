@@ -77,6 +77,9 @@ package enum PredicatePlanBuilder {
         case let .collectionAllEqual(name, elementType, element):
             guard let element = build(element) else { return nil }
             return .collectionAllEqual(name, elementType, element)
+        case let .collectionAllCompare(name, elementType, operation, element):
+            guard let element = build(element) else { return nil }
+            return .collectionAllCompare(name, elementType, runtimeOperator(operation), element)
         case let .codableCollectionIsEmpty(name):
             return .codableCollectionIsEmpty(name)
         case let .codableCollectionCount(name):
@@ -373,6 +376,18 @@ package enum SQLCompiler {
                 element, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
             arguments.append(.text(elementType))
             return "osd_json_array_all_equal(\(tableAlias).Z\(name.uppercased()), \(elementSQL), ?)"
+        case let .collectionAllCompare(name, elementType, operation, element):
+            guard Self.validIdentifier(name),
+                ["Int", "Int8", "Int16", "Int32", "Int64"]
+                    .contains(elementType)
+            else {
+                throw SwiftDataError.unsupportedPredicate("Collection allSatisfy ordering requires integer elements")
+            }
+            let elementSQL = try render(
+                element, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+            arguments.append(.text(elementType))
+            arguments.append(.text(String(describing: operation)))
+            return "osd_json_array_all_compare(\(tableAlias).Z\(name.uppercased()), \(elementSQL), ?, ?)"
         case let .codableCollectionIsEmpty(name):
             guard Self.validIdentifier(name) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
@@ -579,6 +594,8 @@ package enum SQLCompiler {
             "collectionContains(\(name),\(elementType),\(structure(element)))"
         case let .collectionAllEqual(name, elementType, element):
             "collectionAllEqual(\(name),\(elementType),\(structure(element)))"
+        case let .collectionAllCompare(name, elementType, operation, element):
+            "collectionAllCompare(\(name),\(elementType),\(operation),\(structure(element)))"
         case let .codableCollectionIsEmpty(name): "codableCollectionIsEmpty(\(name))"
         case let .codableCollectionCount(name): "codableCollectionCount(\(name))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"

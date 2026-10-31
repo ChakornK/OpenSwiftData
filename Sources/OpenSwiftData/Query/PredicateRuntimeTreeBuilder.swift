@@ -184,11 +184,8 @@ package enum PredicateRuntimeTreeBuilder {
                     codableCollectionName(sequenceNode, entity: activeEntity) == collectionName
                 {
                     let testTypeName = String(reflecting: type(of: test))
-                    guard let comparison = PredicateNodeMetadata.entry(for: testTypeName),
-                        comparison.name == "Equal" || comparison.name == "NotEqual"
-                    else {
-                        throw SwiftDataError.unsupportedPredicate(
-                            "Codable collection allSatisfy supports direct equality comparisons only.")
+                    guard let comparison = PredicateNodeMetadata.entry(for: testTypeName) else {
+                        throw SwiftDataError.unsupportedPredicate("Unsupported Codable collection allSatisfy body.")
                     }
                     let testFields = Dictionary(
                         uniqueKeysWithValues: Mirror(reflecting: test).children.compactMap { child in
@@ -198,27 +195,59 @@ package enum PredicateRuntimeTreeBuilder {
                         throw SwiftDataError.unsupportedPredicate("Malformed scalar collection allSatisfy body.")
                     }
                     let value: Any
+                    let elementIsLeft: Bool
                     if variableIdentifier(lhs) == sequenceVariableID, variableIdentifier(rhs) == nil {
                         value = rhs
+                        elementIsLeft = true
                     } else if variableIdentifier(rhs) == sequenceVariableID, variableIdentifier(lhs) == nil {
                         value = lhs
+                        elementIsLeft = false
                     } else {
                         throw SwiftDataError.unsupportedPredicate(
                             "Codable collection allSatisfy must compare its element to one captured scalar.")
                     }
-                    let valuePath = comparison.name == "Equal" ? path + ["value"] : path + ["wrapped", "element"]
+                    let operationName: String
+                    if comparison.name == "Equal" || comparison.name == "NotEqual" {
+                        operationName = comparison.name
+                    } else if comparison.name == "Comparison", let operatorNode = testFields["op"] {
+                        let reflectedOperator =
+                            String(describing: operatorNode).split(separator: ".").last.map(String.init) ?? ""
+                        guard
+                            ["lessThan", "lessThanOrEqual", "greaterThan", "greaterThanOrEqual"]
+                                .contains(reflectedOperator),
+                            let elementType = activeEntity.attributes.first(where: { $0.name == collectionName })
+                                .map({ Self.codableScalarCollectionElementType($0.type) }) ?? nil,
+                            ["Int", "Int8", "Int16", "Int32", "Int64"]
+                                .contains(elementType)
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Codable collection allSatisfy ordering supports integer elements only.")
+                        }
+                        operationName = elementIsLeft ? reflectedOperator : Self.reversedComparison(reflectedOperator)
+                    } else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Codable collection allSatisfy supports direct scalar comparisons only.")
+                    }
+                    let isNotEqual = operationName == "NotEqual"
+                    let valuePath = isNotEqual ? path + ["wrapped", "element"] : path + ["value"]
                     let valueNode = try visit(
                         value, path: valuePath, bindings: bindings,
                         capturePathRewrites: capturePathRewrites)
-                    if comparison.name == "Equal" {
+                    if operationName == "Equal" {
                         return .expression(
                             name: "OSDScalarCollectionAllEqual",
                             children: [("sequence", sequenceNode), ("value", valueNode)])
                     }
-                    let contains = RuntimePredicateNode.expression(
-                        name: "SequenceContains",
-                        children: [("sequence", sequenceNode), ("element", valueNode)])
-                    return .expression(name: "Negation", children: [("wrapped", contains)])
+                    if isNotEqual {
+                        let contains = RuntimePredicateNode.expression(
+                            name: "SequenceContains",
+                            children: [("sequence", sequenceNode), ("element", valueNode)])
+                        return .expression(name: "Negation", children: [("wrapped", contains)])
+                    }
+                    return .expression(
+                        name:
+                            "OSDScalarCollectionAll\(operationName.prefix(1).uppercased())\(operationName.dropFirst())",
+                        children: [("sequence", sequenceNode), ("value", valueNode)])
                 }
                 let collectionOwner: (entity: Schema.Entity, modelType: any PersistentModel.Type)
                 if localOwnerParts.isEmpty {
@@ -583,6 +612,16 @@ package enum PredicateRuntimeTreeBuilder {
         let rootName = String(reflecting: computedRoot)
         if valueName == rootName { return true }
         return valueName == "Swift.Optional<\(rootName)>"
+    }
+
+    private static func reversedComparison(_ operation: String) -> String {
+        switch operation {
+        case "lessThan": "greaterThan"
+        case "lessThanOrEqual": "greaterThanOrEqual"
+        case "greaterThan": "lessThan"
+        case "greaterThanOrEqual": "lessThanOrEqual"
+        default: operation
+        }
     }
 
     private static func supportsToOnePredicate(

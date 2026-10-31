@@ -85,6 +85,12 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(22), .int(11), .text("match")])
     }
 
+    func testUnsignedCollectionOrderingFailsClosedInSQLCompiler() {
+        let ir = PredicateIR.collectionAllCompare(
+            "values", "UInt64", .greaterThan, .value(.int(1)))
+        XCTAssertThrowsError(try SQLCompiler.compile(ir, entity: "Owner"))
+    }
+
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Equal",

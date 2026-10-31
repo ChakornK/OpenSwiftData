@@ -27,6 +27,8 @@ package enum RuntimePredicateEvaluator {
             Set([name]).union(referencedProperties(in: element))
         case let .collectionAllEqual(name, _, element):
             Set([name]).union(referencedProperties(in: element))
+        case let .collectionAllCompare(name, _, _, element):
+            Set([name]).union(referencedProperties(in: element))
         case let .codableCollectionIsEmpty(name):
             [name]
         case let .codableCollectionCount(name):
@@ -54,6 +56,8 @@ package enum RuntimePredicateEvaluator {
         case let .collectionContains(_, _, element):
             return relationshipProperties(in: element)
         case let .collectionAllEqual(_, _, element):
+            return relationshipProperties(in: element)
+        case let .collectionAllCompare(_, _, _, element):
             return relationshipProperties(in: element)
         case .codableCollectionIsEmpty:
             return [:]
@@ -156,7 +160,7 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, values: endpointValues, relationshipValues: [:]) == .yes { return .yes }
             }
             return .no
-        case .collectionContains, .collectionAllEqual, .codableCollectionIsEmpty:
+        case .collectionContains, .collectionAllEqual, .collectionAllCompare, .codableCollectionIsEmpty:
             let value = try evaluateValue(plan, values: values, relationshipValues: relationshipValues)
             guard value != .null else { return .unknown }
             guard case let .int(integer) = value else {
@@ -313,6 +317,32 @@ package enum RuntimePredicateEvaluator {
                     "Pending scalar collection allSatisfy received an incompatible element value")
             }
             return .int(allMatch ? 1 : 0)
+        case let .collectionAllCompare(name, elementType, operation, element):
+            let collectionValue = try evaluateValue(
+                .property(name), values: values, relationshipValues: relationshipValues)
+            guard case let .blob(bytes) = collectionValue else { return .null }
+            let boundValue = try evaluateValue(element, values: values, relationshipValues: relationshipValues)
+            func matches<T: Comparable>(_ value: T, _ bound: T) -> Bool {
+                switch operation {
+                case .lessThan: value < bound
+                case .lessThanOrEqual: value <= bound
+                case .greaterThan: value > bound
+                case .greaterThanOrEqual: value >= bound
+                case .equal: value == bound
+                case .notEqual: value != bound
+                }
+            }
+            switch (elementType, boundValue) {
+            case ("Int", let .int(bound)), ("Int8", let .int(bound)), ("Int16", let .int(bound)),
+                ("Int32", let .int(bound)), ("Int64", let .int(bound)):
+                guard let values = try? JSONDecoder().decode([Int64].self, from: Data(bytes)) else {
+                    throw SwiftDataError.unsupportedPredicate("Codable integer collection contains malformed data")
+                }
+                return .int(values.allSatisfy { matches($0, bound) } ? 1 : 0)
+            default:
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable collection allSatisfy ordering requires a matching integer capture")
+            }
         case let .codableCollectionIsEmpty(name):
             let value = try evaluateValue(.property(name), values: values, relationshipValues: relationshipValues)
             guard case let .blob(bytes) = value else { return .null }

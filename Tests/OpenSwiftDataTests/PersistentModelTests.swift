@@ -1612,6 +1612,16 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), storedMatches.map(\.persistentModelID))
 
+        let increment = 2
+        let limit = 10
+        let arithmeticDescriptor = FetchDescriptor<OptionalToOneIntegerOwnerFixture>(
+            predicate: #Predicate { owner in (owner.target?.rank ?? 0) + increment > limit },
+            includePendingChanges: false)
+        let arithmeticMatches = try context.fetch(arithmeticDescriptor)
+        XCTAssertEqual(arithmeticMatches.map(\.name), ["high"])
+        XCTAssertEqual(try context.fetchCount(arithmeticDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(arithmeticDescriptor), arithmeticMatches.map(\.persistentModelID))
+
         highTarget.rank = 1
         XCTAssertTrue(highTarget.hasChanges)
         XCTAssertTrue(context.hasChanges)
@@ -1620,6 +1630,16 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 0)
         XCTAssertTrue(try context.fetchIdentifiers(pendingDescriptor).isEmpty)
+        let pendingArithmetic = FetchDescriptor<OptionalToOneIntegerOwnerFixture>(
+            predicate: #Predicate { owner in (owner.target?.rank ?? 0) + increment > limit })
+        XCTAssertTrue(try context.fetch(pendingArithmetic).isEmpty)
+        XCTAssertEqual(try context.fetchCount(pendingArithmetic), 0)
+        XCTAssertTrue(try context.fetchIdentifiers(pendingArithmetic).isEmpty)
+
+        let zero = 0
+        let pendingNilDefault = FetchDescriptor<OptionalToOneIntegerOwnerFixture>(
+            predicate: #Predicate { owner in (owner.target?.rank ?? 0) == zero })
+        XCTAssertEqual(try context.fetch(pendingNilDefault).map(\.name), ["nil"])
     }
 
     @MainActor

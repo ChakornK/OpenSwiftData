@@ -488,6 +488,56 @@ package enum LightweightMigration {
             return root.name
         }
         let newEntities = destination.entities.filter { sourceByName[$0.name] == nil }
+        func isAncestor(_ ancestorName: String, of entityName: String) -> Bool {
+            var current = destination.entity(forName: entityName)
+            var visited = Set<String>()
+            while let entity = current, visited.insert(entity.name).inserted {
+                if entity.name == ancestorName { return true }
+                current = entity.superentityName.flatMap(destination.entity(forName:))
+            }
+            return false
+        }
+        func sameRelationshipExceptInverse(_ lhs: Schema.Relationship, _ rhs: Schema.Relationship) -> Bool {
+            lhs.name == rhs.name
+                && lhs.destination == rhs.destination
+                && lhs.isToMany == rhs.isToMany
+                && lhs.isOptional == rhs.isOptional
+                && lhs.deleteRule == rhs.deleteRule
+                && lhs.minimumModelCount == rhs.minimumModelCount
+                && lhs.maximumModelCount == rhs.maximumModelCount
+                && lhs.originalName == rhs.originalName
+                && lhs.declaringEntityName == rhs.declaringEntityName
+        }
+        func permitsMetadataOnlyInverseAttachment(
+            newEntity: Schema.Entity,
+            inverseRelationship: Schema.Relationship,
+            ownerEntity: Schema.Entity,
+            sourceOwnerRelationship: Schema.Relationship,
+            destinationOwnerRelationship: Schema.Relationship
+        ) -> Bool {
+            guard inverseRelationship.isToMany,
+                inverseRelationship.isOptional,
+                inverseRelationship.inverse == sourceOwnerRelationship.name,
+                inverseRelationship.minimumModelCount == nil,
+                inverseRelationship.maximumModelCount == nil,
+                inverseRelationship.originalName == nil,
+                inverseRelationship.deleteRule == .nullify || inverseRelationship.deleteRule == .noAction,
+                inverseRelationship.destination == ownerEntity.name,
+                SchemaBuilder.isNonOwner(newEntity, inverseRelationship, schema: destination),
+                !sourceOwnerRelationship.isToMany,
+                sourceOwnerRelationship.inverse == nil,
+                sourceOwnerRelationship.isOptional,
+                sourceOwnerRelationship.destination == newEntity.superentityName
+                    || isAncestor(sourceOwnerRelationship.destination, of: newEntity.name),
+                sameRelationshipExceptInverse(sourceOwnerRelationship, destinationOwnerRelationship),
+                let sourceMapping = source.relationshipStorageMapping(
+                    modelEntityName: ownerEntity.name, relationshipName: sourceOwnerRelationship.name),
+                let destinationMapping = destination.relationshipStorageMapping(
+                    modelEntityName: ownerEntity.name, relationshipName: destinationOwnerRelationship.name),
+                sourceMapping == destinationMapping
+            else { return false }
+            return true
+        }
         for entity in newEntities {
             guard let parentName = entity.superentityName, sourceByName[parentName] != nil,
                 entity.indexes.isEmpty,
@@ -498,6 +548,25 @@ package enum LightweightMigration {
                 )
             }
             for relationship in entity.relationships {
+                if relationship.isToMany, relationship.inverse != nil {
+                    guard let ownerEntity = sourceByName[relationship.destination],
+                        let sourceOwnerRelationship = ownerEntity.relationships.first(where: {
+                            $0.name == relationship.inverse
+                        }),
+                        let destinationOwnerRelationship = destinationByName[ownerEntity.name]?.relationships
+                            .first(where: { $0.name == relationship.inverse }),
+                        permitsMetadataOnlyInverseAttachment(
+                            newEntity: entity,
+                            inverseRelationship: relationship,
+                            ownerEntity: ownerEntity,
+                            sourceOwnerRelationship: sourceOwnerRelationship,
+                            destinationOwnerRelationship: destinationOwnerRelationship)
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "New inverse relationships must attach to unchanged existing to-one storage.")
+                    }
+                    continue
+                }
                 guard relationship.inverse == nil,
                     relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
                     relationship.originalName == nil,
@@ -536,11 +605,37 @@ package enum LightweightMigration {
         for sourceEntity in source.entities {
             guard let destinationEntity = destinationByName[sourceEntity.name],
                 sourceEntity.superentityName == destinationEntity.superentityName,
-                sourceEntity.relationships == destinationEntity.relationships,
                 sourceEntity.indexes == destinationEntity.indexes
             else {
                 throw SwiftDataError.migrationUnsupported(
                     "Hierarchy migration cannot change topology, relationships, or constraints.")
+            }
+            let destinationRelationships = Dictionary(
+                uniqueKeysWithValues: destinationEntity.relationships.map { ($0.name, $0) })
+            guard sourceEntity.relationships.count == destinationEntity.relationships.count else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration cannot add or remove relationships on existing entities.")
+            }
+            for sourceRelationship in sourceEntity.relationships {
+                guard let destinationRelationship = destinationRelationships[sourceRelationship.name] else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration cannot rename relationships on existing entities.")
+                }
+                guard sourceRelationship != destinationRelationship else { continue }
+                let hasMetadataOnlyInverse = newEntities.contains { newEntity in
+                    newEntity.relationships.contains { inverseRelationship in
+                        permitsMetadataOnlyInverseAttachment(
+                            newEntity: newEntity,
+                            inverseRelationship: inverseRelationship,
+                            ownerEntity: sourceEntity,
+                            sourceOwnerRelationship: sourceRelationship,
+                            destinationOwnerRelationship: destinationRelationship)
+                    }
+                }
+                guard hasMetadataOnlyInverse else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration cannot change existing relationship storage metadata.")
+                }
             }
         }
 
@@ -653,6 +748,11 @@ package enum LightweightMigration {
         for entity in newEntities {
             for relationship in entity.relationships {
                 if relationship.isToMany {
+                    if relationship.inverse != nil,
+                        SchemaBuilder.isNonOwner(entity, relationship, schema: destination)
+                    {
+                        continue
+                    }
                     guard
                         let joinTable = SchemaBuilder.joinTableName(
                             for: entity, relationship: relationship, schema: destination)

@@ -1117,6 +1117,61 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyLeafInverseCannotReattachAnAlreadyInversedRelationship() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "TargetBase", isToMany: false, isOptional: true,
+                        inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "TargetBase",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "TargetBase", isToMany: false, isOptional: true,
+                        inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "TargetBase",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                ]),
+            Schema.Entity(
+                name: "TargetChild",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                ],
+                superentityName: "TargetBase"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let entityNames = try reopened.read {
+            try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        XCTAssertEqual(entityNames, [[.text("Owner")], [.text("TargetBase")]])
+        try reopened.close()
+    }
+
     func testHierarchyLeafRelationshipMigrationRejectsIndexNameCollisionBeforeWrites() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

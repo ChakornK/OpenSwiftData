@@ -127,6 +127,33 @@ final class InheritedToManyMigrationChildFixture: InheritanceMacroBaseFixture {
 }
 
 @Model
+final class InverseMigrationOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var target: InverseMigrationTargetBaseFixture?
+
+    init(name: String, target: InverseMigrationTargetBaseFixture?) {
+        self.name = name
+        self.target = target
+    }
+}
+
+@Model
+class InverseMigrationTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class InverseMigrationTargetChildFixture: InverseMigrationTargetBaseFixture {
+    @Relationship(inverse: \InverseMigrationOwnerFixture.target) var owners: [InverseMigrationOwnerFixture]
+
+    init(name: String, owners: [InverseMigrationOwnerFixture] = []) {
+        self.owners = owners
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritanceRelationshipBaseFixture {
     @Relationship(inverse: nil) var items: [InheritanceRelationshipItemFixture]
     init(items: [InheritanceRelationshipItemFixture]) { self.items = items }
@@ -4756,6 +4783,58 @@ final class PersistentModelTests: XCTestCase {
             joinTables?.contains {
                 $0 == [.text("Z_INHERITEDTOMANYMIGRATIONCHILDFIXTURE_ITEMS_INHERITEDTOMANYMIGRATIONITEMFIXTURE")]
             } == true)
+    }
+
+    @MainActor
+    func testAddingLeafInverseRelationshipPreservesExistingToOneStorage() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "leaf-inverse-relationship-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InverseMigrationOwnerFixture.self,
+            InverseMigrationTargetBaseFixture.self,
+            configurations: configuration)
+        let oldTarget = InverseMigrationTargetBaseFixture(name: "old target")
+        let oldOwner = InverseMigrationOwnerFixture(name: "old owner", target: oldTarget)
+        sourceContainer.mainContext.insert(oldTarget)
+        sourceContainer.mainContext.insert(oldOwner)
+        try sourceContainer.mainContext.save()
+        let oldIDs = sourceContainer.schema.entityIDsByName
+        let oldMapping = try XCTUnwrap(
+            sourceContainer.schema.relationshipStorageMapping(
+                modelEntityName: "InverseMigrationOwnerFixture", relationshipName: "target"))
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: InverseMigrationOwnerFixture.self,
+            InverseMigrationTargetBaseFixture.self,
+            InverseMigrationTargetChildFixture.self,
+            configurations: configuration)
+        let newMapping = try XCTUnwrap(
+            container.schema.relationshipStorageMapping(
+                modelEntityName: "InverseMigrationOwnerFixture", relationshipName: "target"))
+        XCTAssertEqual(oldMapping.storageColumnName, newMapping.storageColumnName)
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InverseMigrationOwnerFixture"],
+            oldIDs["InverseMigrationOwnerFixture"])
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InverseMigrationTargetBaseFixture"],
+            oldIDs["InverseMigrationTargetBaseFixture"])
+
+        let reader = container.makeContext()
+        let fetchedOldOwner = try XCTUnwrap(try reader.fetch(FetchDescriptor<InverseMigrationOwnerFixture>()).first)
+        XCTAssertEqual(fetchedOldOwner.target?.name, "old target")
+        let newTarget = InverseMigrationTargetChildFixture(name: "new target")
+        let newOwner = InverseMigrationOwnerFixture(name: "new owner", target: newTarget)
+        reader.insert(newTarget)
+        reader.insert(newOwner)
+        try reader.save()
+        let freshReader = container.makeContext()
+        let fetchedChild = try XCTUnwrap(
+            try freshReader.fetch(FetchDescriptor<InverseMigrationTargetChildFixture>()).first)
+        XCTAssertEqual(fetchedChild.owners.map(\.name), ["new owner"])
     }
 
     @MainActor

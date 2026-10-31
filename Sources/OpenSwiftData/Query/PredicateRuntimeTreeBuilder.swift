@@ -290,6 +290,29 @@ package enum PredicateRuntimeTreeBuilder {
                         ),
                     ])
             }
+            if name == "KeyPath",
+                let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
+                let keyPath = keyPathValue as? AnyKeyPath,
+                ObjectIdentifier(type(of: keyPath).valueType) == ObjectIdentifier(Bool.self),
+                let root = children.first(where: { $0.label == "root" })?.value
+            {
+                let rootNode = try visit(
+                    root, path: path + ["root"], bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+                if case let .property(reference) = rootNode,
+                    let collectionName = reference.name.split(separator: ".").last.map(String.init),
+                    let relationship = activeEntity.relationships.first(where: {
+                        $0.name == collectionName && $0.isToMany
+                    }),
+                    let schema,
+                    supportsCollectionPredicate(relationship, schema: schema),
+                    let metadata = activeModelType.schemaMetadata().first(where: { $0.name == collectionName })?
+                        .keypath,
+                    ObjectIdentifier(type(of: metadata).valueType) == ObjectIdentifier(type(of: keyPath).rootType)
+                {
+                    return .expression(name: "OSDSequenceIsEmpty", children: [("sequence", rootNode)])
+                }
+            }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath
             {
@@ -513,7 +536,8 @@ package enum PredicateRuntimeTreeBuilder {
         }
         if ObjectIdentifier(keyPathRootType) != ObjectIdentifier(expectedRootType) {
             throw SwiftDataError.unsupportedPredicate(
-                "Predicate key path root does not match its active model scope.")
+                "Predicate key path root '\(String(reflecting: keyPathRootType))' does not match active model scope "
+                    + "'\(String(reflecting: expectedRootType))' for '\(String(describing: keyPath))'.")
         }
         let pathParts = String(describing: keyPath).split(separator: ".").map(String.init)
         if pathParts.count == 2,

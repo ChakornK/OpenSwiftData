@@ -44,6 +44,7 @@ public enum PredicateNodeMetadata {
             Entry(name: "SequenceContains", requiredChildren: ["sequence", "element"]),
             Entry(name: "SequenceContainsWhere", requiredChildren: ["sequence", "test", "variable"]),
             Entry(name: "OSDSequenceContainsWhere", requiredChildren: ["sequence", "test"]),
+            Entry(name: "OSDSequenceIsEmpty", requiredChildren: ["sequence"]),
             Entry(name: "RangeExpressionContains", requiredChildren: ["range", "element"]),
             Entry(name: "ClosedRange", requiredChildren: ["lower", "upper"]),
             Entry(name: "Range", requiredChildren: ["lower", "upper"]),

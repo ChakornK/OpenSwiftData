@@ -213,6 +213,31 @@ package enum PredicateIRBuilder {
                     try elementPredicate(
                         field("test", from: fields, attributeTypes: attributeTypes), relationship: relationship,
                         attributeTypes: attributeTypes))
+            case "OSDSequenceIsEmpty":
+                guard
+                    case let .keyPath(path) = try field(
+                        "sequence", from: fields, attributeTypes: attributeTypes),
+                    !path.isEmpty
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Collection isEmpty requires a relationship path.")
+                }
+                let relationship = path.flatMap { $0.split(separator: ".").map(String.init) }
+                guard let collection = relationship.last else {
+                    throw SwiftDataError.unsupportedPredicate("Collection isEmpty requires a relationship path.")
+                }
+                guard attributeTypes[relationship.joined(separator: ".")] == "OSDToManyRelationship" else {
+                    throw SwiftDataError.unsupportedPredicate("Collection isEmpty requires a to-many relationship.")
+                }
+                let isEmpty = PredicateIR.negation(
+                    .relationshipContains(relationship.joined(separator: "."), .value(.int(1))))
+                let ownerPath = Array(relationship.dropLast())
+                guard !ownerPath.isEmpty else { return isEmpty }
+                guard !collection.isEmpty else {
+                    throw SwiftDataError.unsupportedPredicate("Collection isEmpty requires a relationship path.")
+                }
+                return .conjunction(
+                    .comparison(.notEqual, .keyPath(ownerPath), .value(.null)),
+                    isEmpty)
             default:
                 throw SwiftDataError.unsupportedPredicate(name)
             }
@@ -231,18 +256,13 @@ package enum PredicateIRBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Optional relationship predicates require a destination property path.")
             }
-            let relationshipPrefix = normalizedRelationships.joined(separator: ".") + "."
-            let normalizedPath: [String]
-            if path.count == 1, path[0].hasPrefix(relationshipPrefix) {
-                normalizedPath = String(path[0].dropFirst(relationshipPrefix.count))
-                    .split(separator: ".")
-                    .map(String.init)
-            } else {
-                normalizedPath = path.flatMap { $0.split(separator: ".").map(String.init) }
-            }
+            let expandedPath = path.flatMap { $0.split(separator: ".").map(String.init) }
+            let normalizedPath =
+                expandedPath.starts(with: normalizedRelationships)
+                ? Array(expandedPath.dropFirst(normalizedRelationships.count)) : expandedPath
             let fullPath = normalizedRelationships + normalizedPath
             let fullName = fullPath.joined(separator: ".")
-            if attributeTypes[fullName] == "OSDRelationship" {
+            if attributeTypes[fullName] == "OSDToOneRelationship" {
                 return .keyPath(fullPath)
             }
             guard isSupportedElementScalar(attributeTypes[fullName]) else {
@@ -512,6 +532,7 @@ package enum PredicateIRBuilder {
         case "SequenceStartsWith": ["base", "prefix"]
         case "SequenceContains": ["sequence", "element"]
         case "OSDSequenceContainsWhere": ["sequence", "test"]
+        case "OSDSequenceIsEmpty": ["sequence"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]
         case "NilLiteral": []

@@ -146,6 +146,15 @@ final class InferredOptionalSetOwnerFixture {
 }
 
 @Model
+final class InferredSetOwnerFixture {
+    var targets: Set<InferredOptionalCollectionTargetFixture>
+
+    init(targets: Set<InferredOptionalCollectionTargetFixture>) {
+        self.targets = targets
+    }
+}
+
+@Model
 final class InferredOptionalCollectionTargetFixture {
     var name: String
 
@@ -2061,6 +2070,30 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInferredSetRelationshipSupportsIsEmptyPredicate() throws {
+        let container = try ModelContainer(
+            for: InferredSetOwnerFixture.self,
+            InferredOptionalCollectionTargetFixture.self,
+            configurations: .sqliteMemory("inferred-set-is-empty"))
+        let context = container.mainContext
+        let item = InferredOptionalCollectionTargetFixture(name: "set-item")
+        let emptyOwner = InferredSetOwnerFixture(targets: [])
+        let populatedOwner = InferredSetOwnerFixture(targets: [item])
+        context.insert(item)
+        context.insert(emptyOwner)
+        context.insert(populatedOwner)
+        try context.save()
+
+        let descriptor = FetchDescriptor<InferredSetOwnerFixture>(
+            predicate: #Predicate { $0.targets.isEmpty },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.persistentModelID), [emptyOwner.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+    }
+
+    @MainActor
     func testPredicateTraversesNestedOwningToOneRelationships() throws {
         let container = try ModelContainer(
             for: NestedToOneRootFixture.self,
@@ -2330,6 +2363,61 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["other-root"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [otherRoot.persistentModelID])
+
+        let emptyMiddle = NestedToManyMiddleFixture(name: "empty-middle", items: [])
+        let emptyRoot = NestedToManyRootFixture(name: "empty-root", middle: emptyMiddle)
+        context.insert(emptyMiddle)
+        context.insert(emptyRoot)
+        try context.save()
+        let emptyDescriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate { $0.middle.flatMap { $0.items.isEmpty } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(emptyDescriptor).map(\.name), ["empty-root"])
+
+        let nilOwnerEmptyDescriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate { $0.middle.flatMap { $0.items.isEmpty } ?? false },
+            includePendingChanges: false)
+        XCTAssertFalse(try context.fetch(nilOwnerEmptyDescriptor).contains { $0 === nilRoot })
+
+        let pendingNestedItem = NestedToManyItemFixture(title: "nested-pending")
+        context.insert(pendingNestedItem)
+        emptyMiddle.items.append(pendingNestedItem)
+        let pendingEmptyDescriptor = FetchDescriptor<NestedToManyRootFixture>(
+            predicate: #Predicate { $0.middle.flatMap { $0.items.isEmpty } ?? false })
+        XCTAssertTrue(try context.fetch(pendingEmptyDescriptor).isEmpty)
+        XCTAssertEqual(try context.fetchCount(pendingEmptyDescriptor), 0)
+    }
+
+    @MainActor
+    func testPredicateMatchesEmptyToManyRelationshipCollections() throws {
+        let container = try ModelContainer(
+            for: NestedToManyMiddleFixture.self,
+            NestedToManyItemFixture.self,
+            configurations: .sqliteMemory("to-many-is-empty-predicate"))
+        let context = container.mainContext
+        let item = NestedToManyItemFixture(title: "item")
+        let empty = NestedToManyMiddleFixture(name: "empty", items: [])
+        let populated = NestedToManyMiddleFixture(name: "populated", items: [item])
+        context.insert(item)
+        context.insert(empty)
+        context.insert(populated)
+        try context.save()
+
+        let emptyDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
+            predicate: #Predicate { $0.items.isEmpty },
+            includePendingChanges: false)
+        let emptyMatches = try context.fetch(emptyDescriptor)
+        XCTAssertEqual(emptyMatches.map(\.name), ["empty"])
+        XCTAssertEqual(try context.fetchCount(emptyDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(emptyDescriptor), emptyMatches.map(\.persistentModelID))
+
+        populated.items.removeAll()
+        let pendingDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(predicate: #Predicate { $0.items.isEmpty })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["empty", "populated"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([empty.persistentModelID, populated.persistentModelID]))
     }
 
     @MainActor

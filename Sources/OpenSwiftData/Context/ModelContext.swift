@@ -1881,6 +1881,7 @@ public final class ModelContext {
         var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
         for relationship in entity.relationships where relationship.isToMany {
             attributeNames.insert(relationship.name)
+            attributeTypes[relationship.name] = "OSDToManyRelationship"
             guard let destination = containerStorage?.schema.entity(forName: relationship.destination) else { continue }
             for attribute in destination.attributes where !attribute.options.contains(.flattened) {
                 let path = "\(relationship.name)[].\(attribute.name)"
@@ -1905,7 +1906,7 @@ public final class ModelContext {
                     let path = prefix + [relationship.name]
                     let relationshipPath = path.joined(separator: ".")
                     attributeNames.insert(relationshipPath)
-                    attributeTypes[relationshipPath] = "OSDRelationship"
+                    attributeTypes[relationshipPath] = "OSDToOneRelationship"
                     for attribute in destination.attributes where !attribute.options.contains(.flattened) {
                         let scalarPath = "\(relationshipPath).\(attribute.name)"
                         attributeNames.insert(scalarPath)
@@ -1920,7 +1921,7 @@ public final class ModelContext {
                         else { continue }
                         let collectionPath = "\(relationshipPath).\(collection.name)"
                         attributeNames.insert(collectionPath)
-                        attributeTypes[collectionPath] = "OSDRelationship"
+                        attributeTypes[collectionPath] = "OSDToManyRelationship"
                         for attribute in collectionDestination.attributes where !attribute.options.contains(.flattened)
                         {
                             let elementPath = "\(collectionPath)[].\(attribute.name)"

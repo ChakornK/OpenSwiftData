@@ -269,7 +269,16 @@ public final class ModelContainer: Sendable {
                             + "'\(reciprocalInverse)' instead of '\(Self.unqualifiedTypeName(String(describing: modelType))).\(metadata.name)'."
                     )
                 }
-                let explicitReciprocals = destinationRelationships.filter { $0.1.inverse == metadata.name }
+                let explicitReciprocals = destinationRelationships.filter { inverseMetadata, inverseRelationship in
+                    guard inverseRelationship.inverse == metadata.name else { return false }
+                    let rawType = inverseMetadata.keypath.map { String(reflecting: type(of: $0).valueType) } ?? ""
+                    let (normalizedType, _) = Self.normalizedPropertyType(rawType)
+                    let parsedType = Self.parseType(normalizedType)
+                    let inverseDestination = Self.unqualifiedTypeName(
+                        parsedType.collectionElement ?? parsedType.name)
+                    return Self.relationshipDestination(
+                        inverseDestination, matchesLogicalOwner: logicalOwnerName, among: types)
+                }
                 let inferredInverse: String?
                 if !hasExplicitInverse, explicitReciprocals.count == 1 {
                     inferredInverse = explicitReciprocals[0].0.name

@@ -221,6 +221,50 @@ final class NestedToOneLeafFixture {
 }
 
 @Model
+final class NestedInverseRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var middle: NestedInverseMiddleFixture?
+
+    init(name: String, middle: NestedInverseMiddleFixture?) {
+        self.name = name
+        self.middle = middle
+    }
+}
+
+@Model
+final class NestedInverseMiddleFixture {
+    var name: String
+    @Relationship(inverse: \NestedInverseBranchFixture.middle) var branch: NestedInverseBranchFixture?
+
+    init(name: String, branch: NestedInverseBranchFixture?) {
+        self.name = name
+        self.branch = branch
+    }
+}
+
+@Model
+final class NestedInverseBranchFixture {
+    var name: String
+    var middle: NestedInverseMiddleFixture?
+    @Relationship(inverse: nil) var leaf: NestedInverseLeafFixture?
+
+    init(name: String, middle: NestedInverseMiddleFixture?, leaf: NestedInverseLeafFixture?) {
+        self.name = name
+        self.middle = middle
+        self.leaf = leaf
+    }
+}
+
+@Model
+final class NestedInverseLeafFixture {
+    var title: String
+
+    init(title: String) {
+        self.title = title
+    }
+}
+
+@Model
 final class ToManyHierarchyOwnerFixture {
     @Relationship(inverse: nil) var targets: [ToManyHierarchyTargetChildFixture]
     init(targets: [ToManyHierarchyTargetChildFixture]) { self.targets = targets }
@@ -1963,6 +2007,57 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["matching-root"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [matchingRoot.persistentModelID])
+    }
+
+    @MainActor
+    func testNestedOwningPathTraversesInverseToOneHop() throws {
+        let container = try ModelContainer(
+            for: NestedInverseRootFixture.self,
+            NestedInverseMiddleFixture.self,
+            NestedInverseBranchFixture.self,
+            NestedInverseLeafFixture.self,
+            configurations: .sqliteMemory("nested-inverse-to-one-path"))
+        let context = container.mainContext
+        let leaf = NestedInverseLeafFixture(title: "selected")
+        let branch = NestedInverseBranchFixture(name: "branch", middle: nil, leaf: leaf)
+        let middle = NestedInverseMiddleFixture(name: "middle", branch: nil)
+        let root = NestedInverseRootFixture(name: "root", middle: nil)
+        context.insert(leaf)
+        context.insert(branch)
+        context.insert(middle)
+        context.insert(root)
+        branch.middle = middle
+        root.middle = middle
+        try context.save()
+
+        XCTAssertNil(
+            container.schema.entity(forName: "NestedInverseRootFixture")?.relationships
+                .first(where: { $0.name == "middle" })?.inverse)
+        XCTAssertEqual(
+            container.schema.entity(forName: "NestedInverseMiddleFixture")?.relationships
+                .first(where: { $0.name == "branch" })?.inverse,
+            "middle")
+        XCTAssertEqual(
+            container.schema.entity(forName: "NestedInverseBranchFixture")?.relationships
+                .first(where: { $0.name == "middle" })?.inverse,
+            "branch")
+
+        let selectedTitle = "selected"
+        let descriptor = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate { $0.middle?.branch?.leaf?.title == selectedTitle },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.name), ["root"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        leaf.title = "pending-selected"
+        let pendingTitle = "pending-selected"
+        let pendingDescriptor = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate { $0.middle?.branch?.leaf?.title == pendingTitle })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["root"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [root.persistentModelID])
     }
 
     @MainActor

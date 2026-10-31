@@ -206,27 +206,57 @@ package enum SQLCompiler {
                             $0.ownerEntityName == ownerEntityName && $0.propertyName == relationshipNames[index]
                         }),
                         !relationship.isToMany,
-                        !relationship.queriesInverseToOne,
-                        Self.validIdentifier(relationship.destinationRootEntityName),
-                        Self.validIdentifier(relationship.foreignKeyColumnName),
-                        !relationship.destinationEntityIDs.isEmpty
+                        Self.validIdentifier(relationship.foreignKeyColumnName)
                     else {
                         throw SwiftDataError.unsupportedPredicate(
-                            "Nested relationship predicate requires owning to-one foreign keys.")
+                            "Nested relationship predicate requires to-one foreign keys.")
                     }
-                    let destination = relationship.destinationEntityName
+                    let destinationEntityName: String
+                    let destinationRootEntityName: String
+                    let destinationEntityIDs: [Int]
+                    let foreignKeyOwner: Bool
+                    if relationship.queriesInverseToOne {
+                        guard let inverseOwnerRoot = relationship.inverseOwnerRootEntityName,
+                            Self.validIdentifier(inverseOwnerRoot),
+                            !relationship.inverseOwnerEntityIDs.isEmpty,
+                            relationship.destinationRootEntityName == inverseOwnerRoot
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Nested inverse relationship requires a flat to-one destination.")
+                        }
+                        destinationEntityName = relationship.destinationEntityName
+                        destinationRootEntityName = inverseOwnerRoot
+                        destinationEntityIDs = relationship.inverseOwnerEntityIDs
+                        foreignKeyOwner = false
+                    } else {
+                        guard Self.validIdentifier(relationship.destinationRootEntityName),
+                            !relationship.destinationEntityIDs.isEmpty
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Nested relationship predicate has incomplete destination metadata.")
+                        }
+                        destinationEntityName = relationship.destinationEntityName
+                        destinationRootEntityName = relationship.destinationRootEntityName
+                        destinationEntityIDs = relationship.destinationEntityIDs
+                        foreignKeyOwner = true
+                    }
                     let alias = "osd_rel_\(index + 1)"
                     let selected =
                         index + 1 == relationshipNames.count
                         ? "\(alias).Z\(property.uppercased())"
-                        : try renderHop(index + 1, ownerEntityName: destination, ownerAlias: alias)
-                    let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
+                        : try renderHop(index + 1, ownerEntityName: destinationEntityName, ownerAlias: alias)
+                    let placeholders = Array(repeating: "?", count: destinationEntityIDs.count)
                         .joined(separator: ", ")
-                    arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+                    arguments.append(contentsOf: destinationEntityIDs.map { .int(Int64($0)) })
+                    let correlation =
+                        foreignKeyOwner
+                        ? "\(alias).Z_PK = \(ownerAlias).Z\(relationship.foreignKeyColumnName.uppercased())"
+                        : "\(alias).Z\(relationship.foreignKeyColumnName.uppercased()) = \(ownerAlias).Z_PK"
+                    let ordering = foreignKeyOwner ? "" : " ORDER BY \(alias).Z_PK ASC"
                     return
-                        "(SELECT \(selected) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS \(alias) "
-                        + "WHERE \(alias).Z_PK = \(ownerAlias).Z\(relationship.foreignKeyColumnName.uppercased()) "
-                        + "AND \(alias).Z_ENT IN (\(placeholders)) LIMIT 1)"
+                        "(SELECT \(selected) FROM Z\(destinationRootEntityName.uppercased()) AS \(alias) "
+                        + "WHERE \(correlation) AND \(alias).Z_ENT IN (\(placeholders))"
+                        + "\(ordering) LIMIT 1)"
                 }
                 return try renderHop(0, ownerEntityName: entity, ownerAlias: tableAlias)
             }

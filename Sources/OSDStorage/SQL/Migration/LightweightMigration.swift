@@ -93,6 +93,25 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("The stored schema hash does not match the source schema.")
         }
         try validatePhysicalSchema(sourceSchema, connection: connection)
+        let sourceEntityIDs = try storedEntityIDs(schema: sourceSchema, connection: connection)
+        let resolvedSourceEntityIDs: [String: Int]
+        if let sourceEntityIDs {
+            guard sourceEntityIDs == sourceSchema.entityIDsByName else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored entity identifiers differ from the runtime schema and cannot yet be reconciled at open.")
+            }
+            resolvedSourceEntityIDs = sourceEntityIDs
+        } else {
+            resolvedSourceEntityIDs = sourceSchema.entityIDsByName
+        }
+        let reconciledDestination = try destination.reconciled(with: resolvedSourceEntityIDs)
+        guard reconciledDestination.entityIDsByName == destination.entityIDsByName else {
+            throw SwiftDataError.migrationUnsupported(
+                "Destination entity identifiers require runtime reconciliation that is not yet available.")
+        }
+        if sourceEntityIDs == nil {
+            try writeEntityIDs(resolvedSourceEntityIDs, schema: sourceSchema, connection: connection)
+        }
         if stored == destinationHash {
             try writeSchemaVersion(destination.version, connection: connection)
             return
@@ -328,6 +347,7 @@ package enum LightweightMigration {
         try connection.execute(
             "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [.text(schemaDescriptionKey), .blob(Array(SchemaHash.canonicalDescription(of: schema).utf8))])
+        try writeEntityIDs(schema.entityIDsByName, schema: schema, connection: connection)
         try writeSchemaVersion(schema.version, connection: connection)
     }
 

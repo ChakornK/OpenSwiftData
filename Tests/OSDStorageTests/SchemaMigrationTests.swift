@@ -1297,6 +1297,97 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testOpeningStoreWritesEntityIDMapAndBackfillsLegacyMetadata() throws {
+        let location = StoreLocation.memory(name: "entity-id-map-open-backfill")
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: schema)
+        let initialIDs = try initial.read {
+            try LightweightMigration.storedEntityIDs(schema: schema, connection: $0)
+        }
+        XCTAssertEqual(initialIDs, schema.entityIDsByName)
+        try initial.write {
+            try $0.execute("DELETE FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDsKey)])
+        }
+        try initial.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: schema)
+        let backfilledIDs = try reopened.read {
+            try LightweightMigration.storedEntityIDs(schema: schema, connection: $0)
+        }
+        XCTAssertEqual(backfilledIDs, schema.entityIDsByName)
+        let hashValue = try reopened.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        guard case let .blob(hashBytes)? = hashValue else {
+            return XCTFail("Expected the canonical schema hash to remain stored as a blob")
+        }
+        XCTAssertEqual(String(decoding: hashBytes, as: UTF8.self), SchemaHash.hexDigest(schema))
+        try reopened.close()
+    }
+
+    func testOpeningStoreRejectsEntityIDMapThatDiffersFromRuntimeSchema() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let schema = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let driver = try LightweightMigration.openStore(location: location, schema: schema)
+        let incompatibleIDs = ["Animal": 2, "Dog": 1]
+        try driver.write { connection in
+            try LightweightMigration.writeEntityIDs(incompatibleIDs, schema: schema, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try LightweightMigration.storedEntityIDs(schema: schema, connection: $0) },
+            incompatibleIDs)
+        try driver.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: schema)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+    }
+
+    func testOpeningStoreFailsClosedWhenNewEntityWouldRenumberStoredIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Cat", superentityName: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let originalIDs = try initial.read {
+            try LightweightMigration.storedEntityIDs(schema: source, connection: $0)
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            originalIDs)
+        try reopened.close()
+    }
+
     func testEntityIDMapCodecRejectsMalformedOrIncompatibleMaps() throws {
         let schema = Schema([
             Schema.Entity(name: "Animal"),

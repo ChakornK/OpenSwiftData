@@ -391,6 +391,22 @@ final class PlainHierarchyChildTargetOwnerFixture {
 }
 
 @Model
+final class OptionalToOneIntegerTargetFixture {
+    var rank: Int
+    init(rank: Int) { self.rank = rank }
+}
+
+@Model
+final class OptionalToOneIntegerOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var target: OptionalToOneIntegerTargetFixture?
+    init(name: String, target: OptionalToOneIntegerTargetFixture?) {
+        self.name = name
+        self.target = target
+    }
+}
+
+@Model
 final class PlainHierarchyTargetSiblingFixture: PlainHierarchyTargetBaseFixture {
     var label: String
     init(name: String, label: String) {
@@ -1542,6 +1558,40 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.target?.name.contains(needle) == true })
         XCTAssertEqual(owner.name, "owner")
         XCTAssertEqual(try reader.fetch(descriptor).map(\.name), ["owner"])
+    }
+
+    @MainActor
+    func testOptionalToOneIntegerPredicateSupportsCoalescingAndPendingValues() throws {
+        let container = try ModelContainer(
+            for: OptionalToOneIntegerOwnerFixture.self,
+            OptionalToOneIntegerTargetFixture.self,
+            configurations: .sqliteMemory("optional-to-one-integer-coalesce"))
+        let context = container.mainContext
+        let highTarget = OptionalToOneIntegerTargetFixture(rank: 9)
+        let lowTarget = OptionalToOneIntegerTargetFixture(rank: 2)
+        context.insert(highTarget)
+        context.insert(lowTarget)
+        context.insert(OptionalToOneIntegerOwnerFixture(name: "high", target: highTarget))
+        context.insert(OptionalToOneIntegerOwnerFixture(name: "low", target: lowTarget))
+        context.insert(OptionalToOneIntegerOwnerFixture(name: "nil", target: nil))
+        try context.save()
+
+        let descriptor = FetchDescriptor<OptionalToOneIntegerOwnerFixture>(
+            predicate: #Predicate { owner in (owner.target?.rank ?? 0) > 3 },
+            includePendingChanges: false)
+        let storedMatches = try context.fetch(descriptor)
+        XCTAssertEqual(storedMatches.map(\.name), ["high"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), storedMatches.map(\.persistentModelID))
+
+        highTarget.rank = 1
+        XCTAssertTrue(highTarget.hasChanges)
+        XCTAssertTrue(context.hasChanges)
+        let pendingDescriptor = FetchDescriptor<OptionalToOneIntegerOwnerFixture>(
+            predicate: #Predicate { owner in (owner.target?.rank ?? 0) > 3 })
+        XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 0)
+        XCTAssertTrue(try context.fetchIdentifiers(pendingDescriptor).isEmpty)
     }
 
     @MainActor

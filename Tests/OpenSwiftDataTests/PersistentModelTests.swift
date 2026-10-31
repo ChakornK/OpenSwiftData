@@ -190,15 +190,26 @@ final class QualifiedOptionalScalarFixture {
 @Model
 final class CodableStringCollectionFixture {
     var name: String
-    @Attribute(.codable) var tags: [String]
-    @Attribute(.codable) var numbers: [Int]
-    @Attribute(.codable) var flags: [Bool]
+    var tags: [String]
+    var optionalTags: [String]?
+    var numbers: [Int]
+    var flags: [Bool]
 
-    init(name: String, tags: [String], numbers: [Int] = [], flags: [Bool] = []) {
+    init(name: String, tags: [String], optionalTags: [String]? = nil, numbers: [Int] = [], flags: [Bool] = []) {
         self.name = name
         self.tags = tags
+        self.optionalTags = optionalTags
         self.numbers = numbers
         self.flags = flags
+    }
+}
+
+@Model
+final class ExplicitCodableStringCollectionFixture {
+    @Attribute(.codable) var tags: [String]
+
+    init(tags: [String]) {
+        self.tags = tags
     }
 }
 
@@ -2535,7 +2546,7 @@ final class PersistentModelTests: XCTestCase {
             configurations: .sqliteMemory("codable-string-collection-contains"))
         let context = container.mainContext
         let matching = CodableStringCollectionFixture(
-            name: "matching", tags: ["swift", "portable"], numbers: [7], flags: [true])
+            name: "matching", tags: ["swift", "portable"], optionalTags: ["optional"], numbers: [7], flags: [true])
         let other = CodableStringCollectionFixture(name: "other", tags: ["database"], numbers: [3], flags: [false])
         context.insert(matching)
         context.insert(other)
@@ -2562,7 +2573,14 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(flagDescriptor).map(\.name), ["matching"])
 
+        let optionalNeedle = "optional"
+        let optionalDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.optionalTags.flatMap { $0.contains(optionalNeedle) } ?? false },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(optionalDescriptor).map(\.name), ["matching"])
+
         matching.tags = []
+        matching.optionalTags = nil
         other.tags = [needle]
         matching.numbers = []
         other.numbers = [number]
@@ -2581,6 +2599,40 @@ final class PersistentModelTests: XCTestCase {
         let pendingFlagDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
             predicate: #Predicate { $0.flags.contains(flag) })
         XCTAssertEqual(try context.fetch(pendingFlagDescriptor).map(\.name), ["other"])
+    }
+
+    @MainActor
+    func testInferredAndExplicitCodableCollectionsHaveEquivalentSchema() throws {
+        let inferredContainer = try ModelContainer(
+            for: CodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("inferred-codable-collection-parity"))
+        let explicitContainer = try ModelContainer(
+            for: ExplicitCodableStringCollectionFixture.self,
+            configurations: .sqliteMemory("explicit-codable-collection-parity"))
+        let inferredAttribute = try XCTUnwrap(
+            inferredContainer.schema.entity(forName: "CodableStringCollectionFixture")?.attributes
+                .first(where: { $0.name == "tags" }))
+        let explicitAttribute = try XCTUnwrap(
+            explicitContainer.schema.entity(forName: "ExplicitCodableStringCollectionFixture")?.attributes
+                .first(where: { $0.name == "tags" }))
+        XCTAssertEqual(inferredAttribute, explicitAttribute)
+
+        let inferredContext = inferredContainer.mainContext
+        let explicitContext = explicitContainer.mainContext
+        let inferred = CodableStringCollectionFixture(name: "inferred", tags: ["shared"])
+        let explicit = ExplicitCodableStringCollectionFixture(tags: ["shared"])
+        inferredContext.insert(inferred)
+        explicitContext.insert(explicit)
+        try inferredContext.save()
+        try explicitContext.save()
+
+        let needle = "shared"
+        let inferredDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.contains(needle) })
+        let explicitDescriptor = FetchDescriptor<ExplicitCodableStringCollectionFixture>(
+            predicate: #Predicate { $0.tags.contains(needle) })
+        XCTAssertEqual(try inferredContext.fetch(inferredDescriptor).map(\.name), ["inferred"])
+        XCTAssertEqual(try explicitContext.fetch(explicitDescriptor).count, 1)
     }
 
     @MainActor

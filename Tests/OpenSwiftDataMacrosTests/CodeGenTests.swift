@@ -483,6 +483,9 @@ final class CodeGenTests: XCTestCase {
                 var payload: Payload?
                 var pets: Set<Pet>
                 var optionalPets: [Pet]?
+                var tags: [String]
+                var optionalTags: [String]?
+                var numbers: Set<Int>
                 var label: String?
             }
             """)
@@ -498,6 +501,12 @@ final class CodeGenTests: XCTestCase {
         XCTAssertFalse(candidates.contains("keyPath: \\Household.label"))
         XCTAssertTrue(generated.contains("isInferredRelationship: true"))
         XCTAssertTrue(generated.contains("metadata: Schema.Attribute(.codable)"))
+        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"tags\""))
+        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"optionalTags\""))
+        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"numbers\""))
+        XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, [String]>(\"tags\""))
+        XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, [String]?>(\"optionalTags\""))
+        XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, Set<Int>>(\"numbers\""))
     }
 
     func testExplicitAttributeMetadataIsNotInferredAsRelationship() throws {

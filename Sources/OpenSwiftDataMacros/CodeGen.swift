@@ -282,7 +282,8 @@ enum CodeGen {
             let propertyType = propertyType(property.name, in: declaration)
             let inferredRelationship =
                 propertyType.map {
-                    !property.hasExplicitAttribute && !property.isFlattened && !isSupportedScalarType($0)
+                    !property.hasExplicitAttribute && !property.isFlattened
+                        && !isSupportedScalarType($0) && !isCodableScalarCollectionType($0)
                 } ?? false
             let kind = property.isRelationship || inferredRelationship ? ".relationship" : ".attribute"
             let options = property.attributeOptionNames.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", ")
@@ -321,7 +322,10 @@ enum CodeGen {
             guard !isRelationshipProperty else { return nil }
             let isOptionalScalar =
                 type.as(OptionalTypeSyntax.self).map { isSupportedScalarType($0.wrappedType) } ?? false
-            guard isExplicitAttribute || isSupportedScalarType(type) || isOptionalScalar else { return nil }
+            guard
+                isExplicitAttribute || isSupportedScalarType(type) || isOptionalScalar
+                    || isCodableScalarCollectionType(type)
+            else { return nil }
             let typeName = type.trimmedDescription
             return
                 "        TypedPropertyAdapter<\(modelName), \(typeName)>(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), encode: { model in try PersistentValue.encode(model.\(property.name)) }, decode: { value, model in model.\(property.name) = try PersistentValue.decode(\(typeName).self, from: value) }, decodeValue: { value in (try PersistentValue.decode(\(typeName).self, from: value)) as Any })"
@@ -491,11 +495,12 @@ enum CodeGen {
             let codableMetadata =
                 !property.isFlattened && !property.hasExplicitRelationship && !property.hasExplicitAttribute
                     && propertyType(property.name, in: declaration).map { type in
-                        !isSupportedScalarType(type)
-                            && !(isOptional
-                                && type.as(OptionalTypeSyntax.self).map {
-                                    isSupportedScalarType($0.wrappedType)
-                                } == true)
+                        isCodableScalarCollectionType(type)
+                            || (!isSupportedScalarType(type)
+                                && !(isOptional
+                                    && type.as(OptionalTypeSyntax.self).map {
+                                        isSupportedScalarType($0.wrappedType)
+                                    } == true))
                     } == true
                 ? "Schema.Attribute(.codable)" : metadata
             let inferredRelationship =
@@ -550,7 +555,8 @@ enum CodeGen {
                 let propertyType = propertyType(property.name, in: declaration)
                 let inferredRelationship =
                     propertyType.map {
-                        !property.hasExplicitAttribute && !property.isFlattened && !isSupportedScalarType($0)
+                        !property.hasExplicitAttribute && !property.isFlattened
+                            && !isSupportedScalarType($0) && !isCodableScalarCollectionType($0)
                     } ?? false
                 let kind = property.isRelationship || inferredRelationship ? ".relationship" : ".attribute"
                 let options = property.attributeOptionNames.map {
@@ -723,6 +729,31 @@ enum CodeGen {
             "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
             "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
         ].contains(identifier.name.text)
+    }
+
+    static func isCodableScalarCollectionType(_ type: TypeSyntax) -> Bool {
+        let collectionType = type.as(OptionalTypeSyntax.self)?.wrappedType ?? type
+        let elementType: TypeSyntax
+        if let array = collectionType.as(ArrayTypeSyntax.self) {
+            elementType = array.element
+        } else if let set = collectionType.as(IdentifierTypeSyntax.self), set.name.text == "Set",
+            let argument = set.genericArgumentClause?.arguments.first?.argument,
+            case let .type(element) = argument
+        {
+            elementType = element
+        } else {
+            return false
+        }
+        let scalarType = elementType.as(OptionalTypeSyntax.self)?.wrappedType ?? elementType
+        let isNominal =
+            scalarType.as(IdentifierTypeSyntax.self)?.genericArgumentClause == nil
+            || scalarType.is(MemberTypeSyntax.self)
+        let name = scalarType.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
+        return isNominal
+            && [
+                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                "UInt32", "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
+            ].contains(name)
     }
 
     static func propertyType(_ name: String, in declaration: ClassDeclSyntax) -> TypeSyntax? {

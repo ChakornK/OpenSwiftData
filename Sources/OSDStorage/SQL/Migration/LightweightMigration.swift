@@ -500,6 +500,7 @@ package enum LightweightMigration {
             for relationship in entity.relationships {
                 guard relationship.inverse == nil,
                     relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                    relationship.originalName == nil,
                     source.entity(forName: relationship.destination) != nil
                 else {
                     throw SwiftDataError.migrationUnsupported(

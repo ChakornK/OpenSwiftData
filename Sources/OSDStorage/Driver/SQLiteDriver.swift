@@ -140,6 +140,7 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
         configuration.label = name.map { "OpenSwiftData.\($0)" } ?? "OpenSwiftData.SQLiteDriver"
         configuration.prepareDatabase { database in
             database.add(collation: .localizedStandardCompare)
+            database.add(collation: DatabaseCollation("OSD_DECIMAL", function: DecimalText.compare))
             database.add(
                 function: DatabaseFunction("osd_localized_standard_contains", argumentCount: 2, pure: true) { values in
                     guard let haystack = String.fromDatabaseValue(values[0]),

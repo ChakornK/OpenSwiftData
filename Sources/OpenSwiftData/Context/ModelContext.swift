@@ -1134,7 +1134,9 @@ public final class ModelContext {
         if descriptor.includePendingChanges, !descriptor.sortBy.isEmpty {
             queryRows = queryRows.enumerated().sorted { lhs, rhs in
                 for (index, descriptor) in descriptor.sortBy.enumerated() {
-                    let comparison = compareSortValues(lhs.element.sortValues[index], rhs.element.sortValues[index])
+                    let comparison = compareSortValues(
+                        lhs.element.sortValues[index], rhs.element.sortValues[index],
+                        isDecimal: isDecimalAttribute(sortProperties[index], in: entity))
                     if comparison != .orderedSame {
                         return descriptor.isAscending
                             ? comparison == .orderedAscending : comparison == .orderedDescending
@@ -1894,8 +1896,8 @@ public final class ModelContext {
             else {
                 throw SwiftDataError.unsupportedPredicate("Sort key must be a direct persisted attribute")
             }
-            return
-                "t0.Z\(property.uppercased()) COLLATE swiftLocalizedStandardCompare \(descriptor.isAscending ? "ASC" : "DESC")"
+            let collation = isDecimalAttribute(property, in: entity) ? "OSD_DECIMAL" : "swiftLocalizedStandardCompare"
+            return "t0.Z\(property.uppercased()) COLLATE \(collation) \(descriptor.isAscending ? "ASC" : "DESC")"
         }
         return columns.isEmpty ? "t0.Z_PK ASC" : columns.joined(separator: ", ")
     }
@@ -1940,7 +1942,8 @@ public final class ModelContext {
                 for (index, descriptor) in descriptor.sortBy.enumerated() {
                     let result = compareSortValues(
                         sortValues[ObjectIdentifier(lhs.element)]?[index] ?? .null,
-                        sortValues[ObjectIdentifier(rhs.element)]?[index] ?? .null)
+                        sortValues[ObjectIdentifier(rhs.element)]?[index] ?? .null,
+                        isDecimal: isDecimalAttribute(sortNames[index], in: entity))
                     if result != .orderedSame {
                         return descriptor.isAscending ? result == .orderedAscending : result == .orderedDescending
                     }
@@ -2124,7 +2127,11 @@ public final class ModelContext {
         return fallback
     }
 
-    package func compareSortValues(_ lhs: RuntimeValue, _ rhs: RuntimeValue) -> ComparisonResult {
+    package func compareSortValues(
+        _ lhs: RuntimeValue,
+        _ rhs: RuntimeValue,
+        isDecimal: Bool = false
+    ) -> ComparisonResult {
         assertAffinity()
         if case let .double(value) = lhs, value.isNaN {
             return compareSortValues(.null, rhs)
@@ -2152,6 +2159,7 @@ public final class ModelContext {
         case let (.double(lhs), .double(rhs)):
             return ordering(lhs, rhs)
         case let (.text(lhs), .text(rhs)):
+            if isDecimal { return DecimalText.compare(lhs, rhs) }
             return lhs.localizedStandardCompare(rhs)
         case let (.blob(lhs), .blob(rhs)):
             if lhs == rhs { return .orderedSame }
@@ -2159,6 +2167,12 @@ public final class ModelContext {
         default:
             return .orderedSame
         }
+    }
+
+    private func isDecimalAttribute(_ property: String, in entity: Schema.Entity) -> Bool {
+        guard let attribute = entity.attributes.first(where: { $0.name == property }) else { return false }
+        let type = attribute.type.hasSuffix("?") ? String(attribute.type.dropLast()) : attribute.type
+        return type == "Decimal" || type == "Foundation.Decimal"
     }
 
     private func compareIntegerAndDouble(_ integer: Int64, _ real: Double) -> ComparisonResult {

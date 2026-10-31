@@ -6,6 +6,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case disjunction(PredicateIR, PredicateIR)
     case negation(PredicateIR)
     case comparison(ComparisonOperator, PredicateIR, PredicateIR)
+    case decimalComparison(ComparisonOperator, PredicateIR, PredicateIR)
     case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
     case value(StoredValue)
@@ -73,7 +74,12 @@ package enum PredicateIRBuilder {
                 let op = try comparisonOperator(operatorNode)
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                try validateDecimalOrdering(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
+                if isOrderingOperator(op),
+                    (referencesDecimal(lhs, attributeTypes: attributeTypes)
+                        || referencesDecimal(rhs, attributeTypes: attributeTypes))
+                {
+                    return .decimalComparison(op, lhs, rhs)
+                }
                 try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
                 return .comparison(
                     op, lhs, rhs)
@@ -227,11 +233,13 @@ package enum PredicateIRBuilder {
             return .keyPath([relationship, property])
         case let .value(value):
             return .value(value)
-        case let .comparison(op, lhs, rhs):
-            return .comparison(
-                op,
-                try prefixRelationshipPath(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try prefixRelationshipPath(rhs, relationship: relationship, attributeTypes: attributeTypes))
+        case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):
+            let prefixedLHS = try prefixRelationshipPath(
+                lhs, relationship: relationship, attributeTypes: attributeTypes)
+            let prefixedRHS = try prefixRelationshipPath(
+                rhs, relationship: relationship, attributeTypes: attributeTypes)
+            if case .decimalComparison = ir { return .decimalComparison(op, prefixedLHS, prefixedRHS) }
+            return .comparison(op, prefixedLHS, prefixedRHS)
         case let .arithmetic(op, lhs, rhs):
             return .arithmetic(
                 op,
@@ -315,19 +323,8 @@ package enum PredicateIRBuilder {
         }
     }
 
-    private static func validateDecimalOrdering(
-        _ op: PredicateIR.ComparisonOperator,
-        lhs: PredicateIR,
-        rhs: PredicateIR,
-        attributeTypes: [String: String]
-    ) throws {
-        guard op != .equal, op != .notEqual else { return }
-        if referencesDecimal(lhs, attributeTypes: attributeTypes)
-            || referencesDecimal(rhs, attributeTypes: attributeTypes)
-        {
-            throw SwiftDataError.unsupportedPredicate(
-                "Ordering comparisons on Decimal attributes are unsupported until numeric SQL semantics are available.")
-        }
+    private static func isOrderingOperator(_ op: PredicateIR.ComparisonOperator) -> Bool {
+        op != .equal && op != .notEqual
     }
 
     private static func referencesDecimal(_ ir: PredicateIR, attributeTypes: [String: String]) -> Bool {
@@ -336,7 +333,8 @@ package enum PredicateIRBuilder {
             guard let type = attributeTypes[path.joined(separator: ".")] else { return false }
             let unwrapped = type.hasSuffix("?") ? String(type.dropLast()) : type
             return unwrapped == "Decimal" || unwrapped == "Foundation.Decimal"
-        case let .comparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .nilCoalesce(lhs, rhs),
+        case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+            let .nilCoalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs), let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return referencesDecimal(lhs, attributeTypes: attributeTypes)
@@ -378,11 +376,16 @@ package enum PredicateIRBuilder {
             return .keyPath([elementPath[1]])
         case let .value(value):
             return .value(value)
-        case let .comparison(op, lhs, rhs):
+        case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):
+            let normalizedLHS = try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes)
+            let normalizedRHS = try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes)
+            if case .decimalComparison = ir {
+                return .decimalComparison(op, normalizedLHS, normalizedRHS)
+            }
             return .comparison(
                 op,
-                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),
-                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes))
+                normalizedLHS,
+                normalizedRHS)
         case let .conjunction(lhs, rhs):
             return .conjunction(
                 try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes),

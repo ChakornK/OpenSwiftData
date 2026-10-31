@@ -36,6 +36,9 @@ package enum PredicatePlanBuilder {
             }
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .comparison(runtimeOperator(op), lhs, rhs)
+        case let .decimalComparison(op, lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .decimalComparison(runtimeOperator(op), lhs, rhs)
         case let .arithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
@@ -153,16 +156,15 @@ package enum SQLCompiler {
                 lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
             let rhsSQL = try render(
                 rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
-            let symbol: String
-            switch op {
-            case .equal: symbol = "="
-            case .notEqual: symbol = "!="
-            case .lessThan: symbol = "<"
-            case .lessThanOrEqual: symbol = "<="
-            case .greaterThan: symbol = ">"
-            case .greaterThanOrEqual: symbol = ">="
-            }
-            return "(\(lhsSQL) \(symbol) \(rhsSQL))"
+            return "(\(lhsSQL) \(comparisonSymbol(op)) \(rhsSQL))"
+        case let .decimalComparison(op, lhs, rhs):
+            let lhsSQL = try render(
+                lhs, arguments: &arguments, entity: entity, relationships: relationships,
+                tableAlias: tableAlias)
+            let rhsSQL = try render(
+                rhs, arguments: &arguments, entity: entity, relationships: relationships,
+                tableAlias: tableAlias)
+            return "(\(lhsSQL) COLLATE OSD_DECIMAL \(comparisonSymbol(op)) \(rhsSQL))"
         case let .arithmetic(op, lhs, rhs):
             let function =
                 switch op {
@@ -266,6 +268,17 @@ package enum SQLCompiler {
         }
     }
 
+    private static func comparisonSymbol(_ op: PredicateIR.ComparisonOperator) -> String {
+        switch op {
+        case .equal: "="
+        case .notEqual: "!="
+        case .lessThan: "<"
+        case .lessThanOrEqual: "<="
+        case .greaterThan: ">"
+        case .greaterThanOrEqual: ">="
+        }
+    }
+
     private static func structuralKey(
         _ ir: PredicateIR,
         entity: String,
@@ -286,6 +299,7 @@ package enum SQLCompiler {
         case let .disjunction(lhs, rhs): "or(\(structure(lhs)),\(structure(rhs)))"
         case let .negation(value): "not(\(structure(value)))"
         case let .comparison(op, lhs, rhs): "compare(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .decimalComparison(op, lhs, rhs): "decimalCompare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
         case let .value(value):

@@ -123,6 +123,25 @@ final class PredicateCompilerTests: XCTestCase {
             }
         }
 
+    }
+
+    func testDecimalOrderingPredicateUsesExactCollation() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Comparison",
+            children: [
+                ("op", .capture(typeName: "ComparisonOperator", description: "lessThan")),
+                ("lhs", .propertyReference("amount")),
+                ("rhs", .typedValue(.text("10"))),
+            ])
+
+        let ir = try PredicateIRBuilder.build(node, attributeTypes: ["amount": "Decimal"])
+        guard case .decimalComparison(.lessThan, .keyPath(["amount"]), .value(.text("10"))) = ir else {
+            return XCTFail("Expected exact Decimal ordering IR")
+        }
+        let compiled = try SQLCompiler.compile(ir, entity: "Item")
+        XCTAssertEqual(compiled.sql, "(t0.ZAMOUNT COLLATE OSD_DECIMAL < ?)")
+        XCTAssertEqual(compiled.arguments, [.text("10")])
+
         let coalesced = PredicateMirrorWalker.Node.expression(
             name: "Comparison",
             children: [
@@ -132,31 +151,15 @@ final class PredicateCompilerTests: XCTestCase {
                     .expression(
                         name: "NilCoalesce",
                         children: [
-                            ("lhs", .propertyReference("target.amount")),
+                            ("lhs", .propertyReference("amount")),
                             ("rhs", .typedValue(.text("0"))),
                         ])
                 ),
                 ("rhs", .typedValue(.text("10"))),
             ])
-        XCTAssertThrowsError(
-            try PredicateIRBuilder.build(coalesced, attributeTypes: ["target.amount": "Foundation.Decimal"]))
-    }
-
-    func testDecimalOrderingPredicateFailsClosed() throws {
-        let node = PredicateMirrorWalker.Node.expression(
-            name: "Comparison",
-            children: [
-                ("op", .capture(typeName: "ComparisonOperator", description: "lessThan")),
-                ("lhs", .propertyReference("target.amount")),
-                ("rhs", .typedValue(.text("10"))),
-            ])
-
-        XCTAssertThrowsError(
-            try PredicateIRBuilder.build(node, attributeTypes: ["target.amount": "Decimal"])
-        ) { error in
-            guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected unsupportedPredicate, got \(error)")
-            }
+        let coalescedIR = try PredicateIRBuilder.build(coalesced, attributeTypes: ["amount": "Foundation.Decimal"])
+        guard case .decimalComparison(.lessThan, .nilCoalesce, .value(.text("10"))) = coalescedIR else {
+            return XCTFail("Expected coalesced Decimal ordering IR")
         }
     }
 

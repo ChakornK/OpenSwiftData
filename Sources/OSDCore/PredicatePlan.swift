@@ -4,6 +4,7 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case disjunction(PredicatePlan, PredicatePlan)
     case negation(PredicatePlan)
     case comparison(PredicateComparisonOperator, PredicatePlan, PredicatePlan)
+    case decimalComparison(PredicateComparisonOperator, PredicatePlan, PredicatePlan)
     case arithmetic(PredicateArithmeticOperator, PredicatePlan, PredicatePlan)
     case isNull(PredicatePlan, negated: Bool)
     case property(String)

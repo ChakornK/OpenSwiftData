@@ -18,7 +18,7 @@ package enum RuntimePredicateEvaluator {
     package static func referencedProperties(in plan: PredicatePlan) -> Set<String> {
         switch plan {
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
-            let .arithmetic(_, lhs, rhs),
+            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
             let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             referencedProperties(in: lhs).union(referencedProperties(in: rhs))
@@ -46,7 +46,8 @@ package enum RuntimePredicateEvaluator {
             merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
         case let .negation(value), let .isNull(value, _):
             relationshipProperties(in: value)
-        case let .comparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
+        case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
+            let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
@@ -105,6 +106,14 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("Pending evaluation cannot compare these stored value types")
             }
             return result ? .yes : .no
+        case let .decimalComparison(op, lhs, rhs):
+            let lhsValue = try evaluateValue(lhs, values: values, relationshipValues: relationshipValues)
+            let rhsValue = try evaluateValue(rhs, values: values, relationshipValues: relationshipValues)
+            guard lhsValue != .null, rhsValue != .null else { return .unknown }
+            guard case let .text(left) = lhsValue, case let .text(right) = rhsValue else {
+                throw SwiftDataError.unsupportedPredicate("Decimal comparison requires text operands")
+            }
+            return compare(DecimalText.compare(left, right), op) ? .yes : .no
         case .arithmetic:
             throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
         case let .isNull(value, negated):
@@ -248,7 +257,7 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("String prefix requires string operands")
             }
             return .int(OSDStringMatch.startsWith(value, prefix) ? 1 : 0)
-        case .comparison, .conjunction, .disjunction, .negation, .isNull, .relationshipContains:
+        case .comparison, .decimalComparison, .conjunction, .disjunction, .negation, .isNull, .relationshipContains:
             switch try evaluateTruth(plan, values: values, relationshipValues: relationshipValues) {
             case .yes: return .int(1)
             case .no: return .int(0)

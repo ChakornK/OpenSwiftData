@@ -227,15 +227,12 @@ package enum SQLCompiler {
             guard
                 let relationship = relationships.first(where: {
                     $0.ownerEntityName == entity && $0.propertyName == name && $0.isToMany
-                }), let joinTable = relationship.joinTableName,
-                Self.validIdentifier(joinTable),
+                }),
                 Self.validIdentifier(relationship.destinationRootEntityName),
-                Self.validIdentifier(relationship.ownerJoinColumnName),
-                Self.validIdentifier(relationship.destinationJoinColumnName),
                 !relationship.destinationEntityIDs.isEmpty
             else {
                 throw SwiftDataError.unsupportedPredicate(
-                    "SequenceContainsWhere requires a supported to-many relationship join table.")
+                    "SequenceContainsWhere requires supported to-many relationship storage.")
             }
             let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
                 .joined(separator: ", ")
@@ -243,6 +240,21 @@ package enum SQLCompiler {
             let bodySQL = try render(
                 body, arguments: &arguments, entity: relationship.destinationEntityName,
                 relationships: relationships, tableAlias: "t1")
+            if relationship.storesForeignKeyOnDestination {
+                guard Self.validIdentifier(relationship.foreignKeyColumnName) else {
+                    throw SwiftDataError.unsupportedPredicate("Invalid inverse relationship foreign-key column")
+                }
+                return "EXISTS (SELECT 1 FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                    + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = \(tableAlias).Z_PK "
+                    + "AND t1.Z_ENT IN (\(placeholders)) AND \(bodySQL))"
+            }
+            guard let joinTable = relationship.joinTableName, Self.validIdentifier(joinTable),
+                Self.validIdentifier(relationship.ownerJoinColumnName),
+                Self.validIdentifier(relationship.destinationJoinColumnName)
+            else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "SequenceContainsWhere requires a supported to-many relationship join table.")
+            }
             return "EXISTS (SELECT 1 FROM \(joinTable.uppercased()) AS j "
                 + "JOIN Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
                 + "ON t1.Z_PK = j.\(relationship.destinationJoinColumnName.uppercased()) "
@@ -263,7 +275,7 @@ package enum SQLCompiler {
         let relationshipKey = relationships.sorted {
             "\($0.ownerEntityName).\($0.propertyName)" < "\($1.ownerEntityName).\($1.propertyName)"
         }.map {
-            "\($0.ownerEntityName).\($0.propertyName)[toMany=\($0.isToMany)]->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.joinTableName ?? "").\($0.ownerJoinColumnName).\($0.destinationJoinColumnName).\($0.destinationEntityIDs)"
+            "\($0.ownerEntityName).\($0.propertyName)[toMany=\($0.isToMany),destinationFK=\($0.storesForeignKeyOnDestination)]->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.joinTableName ?? "").\($0.ownerJoinColumnName).\($0.destinationJoinColumnName).\($0.destinationEntityIDs)"
         }.joined(separator: ";")
         return "\(entity)|\(ordering.joined(separator: ","))|\(relationshipKey)|\(structure(ir))"
     }

@@ -1813,6 +1813,60 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateTraversesInverseOneToManyCollection() throws {
+        let container = try ModelContainer(
+            for: InheritedOneToManyTargetFixture.self,
+            InheritedOneToManyChildFixture.self,
+            InheritedOneToManyGrandchildFixture.self,
+            configurations: .sqliteMemory("inverse-one-to-many-predicate"))
+        let context = container.mainContext
+        let selectedTarget = InheritedOneToManyTargetFixture(title: "selected")
+        let otherTarget = InheritedOneToManyTargetFixture(title: "other")
+        context.insert(selectedTarget)
+        context.insert(otherTarget)
+        context.insert(InheritedOneToManyChildFixture(name: "selected-child", target: selectedTarget))
+        context.insert(InheritedOneToManyGrandchildFixture(name: "other-child", target: otherTarget, rank: 4))
+        try context.save()
+
+        let selectedName = "selected-child"
+        let descriptor = FetchDescriptor<InheritedOneToManyTargetFixture>(
+            predicate: #Predicate { target in
+                target.children.contains(where: { child in child.name == selectedName })
+            },
+            includePendingChanges: false)
+        let matches = try context.fetch(descriptor)
+        XCTAssertEqual(matches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), matches.map(\.persistentModelID))
+
+        let selectedChild = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<InheritedOneToManyChildFixture>())
+                .first(where: { $0.name == "selected-child" }))
+        selectedChild.name = "pending-child"
+        let pendingName = "pending-child"
+        let pendingDescriptor = FetchDescriptor<InheritedOneToManyTargetFixture>(
+            predicate: #Predicate { target in
+                target.children.contains(where: { child in child.name == pendingName })
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+
+        let insertedChild = InheritedOneToManyChildFixture(name: "inserted-child", target: selectedTarget)
+        context.insert(insertedChild)
+        let insertedName = "inserted-child"
+        let insertedDescriptor = FetchDescriptor<InheritedOneToManyTargetFixture>(
+            predicate: #Predicate { target in
+                target.children.contains(where: { child in child.name == insertedName })
+            })
+        let insertedMatches = try context.fetch(insertedDescriptor)
+        XCTAssertEqual(insertedMatches.map(\.title), ["selected"])
+        XCTAssertEqual(try context.fetchCount(insertedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(insertedDescriptor), insertedMatches.map(\.persistentModelID))
+    }
+
+    @MainActor
     func testPredicateMatchesInheritedNoInverseToManyRelationship() throws {
         let container = try ModelContainer(
             for: InheritedToManyChildFixture.self,

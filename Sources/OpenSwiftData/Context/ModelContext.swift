@@ -1798,13 +1798,25 @@ public final class ModelContext {
                 let destination = schema.entity(forName: relationship.destination)
             else { return nil }
             if relationship.isToMany {
-                let inverseIsToMany =
-                    relationship.inverse.flatMap { inverseName in
-                        schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)?
-                            .relationship
-                            .isToMany
-                    } ?? true
-                guard inverseIsToMany,
+                let inverse = relationship.inverse.flatMap { inverseName in
+                    schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)
+                }
+                if let inverse, !inverse.relationship.isToMany {
+                    guard
+                        let mapping = schema.relationshipStorageMapping(
+                            modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name)
+                    else { return nil }
+                    return RuntimePredicateRelationship(
+                        ownerEntityName: entity.name,
+                        propertyName: relationship.name,
+                        destinationEntityName: relationship.destination,
+                        destinationRootEntityName: rootEntity(for: destination).name,
+                        foreignKeyColumnName: mapping.storageColumnName,
+                        destinationEntityIDs: descendantEntityIDs(for: destination),
+                        isToMany: true,
+                        storesForeignKeyOnDestination: true)
+                }
+                guard relationship.inverse == nil || inverse?.relationship.isToMany == true,
                     let joinTable = joinTableName(for: entity, relationship)
                 else { return nil }
                 let relationshipIsSideAOwner = joinSideAOwner(entity, relationship)
@@ -1976,8 +1988,7 @@ public final class ModelContext {
                 let inverseName = metadata.inverse,
                 let schema = containerStorage?.schema,
                 let destination = schema.entity(forName: metadata.destination),
-                schema.relationshipDeclaration(named: inverseName, onOrBelow: destination.name)?.relationship.isToMany
-                    == true
+                schema.relationshipDeclaration(named: inverseName, onOrBelow: destination.name) != nil
             {
                 if let resolver = try relationshipResolver(),
                     let property = type(of: model).schemaMetadata().first(where: { $0.name == name }),

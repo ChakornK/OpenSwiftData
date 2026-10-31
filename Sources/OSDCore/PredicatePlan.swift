@@ -45,11 +45,13 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
     public let destinationEntityName: String
     /// The root entity that stores destination rows.
     public let destinationRootEntityName: String
-    /// The physical foreign-key column on the owner root table for to-one relationships.
+    /// The physical foreign-key column for a to-one or inverse one-to-many relationship.
     public let foreignKeyColumnName: String
-    /// Whether the relationship is encoded by a no-inverse to-many join table.
+    /// Whether a queried to-many relationship is stored as a foreign key on each destination row.
+    public let storesForeignKeyOnDestination: Bool
+    /// Whether the relationship contains multiple destinations.
     public let isToMany: Bool
-    /// The join table used for direct no-inverse to-many relationships.
+    /// The join table used for direct or many-to-many collection relationships.
     public let joinTableName: String?
     /// The owner primary-key column in the join table.
     public let ownerJoinColumnName: String
@@ -67,6 +69,7 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
         foreignKeyColumnName: String,
         destinationEntityIDs: [Int],
         isToMany: Bool = false,
+        storesForeignKeyOnDestination: Bool = false,
         joinTableName: String? = nil,
         ownerJoinColumnName: String = "Z_A",
         destinationJoinColumnName: String = "Z_B"
@@ -76,6 +79,7 @@ public struct RuntimePredicateRelationship: Sendable, Equatable {
         self.destinationEntityName = destinationEntityName
         self.destinationRootEntityName = destinationRootEntityName
         self.foreignKeyColumnName = foreignKeyColumnName
+        self.storesForeignKeyOnDestination = storesForeignKeyOnDestination
         self.destinationEntityIDs = destinationEntityIDs
         self.isToMany = isToMany
         self.joinTableName = joinTableName

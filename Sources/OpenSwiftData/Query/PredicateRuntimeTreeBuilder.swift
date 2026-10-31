@@ -366,8 +366,11 @@ package enum PredicateRuntimeTreeBuilder {
 
     private static func supportsCollectionPredicate(_ relationship: Schema.Relationship, schema: Schema) -> Bool {
         guard let inverseName = relationship.inverse else { return true }
-        return schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)?.relationship
-            .isToMany == true
+        guard let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)
+        else { return false }
+        if inverse.relationship.isToMany { return true }
+        return schema.relationshipStorageMapping(
+            modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name) != nil
     }
 
     private static func propertyReference(

@@ -577,16 +577,21 @@ package enum LightweightMigration {
         }
         for entity in newEntities {
             let hasNewDescendants = destination.entities.contains { $0.superentityName == entity.name }
-            if let parentName = entity.superentityName {
+            let entityRootName = try rootName(for: entity.name, schema: destination)
+            let rootIsNew = sourceByName[entityRootName] == nil
+            if let parentName = entity.superentityName, !rootIsNew {
                 guard sourceByName[parentName] != nil, !hasNewDescendants else {
                     throw SwiftDataError.migrationUnsupported(
                         "Hierarchy migration only adds leaf subclasses beneath existing entities.")
                 }
-            } else {
-                guard !hasNewDescendants else {
+            } else if entity.superentityName == nil {
+                guard rootIsNew else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Hierarchy migration only adds independent roots without descendants.")
+                        "Hierarchy migration cannot add a root over an existing entity.")
                 }
+            } else if !rootIsNew {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy migration cannot add an intermediate class beneath an existing root.")
             }
             for relationship in entity.relationships {
                 if relationship.isToMany, relationship.inverse != nil {
@@ -622,7 +627,7 @@ package enum LightweightMigration {
                         throw SwiftDataError.migrationUnsupported(
                             "New hierarchy to-many relationships cannot have cardinality constraints.")
                     }
-                    if entity.superentityName == nil {
+                    if rootIsNew {
                         guard source.entity(forName: relationship.destination) != nil,
                             entity.name != relationship.destination
                         else {
@@ -759,6 +764,8 @@ package enum LightweightMigration {
                 }
                 let isNewRoot = sourceEntity == nil && destinationEntity.superentityName == nil
                 let isNewLeaf = sourceEntity == nil && destinationEntity.superentityName != nil
+                let destinationRootName = try rootName(for: destinationEntity.name, schema: destination)
+                let isNewTreeEntity = sourceEntity == nil && sourceByName[destinationRootName] == nil
                 guard isNewRoot || isNewLeaf || (attribute.isOptional && attribute.defaultValue == nil),
                     attribute.originalName == nil,
                     (!attribute.options.contains(.unique) || sourceEntity == nil),
@@ -770,7 +777,7 @@ package enum LightweightMigration {
                     throw SwiftDataError.migrationUnsupported(
                         "Hierarchy migration only adds optional scalar attributes without defaults.")
                 }
-                if sourceEntity == nil, destinationEntity.superentityName == nil { continue }
+                if isNewTreeEntity { continue }
                 let root = try rootName(for: destinationEntity.name, schema: destination)
                 let keyName = columnKey("Z\(attribute.name)")
                 guard !sourceColumnsByRoot[root, default: []].contains(keyName) else {
@@ -802,17 +809,18 @@ package enum LightweightMigration {
         }
 
         for entity in newEntities {
+            let rootIsNew = sourceByName[try rootName(for: entity.name, schema: destination)] == nil
             for relationship in entity.relationships {
-                if entity.superentityName == nil {
+                if rootIsNew {
                     if !relationship.isToMany {
                         guard
                             let mapping = destination.relationshipStorageMapping(
                                 modelEntityName: entity.name, relationshipName: relationship.name),
                             mapping.declaringEntityName == entity.name,
-                            mapping.ownerRootEntityName == entity.name
+                            mapping.ownerRootEntityName == (try rootName(for: entity.name, schema: destination))
                         else {
                             throw SwiftDataError.migrationUnsupported(
-                                "New root to-one relationships must use directly owned storage.")
+                                "New-tree to-one relationships must use directly owned storage.")
                         }
                         continue
                     }

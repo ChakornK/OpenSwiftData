@@ -120,6 +120,24 @@ final class IndependentToManyRootFixture {
 }
 
 @Model
+class MigratedTreeRootFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class MigratedTreeLeafFixture: MigratedTreeRootFixture {
+    var label: String?
+    @Relationship(inverse: nil) var target: InheritedToOneMigrationTargetFixture?
+
+    init(name: String, label: String?, target: InheritedToOneMigrationTargetFixture?) {
+        self.label = label
+        self.target = target
+        super.init(name: name)
+    }
+}
+
+@Model
 class InheritedToOneMigrationBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -4875,6 +4893,71 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             try reopened.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name),
             ["base", "child"])
+    }
+
+    @MainActor
+    func testAddingEntirelyNewRootAndLeafTreeRoundTrips() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "new-tree-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToOneMigrationTargetFixture.self,
+            configurations: configuration)
+        let base = InheritanceMacroBaseFixture(name: "existing base")
+        let child = InheritanceMacroChildFixture(name: "existing child", age: 4)
+        let target = InheritedToOneMigrationTargetFixture(title: "target")
+        sourceContainer.mainContext.insert(base)
+        sourceContainer.mainContext.insert(child)
+        sourceContainer.mainContext.insert(target)
+        try sourceContainer.mainContext.save()
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: MigratedTreeRootFixture.self,
+            MigratedTreeLeafFixture.self,
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToOneMigrationTargetFixture.self,
+            configurations: configuration)
+        for name in [
+            "InheritanceMacroBaseFixture", "InheritanceMacroChildFixture", "InheritedToOneMigrationTargetFixture",
+        ] {
+            XCTAssertEqual(container.schema.entityIDsByName[name], sourceIDs[name])
+        }
+        let rootID = try XCTUnwrap(container.schema.entityIDsByName["MigratedTreeRootFixture"])
+        let leafID = try XCTUnwrap(container.schema.entityIDsByName["MigratedTreeLeafFixture"])
+        XCTAssertLessThan(rootID, leafID)
+
+        let root = MigratedTreeRootFixture(name: "new root")
+        let leaf = MigratedTreeLeafFixture(name: "new leaf", label: "leaf", target: target)
+        container.mainContext.insert(root)
+        container.mainContext.insert(leaf)
+        try container.mainContext.save()
+        let reader = container.makeContext()
+        XCTAssertEqual(
+            Set(try reader.fetch(FetchDescriptor<MigratedTreeRootFixture>()).map(\.name)), ["new root", "new leaf"])
+        let fetchedLeaf = try XCTUnwrap(reader.fetch(FetchDescriptor<MigratedTreeLeafFixture>()).first)
+        XCTAssertEqual(fetchedLeaf.target?.title, "target")
+        XCTAssertEqual(fetchedLeaf.label, "leaf")
+
+        let reopened = try ModelContainer(
+            for: MigratedTreeRootFixture.self,
+            MigratedTreeLeafFixture.self,
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToOneMigrationTargetFixture.self,
+            configurations: configuration)
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name),
+            ["existing base", "existing child"])
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigratedTreeLeafFixture>()).first?.target?.title,
+            "target")
     }
 
     @MainActor

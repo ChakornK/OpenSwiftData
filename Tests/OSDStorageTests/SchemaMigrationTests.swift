@@ -813,6 +813,70 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testHierarchyMigrationAddsEntirelyNewRootAndLeafTree() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "NewRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "NewLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "label", type: "String", isOptional: true),
+                ],
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: true)
+                ],
+                superentityName: "NewRoot"),
+            Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 1)", [.int(Int64(sourceIDs["Dog"]!))])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        XCTAssertEqual(destinationIDs["Animal"], sourceIDs["Animal"])
+        XCTAssertEqual(destinationIDs["Dog"], sourceIDs["Dog"])
+        XCTAssertEqual(destinationIDs["Target"], sourceIDs["Target"])
+        let rootID = try XCTUnwrap(destinationIDs["NewRoot"])
+        let leafID = try XCTUnwrap(destinationIDs["NewLeaf"])
+        XCTAssertLessThan(rootID, leafID)
+        XCTAssertGreaterThan(rootID, try XCTUnwrap(sourceIDs.values.max()))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_SUPER FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(rootID))]).first?.first
+            },
+            .int(0))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_SUPER FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(leafID))]).first?.first
+            },
+            .int(Int64(rootID)))
+        let columns = try migrated.read { try $0.rows("PRAGMA table_info(ZNEWROOT)") }
+        XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZNAME") })
+        XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZLABEL") })
+        XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZNEWLEAF_TARGET") })
+        let oldRows = try migrated.read { try $0.rows("SELECT Z_ENT, Z_PK FROM ZANIMAL") }
+        XCTAssertEqual(oldRows, [[.int(Int64(sourceIDs["Dog"]!)), .int(1)]])
+        try migrated.close()
+    }
+
     func testHierarchyMigrationAddsIndependentRootWithOptionalToOneRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2198,6 +2262,39 @@ final class SchemaMigrationTests: XCTestCase {
                     Schema.Relationship(name: "target", destination: "Target", isOptional: true)
                 ]),
             Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try initial.read {
+            try LightweightMigration.storedEntityIDs(schema: source, connection: $0)
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        try reopened.close()
+    }
+
+    func testOpeningStoreFailsClosedWhenAddingIntermediateUnderExistingRoot() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Mammal", superentityName: "Animal"),
+            Schema.Entity(name: "Cat", superentityName: "Mammal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try initial.read {

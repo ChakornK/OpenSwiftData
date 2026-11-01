@@ -586,6 +586,66 @@ final class InverseNestedQuantifierItemFixture {
 }
 
 @Model
+final class DeepInverseQuantifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var groups: [DeepInverseQuantifierGroupFixture] = []
+    init(name: String, groups: [DeepInverseQuantifierGroupFixture] = []) {
+        self.name = name
+        self.groups = groups
+    }
+}
+
+@Model
+final class DeepInverseQuantifierGroupFixture {
+    var name: String
+    var children: [DeepInverseQuantifierChildFixture] = []
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class DeepInverseQuantifierChildFixture {
+    var name: String
+    @Relationship(inverse: \DeepInverseQuantifierGroupFixture.children)
+    var group: DeepInverseQuantifierGroupFixture?
+    var items: [DeepInverseQuantifierItemFixture] = []
+    init(name: String, group: DeepInverseQuantifierGroupFixture? = nil) {
+        self.name = name
+        self.group = group
+    }
+}
+
+@Model
+final class DeepInverseQuantifierItemFixture {
+    var title: String
+    @Relationship(inverse: \DeepInverseQuantifierChildFixture.items)
+    var child: DeepInverseQuantifierChildFixture?
+    init(title: String, child: DeepInverseQuantifierChildFixture? = nil) {
+        self.title = title
+        self.child = child
+    }
+}
+
+@Model
+final class NestedInverseManyToManyRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var groups: [NestedInverseManyToManyGroupFixture] = []
+    init(name: String, groups: [NestedInverseManyToManyGroupFixture] = []) {
+        self.name = name
+        self.groups = groups
+    }
+}
+
+@Model
+final class NestedInverseManyToManyGroupFixture {
+    var name: String
+    @Relationship(inverse: nil) var tags: [InheritedManyToManyTagFixture] = []
+    init(name: String, tags: [InheritedManyToManyTagFixture] = []) {
+        self.name = name
+        self.tags = tags
+    }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -3307,6 +3367,128 @@ final class PersistentModelTests: XCTestCase {
         matchingItem.child = child
         try context.save()
         XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["owner"])
+    }
+
+    @MainActor
+    func testNestedContainsTraversesThreeInverseBackedCollectionLevels() throws {
+        let container = try ModelContainer(
+            for: DeepInverseQuantifierOwnerFixture.self,
+            DeepInverseQuantifierGroupFixture.self,
+            DeepInverseQuantifierChildFixture.self,
+            DeepInverseQuantifierItemFixture.self,
+            configurations: .sqliteMemory("three-level-inverse-backed-collections"))
+        let context = container.mainContext
+        let matchingGroup = DeepInverseQuantifierGroupFixture(name: "matching group")
+        let emptyGroup = DeepInverseQuantifierGroupFixture(name: "empty group")
+        let otherGroup = DeepInverseQuantifierGroupFixture(name: "other group")
+        let matchingChild = DeepInverseQuantifierChildFixture(name: "matching child")
+        let emptyChild = DeepInverseQuantifierChildFixture(name: "empty child")
+        let otherChild = DeepInverseQuantifierChildFixture(name: "other child")
+        let matchingItem = DeepInverseQuantifierItemFixture(title: "match")
+        let matchingOwner = DeepInverseQuantifierOwnerFixture(name: "matching owner", groups: [matchingGroup])
+        let emptyOwner = DeepInverseQuantifierOwnerFixture(name: "empty owner", groups: [emptyGroup])
+        let otherOwner = DeepInverseQuantifierOwnerFixture(name: "other owner", groups: [otherGroup])
+        context.insert(matchingGroup)
+        context.insert(emptyGroup)
+        context.insert(otherGroup)
+        context.insert(matchingChild)
+        context.insert(emptyChild)
+        context.insert(otherChild)
+        context.insert(matchingItem)
+        context.insert(matchingOwner)
+        context.insert(emptyOwner)
+        context.insert(otherOwner)
+        matchingChild.group = matchingGroup
+        emptyChild.group = emptyGroup
+        otherChild.group = otherGroup
+        matchingItem.child = matchingChild
+        try context.save()
+
+        let needle = "match"
+        let storedDescriptor = FetchDescriptor<DeepInverseQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.title == needle }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["matching owner"])
+
+        let pendingItem = DeepInverseQuantifierItemFixture(title: "other")
+        context.insert(pendingItem)
+        pendingItem.child = emptyChild
+        let pendingDescriptor = FetchDescriptor<DeepInverseQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.title == needle }
+                    }
+                }
+            })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["matching owner"])
+
+        matchingItem.child = nil
+        XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
+        matchingItem.child = matchingChild
+        try context.save()
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["matching owner"])
+
+        matchingItem.child = otherChild
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["other owner"])
+        context.delete(otherChild)
+        XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
+        try context.save()
+        XCTAssertTrue(try context.fetch(storedDescriptor).isEmpty)
+    }
+
+    @MainActor
+    func testNestedContainsTraversesInverseManyToManyAtThirdLevel() throws {
+        let container = try ModelContainer(
+            for: NestedInverseManyToManyRootFixture.self,
+            NestedInverseManyToManyGroupFixture.self,
+            InheritedManyToManyTagFixture.self,
+            InheritedManyToManyChildFixture.self,
+            configurations: .sqliteMemory("nested-inverse-many-to-many-third-level"))
+        let context = container.mainContext
+        let tag = InheritedManyToManyTagFixture(title: "selected")
+        let owner = InheritedManyToManyChildFixture(name: "owner", tags: [tag])
+        let group = NestedInverseManyToManyGroupFixture(name: "group", tags: [tag])
+        let root = NestedInverseManyToManyRootFixture(name: "root", groups: [group])
+        context.insert(tag)
+        context.insert(owner)
+        context.insert(group)
+        context.insert(root)
+        try context.save()
+
+        let needle = "owner"
+        let descriptor = FetchDescriptor<NestedInverseManyToManyRootFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.tags.contains { tag in
+                        tag.owners.contains { $0.name == needle }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["root"])
+
+        let pendingOwner = InheritedManyToManyChildFixture(name: needle, tags: [])
+        context.insert(pendingOwner)
+        pendingOwner.tags = [tag]
+        let pendingDescriptor = FetchDescriptor<NestedInverseManyToManyRootFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.tags.contains { tag in
+                        tag.owners.contains { $0.name == needle }
+                    }
+                }
+            })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["root"])
+
+        group.tags = []
+        XCTAssertTrue(try context.fetch(pendingDescriptor).isEmpty)
     }
 
     @MainActor

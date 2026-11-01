@@ -172,7 +172,7 @@ package enum PredicateRuntimeTreeBuilder {
                 if collectionVariableScopes.isEmpty {
                     collectionVariableScopes.append(sequenceRootID)
                 }
-                guard collectionVariableScopes.count <= 2,
+                guard collectionVariableScopes.count <= 3,
                     collectionVariableScopes.last == sequenceRootID
                 else {
                     throw SwiftDataError.unsupportedPredicate(

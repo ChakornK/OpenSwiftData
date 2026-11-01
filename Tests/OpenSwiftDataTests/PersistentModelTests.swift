@@ -418,6 +418,42 @@ final class MultiHopAllSatisfyItemFixture {
 }
 
 @Model
+final class ThreeLevelQuantifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var groups: [ThreeLevelQuantifierGroupFixture]
+    init(name: String, groups: [ThreeLevelQuantifierGroupFixture]) {
+        self.name = name
+        self.groups = groups
+    }
+}
+
+@Model
+final class ThreeLevelQuantifierGroupFixture {
+    var name: String
+    @Relationship(inverse: nil) var children: [ThreeLevelQuantifierChildFixture]
+    init(name: String, children: [ThreeLevelQuantifierChildFixture]) {
+        self.name = name
+        self.children = children
+    }
+}
+
+@Model
+final class ThreeLevelQuantifierChildFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [ThreeLevelQuantifierItemFixture]
+    init(name: String, items: [ThreeLevelQuantifierItemFixture]) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class ThreeLevelQuantifierItemFixture {
+    var value: String
+    init(value: String) { self.value = value }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -3256,6 +3292,67 @@ final class PersistentModelTests: XCTestCase {
                 })
             })
         XCTAssertThrowsError(try context.fetch(depthThreeDescriptor))
+    }
+
+    @MainActor
+    func testNestedRelationshipContainsWhereSupportsThreeDirectLevels() throws {
+        let container = try ModelContainer(
+            for: ThreeLevelQuantifierOwnerFixture.self,
+            ThreeLevelQuantifierGroupFixture.self,
+            ThreeLevelQuantifierChildFixture.self,
+            ThreeLevelQuantifierItemFixture.self,
+            configurations: .sqliteMemory("nested-relationship-quantifier-depth-three"))
+        let context = container.mainContext
+        let accepted = ThreeLevelQuantifierItemFixture(value: "match")
+        let rejected = ThreeLevelQuantifierItemFixture(value: "other")
+        let matchingChild = ThreeLevelQuantifierChildFixture(name: "matching-child", items: [accepted])
+        let failingChild = ThreeLevelQuantifierChildFixture(name: "failing-child", items: [rejected])
+        let emptyChild = ThreeLevelQuantifierChildFixture(name: "empty-child", items: [])
+        let matchingGroup = ThreeLevelQuantifierGroupFixture(name: "matching-group", children: [matchingChild])
+        let failingGroup = ThreeLevelQuantifierGroupFixture(name: "failing-group", children: [failingChild])
+        let emptyGroup = ThreeLevelQuantifierGroupFixture(name: "empty-group", children: [emptyChild])
+        let emptyOwnerGroup = ThreeLevelQuantifierOwnerFixture(name: "empty-owner-group", groups: [emptyGroup])
+        let matchingOwner = ThreeLevelQuantifierOwnerFixture(name: "matching-owner", groups: [matchingGroup])
+        let failingOwner = ThreeLevelQuantifierOwnerFixture(name: "failing-owner", groups: [failingGroup])
+        let emptyOwner = ThreeLevelQuantifierOwnerFixture(name: "empty-owner", groups: [])
+        context.insert(accepted)
+        context.insert(rejected)
+        context.insert(matchingChild)
+        context.insert(failingChild)
+        context.insert(emptyChild)
+        context.insert(matchingGroup)
+        context.insert(failingGroup)
+        context.insert(emptyGroup)
+        context.insert(emptyOwnerGroup)
+        context.insert(matchingOwner)
+        context.insert(failingOwner)
+        context.insert(emptyOwner)
+        try context.save()
+
+        let needle = "match"
+        let descriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.value == needle }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching-owner"])
+
+        let pendingItem = ThreeLevelQuantifierItemFixture(value: needle)
+        context.insert(pendingItem)
+        failingChild.items.append(pendingItem)
+        let pendingDescriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.value == needle }
+                    }
+                }
+            })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching-owner", "failing-owner"])
     }
 
     @MainActor

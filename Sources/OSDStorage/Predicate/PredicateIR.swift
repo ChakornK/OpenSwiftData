@@ -569,11 +569,16 @@ package enum PredicateIRBuilder {
                 propertyPath.hasPrefix("\(finalScope)[].")
             {
                 localPath = String(propertyPath.dropFirst(finalScope.count + 3))
+            } else if !propertyPath.contains("."),
+                isSupportedElementScalar(attributeTypes["\(relationship)[].\(propertyPath)"])
+                    || isSupportedElementScalar(attributeTypes[propertyPath])
+            {
+                localPath = propertyPath
             } else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Collection predicate bodies support direct scalar properties of the related model.")
             }
-            let typeName = attributeTypes[path[0]]
+            let typeName = attributeTypes[path[0]] ?? attributeTypes["\(relationship)[].\(path[0])"]
             guard isSupportedElementScalar(typeName) else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Collection predicate bodies require direct persisted scalar attributes.")
@@ -599,20 +604,28 @@ package enum PredicateIRBuilder {
                 normalizedLHS,
                 normalizedRHS)
         case let .relationshipContains(name, body):
-            let nestedParts = name.split(separator: ".").map(String.init)
+            let prefix = "\(relationship)[]."
             let localName: String
-            if depth == 0, nestedParts.count == 2,
-                nestedParts[0].hasSuffix("[]"),
-                String(nestedParts[0].dropLast(2)) == relationship
+            let nextRelationship: String
+            if name.hasPrefix(prefix),
+                let nextPart = String(name.dropFirst(prefix.count)).split(separator: ".").first
             {
-                localName = nestedParts[1]
-            } else if depth == 0, nestedParts.count == 1 {
-                localName = nestedParts[0]
+                localName = nextPart.hasSuffix("[]") ? String(nextPart.dropLast(2)) : String(nextPart)
+                nextRelationship = "\(relationship)[].\(localName)"
+            } else if !name.contains("."), !name.contains("[]") {
+                localName = name
+                nextRelationship = "\(relationship)[].\(localName)"
             } else {
                 throw SwiftDataError.unsupportedPredicate(
-                    "Nested collection predicates support one direct inner relationship.")
+                    "Nested collection relationship '\(name)' is not direct from '\(relationship)'.")
             }
-            return .relationshipContains(localName, body)
+            guard depth < 2 else {
+                throw SwiftDataError.unsupportedPredicate("Nested collection predicates support at most three levels.")
+            }
+            return .relationshipContains(
+                localName,
+                try elementPredicate(
+                    body, relationship: nextRelationship, attributeTypes: attributeTypes, depth: depth + 1))
         case let .conjunction(lhs, rhs):
             return .conjunction(
                 try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),

@@ -1895,32 +1895,37 @@ public final class ModelContext {
         var attributeTypes = Dictionary(
             uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) } + flattenedAttributes)
         var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
-        for relationship in entity.relationships where relationship.isToMany {
-            attributeNames.insert(relationship.name)
-            attributeTypes[relationship.name] = "OSDToManyRelationship"
-            guard let destination = containerStorage?.schema.entity(forName: relationship.destination) else { continue }
+        func addCollectionPath(
+            ownerEntity: Schema.Entity,
+            relationship: Schema.Relationship,
+            prefix: String,
+            depth: Int
+        ) {
+            guard depth <= 3,
+                relationshipPaths.contains(where: {
+                    $0.ownerEntityName == ownerEntity.name && $0.propertyName == relationship.name && $0.isToMany
+                }),
+                let destination = containerStorage?.schema.entity(forName: relationship.destination)
+            else { return }
+            let path = prefix.isEmpty ? relationship.name : "\(prefix)[].\(relationship.name)"
+            attributeNames.insert(path)
+            attributeTypes[path] = "OSDToManyRelationship"
             for attribute in destination.attributes where !attribute.options.contains(.flattened) {
-                let path = "\(relationship.name)[].\(attribute.name)"
-                attributeNames.insert(path)
-                attributeTypes[path] = attribute.type
+                let elementPath = "\(path)[].\(attribute.name)"
+                attributeNames.insert(elementPath)
+                attributeTypes[elementPath] = attribute.type
             }
+            guard depth < 3 else { return }
             for nestedRelationship in destination.relationships where nestedRelationship.isToMany {
-                guard
-                    relationshipPaths.contains(where: {
-                        $0.ownerEntityName == destination.name && $0.propertyName == nestedRelationship.name
-                    }),
-                    let nestedDestination = containerStorage?.schema.entity(
-                        forName: nestedRelationship.destination)
-                else { continue }
-                let nestedPath = "\(relationship.name)[].\(nestedRelationship.name)"
-                attributeNames.insert(nestedPath)
-                attributeTypes[nestedPath] = "OSDToManyRelationship"
-                for attribute in nestedDestination.attributes where !attribute.options.contains(.flattened) {
-                    let nestedElementPath = "\(nestedPath)[].\(attribute.name)"
-                    attributeNames.insert(nestedElementPath)
-                    attributeTypes[nestedElementPath] = attribute.type
-                }
+                addCollectionPath(
+                    ownerEntity: destination,
+                    relationship: nestedRelationship,
+                    prefix: path,
+                    depth: depth + 1)
             }
+        }
+        for relationship in entity.relationships where relationship.isToMany {
+            addCollectionPath(ownerEntity: entity, relationship: relationship, prefix: "", depth: 1)
         }
         if let schema = containerStorage?.schema {
             func addRelationshipPaths(
@@ -2101,8 +2106,8 @@ public final class ModelContext {
                 evaluating plan: PredicatePlan,
                 depth: Int
             ) throws -> RuntimePredicateEvaluator.Context {
-                guard depth <= 2 else {
-                    throw SwiftDataError.unsupportedPredicate("Collection predicates support at most two levels.")
+                guard depth <= 3 else {
+                    throw SwiftDataError.unsupportedPredicate("Collection predicates support at most three levels.")
                 }
                 let nestedNames = RuntimePredicateEvaluator.nestedRelationshipNames(in: plan)
                 let allNames = RuntimePredicateEvaluator.referencedProperties(in: plan)

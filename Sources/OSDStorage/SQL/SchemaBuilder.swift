@@ -477,16 +477,7 @@ package enum SchemaBuilder {
                         if relationship.inverse != nil, isNonOwner(member, relationship, schema: schema) {
                             continue
                         }
-                        let destinationRoot = mapping.destinationRootEntityName
-                        let ownerIsHierarchical = entities.contains {
-                            $0.name != mapping.ownerRootEntityName
-                                && rootsByEntity[$0.name] == mapping.ownerRootEntityName
-                        }
-                        let destinationIsHierarchical = entities.contains {
-                            $0.name != destinationRoot && rootsByEntity[$0.name] == destinationRoot
-                        }
                         guard mapping.ownerRootEntityName == root.name,
-                            relationship.inverse != nil || !ownerIsHierarchical || !destinationIsHierarchical,
                             relationship.inverse.map({ inverseName in
                                 schema.relationshipDeclaration(
                                     named: inverseName, onOrBelow: mapping.destinationEntityName)?.relationship
@@ -495,7 +486,7 @@ package enum SchemaBuilder {
                             let joinTable = joinTableName(for: member, relationship: relationship, schema: schema)
                         else {
                             throw SwiftDataError.unsupportedSchemaProperty(
-                                "Inherited many-to-many storage requires no more than one hierarchy endpoint ('\(member.name).\(relationship.name)')."
+                                "Inherited many-to-many storage has no compatible join-table mapping ('\(member.name).\(relationship.name)')."
                             )
                         }
                         inheritedJoinTablesByName[joinTable] = root.name

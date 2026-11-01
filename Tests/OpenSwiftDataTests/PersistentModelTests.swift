@@ -655,6 +655,54 @@ final class ToManyHierarchyTargetSiblingFixture: ToManyHierarchyTargetBaseFixtur
 }
 
 @Model
+class DualHierarchyOwnerBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class DualHierarchyOwnerLeafAFixture: DualHierarchyOwnerBaseFixture {
+    @Relationship(inverse: nil) var items: [DualHierarchyTargetLeafFixture]
+    init(name: String, items: [DualHierarchyTargetLeafFixture]) {
+        self.items = items
+        super.init(name: name)
+    }
+}
+
+@Model
+final class DualHierarchyOwnerLeafBFixture: DualHierarchyOwnerBaseFixture {
+    @Relationship(inverse: nil) var items: [DualHierarchyTargetLeafFixture]
+    init(name: String, items: [DualHierarchyTargetLeafFixture]) {
+        self.items = items
+        super.init(name: name)
+    }
+}
+
+@Model
+class DualHierarchyTargetBaseFixture {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+@Model
+class DualHierarchyTargetLeafFixture: DualHierarchyTargetBaseFixture {
+    var code: String
+    init(name: String, code: String) {
+        self.code = code
+        super.init(name: name)
+    }
+}
+
+@Model
+final class DualHierarchyTargetSiblingFixture: DualHierarchyTargetBaseFixture {
+    var label: String
+    init(name: String, label: String) {
+        self.label = label
+        super.init(name: name)
+    }
+}
+
+@Model
 final class InheritedToOneTargetFixture {
     var title: String
     init(title: String) { self.title = title }
@@ -4958,6 +5006,74 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             try reopened.mainContext.fetch(FetchDescriptor<MigratedTreeLeafFixture>()).first?.target?.title,
             "target")
+    }
+
+    @MainActor
+    func testNoInverseToManyBetweenHierarchiesIsIsolatedByDeclaringLeaf() throws {
+        let container = try ModelContainer(
+            for: DualHierarchyOwnerBaseFixture.self,
+            DualHierarchyOwnerLeafAFixture.self,
+            DualHierarchyOwnerLeafBFixture.self,
+            DualHierarchyTargetBaseFixture.self,
+            DualHierarchyTargetLeafFixture.self,
+            DualHierarchyTargetSiblingFixture.self,
+            configurations: .sqliteMemory("dual-hierarchy-no-inverse-to-many"))
+        let writer = container.mainContext
+        let firstTarget = DualHierarchyTargetLeafFixture(name: "first", code: "a")
+        let secondTarget = DualHierarchyTargetLeafFixture(name: "second", code: "b")
+        let siblingTarget = DualHierarchyTargetSiblingFixture(name: "sibling", label: "x")
+        let firstOwner = DualHierarchyOwnerLeafAFixture(name: "first owner", items: [firstTarget])
+        let secondOwner = DualHierarchyOwnerLeafBFixture(name: "second owner", items: [secondTarget])
+        writer.insert(firstTarget)
+        writer.insert(secondTarget)
+        writer.insert(siblingTarget)
+        writer.insert(firstOwner)
+        writer.insert(secondOwner)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let owners = try reader.fetch(FetchDescriptor<DualHierarchyOwnerBaseFixture>())
+        let fetchedFirstOwner = try XCTUnwrap(
+            owners.first { $0.name == "first owner" } as? DualHierarchyOwnerLeafAFixture)
+        let fetchedSecondOwner = try XCTUnwrap(
+            owners.first { $0.name == "second owner" } as? DualHierarchyOwnerLeafBFixture)
+        XCTAssertEqual(fetchedFirstOwner.items.map(\.name), ["first"])
+        XCTAssertEqual(fetchedSecondOwner.items.map(\.name), ["second"])
+
+        let firstPredicate = #Predicate<DualHierarchyOwnerLeafAFixture> { owner in
+            owner.items.contains { $0.code == "b" }
+        }
+        XCTAssertTrue(try reader.fetch(FetchDescriptor(predicate: firstPredicate)).isEmpty)
+
+        let readerTarget = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<DualHierarchyTargetLeafFixture>()).first(where: { $0.name == "first" }))
+        XCTAssertEqual(readerTarget.persistentModelID.entityName, "DualHierarchyTargetLeafFixture")
+        reader.delete(readerTarget)
+        try reader.save()
+        let joinTableA = "Z_DUALHIERARCHYOWNERLEAFAFIXTURE_ITEMS_DUALHIERARCHYTARGETLEAFFIXTURE"
+        let joinTableB = "Z_DUALHIERARCHYOWNERLEAFBFIXTURE_ITEMS_DUALHIERARCHYTARGETLEAFFIXTURE"
+        let afterTargetDeleteCounts = try container.store?.read {
+            try $0.rows(
+                "SELECT (SELECT COUNT(*) FROM \(joinTableA)), (SELECT COUNT(*) FROM \(joinTableB))",
+                arguments: [])
+        }
+        XCTAssertEqual(afterTargetDeleteCounts, [[.int(0), .int(1)]])
+        let afterTargetDelete = container.makeContext()
+        let remainingOwners = try afterTargetDelete.fetch(FetchDescriptor<DualHierarchyOwnerBaseFixture>())
+        let remainingFirstOwner = try XCTUnwrap(
+            remainingOwners.first { $0.name == "first owner" } as? DualHierarchyOwnerLeafAFixture)
+        let remainingSecondOwner = try XCTUnwrap(
+            remainingOwners.first { $0.name == "second owner" } as? DualHierarchyOwnerLeafBFixture)
+        XCTAssertTrue(remainingFirstOwner.items.isEmpty)
+        XCTAssertEqual(remainingSecondOwner.items.map(\.name), ["second"])
+
+        afterTargetDelete.delete(remainingFirstOwner)
+        try afterTargetDelete.save()
+        let counts = try container.store?.read {
+            try $0.rows(
+                "SELECT (SELECT COUNT(*) FROM \(joinTableA)), (SELECT COUNT(*) FROM \(joinTableB))", arguments: [])
+        }
+        XCTAssertEqual(counts, [[.int(0), .int(1)]])
     }
 
     @MainActor

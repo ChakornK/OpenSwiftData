@@ -2686,8 +2686,10 @@ public final class ModelContext {
                 if relationship.inverse == nil {
                     guard let joinTable = joinTableName(for: entity, relationship) else { continue }
                     table = joinTable
-                    sideAEntity = entity.name
-                    sideBEntity = relationship.destination
+                    let mapping = container.schema.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name)
+                    sideAEntity = mapping?.declaringEntityName ?? entity.name
+                    sideBEntity = mapping?.destinationEntityName ?? relationship.destination
                 } else if isCanonicalSideA(entity, relationship),
                     let inverseName = relationship.inverse,
                     let inverse = container.schema.relationshipDeclaration(
@@ -2701,7 +2703,7 @@ public final class ModelContext {
                 } else {
                     continue
                 }
-                if isEntity(model.persistentModelID.entityName, descendantOf: entity.name) {
+                if isEntity(model.persistentModelID.entityName, descendantOf: sideAEntity) {
                     try connection.execute("DELETE FROM \(table) WHERE Z_A = ?", arguments: [.int(primaryKey)])
                 }
                 if isEntity(model.persistentModelID.entityName, descendantOf: sideBEntity) {

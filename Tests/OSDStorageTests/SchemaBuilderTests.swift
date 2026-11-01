@@ -271,7 +271,7 @@ final class SchemaBuilderTests: XCTestCase {
         XCTAssertEqual(statements.filter { $0.contains("ZBASE_CHILD_ZSCORE") }.count, 2)
     }
 
-    func testInheritedToManyOwnerToFlatDestinationUsesJoinTable() throws {
+    func testInheritedToManyOwnerAndHierarchicalDestinationUseJoinTable() throws {
         let schema = Schema([
             Schema.Entity(name: "Base"),
             Schema.Entity(
@@ -299,11 +299,9 @@ final class SchemaBuilderTests: XCTestCase {
                 superentityName: "Base"),
             Schema.Entity(name: "Target", superentityName: "Base"),
         ])
-        XCTAssertThrowsError(try SchemaBuilder.build(hierarchyDestination)) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty = error else {
-                return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
-            }
-        }
+        let hierarchyBuilt = try SchemaBuilder.build(hierarchyDestination)
+        XCTAssertTrue(
+            hierarchyBuilt.statements.contains("CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);"))
 
         let oneToOneInverse = Schema([
             Schema.Entity(name: "Base"),

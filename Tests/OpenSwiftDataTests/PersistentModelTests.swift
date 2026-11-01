@@ -422,6 +422,30 @@ final class DetachedManyToManyRightFixture {
 }
 
 @Model
+final class DetachedInverseAmbiguityOwnerFixture {
+    var name: String
+    @Relationship(inverse: \DetachedInverseAmbiguityTargetFixture.primaryOwner)
+    var targets: [DetachedInverseAmbiguityTargetFixture] = []
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class DetachedInverseAmbiguityTargetFixture {
+    var name: String
+    var primaryOwner: DetachedInverseAmbiguityOwnerFixture?
+    var secondaryOwner: DetachedInverseAmbiguityOwnerFixture?
+
+    init(
+        name: String, primaryOwner: DetachedInverseAmbiguityOwnerFixture? = nil,
+        secondaryOwner: DetachedInverseAmbiguityOwnerFixture? = nil
+    ) {
+        self.name = name
+        self.primaryOwner = primaryOwner
+        self.secondaryOwner = secondaryOwner
+    }
+}
+
+@Model
 final class MultiHopAllSatisfyRootFixture {
     var name: String
     @Relationship(inverse: nil) var middle: MultiHopAllSatisfyMiddleFixture?
@@ -2502,6 +2526,10 @@ final class PersistentModelTests: XCTestCase {
     func testDetachedSetterInfersReciprocalExplicitInverseKeyPath() throws {
         let left = InferredToOneLeftFixture(title: "left")
         let right = InferredToOneRightFixture(name: "right")
+        let rightMetadata =
+            InferredToOneLeftFixture.schemaMetadata()
+            .first(where: { $0.name == "right" })?.metadata?.base as? Schema.Relationship
+        XCTAssertEqual(rightMetadata?.inverse, "left")
         right.left = left
         XCTAssertTrue(left.right === right)
 
@@ -2513,6 +2541,16 @@ final class PersistentModelTests: XCTestCase {
     func testDetachedManyToManyInverseAssignmentMutatesBothSides() throws {
         let left = DetachedManyToManyLeftFixture(name: "left")
         let right = DetachedManyToManyRightFixture(name: "right")
+        let rightsMetadata =
+            DetachedManyToManyLeftFixture.schemaMetadata()
+            .first(where: { $0.name == "rights" })?.metadata?.base as? Schema.Relationship
+        XCTAssertEqual(rightsMetadata?.inverse, "lefts")
+        let reciprocal = try XCTUnwrap(
+            DetachedManyToManyRightFixture.relationshipAdapterCandidatesForMutation().first {
+                $0.name == "lefts"
+            })
+        XCTAssertTrue(reciprocal.isToMany)
+        XCTAssertEqual(try reciprocal.endpoints(in: reciprocal.makeInverseValue([left]) as Any).count, 1)
         left.rights = [right]
         XCTAssertEqual(left.rights.map(\.name), ["right"])
         XCTAssertEqual(right.lefts.map(\.name), ["left"])
@@ -2520,6 +2558,19 @@ final class PersistentModelTests: XCTestCase {
         left.rights = []
         XCTAssertTrue(left.rights.isEmpty)
         XCTAssertTrue(right.lefts.isEmpty)
+    }
+
+    @MainActor
+    func testDetachedInverseUsesExplicitKeyPathWhenMultipleOwnerLinksExist() throws {
+        let owner = DetachedInverseAmbiguityOwnerFixture(name: "owner")
+        let target = DetachedInverseAmbiguityTargetFixture(name: "target")
+        owner.targets = [target]
+        XCTAssertTrue(target.primaryOwner === owner)
+        XCTAssertNil(target.secondaryOwner)
+
+        owner.targets = []
+        XCTAssertNil(target.primaryOwner)
+        XCTAssertNil(target.secondaryOwner)
     }
 
     @MainActor

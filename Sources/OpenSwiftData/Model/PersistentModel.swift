@@ -364,7 +364,7 @@ public extension PersistentModel {
             do {
                 let endpoints = try adapter.endpoints(in: value)
                 try DetachedRelationshipGraph.assign(
-                    endpoints: endpoints, owner: self, adapter: adapter)
+                    endpoints: endpoints, owner: self, ownerType: modelType, adapter: adapter)
             } catch {
                 return
             }
@@ -423,6 +423,7 @@ private enum DetachedRelationshipGraph {
     static func assign(
         endpoints: [any PersistentModel],
         owner: any PersistentModel,
+        ownerType: any RelationshipModel.Type,
         adapter: any AnyRelationshipAdapterBox
     ) throws {
         let endpoints = unique(endpoints)
@@ -435,17 +436,18 @@ private enum DetachedRelationshipGraph {
         let sourceHasValue = owner.anyBackingData.hasValue(forKeyPath: adapter.keyPath)
         let original = sourceHasValue ? unique(adapter.read(owner) ?? []) : []
         let declaredRelationship =
-            type(of: owner).schemaMetadata()
+            ownerType.schemaMetadata()
             .first(where: { $0.name == adapter.name })?.metadata?.base as? Schema.Relationship
+        let explicitInverseName = adapter.explicitInverseKeyPath.flatMap { inverseKeyPath in
+            (original + endpoints).compactMap { endpoint in
+                type(of: endpoint).schemaMetadata().first(where: { $0.keypath == inverseKeyPath })?.name
+            }.first
+        }
         let inverseName =
             adapter.metadata?.inverse
             ?? declaredRelationship?.inverse
-            ?? inferredInverseName(for: adapter, relatedModels: original + endpoints)
-            ?? adapter.explicitInverseKeyPath.flatMap { inverseKeyPath in
-                endpoints.first.flatMap { endpoint in
-                    type(of: endpoint).schemaMetadata().first(where: { $0.keypath == inverseKeyPath })?.name
-                }
-            }
+            ?? explicitInverseName
+            ?? inferredInverseName(for: adapter, owner: owner, relatedModels: original + endpoints)
         guard let inverseName else {
             try adapter.assign(typedValue, to: owner)
             return
@@ -536,16 +538,25 @@ private enum DetachedRelationshipGraph {
 
     private static func inferredInverseName(
         for adapter: any AnyRelationshipAdapterBox,
+        owner: any PersistentModel,
         relatedModels: [any PersistentModel]
     ) -> String? {
         guard !relatedModels.isEmpty else { return nil }
         var inverseNames = Set<String>()
         for model in relatedModels {
-            guard let relationshipModel = type(of: model) as? any RelationshipModel.Type else { return nil }
-            let matches = relationshipModel.relationshipAdapterCandidatesForMutation().filter {
-                $0.explicitInverseKeyPath == adapter.keyPath
+            let matches = type(of: model).schemaMetadata().compactMap { metadata -> String? in
+                guard let relationship = metadata.metadata?.base as? Schema.Relationship,
+                    relationship.inverse == adapter.name
+                else { return nil }
+                return metadata.name
             }
-            guard matches.count == 1, let name = matches.first?.name else { return nil }
+            guard matches.count == 1, let name = matches.first else { return nil }
+            let reciprocalAdapters =
+                (type(of: model) as? any RelationshipModel.Type)?
+                .relationshipAdapterCandidatesForMutation().filter {
+                    $0.name == name && $0.destinationType == type(of: owner)
+                } ?? []
+            guard reciprocalAdapters.count == 1 else { return nil }
             inverseNames.insert(name)
         }
         return inverseNames.count == 1 ? inverseNames.first : nil

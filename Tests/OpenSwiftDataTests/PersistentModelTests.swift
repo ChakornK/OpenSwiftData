@@ -111,9 +111,9 @@ final class IndependentRelationshipRootFixture {
 @Model
 final class IndependentToManyRootFixture {
     var name: String
-    @Relationship(inverse: nil) var items: [InheritedToManyMigrationItemFixture]
+    @Relationship(inverse: nil) var items: [ToManyHierarchyTargetChildFixture]
 
-    init(name: String, items: [InheritedToManyMigrationItemFixture]) {
+    init(name: String, items: [ToManyHierarchyTargetChildFixture]) {
         self.name = name
         self.items = items
     }
@@ -4821,16 +4821,20 @@ final class PersistentModelTests: XCTestCase {
         let sourceContainer = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
-            InheritedToManyMigrationItemFixture.self,
+            ToManyHierarchyTargetChildFixture.self,
+            ToManyHierarchyTargetGrandchildFixture.self,
+            ToManyHierarchyTargetSiblingFixture.self,
             configurations: configuration)
         let base = InheritanceMacroBaseFixture(name: "base")
         let child = InheritanceMacroChildFixture(name: "child", age: 2)
-        let first = InheritedToManyMigrationItemFixture(title: "first")
-        let second = InheritedToManyMigrationItemFixture(title: "second")
+        let first = ToManyHierarchyTargetChildFixture(title: "first", code: "one")
+        let second = ToManyHierarchyTargetGrandchildFixture(title: "second", code: "two", rank: 2)
+        let sibling = ToManyHierarchyTargetSiblingFixture(title: "sibling", label: "other")
         sourceContainer.mainContext.insert(base)
         sourceContainer.mainContext.insert(child)
         sourceContainer.mainContext.insert(first)
         sourceContainer.mainContext.insert(second)
+        sourceContainer.mainContext.insert(sibling)
         try sourceContainer.mainContext.save()
         let sourceIDs = sourceContainer.schema.entityIDsByName
         try sourceContainer.store?.close()
@@ -4839,7 +4843,9 @@ final class PersistentModelTests: XCTestCase {
             for: IndependentToManyRootFixture.self,
             InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
-            InheritedToManyMigrationItemFixture.self,
+            ToManyHierarchyTargetChildFixture.self,
+            ToManyHierarchyTargetGrandchildFixture.self,
+            ToManyHierarchyTargetSiblingFixture.self,
             configurations: configuration)
         XCTAssertEqual(
             container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
@@ -4851,6 +4857,7 @@ final class PersistentModelTests: XCTestCase {
         let reader = container.makeContext()
         let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<IndependentToManyRootFixture>()).first)
         XCTAssertEqual(Set(fetched.items.map(\.title)), ["first", "second"])
+        XCTAssertTrue(fetched.items.contains { $0 is ToManyHierarchyTargetGrandchildFixture })
         fetched.items.removeAll { $0.title == "first" }
         try reader.save()
 
@@ -4858,7 +4865,9 @@ final class PersistentModelTests: XCTestCase {
             for: IndependentToManyRootFixture.self,
             InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
-            InheritedToManyMigrationItemFixture.self,
+            ToManyHierarchyTargetChildFixture.self,
+            ToManyHierarchyTargetGrandchildFixture.self,
+            ToManyHierarchyTargetSiblingFixture.self,
             configurations: configuration)
         let refreshed = try XCTUnwrap(
             reopened.mainContext.fetch(FetchDescriptor<IndependentToManyRootFixture>()).first)

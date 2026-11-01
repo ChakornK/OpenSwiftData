@@ -618,18 +618,30 @@ package enum LightweightMigration {
                     )
                 }
                 if relationship.isToMany {
-                    let targetEntity = source.entity(forName: relationship.destination)
-                    let ownerRootName = try rootName(for: entity.name, schema: destination)
-                    let destinationHasHierarchy = source.entities.contains {
-                        $0.superentityName == relationship.destination
-                    }
-                    guard relationship.minimumModelCount == nil, relationship.maximumModelCount == nil,
-                        let targetEntity, targetEntity.superentityName == nil, !destinationHasHierarchy,
-                        ownerRootName != relationship.destination
-                    else {
+                    guard relationship.minimumModelCount == nil, relationship.maximumModelCount == nil else {
                         throw SwiftDataError.migrationUnsupported(
-                            "New hierarchy to-many relationships require an existing flat destination with no cardinality constraints."
-                        )
+                            "New hierarchy to-many relationships cannot have cardinality constraints.")
+                    }
+                    if entity.superentityName == nil {
+                        guard source.entity(forName: relationship.destination) != nil,
+                            entity.name != relationship.destination
+                        else {
+                            throw SwiftDataError.migrationUnsupported(
+                                "New root to-many relationships require an existing destination outside the root.")
+                        }
+                    } else {
+                        let ownerRootName = try rootName(for: entity.name, schema: destination)
+                        let destinationHasHierarchy = source.entities.contains {
+                            $0.superentityName == relationship.destination
+                        }
+                        guard let targetEntity = source.entity(forName: relationship.destination),
+                            targetEntity.superentityName == nil, !destinationHasHierarchy,
+                            ownerRootName != relationship.destination
+                        else {
+                            throw SwiftDataError.migrationUnsupported(
+                                "New leaf to-many relationships require an existing flat destination outside the owner hierarchy."
+                            )
+                        }
                     }
                 } else {
                     guard relationship.isOptional,

@@ -805,6 +805,8 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertFalse(
             try RuntimePredicateEvaluator.matches(
                 finitePlan, values: ["score": .double(.greatestFiniteMagnitude)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(finitePlan, values: ["score": .double(.infinity)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(finitePlan, values: ["score": .double(.nan)]))
 
         let zeroDivisionPlan = PredicatePlan.comparison(
             .greaterThan,

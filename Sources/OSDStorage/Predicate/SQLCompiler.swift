@@ -286,13 +286,16 @@ package enum SQLCompiler {
             return
                 "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .realArithmetic(op, lhs, rhs):
+            guard op != .remainder else {
+                throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
+            }
             let function =
                 switch op {
                 case .add: "osd_real_add"
                 case .subtract: "osd_real_subtract"
                 case .multiply: "osd_real_multiply"
                 case .divide: "osd_real_divide"
-                case .remainder: "osd_real_remainder"
+                case .remainder: throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
                 }
             return
                 "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"

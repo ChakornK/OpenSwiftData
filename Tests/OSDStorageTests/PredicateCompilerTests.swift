@@ -113,6 +113,17 @@ final class PredicateCompilerTests: XCTestCase {
         }
     }
 
+    func testArithmeticRejectsDoubleRemainder() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", .propertyReference("score")),
+                ("rhs", .typedValue(.double(2.0))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "remainder")),
+            ])
+        XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["score": "Double"]))
+    }
+
     func testArithmeticRejectsMixedAndUnsignedOperands() throws {
         let lhs = PredicateMirrorWalker.Node.propertyReference("score")
         let rhs = PredicateMirrorWalker.Node.typedValue(.int(1))
@@ -201,6 +212,28 @@ final class PredicateCompilerTests: XCTestCase {
                 .add,
                 .realArithmetic(.multiply, .keyPath(["score"]), .value(.double(2.0))),
                 .value(.double(1.0))))
+
+        let qualified = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", .propertyReference("amount")),
+                ("rhs", .typedValue(.double(1.0))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertNoThrow(
+            try PredicateIRBuilder.build(qualified, attributeTypes: ["owner.amount": "Double"]))
+    }
+
+    func testRealArithmeticSQLAndPlanUseMatchingExpression() throws {
+        let ir = PredicateIR.comparison(
+            .greaterThan,
+            .realArithmetic(.multiply, .value(.double(3.0)), .value(.double(2.0))),
+            .value(.double(5.0)))
+        let compiled = try SQLCompiler.compile(ir, entity: "DoubleOwner")
+        XCTAssertEqual(compiled.sql, "(osd_real_multiply(?, ?) > ?)")
+        XCTAssertEqual(compiled.arguments, [.double(3.0), .double(2.0), .double(5.0)])
+
+        XCTAssertNotNil(PredicatePlanBuilder.build(ir))
     }
 
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {

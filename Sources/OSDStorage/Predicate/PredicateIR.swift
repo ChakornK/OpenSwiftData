@@ -772,7 +772,10 @@ package enum PredicateIRBuilder {
         switch ir {
         case let .keyPath(path):
             guard !path.isEmpty else { return false }
-            let typeName = attributeTypes[path.joined(separator: ".")] ?? attributeTypes[path.last ?? ""]
+            let typeName =
+                attributeTypes[path.joined(separator: ".")]
+                ?? attributeTypes[path.last ?? ""]
+                ?? attributeTypes.first(where: { $0.key.hasSuffix(".\(path.last ?? "")") })?.value
             let unwrapped = typeName.map { $0.hasSuffix("?") ? String($0.dropLast()) : $0 }
             return ["Double", "Swift.Double"].contains(unwrapped ?? "")
         case .value(.double):

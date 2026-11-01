@@ -9,6 +9,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case decimalComparison(ComparisonOperator, PredicateIR, PredicateIR)
     case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
+    case relationshipIsPresent([String])
     case value(StoredValue)
     case nilCoalesce(PredicateIR, PredicateIR)
     case conditional(PredicateIR, PredicateIR, PredicateIR)
@@ -159,13 +160,9 @@ package enum PredicateIRBuilder {
                     transform,
                     relationships: relationshipPath,
                     attributeTypes: attributeTypes)
-                if relationshipPath.count > 1, isNegatedRelationshipContains(transform) {
-                    throw SwiftDataError.unsupportedPredicate(
-                        "Optional allSatisfy through multi-hop relationships is unsupported.")
-                }
-                if relationshipPath.count == 1, isNegatedRelationshipContains(transform) {
+                if isNegatedRelationshipContains(transform) {
                     return .conjunction(
-                        .comparison(.notEqual, .keyPath(relationshipPath), .value(.null)),
+                        .relationshipIsPresent(relationshipPath),
                         prefixedTransform)
                 }
                 return prefixedTransform
@@ -377,6 +374,13 @@ package enum PredicateIRBuilder {
                     "Optional relationship predicates must end in a persisted scalar property.")
             }
             return .keyPath(fullPath)
+        case let .relationshipIsPresent(path):
+            let relationshipParts = path.flatMap { $0.split(separator: ".").map(String.init) }
+            let fullPath =
+                relationshipParts.starts(with: normalizedRelationships)
+                ? relationshipParts
+                : normalizedRelationships + relationshipParts
+            return .relationshipIsPresent(fullPath)
         case let .value(value):
             return .value(value)
         case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):
@@ -540,7 +544,7 @@ package enum PredicateIRBuilder {
             return false
         case .codableCollectionCount:
             return false
-        case .sequenceContains, .relationshipCount, .value:
+        case .sequenceContains, .relationshipIsPresent, .relationshipCount, .value:
             return false
         }
     }
@@ -575,6 +579,11 @@ package enum PredicateIRBuilder {
                     "Collection predicate bodies require direct persisted scalar attributes.")
             }
             return .keyPath([localPath])
+        case let .relationshipIsPresent(path):
+            let nestedParts = path.flatMap { $0.split(separator: ".").map(String.init) }
+            let fullPath =
+                nestedParts.starts(with: [relationship]) ? nestedParts : [relationship] + nestedParts
+            return .relationshipIsPresent(fullPath)
         case let .value(value):
             return .value(value)
         case let .comparison(op, lhs, rhs), let .decimalComparison(op, lhs, rhs):

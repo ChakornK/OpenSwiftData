@@ -379,6 +379,45 @@ final class QuantifierItemFixture {
 }
 
 @Model
+final class MultiHopAllSatisfyRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var middle: MultiHopAllSatisfyMiddleFixture?
+
+    init(name: String, middle: MultiHopAllSatisfyMiddleFixture?) {
+        self.name = name
+        self.middle = middle
+    }
+}
+
+@Model
+final class MultiHopAllSatisfyMiddleFixture {
+    var name: String
+    @Relationship(inverse: nil) var branch: MultiHopAllSatisfyBranchFixture?
+
+    init(name: String, branch: MultiHopAllSatisfyBranchFixture?) {
+        self.name = name
+        self.branch = branch
+    }
+}
+
+@Model
+final class MultiHopAllSatisfyBranchFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [MultiHopAllSatisfyItemFixture]
+
+    init(name: String, items: [MultiHopAllSatisfyItemFixture]) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class MultiHopAllSatisfyItemFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -2516,11 +2555,18 @@ final class PersistentModelTests: XCTestCase {
                     }
                 } ?? false
             })
-        XCTAssertThrowsError(try context.fetch(inverseAllSatisfyDescriptor)) { error in
-            guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected unsupported multi-hop allSatisfy, got \(error)")
-            }
-        }
+        XCTAssertTrue(try context.fetch(inverseAllSatisfyDescriptor).isEmpty)
+        let sharedPrefix = "collection"
+        let allSatisfyMatches = FetchDescriptor<NestedInverseRootFixture>(
+            predicate: #Predicate {
+                $0.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.allSatisfy { $0.title.contains(sharedPrefix) }
+                    }
+                } ?? false
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(allSatisfyMatches).map(\.name), ["root"])
 
         let pendingItem = NestedInverseItemFixture(title: "pending-collection")
         context.insert(pendingItem)
@@ -2736,6 +2782,85 @@ final class PersistentModelTests: XCTestCase {
             Set(try context.fetch(pendingDescriptor).map(\.name)),
             ["accepted-root", "mixed-root", "empty-root"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+    }
+
+    @MainActor
+    func testAllSatisfyTraversesTwoOptionalToOneHops() throws {
+        let container = try ModelContainer(
+            for: MultiHopAllSatisfyRootFixture.self,
+            MultiHopAllSatisfyMiddleFixture.self,
+            MultiHopAllSatisfyBranchFixture.self,
+            MultiHopAllSatisfyItemFixture.self,
+            configurations: .sqliteMemory("multi-hop-optional-to-one-all-satisfy"))
+        let context = container.mainContext
+        let accepted = MultiHopAllSatisfyItemFixture(title: "accepted")
+        let rejected = MultiHopAllSatisfyItemFixture(title: "rejected")
+        let emptyBranch = MultiHopAllSatisfyBranchFixture(name: "empty", items: [])
+        let matchingBranch = MultiHopAllSatisfyBranchFixture(name: "matching", items: [accepted])
+        let mixedBranch = MultiHopAllSatisfyBranchFixture(name: "mixed", items: [accepted, rejected])
+        let nilFirstHop = MultiHopAllSatisfyRootFixture(name: "nil-first", middle: nil)
+        let nilSecondHop = MultiHopAllSatisfyRootFixture(
+            name: "nil-second", middle: MultiHopAllSatisfyMiddleFixture(name: "nil-branch", branch: nil))
+        let nilBranchMiddle = try XCTUnwrap(nilSecondHop.middle)
+        let emptyRoot = MultiHopAllSatisfyRootFixture(
+            name: "empty", middle: MultiHopAllSatisfyMiddleFixture(name: "empty-middle", branch: emptyBranch))
+        let matchingRoot = MultiHopAllSatisfyRootFixture(
+            name: "matching", middle: MultiHopAllSatisfyMiddleFixture(name: "matching-middle", branch: matchingBranch))
+        let mixedRoot = MultiHopAllSatisfyRootFixture(
+            name: "mixed", middle: MultiHopAllSatisfyMiddleFixture(name: "mixed-middle", branch: mixedBranch))
+        let emptyMiddle = try XCTUnwrap(emptyRoot.middle)
+        let matchingMiddle = try XCTUnwrap(matchingRoot.middle)
+        let mixedMiddle = try XCTUnwrap(mixedRoot.middle)
+        context.insert(accepted)
+        context.insert(rejected)
+        context.insert(emptyBranch)
+        context.insert(matchingBranch)
+        context.insert(mixedBranch)
+        context.insert(nilBranchMiddle)
+        context.insert(emptyMiddle)
+        context.insert(matchingMiddle)
+        context.insert(mixedMiddle)
+        context.insert(nilFirstHop)
+        context.insert(nilSecondHop)
+        context.insert(emptyRoot)
+        context.insert(matchingRoot)
+        context.insert(mixedRoot)
+        try context.save()
+
+        let expected = "accepted"
+        let predicate = #Predicate<MultiHopAllSatisfyRootFixture> { root in
+            root.middle.flatMap { middle in
+                middle.branch.flatMap { branch in
+                    branch.items.allSatisfy { $0.title == expected }
+                }
+            } ?? false
+        }
+        let descriptor = FetchDescriptor<MultiHopAllSatisfyRootFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["empty", "matching"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+
+        rejected.title = expected
+        let pendingDescriptor = FetchDescriptor<MultiHopAllSatisfyRootFixture>(
+            predicate: #Predicate { root in
+                root.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.allSatisfy { $0.title == expected }
+                    }
+                } ?? false
+            })
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["empty", "matching", "mixed"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+
+        let containsDescriptor = FetchDescriptor<MultiHopAllSatisfyRootFixture>(
+            predicate: #Predicate { root in
+                root.middle.flatMap { middle in
+                    middle.branch.flatMap { branch in
+                        branch.items.contains { $0.title == expected }
+                    }
+                } ?? false
+            })
+        XCTAssertEqual(Set(try context.fetch(containsDescriptor).map(\.name)), ["matching", "mixed"])
     }
 
     @MainActor

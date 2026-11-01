@@ -53,6 +53,9 @@ package enum PredicatePlanBuilder {
         case let .keyPath(path):
             guard !path.isEmpty else { return nil }
             return .property(path.joined(separator: "."))
+        case let .relationshipIsPresent(path):
+            guard !path.isEmpty else { return nil }
+            return .isNull(.property(path.joined(separator: ".")), negated: true)
         case let .value(value):
             return .value(value)
         case let .nilCoalesce(lhs, rhs):
@@ -145,6 +148,76 @@ package enum SQLCompiler {
         ordering: [String] = []
     ) throws -> CompiledPredicate {
         try compile(PredicateIRBuilder.build(node), entity: entity, ordering: ordering)
+    }
+
+    private static func renderRelationshipPresence(
+        _ path: [String],
+        index: Int = 0,
+        entity: String,
+        tableAlias: String,
+        relationships: [RuntimePredicateRelationship],
+        arguments: inout [StoredValue]
+    ) throws -> String? {
+        guard path.indices.contains(index),
+            let relationship = relationships.first(where: {
+                $0.ownerEntityName == entity && $0.propertyName == path[index]
+            }),
+            !relationship.isToMany
+        else { return nil }
+
+        if relationship.queriesInverseToOne {
+            guard let inverseOwnerRoot = relationship.inverseOwnerRootEntityName,
+                Self.validIdentifier(inverseOwnerRoot),
+                Self.validIdentifier(relationship.foreignKeyColumnName),
+                !relationship.inverseOwnerEntityIDs.isEmpty
+            else {
+                throw SwiftDataError.unsupportedPredicate("Inverse relationship presence has incomplete metadata.")
+            }
+            let alias = "osd_presence_\(index + 1)"
+            let placeholders = Array(repeating: "?", count: relationship.inverseOwnerEntityIDs.count)
+                .joined(separator: ", ")
+            arguments.append(contentsOf: relationship.inverseOwnerEntityIDs.map { .int(Int64($0)) })
+            let continuation: String
+            if index + 1 < path.count {
+                guard
+                    let nested = try renderRelationshipPresence(
+                        path, index: index + 1, entity: relationship.destinationEntityName,
+                        tableAlias: alias, relationships: relationships, arguments: &arguments)
+                else { return nil }
+                continuation = " AND \(nested)"
+            } else {
+                continuation = ""
+            }
+            return
+                "EXISTS (SELECT 1 FROM Z\(inverseOwnerRoot.uppercased()) AS \(alias) "
+                + "WHERE \(alias).Z\(relationship.foreignKeyColumnName.uppercased()) = \(tableAlias).Z_PK "
+                + "AND \(alias).Z_ENT IN (\(placeholders))\(continuation))"
+        }
+
+        guard Self.validIdentifier(relationship.foreignKeyColumnName) else {
+            throw SwiftDataError.unsupportedPredicate("Relationship presence has an invalid foreign-key column.")
+        }
+        if index + 1 == path.count {
+            return "\(tableAlias).Z\(relationship.foreignKeyColumnName.uppercased()) IS NOT NULL"
+        }
+        guard Self.validIdentifier(relationship.destinationRootEntityName),
+            !relationship.destinationEntityIDs.isEmpty
+        else {
+            throw SwiftDataError.unsupportedPredicate("Relationship presence has incomplete destination metadata.")
+        }
+        let alias = "osd_presence_\(index + 1)"
+        let placeholders = Array(repeating: "?", count: relationship.destinationEntityIDs.count)
+            .joined(separator: ", ")
+        arguments.append(contentsOf: relationship.destinationEntityIDs.map { .int(Int64($0)) })
+        guard
+            let nested = try renderRelationshipPresence(
+                path, index: index + 1, entity: relationship.destinationEntityName,
+                tableAlias: alias, relationships: relationships, arguments: &arguments)
+        else { return nil }
+        return
+            "EXISTS (SELECT 1 FROM Z\(relationship.destinationRootEntityName.uppercased()) AS \(alias) "
+            + "WHERE \(alias).Z_PK = \(tableAlias).Z\(relationship.foreignKeyColumnName.uppercased()) "
+            + "AND \(alias).Z_ENT IN (\(placeholders)) AND \(nested))"
     }
 
     private static func render(
@@ -336,6 +409,15 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate("Unsupported relationship predicate path")
             }
             return "\(tableAlias).Z\(property.uppercased())"
+        case let .relationshipIsPresent(path):
+            guard
+                let sql = try renderRelationshipPresence(
+                    path, entity: entity, tableAlias: tableAlias,
+                    relationships: relationships, arguments: &arguments)
+            else {
+                throw SwiftDataError.unsupportedPredicate("Relationship presence path has no resolved to-one mapping.")
+            }
+            return sql
         case let .value(value):
             arguments.append(value)
             return "?"
@@ -586,6 +668,7 @@ package enum SQLCompiler {
         case let .decimalComparison(op, lhs, rhs): "decimalCompare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
+        case let .relationshipIsPresent(path): "relationshipIsPresent(\(path.joined(separator: ".")))"
         case let .value(value):
             if case .null = value { "value(NULL)" } else { "value(?)" }
         case let .nilCoalesce(lhs, rhs): "coalesce(\(structure(lhs)),\(structure(rhs)))"

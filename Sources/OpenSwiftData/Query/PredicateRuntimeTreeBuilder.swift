@@ -275,11 +275,13 @@ package enum PredicateRuntimeTreeBuilder {
                     throw SwiftDataError.unsupportedPredicate(
                         "Collection quantifiers require owning to-one relationships before the collection.")
                 }
+                let optionalOwnerPathDepth = ownerParts.filter { !$0.hasSuffix("[]") }.count
                 guard
                     let relationship = collectionOwner.entity.relationships.first(where: {
                         $0.name == collectionName && $0.isToMany
                     }),
                     supportsCollectionPredicate(relationship, schema: schema),
+                    !(name == "SequenceAllSatisfy" && optionalOwnerPathDepth > 1 && relationship.inverse != nil),
                     collectionVariableScopes.count == 1 || (localOwnerParts.isEmpty && relationship.inverse == nil),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)

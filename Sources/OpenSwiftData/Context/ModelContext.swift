@@ -2342,6 +2342,14 @@ public final class ModelContext {
     ) throws -> RuntimeValue {
         guard let first = path.first else { return .null }
         if path.count == 1 {
+            if let relationship = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
+                .first(where: { $0.name == first && !$0.isToMany })
+            {
+                guard let endpoint = try pendingRelationshipEndpoints(relationship, owner: model).first else {
+                    return .null
+                }
+                return .int(endpoint.persistentModelID.primaryKey ?? Int64.min)
+            }
             let property = type(of: model).erasedPersistenceAdapters().first(where: { $0.name == first })
             guard let property else {
                 throw SwiftDataError.unsupportedPredicate(

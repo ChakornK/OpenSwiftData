@@ -454,6 +454,40 @@ final class ThreeLevelQuantifierItemFixture {
 }
 
 @Model
+final class FourLevelQuantifierRootFixture {
+    @Relationship(inverse: nil) var groups: [FourLevelQuantifierGroupFixture]
+    init(groups: [FourLevelQuantifierGroupFixture]) { self.groups = groups }
+}
+
+@Model
+final class FourLevelQuantifierGroupFixture {
+    @Relationship(inverse: nil) var children: [FourLevelQuantifierChildFixture]
+    init(children: [FourLevelQuantifierChildFixture]) { self.children = children }
+}
+
+@Model
+final class FourLevelQuantifierChildFixture {
+    @Relationship(inverse: nil) var items: [FourLevelQuantifierItemFixture]
+    init(items: [FourLevelQuantifierItemFixture]) { self.items = items }
+}
+
+@Model
+final class FourLevelQuantifierItemFixture {
+    var value: String
+    @Relationship(inverse: nil) var leaves: [FourLevelQuantifierLeafFixture]
+    init(value: String, leaves: [FourLevelQuantifierLeafFixture]) {
+        self.value = value
+        self.leaves = leaves
+    }
+}
+
+@Model
+final class FourLevelQuantifierLeafFixture {
+    var value: String
+    init(value: String) { self.value = value }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -2897,6 +2931,77 @@ final class PersistentModelTests: XCTestCase {
                 } ?? false
             })
         XCTAssertEqual(Set(try context.fetch(containsDescriptor).map(\.name)), ["matching", "mixed"])
+
+    }
+
+    @MainActor
+    func testNestedThreeLevelContainsSupportsStringAndOuterScalarPredicates() throws {
+        let container = try ModelContainer(
+            for: ThreeLevelQuantifierOwnerFixture.self,
+            ThreeLevelQuantifierGroupFixture.self,
+            ThreeLevelQuantifierChildFixture.self,
+            ThreeLevelQuantifierItemFixture.self,
+            configurations: .sqliteMemory("three-level-nested-string-predicate"))
+        let context = container.mainContext
+        let item = ThreeLevelQuantifierItemFixture(value: "matching item")
+        let child = ThreeLevelQuantifierChildFixture(name: "child", items: [item])
+        let group = ThreeLevelQuantifierGroupFixture(name: "group", children: [child])
+        let owner = ThreeLevelQuantifierOwnerFixture(name: "matching owner", groups: [group])
+        context.insert(item)
+        context.insert(child)
+        context.insert(group)
+        context.insert(owner)
+        try context.save()
+
+        let fragment = "mat"
+        let nestedStringDescriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.value.contains(fragment) }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(nestedStringDescriptor).map(\.name), ["matching owner"])
+
+        let scopedPredicate = #Predicate<ThreeLevelQuantifierOwnerFixture> {
+            $0.name == "matching owner"
+                && $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.value.contains(fragment) }
+                    }
+                }
+        }
+        let scopedStoredDescriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: scopedPredicate, includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(scopedStoredDescriptor).map(\.name), ["matching owner"])
+        let scopedDescriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(predicate: scopedPredicate)
+        XCTAssertEqual(try context.fetch(scopedDescriptor).map(\.name), ["matching owner"])
+
+    }
+
+    @MainActor
+    func testNestedFourLevelContainsRemainsFailClosed() throws {
+        let container = try ModelContainer(
+            for: FourLevelQuantifierRootFixture.self,
+            FourLevelQuantifierGroupFixture.self,
+            FourLevelQuantifierChildFixture.self,
+            FourLevelQuantifierItemFixture.self,
+            FourLevelQuantifierLeafFixture.self,
+            configurations: .sqliteMemory("nested-relationship-quantifier-depth-four"))
+        let needle = "match"
+        let descriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: #Predicate {
+                $0.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { item in
+                            item.leaves.contains { $0.value == needle }
+                        }
+                    }
+                }
+            })
+        XCTAssertThrowsError(try container.mainContext.fetch(descriptor))
     }
 
     @MainActor
@@ -3283,7 +3388,7 @@ final class PersistentModelTests: XCTestCase {
             Set(try context.fetchIdentifiers(pendingDescriptor)),
             Set([matchingOwner.persistentModelID, otherOwner.persistentModelID]))
 
-        let depthThreeDescriptor = FetchDescriptor<QuantifierOwnerFixture>(
+        let nestedStringDescriptor = FetchDescriptor<QuantifierOwnerFixture>(
             predicate: #Predicate {
                 $0.children.contains(where: { child in
                     child.items.contains(where: { item in
@@ -3291,7 +3396,8 @@ final class PersistentModelTests: XCTestCase {
                     })
                 })
             })
-        XCTAssertThrowsError(try context.fetch(depthThreeDescriptor))
+        XCTAssertEqual(
+            Set(try context.fetch(nestedStringDescriptor).map(\.name)), ["matching-owner", "other-owner"])
     }
 
     @MainActor
@@ -3353,6 +3459,7 @@ final class PersistentModelTests: XCTestCase {
                 }
             })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching-owner", "failing-owner"])
+
     }
 
     @MainActor

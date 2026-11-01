@@ -667,10 +667,18 @@ package enum PredicateIRBuilder {
             throw SwiftDataError.unsupportedPredicate(
                 "Collection string predicates require a direct persisted String element property.")
         }
-        let components = path[0].components(separatedBy: "[].")
-        guard components.count == 2, components[0] == relationship,
-            isStringAttribute(attributeTypes[path[0]])
-        else {
+        let propertyPath = path[0]
+        let scopedType =
+            attributeTypes[propertyPath]
+            ?? attributeTypes["\(relationship)[].\(propertyPath)"]
+            ?? relationship.split(separator: ".").last.map(String.init).flatMap {
+                attributeTypes["\($0)[].\(propertyPath)"]
+            }
+        let isScopedElementPath =
+            propertyPath.hasPrefix("\(relationship)[].")
+            && !propertyPath.dropFirst(relationship.count + 3).contains(".")
+            && !propertyPath.dropFirst(relationship.count + 3).contains("[]")
+        guard (!propertyPath.contains(".") || isScopedElementPath), isStringAttribute(scopedType) else {
             throw SwiftDataError.unsupportedPredicate(
                 "Collection string predicates require a direct persisted String element property.")
         }

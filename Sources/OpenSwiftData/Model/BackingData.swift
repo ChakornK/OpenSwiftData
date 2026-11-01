@@ -130,6 +130,8 @@ public protocol AnyBackingData: AnyObject {
     var supportsSubclassKeyPaths: Bool { get }
     /// Captures the storage's lifecycle and property values.
     func snapshot() -> BackingDataSnapshot
+    /// Reports whether the backing stores a value for the supplied property key path.
+    func hasValue(forKeyPath keyPath: AnyKeyPath) -> Bool
     /// Associates the storage with its context and model object.
     func attach(to context: ModelContext, model: any PersistentModel)
     /// Replaces the model identifier's entity name after a concrete hierarchy entity is persisted.
@@ -139,6 +141,7 @@ public protocol AnyBackingData: AnyObject {
 }
 
 public extension AnyBackingData {
+    func hasValue(forKeyPath keyPath: AnyKeyPath) -> Bool { snapshot().values[keyPath] != nil }
     func setConcreteEntityName(_ entityName: String) { _ = entityName }
     func setMaterializedValueIfNoOverlay(forKeyPath keyPath: AnyKeyPath, to value: Any) {
         _ = (keyPath, value)

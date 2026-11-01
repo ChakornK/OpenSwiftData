@@ -379,6 +379,49 @@ final class QuantifierItemFixture {
 }
 
 @Model
+final class InverseCollectionLifecycleOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [InverseCollectionLifecycleItemFixture] = []
+    init(name: String, items: [InverseCollectionLifecycleItemFixture] = []) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class InverseCollectionLifecycleItemFixture {
+    var value: String
+    @Relationship(inverse: \InverseCollectionLifecycleOwnerFixture.items)
+    var owner: InverseCollectionLifecycleOwnerFixture?
+
+    init(value: String, owner: InverseCollectionLifecycleOwnerFixture?) {
+        self.value = value
+        self.owner = owner
+    }
+}
+
+@Model
+final class DetachedManyToManyLeftFixture {
+    var name: String
+    @Relationship(inverse: \DetachedManyToManyRightFixture.lefts)
+    var rights: [DetachedManyToManyRightFixture] = []
+    init(name: String, rights: [DetachedManyToManyRightFixture] = []) {
+        self.name = name
+        self.rights = rights
+    }
+}
+
+@Model
+final class DetachedManyToManyRightFixture {
+    var name: String
+    var lefts: [DetachedManyToManyLeftFixture] = []
+    init(name: String) {
+        self.name = name
+        self.lefts = []
+    }
+}
+
+@Model
 final class MultiHopAllSatisfyRootFixture {
     var name: String
     @Relationship(inverse: nil) var middle: MultiHopAllSatisfyMiddleFixture?
@@ -2367,6 +2410,133 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["right"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), [right.persistentModelID])
+    }
+
+    @MainActor
+    func testOneSidedInverseToManyCollectionLifecycle() throws {
+        let container = try ModelContainer(
+            for: InverseCollectionLifecycleOwnerFixture.self,
+            InverseCollectionLifecycleItemFixture.self,
+            configurations: .sqliteMemory("one-sided-inverse-collection-lifecycle"))
+        let context = container.mainContext
+        let owner = InverseCollectionLifecycleOwnerFixture(name: "owner")
+        let item = InverseCollectionLifecycleItemFixture(value: "saved", owner: nil)
+        context.insert(owner)
+        context.insert(item)
+        item.owner = owner
+        try context.save()
+
+        let ownerAdapter = try XCTUnwrap(
+            container.relationshipAdapters(for: InverseCollectionLifecycleOwnerFixture.self)
+                .first(where: { $0.name == "items" }))
+        XCTAssertEqual(ownerAdapter.metadata?.inverse, "owner")
+        XCTAssertEqual(owner.items.map(\.value), ["saved"])
+
+        let reader = container.makeContext()
+        let fetchedOwner = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InverseCollectionLifecycleOwnerFixture>()).first)
+        XCTAssertEqual(fetchedOwner.items.map(\.value), ["saved"])
+
+        let pendingItem = InverseCollectionLifecycleItemFixture(value: "pending", owner: nil)
+        context.insert(pendingItem)
+        pendingItem.owner = owner
+        let inverseEvents = context.state.relationshipMutations.filter { $0.property == "items" }
+        XCTAssertEqual(inverseEvents.last?.oldEndpoints.map(\.persistentModelID), [item.persistentModelID])
+        XCTAssertEqual(
+            Set(inverseEvents.last?.newEndpoints.map(\.persistentModelID) ?? []),
+            Set([item.persistentModelID, pendingItem.persistentModelID]))
+        XCTAssertEqual(Set(owner.items.map(\.value)), ["saved", "pending"])
+        try context.save()
+        XCTAssertEqual(Set(owner.items.map(\.value)), ["saved", "pending"])
+    }
+
+    @MainActor
+    func testDetachedOneSidedInverseToManyMutatesBothSides() throws {
+        let owner = InverseCollectionLifecycleOwnerFixture(name: "detached owner")
+        XCTAssertTrue(owner.items.isEmpty)
+        let item = InverseCollectionLifecycleItemFixture(value: "detached item", owner: nil)
+        XCTAssertEqual(
+            (InverseCollectionLifecycleItemFixture.schemaMetadata()
+                .first(where: { $0.name == "owner" })?.metadata?.base as? Schema.Relationship)?.inverse,
+            "items")
+        XCTAssertEqual(
+            InverseCollectionLifecycleOwnerFixture.relationshipAdapterCandidatesForMutation().map(\.name), ["items"])
+        item.owner = owner
+        XCTAssertEqual(owner.items.map(\.value), ["detached item"])
+
+        let secondOwner = InverseCollectionLifecycleOwnerFixture(name: "second owner")
+        item.owner = secondOwner
+        XCTAssertTrue(owner.items.isEmpty)
+        XCTAssertEqual(secondOwner.items.map(\.value), ["detached item"])
+        item.owner = nil
+        XCTAssertTrue(secondOwner.items.isEmpty)
+
+        item.owner = owner
+        let container = try ModelContainer(
+            for: InverseCollectionLifecycleOwnerFixture.self,
+            InverseCollectionLifecycleItemFixture.self,
+            configurations: .sqliteMemory("detached-inverse-insert-idempotence"))
+        container.mainContext.insert(owner)
+        container.mainContext.insert(item)
+        try container.mainContext.save()
+        XCTAssertEqual(owner.items.map(\.value), ["detached item"])
+    }
+
+    @MainActor
+    func testDetachedOneToOneInverseDisplacesPreviousOwner() throws {
+        let right = InferredToOneRightFixture(name: "right")
+        let first = InferredToOneLeftFixture(title: "first")
+        let second = InferredToOneLeftFixture(title: "second")
+        first.right = right
+        XCTAssertTrue(right.left === first)
+
+        second.right = right
+        XCTAssertNil(first.right)
+        XCTAssertTrue(right.left === second)
+
+        second.right = nil
+        XCTAssertNil(right.left)
+    }
+
+    @MainActor
+    func testDetachedSetterInfersReciprocalExplicitInverseKeyPath() throws {
+        let left = InferredToOneLeftFixture(title: "left")
+        let right = InferredToOneRightFixture(name: "right")
+        right.left = left
+        XCTAssertTrue(left.right === right)
+
+        right.left = nil
+        XCTAssertNil(left.right)
+    }
+
+    @MainActor
+    func testDetachedManyToManyInverseAssignmentMutatesBothSides() throws {
+        let left = DetachedManyToManyLeftFixture(name: "left")
+        let right = DetachedManyToManyRightFixture(name: "right")
+        left.rights = [right]
+        XCTAssertEqual(left.rights.map(\.name), ["right"])
+        XCTAssertEqual(right.lefts.map(\.name), ["left"])
+
+        left.rights = []
+        XCTAssertTrue(left.rights.isEmpty)
+        XCTAssertTrue(right.lefts.isEmpty)
+    }
+
+    @MainActor
+    func testDetachedRelationshipDoesNotMutateContextOwnedEndpoint() throws {
+        let container = try ModelContainer(
+            for: DetachedManyToManyLeftFixture.self,
+            DetachedManyToManyRightFixture.self,
+            configurations: .sqliteMemory("detached-to-managed-relationship"))
+        let managedRight = DetachedManyToManyRightFixture(name: "managed")
+        container.mainContext.insert(managedRight)
+        try container.mainContext.save()
+
+        let detachedLeft = DetachedManyToManyLeftFixture(name: "detached")
+        detachedLeft.rights = [managedRight]
+        XCTAssertEqual(detachedLeft.rights.map(\.name), ["managed"])
+        XCTAssertTrue(managedRight.lefts.isEmpty)
+        XCTAssertTrue(container.mainContext.hasChanges == false)
     }
 
     @MainActor

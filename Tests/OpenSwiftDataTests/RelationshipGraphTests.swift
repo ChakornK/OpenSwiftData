@@ -242,7 +242,7 @@ final class RelationshipGraphTests: XCTestCase {
 
         holder.badges = []
 
-        XCTAssertTrue(holder.badges.isEmpty)
+        XCTAssertEqual(holder.badges.map(ObjectIdentifier.init), [ObjectIdentifier(badge)])
         XCTAssertTrue(badge.holder === holder)
         XCTAssertEqual(container.mainContext.state.relationshipMutations.count, eventsBefore)
     }
@@ -843,11 +843,12 @@ final class RelationshipGraphTests: XCTestCase {
         container.mainContext.insert(badge)
         let badges = try XCTUnwrap(container.relationshipAdapters(for: GraphHolder.self).first)
         try badges.write([badge], to: holder)
+        let eventsBeforeFailedWrite = container.mainContext.state.relationshipMutations.count
 
         XCTAssertThrowsError(try badges.write([GraphBadge](), to: holder))
         XCTAssertEqual(holder.badges.map(ObjectIdentifier.init), [ObjectIdentifier(badge)])
         XCTAssertTrue(badge.holder === holder)
-        XCTAssertTrue(container.mainContext.state.relationshipMutations.contains { $0.owner === holder })
+        XCTAssertEqual(container.mainContext.state.relationshipMutations.count, eventsBeforeFailedWrite)
     }
 
     @MainActor

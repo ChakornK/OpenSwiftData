@@ -363,8 +363,8 @@ public extension PersistentModel {
             }
             do {
                 let endpoints = try adapter.endpoints(in: value)
-                let typedValue = try adapter.makeValue(endpoints)
-                try adapter.assign(typedValue, to: self)
+                try DetachedRelationshipGraph.assign(
+                    endpoints: endpoints, owner: self, adapter: adapter)
             } catch {
                 return
             }
@@ -404,4 +404,167 @@ public extension PersistentModel {
     }
     func detachLifecycle() { persistentBackingData.detach() }
     func detachDeletedLifecycle() { persistentBackingData.detachDeleted() }
+}
+
+private enum DetachedRelationshipGraph {
+    private struct Plan {
+        let owner: any PersistentModel
+        let adapter: any AnyRelationshipAdapterBox
+        let original: [any PersistentModel]
+        var endpoints: [any PersistentModel]
+        let initialValue: Any?
+    }
+
+    private struct Key: Hashable {
+        let owner: ObjectIdentifier
+        let property: String
+    }
+
+    static func assign(
+        endpoints: [any PersistentModel],
+        owner: any PersistentModel,
+        adapter: any AnyRelationshipAdapterBox
+    ) throws {
+        let endpoints = unique(endpoints)
+        let typedValue = try adapter.makeValue(endpoints)
+        guard endpoints.allSatisfy({ $0.modelContext == nil }) else {
+            try adapter.assign(typedValue, to: owner)
+            return
+        }
+
+        let sourceHasValue = owner.anyBackingData.hasValue(forKeyPath: adapter.keyPath)
+        let original = sourceHasValue ? unique(adapter.read(owner) ?? []) : []
+        let declaredRelationship =
+            type(of: owner).schemaMetadata()
+            .first(where: { $0.name == adapter.name })?.metadata?.base as? Schema.Relationship
+        let inverseName =
+            adapter.metadata?.inverse
+            ?? declaredRelationship?.inverse
+            ?? inferredInverseName(for: adapter, relatedModels: original + endpoints)
+            ?? adapter.explicitInverseKeyPath.flatMap { inverseKeyPath in
+                endpoints.first.flatMap { endpoint in
+                    type(of: endpoint).schemaMetadata().first(where: { $0.keypath == inverseKeyPath })?.name
+                }
+            }
+        guard let inverseName else {
+            try adapter.assign(typedValue, to: owner)
+            return
+        }
+        guard (original + endpoints).allSatisfy({ $0.modelContext == nil }) else {
+            try adapter.assign(typedValue, to: owner)
+            return
+        }
+
+        var plans: [Key: Plan] = [:]
+        var order: [Key] = []
+        let ownerKey = Key(owner: ObjectIdentifier(owner), property: adapter.name)
+        plans[ownerKey] = Plan(
+            owner: owner, adapter: adapter, original: original, endpoints: endpoints, initialValue: typedValue)
+        order.append(ownerKey)
+
+        let removed = original.filter { old in !endpoints.contains(where: { $0 === old }) }
+        let added = endpoints.filter { new in !original.contains(where: { $0 === new }) }
+        for endpoint in added + removed where endpoint.modelContext == nil {
+            guard let inverse = relationshipAdapter(on: endpoint, named: inverseName),
+                let inverseCurrent = inverse.read(endpoint)
+            else {
+                throw SwiftDataError.unsupportedSchemaProperty(
+                    "Detached relationship inverse '\(inverseName)' has no unique typed adapter.")
+            }
+            let inverseKey = Key(owner: ObjectIdentifier(endpoint), property: inverseName)
+            var inversePlan =
+                plans[inverseKey]
+                ?? Plan(
+                    owner: endpoint, adapter: inverse, original: unique(inverseCurrent),
+                    endpoints: unique(inverseCurrent), initialValue: nil)
+            if removed.contains(where: { $0 === endpoint }) {
+                inversePlan.endpoints.removeAll { $0 === owner }
+            } else if inverse.isToMany {
+                if !inversePlan.endpoints.contains(where: { $0 === owner }) { inversePlan.endpoints.append(owner) }
+            } else {
+                for displaced in inversePlan.endpoints where displaced !== owner {
+                    guard displaced.modelContext == nil,
+                        let displacedAdapter = relationshipAdapter(on: displaced, named: adapter.name)
+                    else {
+                        throw SwiftDataError.unsupportedSchemaProperty(
+                            "Detached inverse displacement requires detached relationship endpoints.")
+                    }
+                    let displacedKey = Key(owner: ObjectIdentifier(displaced), property: adapter.name)
+                    var displacedPlan =
+                        plans[displacedKey]
+                        ?? Plan(
+                            owner: displaced, adapter: displacedAdapter,
+                            original: unique(displacedAdapter.read(displaced) ?? []),
+                            endpoints: unique(displacedAdapter.read(displaced) ?? []), initialValue: nil)
+                    displacedPlan.endpoints.removeAll { $0 === endpoint }
+                    if plans[displacedKey] == nil { order.append(displacedKey) }
+                    plans[displacedKey] = displacedPlan
+                }
+                inversePlan.endpoints = [owner]
+            }
+            if plans[inverseKey] == nil { order.append(inverseKey) }
+            plans[inverseKey] = inversePlan
+        }
+
+        try apply(plans, order: order)
+    }
+
+    private static func relationshipAdapter(
+        on owner: any PersistentModel, named property: String
+    ) -> (any AnyRelationshipAdapterBox)? {
+        guard let relationshipModel = type(of: owner) as? any RelationshipModel.Type else { return nil }
+        let matches = relationshipModel.relationshipAdapterCandidatesForMutation().filter {
+            $0.name == property
+        }
+        return matches.count == 1 ? matches.first : nil
+    }
+
+    private static func unique(_ endpoints: [any PersistentModel]) -> [any PersistentModel] {
+        var result: [any PersistentModel] = []
+        for endpoint in endpoints where !result.contains(where: { $0 === endpoint }) {
+            result.append(endpoint)
+        }
+        return result
+    }
+
+    private static func inferredInverseName(
+        for adapter: any AnyRelationshipAdapterBox,
+        relatedModels: [any PersistentModel]
+    ) -> String? {
+        guard !relatedModels.isEmpty else { return nil }
+        var inverseNames = Set<String>()
+        for model in relatedModels {
+            guard let relationshipModel = type(of: model) as? any RelationshipModel.Type else { return nil }
+            let matches = relationshipModel.relationshipAdapterCandidatesForMutation().filter {
+                $0.explicitInverseKeyPath == adapter.keyPath
+            }
+            guard matches.count == 1, let name = matches.first?.name else { return nil }
+            inverseNames.insert(name)
+        }
+        return inverseNames.count == 1 ? inverseNames.first : nil
+    }
+
+    private static func apply(_ plans: [Key: Plan], order: [Key]) throws {
+        let models = order.compactMap { plans[$0]?.owner }
+        var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
+        for model in models {
+            let identifier = ObjectIdentifier(model)
+            if snapshots[identifier] == nil { snapshots[identifier] = (model, model.snapshotLifecycle()) }
+        }
+        do {
+            for key in order {
+                guard let plan = plans[key] else { continue }
+                let value: Any
+                if let initialValue = plan.initialValue {
+                    value = initialValue
+                } else {
+                    value = try plan.adapter.makeInverseValue(plan.endpoints)
+                }
+                try plan.adapter.assign(value, to: plan.owner)
+            }
+        } catch {
+            for (model, snapshot) in snapshots.values { model.restoreLifecycle(snapshot) }
+            throw error
+        }
+    }
 }

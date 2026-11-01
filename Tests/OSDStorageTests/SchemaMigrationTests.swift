@@ -871,6 +871,62 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyMigrationAddsIndependentRootWithToManyJoinTable() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Aardvark",
+                relationships: [
+                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
+                ]),
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        let rootID = try XCTUnwrap(destinationIDs["Aardvark"])
+        XCTAssertEqual(destinationIDs["Animal"], sourceIDs["Animal"])
+        XCTAssertEqual(destinationIDs["Dog"], sourceIDs["Dog"])
+        XCTAssertEqual(destinationIDs["Target"], sourceIDs["Target"])
+
+        let tables = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'Z_%'")
+        }
+        XCTAssertTrue(tables.contains([.text("Z_AARDVARK_TARGETS_TARGET")]))
+        let indexes = try migrated.read {
+            try $0.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'Z_AARDVARK_TARGETS_TARGET'"
+            )
+        }
+        XCTAssertEqual(
+            Set(
+                indexes.compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name
+                }),
+            ["Z_AARDVARK_TARGETS_TARGET_UNIQUE_INDEX", "Z_AARDVARK_TARGETS_TARGET_Z_B_INDEX"])
+        let parent = try migrated.read {
+            try $0.rows("SELECT Z_SUPER FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(rootID))]).first?.first
+        }
+        XCTAssertEqual(parent, .int(0))
+        try migrated.close()
+    }
+
     func testAddingLeafSubclassBelowExistingSubtype() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2085,7 +2141,7 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
-    func testOpeningStoreFailsClosedWhenNewRootAddsToManyRelationship() throws {
+    func testOpeningStoreFailsClosedWhenNewRootAddsConstrainedToManyRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2101,7 +2157,10 @@ final class SchemaMigrationTests: XCTestCase {
             Schema.Entity(name: "Target"),
             Schema.Entity(
                 name: "Vehicle",
-                relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)]),
+                relationships: [
+                    Schema.Relationship(
+                        name: "targets", destination: "Target", isToMany: true, maximumModelCount: 1)
+                ]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let originalIDs = try initial.read {
@@ -2118,6 +2177,43 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
             originalIDs)
+        try reopened.close()
+    }
+
+    func testOpeningStoreFailsClosedWhenNewRootRelationshipTargetsNewEntity() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(
+                name: "Aardvark",
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "Target", isOptional: true)
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try initial.read {
+            try LightweightMigration.storedEntityIDs(schema: source, connection: $0)
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
         try reopened.close()
     }
 

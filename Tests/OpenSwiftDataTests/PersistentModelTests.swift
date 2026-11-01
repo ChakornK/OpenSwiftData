@@ -109,6 +109,17 @@ final class IndependentRelationshipRootFixture {
 }
 
 @Model
+final class IndependentToManyRootFixture {
+    var name: String
+    @Relationship(inverse: nil) var items: [InheritedToManyMigrationItemFixture]
+
+    init(name: String, items: [InheritedToManyMigrationItemFixture]) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
 class InheritedToOneMigrationBaseFixture {
     var name: String
     init(name: String) { self.name = name }
@@ -4795,6 +4806,63 @@ final class PersistentModelTests: XCTestCase {
         let refreshed = try XCTUnwrap(
             reopened.mainContext.fetch(FetchDescriptor<IndependentRelationshipRootFixture>()).first)
         XCTAssertNil(refreshed.target)
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name),
+            ["base", "child"])
+    }
+
+    @MainActor
+    func testAddingIndependentRootWithToManyJoinTableRoundTrips() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ModelConfiguration.sqliteFile(
+            "independent-root-to-many-migration", url: directory.appendingPathComponent("store.sqlite"))
+        let sourceContainer = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToManyMigrationItemFixture.self,
+            configurations: configuration)
+        let base = InheritanceMacroBaseFixture(name: "base")
+        let child = InheritanceMacroChildFixture(name: "child", age: 2)
+        let first = InheritedToManyMigrationItemFixture(title: "first")
+        let second = InheritedToManyMigrationItemFixture(title: "second")
+        sourceContainer.mainContext.insert(base)
+        sourceContainer.mainContext.insert(child)
+        sourceContainer.mainContext.insert(first)
+        sourceContainer.mainContext.insert(second)
+        try sourceContainer.mainContext.save()
+        let sourceIDs = sourceContainer.schema.entityIDsByName
+        try sourceContainer.store?.close()
+
+        let container = try ModelContainer(
+            for: IndependentToManyRootFixture.self,
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToManyMigrationItemFixture.self,
+            configurations: configuration)
+        XCTAssertEqual(
+            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            sourceIDs["InheritanceMacroBaseFixture"])
+        let root = IndependentToManyRootFixture(name: "root", items: [first, second])
+        container.mainContext.insert(root)
+        try container.mainContext.save()
+
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<IndependentToManyRootFixture>()).first)
+        XCTAssertEqual(Set(fetched.items.map(\.title)), ["first", "second"])
+        fetched.items.removeAll { $0.title == "first" }
+        try reader.save()
+
+        let reopened = try ModelContainer(
+            for: IndependentToManyRootFixture.self,
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritedToManyMigrationItemFixture.self,
+            configurations: configuration)
+        let refreshed = try XCTUnwrap(
+            reopened.mainContext.fetch(FetchDescriptor<IndependentToManyRootFixture>()).first)
+        XCTAssertEqual(refreshed.items.map(\.title), ["second"])
         XCTAssertEqual(
             try reopened.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name),
             ["base", "child"])

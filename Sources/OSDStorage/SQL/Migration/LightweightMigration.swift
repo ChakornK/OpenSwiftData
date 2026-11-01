@@ -792,16 +792,18 @@ package enum LightweightMigration {
         for entity in newEntities {
             for relationship in entity.relationships {
                 if entity.superentityName == nil {
-                    guard !relationship.isToMany,
-                        let mapping = destination.relationshipStorageMapping(
-                            modelEntityName: entity.name, relationshipName: relationship.name),
-                        mapping.declaringEntityName == entity.name,
-                        mapping.ownerRootEntityName == entity.name
-                    else {
-                        throw SwiftDataError.migrationUnsupported(
-                            "New root relationships must use directly owned to-one storage.")
+                    if !relationship.isToMany {
+                        guard
+                            let mapping = destination.relationshipStorageMapping(
+                                modelEntityName: entity.name, relationshipName: relationship.name),
+                            mapping.declaringEntityName == entity.name,
+                            mapping.ownerRootEntityName == entity.name
+                        else {
+                            throw SwiftDataError.migrationUnsupported(
+                                "New root to-one relationships must use directly owned storage.")
+                        }
+                        continue
                     }
-                    continue
                 }
                 if relationship.isToMany {
                     if relationship.inverse != nil,

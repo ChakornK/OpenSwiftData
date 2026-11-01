@@ -9,6 +9,16 @@ final class CustomDataStoreFixture {
 }
 
 @Model
+final class CustomDataStorePartialFixture {
+    var name: String
+    var value: Int
+    init(name: String, value: Int) {
+        self.name = name
+        self.value = value
+    }
+}
+
+@Model
 final class CustomDataStoreOwner {
     var name: String
     @Relationship(inverse: nil) var destination: CustomDataStoreDestination?
@@ -85,6 +95,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
     private var nextPrimaryKey: Int64 = 1
     private var snapshots: [PersistentIdentifier: DataStoreSnapshot] = [:]
     private var reservations: [PersistentIdentifier: PersistentIdentifier] = [:]
+    private(set) var lastFetchedValueKeys: Set<String>?
 
     func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         lock.lock()
@@ -108,7 +119,24 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         let offset = request.descriptor.fetchOffset ?? 0
         rows = Array(rows.dropFirst(offset))
         if let limit = request.descriptor.fetchLimit { rows = Array(rows.prefix(limit)) }
-        return DataStoreFetchResult(snapshots: rows)
+        guard let keyPaths = request.descriptor.propertiesToFetch else {
+            lastFetchedValueKeys = rows.first.map { Set($0.values.keys) }
+            return DataStoreFetchResult(snapshots: rows)
+        }
+        let requestedProperties = Set(keyPaths.compactMap(Model.propertyName(forKeyPath:)))
+        let requested = Set(
+            request.entity.attributes.filter { requestedProperties.contains($0.name) }.flatMap { attribute in
+                attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
+            })
+        let partialRows = rows.map { snapshot in
+            DataStoreSnapshot(
+                persistentIdentifier: snapshot.persistentIdentifier,
+                entityName: snapshot.entityName,
+                values: snapshot.values.filter { requested.contains($0.key) },
+                relationships: snapshot.relationships)
+        }
+        lastFetchedValueKeys = partialRows.first.map { Set($0.values.keys) }
+        return DataStoreFetchResult(snapshots: partialRows)
     }
 
     func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
@@ -772,14 +800,27 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsPartialFetchesAndIncompleteSnapshots() throws {
+    func testDataStorePartialFetchFaultsUnrequestedProperties() throws {
         let dataStore = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-partial", dataStoreConfiguration: ExistingDataStoreConfiguration(store: dataStore))
-        let container = try ModelContainer(for: CustomDataStoreFixture.self, configurations: configuration)
+        let container = try ModelContainer(for: CustomDataStorePartialFixture.self, configurations: configuration)
         let context = container.mainContext
-        XCTAssertThrowsError(
-            try context.fetch(FetchDescriptor<CustomDataStoreFixture>(propertiesToFetch: [\.value])))
+        context.insert(CustomDataStorePartialFixture(name: "partial", value: 42))
+        try context.save()
+        let descriptor = FetchDescriptor<CustomDataStorePartialFixture>(propertiesToFetch: [\.name])
+        let fetched = try XCTUnwrap(context.fetch(descriptor).first)
+        XCTAssertEqual(fetched.name, "partial")
+        XCTAssertEqual(dataStore.lastFetchedValueKeys, ["name"])
+        XCTAssertEqual(fetched.value, 42)
+        XCTAssertEqual(dataStore.lastFetchedValueKeys, ["name"])
+
+        let valueDescriptor = FetchDescriptor<CustomDataStorePartialFixture>(propertiesToFetch: [\.value])
+        let fetchedByValue = try XCTUnwrap(context.fetch(valueDescriptor).first)
+        XCTAssertTrue(fetchedByValue === fetched)
+        XCTAssertEqual(dataStore.lastFetchedValueKeys, ["value"])
+        XCTAssertEqual(fetchedByValue.name, "partial")
+        XCTAssertEqual(fetchedByValue.value, 42)
 
         let malformedStore = MalformedSnapshotDataStore()
         let malformedConfiguration = ModelConfiguration(
@@ -803,6 +844,11 @@ final class DataStoreTests: XCTestCase {
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<FlattenedCompositeFixture>()).first?.dimensions,
             value)
+
+        let partial = try XCTUnwrap(
+            context.fetch(FetchDescriptor<FlattenedCompositeFixture>(propertiesToFetch: [\.dimensions])).first)
+        XCTAssertEqual(store.lastFetchedValueKeys, ["dimensions_width", "dimensions_label"])
+        XCTAssertEqual(partial.dimensions, value)
     }
 
     @MainActor
@@ -821,6 +867,14 @@ final class DataStoreTests: XCTestCase {
         try context.save()
 
         let reader = container.makeContext()
+        let partialOwners = try reader.fetch(
+            FetchDescriptor<CustomDataStoreOwner>(propertiesToFetch: [\.name]))
+        XCTAssertEqual(store.lastFetchedValueKeys, ["name"])
+        let partialOwner = try XCTUnwrap(partialOwners.first(where: { $0.name == "owner" }))
+        let partialSecondOwner = try XCTUnwrap(partialOwners.first(where: { $0.name == "second owner" }))
+        XCTAssertEqual(partialOwner.destination?.title, "destination")
+        XCTAssertTrue(partialOwner.destination === partialSecondOwner.destination)
+
         let fetchedOwners = try reader.fetch(FetchDescriptor<CustomDataStoreOwner>())
         let fetched = try XCTUnwrap(fetchedOwners.first(where: { $0.name == "owner" }))
         let fetchedSecondOwner = try XCTUnwrap(fetchedOwners.first(where: { $0.name == "second owner" }))

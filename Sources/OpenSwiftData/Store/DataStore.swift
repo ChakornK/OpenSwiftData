@@ -8,6 +8,8 @@ public protocol DataStore: Sendable {
     /// Whether fetch requests can return every requested hierarchy entity using its concrete entity name.
     var supportsInheritance: Bool { get }
     /// Fetches snapshots matching the request's entity subtree, predicate, ordering, offset, and limit.
+    /// When `propertiesToFetch` is non-nil, snapshots may omit unrequested scalar values; relationship identifiers
+    /// remain complete. The context faults omitted scalar properties on demand through `snapshot(for:)`.
     /// The store applies the predicate and ordering before offset and limit. When `includePendingChanges` is true,
     /// ModelContext requests all matching stored snapshots and applies pagination after merging pending models.
     /// Hierarchy-capable stores include every matching `includedEntityNames` entry and return each snapshot with its
@@ -46,12 +48,13 @@ public struct DataStoreSnapshot: Sendable, Equatable {
     /// The stable schema entity name.
     public let entityName: String
     /// Encoded scalar properties keyed by schema property name, or component column name when flattened.
+    /// Partial fetches may omit unrequested values; flattened properties are atomic and include all components.
     public let values: [String: StoredValue]
     /// Related model identifiers keyed by relationship property name.
     public let relationships: [String: [PersistentIdentifier]]
 
     /// Creates a snapshot with scalar values and related persistent identifiers.
-    /// ModelContext resolves related snapshots recursively during fetch; partial-property fetches are unsupported.
+    /// ModelContext resolves related snapshots recursively during fetch and faults omitted partial-fetch values on demand.
     public init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,

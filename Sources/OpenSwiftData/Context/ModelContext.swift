@@ -837,8 +837,8 @@ public final class ModelContext {
         if let offset = descriptor.fetchOffset, offset < 0 {
             throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
         }
-        guard descriptor.propertiesToFetch == nil else {
-            throw unsupportedStore("This DataStore fetch path does not support partial property materialization.")
+        let requestedAttributeNames = try descriptor.propertiesToFetch.map {
+            Set(try selectedAttributes($0, entity: entity, type: Model.self))
         }
         if hasHierarchy, !descriptor.sortBy.isEmpty {
             _ = try sortProperties(descriptor.sortBy, entity: entity, type: Model.self)
@@ -876,7 +876,8 @@ public final class ModelContext {
         }
         for (snapshot, concreteEntity) in includedModels {
             let resolved = try resolveDataStoreSnapshot(
-                snapshot, dataStore: dataStore, container: container, cache: &materialized)
+                snapshot, dataStore: dataStore, container: container, cache: &materialized,
+                requestedAttributeNames: requestedAttributeNames)
             guard isEntity(concreteEntity.name, descendantOf: entity.name), let model = resolved as? Model else {
                 throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with the wrong model type.")
             }
@@ -889,7 +890,8 @@ public final class ModelContext {
         _ snapshot: DataStoreSnapshot,
         dataStore: any DataStore,
         container: ModelContainer,
-        cache: inout [PersistentIdentifier: any PersistentModel]
+        cache: inout [PersistentIdentifier: any PersistentModel],
+        requestedAttributeNames: Set<String>? = nil
     ) throws -> any PersistentModel {
         if let cached = cache[snapshot.persistentIdentifier] { return cached }
         guard let entity = container.schema.entity(forName: snapshot.entityName),
@@ -902,10 +904,34 @@ public final class ModelContext {
             entity.attributes.flatMap { attribute in
                 attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
             })
-        guard Set(snapshot.values.keys) == expectedAttributes,
+        let suppliedAttributes = Set(snapshot.values.keys)
+        guard suppliedAttributes.isSubset(of: expectedAttributes),
             Set(snapshot.relationships.keys) == Set(entity.relationships.map(\.name))
         else {
             throw SwiftDataError.unsupportedStore("DataStore returned an incomplete model snapshot for \(entity.name).")
+        }
+        if let requestedAttributeNames {
+            let selectedAttributes = entity.attributes.filter { requestedAttributeNames.contains($0.name) }
+            let requiredKeys = Set(
+                selectedAttributes.flatMap { attribute in
+                    attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
+                })
+            guard requiredKeys.isSubset(of: suppliedAttributes) else {
+                throw SwiftDataError.unsupportedStore(
+                    "DataStore omitted a requested property from \(entity.name).")
+            }
+            for attribute in selectedAttributes where attribute.options.contains(.flattened) {
+                let suppliedCount = attribute.components.filter { suppliedAttributes.contains($0.columnName) }.count
+                guard suppliedCount == 0 || suppliedCount == attribute.components.count else {
+                    throw SwiftDataError.unsupportedStore(
+                        "DataStore returned a partial flattened property for \(entity.name).\(attribute.name).")
+                }
+            }
+        } else {
+            guard suppliedAttributes == expectedAttributes else {
+                throw SwiftDataError.unsupportedStore(
+                    "DataStore returned an incomplete model snapshot for \(entity.name).")
+            }
         }
         guard let registration = container.modelRegistration(forEntityName: entity.name),
             let primaryKey = snapshot.persistentIdentifier.primaryKey
@@ -961,6 +987,16 @@ public final class ModelContext {
         if !wasDirty {
             try registration.assignDataStoreRelationships(on: model, relationships: relationships)
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
+            let suppliedNames = Set(
+                entity.attributes.compactMap { attribute -> String? in
+                    if attribute.options.contains(.flattened) {
+                        return attribute.components.allSatisfy { suppliedAttributes.contains($0.columnName) }
+                            ? attribute.name : nil
+                    }
+                    return suppliedAttributes.contains(attribute.name) ? attribute.name : nil
+                })
+            try registration.installDataStoreFaults(
+                on: model, entity: entity, dataStore: dataStore, suppliedAttributeNames: suppliedNames)
         }
         return model
     }

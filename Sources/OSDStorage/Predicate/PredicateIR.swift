@@ -92,17 +92,35 @@ package enum PredicateIRBuilder {
                     op, lhs, rhs)
             case "Arithmetic":
                 let op = try arithmeticOperator(try fieldNode("op", from: fields))
-                return .arithmetic(
-                    op, try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
+                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                    isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Arithmetic currently supports signed integer operands only.")
+                }
+                return .arithmetic(op, lhs, rhs)
             case "IntDivision":
-                return .arithmetic(
-                    .divide, try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
+                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                    isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Integer division requires signed integer operands.")
+                }
+                return .arithmetic(.divide, lhs, rhs)
             case "IntRemainder":
-                return .arithmetic(
-                    .remainder, try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
+                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                    isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Integer remainder requires signed integer operands.")
+                }
+                return .arithmetic(.remainder, lhs, rhs)
             case "Equal":
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
@@ -694,6 +712,35 @@ package enum PredicateIRBuilder {
             "Float", "Swift.Float", "Double", "Swift.Double", "Decimal", "Foundation.Decimal", "Date",
             "Foundation.Date", "URL", "Foundation.URL",
         ].contains(unwrapped)
+    }
+
+    private static func isIntegerArithmeticOperand(
+        _ ir: PredicateIR,
+        attributeTypes: [String: String]
+    ) -> Bool {
+        switch ir {
+        case let .keyPath(path):
+            guard !path.isEmpty else { return false }
+            let typeName =
+                attributeTypes[path.joined(separator: ".")]
+                ?? attributeTypes[path.last ?? ""]
+                ?? attributeTypes.first(where: { $0.key.hasSuffix(".\(path.last ?? "")") })?.value
+            let unwrapped = typeName.map { $0.hasSuffix("?") ? String($0.dropLast()) : $0 }
+            return [
+                "Int", "Swift.Int", "Int8", "Swift.Int8", "Int16", "Swift.Int16", "Int32", "Swift.Int32",
+                "Int64", "Swift.Int64",
+            ].contains(unwrapped ?? "")
+        case .value(.int):
+            return true
+        case let .arithmetic(_, lhs, rhs):
+            return isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                && isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+        case let .nilCoalesce(lhs, rhs):
+            return isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                && isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+        default:
+            return false
+        }
     }
 
     private static func scalarCollectionElementType(_ typeName: String?) -> String? {

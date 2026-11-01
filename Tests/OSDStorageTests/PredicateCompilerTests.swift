@@ -96,6 +96,64 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(1), .text("UInt64"), .text("greaterThan")])
     }
 
+    func testArithmeticRejectsFloatingPointUntilRealFunctionsAreAvailable() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", .propertyReference("score")),
+                ("rhs", .typedValue(.double(2.0))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Double"])
+        ) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupported floating-point arithmetic, got \(error)")
+            }
+        }
+    }
+
+    func testArithmeticRejectsMixedAndUnsignedOperands() throws {
+        let lhs = PredicateMirrorWalker.Node.propertyReference("score")
+        let rhs = PredicateMirrorWalker.Node.typedValue(.int(1))
+        let mixed = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", lhs),
+                ("rhs", rhs),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(mixed, attributeTypes: ["score": "Double"]))
+
+        let unsigned = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", .propertyReference("count")),
+                ("rhs", rhs),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertThrowsError(try PredicateIRBuilder.build(unsigned, attributeTypes: ["count": "UInt64"]))
+    }
+
+    func testArithmeticAcceptsQualifiedIntegerPathsAndCoalescing() throws {
+        let keyPath = PredicateMirrorWalker.Node.propertyReference("owner.count")
+        let coalesced = PredicateMirrorWalker.Node.expression(
+            name: "NilCoalesce",
+            children: [("lhs", keyPath), ("rhs", .typedValue(.int(0)))])
+        let arithmetic = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", coalesced),
+                ("rhs", .typedValue(.int(1))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertNoThrow(
+            try PredicateIRBuilder.build(
+                arithmetic,
+                attributeTypes: ["owner.count": "Int?"]))
+    }
+
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Equal",

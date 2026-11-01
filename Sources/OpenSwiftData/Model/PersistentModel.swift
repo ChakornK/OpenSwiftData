@@ -465,12 +465,12 @@ private enum DetachedRelationshipGraph {
         let removed = original.filter { old in !endpoints.contains(where: { $0 === old }) }
         let added = endpoints.filter { new in !original.contains(where: { $0 === new }) }
         for endpoint in added + removed where endpoint.modelContext == nil {
-            guard let inverse = relationshipAdapter(on: endpoint, named: inverseName),
-                let inverseCurrent = inverse.read(endpoint)
+            guard let inverse = relationshipAdapter(on: endpoint, named: inverseName)
             else {
                 throw SwiftDataError.unsupportedSchemaProperty(
                     "Detached relationship inverse '\(inverseName)' has no unique typed adapter.")
             }
+            let inverseCurrent = readEndpoints(of: inverse, on: endpoint)
             let inverseKey = Key(owner: ObjectIdentifier(endpoint), property: inverseName)
             var inversePlan =
                 plans[inverseKey]
@@ -494,8 +494,8 @@ private enum DetachedRelationshipGraph {
                         plans[displacedKey]
                         ?? Plan(
                             owner: displaced, adapter: displacedAdapter,
-                            original: unique(displacedAdapter.read(displaced) ?? []),
-                            endpoints: unique(displacedAdapter.read(displaced) ?? []), initialValue: nil)
+                            original: readEndpoints(of: displacedAdapter, on: displaced),
+                            endpoints: readEndpoints(of: displacedAdapter, on: displaced), initialValue: nil)
                     displacedPlan.endpoints.removeAll { $0 === endpoint }
                     if plans[displacedKey] == nil { order.append(displacedKey) }
                     plans[displacedKey] = displacedPlan
@@ -525,6 +525,13 @@ private enum DetachedRelationshipGraph {
             result.append(endpoint)
         }
         return result
+    }
+
+    private static func readEndpoints(
+        of adapter: any AnyRelationshipAdapterBox, on owner: any PersistentModel
+    ) -> [any PersistentModel] {
+        guard owner.anyBackingData.hasValue(forKeyPath: adapter.keyPath) else { return [] }
+        return unique(adapter.read(owner) ?? [])
     }
 
     private static func inferredInverseName(

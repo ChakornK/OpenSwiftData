@@ -446,8 +446,14 @@ package enum LightweightMigration {
                     "Lightweight migration does not support inherited relationships or indexes.")
             }
         }
-        guard Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)) else {
-            throw SwiftDataError.migrationUnsupported("Entity additions and removals require a versioned row mapping.")
+        let sourceNames = Set(source.entities.map(\.name))
+        let destinationNames = Set(destination.entities.map(\.name))
+        guard sourceNames.isSubset(of: destinationNames) else {
+            throw SwiftDataError.migrationUnsupported("Entity removals require a versioned row mapping.")
+        }
+        if sourceNames != destinationNames {
+            try applyFlatIndependentRootAdditions(source: source, destination: destination, connection: connection)
+            return
         }
         try validateDestinationIndexNames(destination)
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
@@ -465,6 +471,75 @@ package enum LightweightMigration {
                 connection: connection)
         }
         try reconcileIndexes(indexTransitions, connection: connection)
+    }
+
+    private static func applyFlatIndependentRootAdditions(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws {
+        let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
+        let destinationEntities = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        guard source.entities.allSatisfy({ destinationEntities[$0.name] == $0 }) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Adding flat roots cannot be combined with changes to existing entities.")
+        }
+        let added = destination.entities.filter { sourceEntities[$0.name] == nil }
+        guard !added.isEmpty, added.allSatisfy({ $0.superentityName == nil && $0.relationships.isEmpty }) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Flat migrations only add independent root entities without relationships.")
+        }
+        try validateDestinationIndexNames(destination)
+        let built = try SchemaBuilder.build(destination)
+        let physicalNames = Set(
+            try connection.rows(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index', 'view')"
+            ).compactMap { row -> String? in
+                guard case let .text(name)? = row.first else { return nil }
+                return name.uppercased()
+            })
+        let maximumSourceID = source.entityIDsByName.values.max() ?? 0
+        var plannedObjectNames = physicalNames
+        var plans:
+            [(
+                entity: Schema.Entity, identifier: Int64, tableName: String, statement: String,
+                indexes: [IndexDefinition]
+            )] = []
+        for entity in added.sorted(by: { lhs, rhs in
+            let lhsID = destination.entityIDsByName[lhs.name] ?? .max
+            let rhsID = destination.entityIDsByName[rhs.name] ?? .max
+            return lhsID == rhsID ? lhs.name.utf8.lexicographicallyPrecedes(rhs.name.utf8) : lhsID < rhsID
+        }) {
+            guard let rawIdentifier = destination.entityIDsByName[entity.name],
+                rawIdentifier > maximumSourceID,
+                let identifier = Int64(exactly: rawIdentifier)
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "New root entity identifiers must append after all persisted identifiers.")
+            }
+            let tableName = "Z\(entity.name.uppercased())"
+            guard plannedObjectNames.insert(tableName).inserted else {
+                throw SwiftDataError.migrationUnsupported("New root table '\(tableName)' already exists.")
+            }
+            guard let statement = built.statements.first(where: { $0.hasPrefix("CREATE TABLE \(tableName) ") }) else {
+                throw SwiftDataError.migrationUnsupported("SchemaBuilder did not create table \(tableName).")
+            }
+            let definitions = indexDefinitions(for: entity, schema: destination)
+            for definition in definitions {
+                guard plannedObjectNames.insert(definition.name.uppercased()).inserted else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "New root index '\(definition.name)' collides with another schema object.")
+                }
+            }
+            plans.append((entity, identifier, tableName, statement, definitions))
+        }
+        for plan in plans {
+            try connection.execute(plan.statement)
+            for definition in plan.indexes { try connection.execute(definition.statement) }
+            try connection.execute(
+                "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, 0, 0)",
+                [.int(plan.identifier), .text(plan.entity.name)])
+        }
     }
 
     private static func applyHierarchyOptionalAttributeAdditions(

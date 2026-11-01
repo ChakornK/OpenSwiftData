@@ -915,6 +915,119 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testAddingIndependentFlatRootPreservesExistingRowsAndAddsIndexes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Address",
+                attributes: [
+                    Schema.Attribute(name: "street", type: "String"),
+                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["street"])]),
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let sourceIDs = source.entityIDsByName
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZPERSON (Z_ENT, Z_OPT, ZNAME) VALUES (?, 1, ?)",
+                [.int(Int64(sourceIDs["Person"] ?? 0)), .text("existing")])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        XCTAssertEqual(destinationIDs["Person"], sourceIDs["Person"])
+        let addressID = try XCTUnwrap(destinationIDs["Address"])
+        XCTAssertGreaterThan(addressID, try XCTUnwrap(sourceIDs.values.max()))
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT ZNAME FROM ZPERSON") }, [[.text("existing")]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_SUPER, Z_MAX FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(addressID))])
+            },
+            [[.int(0), .int(0)]])
+        let objects = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")
+        }
+        XCTAssertTrue(objects.contains([.text("ZADDRESS")]))
+        XCTAssertTrue(objects.contains([.text("ZADDRESS_ZCODE_UNIQUE_INDEX")]))
+        XCTAssertTrue(objects.contains([.text("ZADDRESS_ZSTREET_INDEX")]))
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        try reopened.close()
+    }
+
+    func testAddingFlatRootWithRelationshipsFailsAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Kennel",
+                relationships: [Schema.Relationship(name: "pets", destination: "Pet", isToMany: true)]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let tables = try reopened.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZKENNEL'")
+        }
+        XCTAssertTrue(tables.isEmpty)
+        try reopened.close()
+    }
+
+    func testAddingFlatRootsRejectsCrossObjectTableIndexCollisionAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([Schema.Entity(name: "Person")])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "value", type: "Int")],
+                indexes: [Schema.Index(properties: ["value"])]),
+            Schema.Entity(name: "Owner_ZValue_INDEX"),
+            Schema.Entity(name: "Person"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let tables = try reopened.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        XCTAssertEqual(
+            Set(
+                tables.compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name
+                }),
+            [
+                "ZPERSON", "Z_PRIMARYKEY", "_osd_history_changes", "_osd_history_transactions", "_osd_meta",
+                "sqlite_sequence",
+            ])
+        try reopened.close()
+    }
+
     func testHierarchyMigrationAddsIndependentRootWithoutRenumberingEntities() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

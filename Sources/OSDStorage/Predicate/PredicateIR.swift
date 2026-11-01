@@ -294,7 +294,7 @@ package enum PredicateIRBuilder {
                     case let .keyPath(path) = try field(
                         "sequence", from: fields, attributeTypes: attributeTypes), path.count == 1,
                     let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
-                    ["Int", "Int8", "Int16", "Int32", "Int64"]
+                    ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
                         .contains(elementType),
                     case let .value(value) = try field("value", from: fields, attributeTypes: attributeTypes)
                 else {

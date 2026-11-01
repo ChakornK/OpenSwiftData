@@ -41,6 +41,7 @@ package enum PredicateRuntimeTreeBuilder {
         modelTypeForEntity: (String) -> (any PersistentModel.Type)? = { _ in nil }
     ) throws -> Result {
         var captures: [RuntimePredicatePath: StoredValue] = [:]
+        var unsignedCollectionBoundPaths = Set<RuntimePredicatePath>()
         var activeModelType: any PersistentModel.Type = modelType
         var activeEntity = entity
         var activeCollectionName: String?
@@ -231,7 +232,7 @@ package enum PredicateRuntimeTreeBuilder {
                                 .contains(reflectedOperator),
                             let elementType = activeEntity.attributes.first(where: { $0.name == collectionName })
                                 .map({ Self.codableScalarCollectionElementType($0.type) }) ?? nil,
-                            ["Int", "Int8", "Int16", "Int32", "Int64"]
+                            ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
                                 .contains(elementType)
                         else {
                             throw SwiftDataError.unsupportedPredicate(
@@ -244,9 +245,24 @@ package enum PredicateRuntimeTreeBuilder {
                     }
                     let isNotEqual = operationName == "NotEqual"
                     let valuePath = isNotEqual ? path + ["wrapped", "element"] : path + ["value"]
-                    let valueNode = try visit(
-                        value, path: valuePath, bindings: bindings,
-                        capturePathRewrites: capturePathRewrites)
+                    let unsignedBoundPath = RuntimePredicatePath(
+                        labels: capturePathRewrites.reduce(valuePath) { $1.apply(to: $0) })
+                    let usesUnsignedBound =
+                        !isNotEqual
+                        && ["UInt", "UInt64"].contains(
+                            activeEntity.attributes.first(where: { $0.name == collectionName })
+                                .flatMap { Self.codableScalarCollectionElementType($0.type) })
+                    if usesUnsignedBound { unsignedCollectionBoundPaths.insert(unsignedBoundPath) }
+                    let valueNode: RuntimePredicateNode
+                    do {
+                        valueNode = try visit(
+                            value, path: valuePath, bindings: bindings,
+                            capturePathRewrites: capturePathRewrites)
+                    } catch {
+                        unsignedCollectionBoundPaths.remove(unsignedBoundPath)
+                        throw error
+                    }
+                    unsignedCollectionBoundPaths.remove(unsignedBoundPath)
                     if operationName == "Equal" {
                         return .expression(
                             name: "OSDScalarCollectionAllEqual",
@@ -534,8 +550,15 @@ package enum PredicateRuntimeTreeBuilder {
                 if name == "Value" {
                     do {
                         let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
-                        captures[RuntimePredicatePath(labels: rewrittenPath)] = try StoredValue(
-                            predicateScalar: child.value, type: type(of: child.value))
+                        let capturePath = RuntimePredicatePath(labels: rewrittenPath)
+                        if unsignedCollectionBoundPaths.contains(capturePath),
+                            let unsigned = unsignedIntegerValue(child.value)
+                        {
+                            captures[capturePath] = .text(String(unsigned))
+                        } else {
+                            captures[capturePath] = try StoredValue(
+                                predicateScalar: child.value, type: type(of: child.value))
+                        }
                     } catch {
                         throw SwiftDataError.unsupportedPredicate("Unsupported predicate capture \(childTypeName)")
                     }
@@ -637,6 +660,12 @@ package enum PredicateRuntimeTreeBuilder {
             let id = Mirror(reflecting: key).children.first(where: { $0.label == "id" })?.value
         else { return nil }
         return id as? UInt
+    }
+
+    private static func unsignedIntegerValue(_ value: Any) -> UInt64? {
+        if let value = value as? UInt64 { return value }
+        if let value = value as? UInt { return UInt64(value) }
+        return nil
     }
 
     private static func isArrayOrSetType(_ type: Any.Type) -> Bool {

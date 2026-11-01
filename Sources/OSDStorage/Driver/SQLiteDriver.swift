@@ -294,6 +294,28 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                 let elements = try? JSONDecoder().decode([Int64].self, from: data)
             else { return nil }
             return elements.allSatisfy { matches($0, bound) } ? 1 : 0
+        case "UInt", "UInt64":
+            let bound: UInt64?
+            if let signed = Int64.fromDatabaseValue(values[1]), signed >= 0 {
+                bound = UInt64(signed)
+            } else if let text = String.fromDatabaseValue(values[1]) {
+                bound = UInt64(text)
+            } else {
+                bound = nil
+            }
+            guard let bound,
+                let elements = try? JSONDecoder().decode([UInt64].self, from: data)
+            else { return nil }
+            func matchesUnsigned(_ lhs: UInt64, _ rhs: UInt64) -> Bool {
+                switch operation {
+                case "lessThan": lhs < rhs
+                case "lessThanOrEqual": lhs <= rhs
+                case "greaterThan": lhs > rhs
+                case "greaterThanOrEqual": lhs >= rhs
+                default: false
+                }
+            }
+            return elements.allSatisfy { matchesUnsigned($0, bound) } ? 1 : 0
         default:
             return nil
         }

@@ -85,10 +85,15 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(22), .int(11), .text("match")])
     }
 
-    func testUnsignedCollectionOrderingFailsClosedInSQLCompiler() {
+    func testUnsignedCollectionOrderingCompilesInSQLCompiler() throws {
         let ir = PredicateIR.collectionAllCompare(
             "values", "UInt64", .greaterThan, .value(.int(1)))
-        XCTAssertThrowsError(try SQLCompiler.compile(ir, entity: "Owner"))
+        let compiled = try SQLCompiler.compile(ir, entity: "Owner")
+        XCTAssertEqual(
+            compiled.sql,
+            "osd_json_array_all_compare(t0.ZVALUES, ?, ?, ?)"
+        )
+        XCTAssertEqual(compiled.arguments, [.int(1), .text("UInt64"), .text("greaterThan")])
     }
 
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {

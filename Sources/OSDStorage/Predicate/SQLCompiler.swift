@@ -460,7 +460,7 @@ package enum SQLCompiler {
             return "osd_json_array_all_equal(\(tableAlias).Z\(name.uppercased()), \(elementSQL), ?)"
         case let .collectionAllCompare(name, elementType, operation, element):
             guard Self.validIdentifier(name),
-                ["Int", "Int8", "Int16", "Int32", "Int64"]
+                ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
                     .contains(elementType)
             else {
                 throw SwiftDataError.unsupportedPredicate("Collection allSatisfy ordering requires integer elements")

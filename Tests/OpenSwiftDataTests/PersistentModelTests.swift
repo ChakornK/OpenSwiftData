@@ -677,6 +677,12 @@ final class UInt64CollectionFixture {
 }
 
 @Model
+final class UIntCollectionFixture {
+    @Attribute(.codable) var values: [UInt]
+    init(values: [UInt]) { self.values = values }
+}
+
+@Model
 final class OptionalCodableStringCollectionFixture {
     var name: String
     @Attribute(.codable) var tags: [String]?
@@ -3988,23 +3994,84 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64CollectionAllSatisfyOrderingFailsClosed() throws {
+    func testUInt64CollectionAllSatisfyOrderingSupportsFullRange() throws {
         let container = try ModelContainer(
             for: UInt64CollectionFixture.self,
-            configurations: .sqliteMemory("uint64-collection-all-satisfy-limit"))
+            configurations: .sqliteMemory("uint64-collection-all-satisfy-full-range"))
         let context = container.mainContext
-        let model = UInt64CollectionFixture(values: [UInt64.max])
+        let models = [
+            UInt64CollectionFixture(values: [0, UInt64(Int64.max)]),
+            UInt64CollectionFixture(values: [UInt64(Int64.max) + 1]),
+            UInt64CollectionFixture(values: [UInt64.max]),
+            UInt64CollectionFixture(values: []),
+        ]
+        for model in models { context.insert(model) }
+        try context.save()
+
+        let maxValue = UInt64.max
+        let beyondSignedRange = UInt64(Int64.max) + 1
+        let lessDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 < maxValue } }, includePendingChanges: false)
+        XCTAssertEqual(
+            Set(try context.fetch(lessDescriptor).map(\.persistentModelID)),
+            Set([models[0].persistentModelID, models[1].persistentModelID, models[3].persistentModelID]))
+        let lessEqualDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 <= maxValue } }, includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(lessEqualDescriptor).map(\.persistentModelID), models.map(\.persistentModelID))
+        let greaterDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 > beyondSignedRange } }, includePendingChanges: false)
+        XCTAssertEqual(
+            Set(try context.fetch(greaterDescriptor).map(\.persistentModelID)),
+            Set([models[2].persistentModelID, models[3].persistentModelID]))
+        let greaterEqualDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 >= beyondSignedRange } }, includePendingChanges: false)
+        XCTAssertEqual(
+            Set(try context.fetch(greaterEqualDescriptor).map(\.persistentModelID)),
+            Set([models[1].persistentModelID, models[2].persistentModelID, models[3].persistentModelID]))
+
+        let pending = UInt64CollectionFixture(values: [UInt64.max])
+        context.insert(pending)
+        let pendingBound = UInt64.max - 1
+        let pendingDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 > pendingBound } })
+        XCTAssertEqual(
+            Set(try context.fetch(pendingDescriptor).map(\.persistentModelID)),
+            Set([models[2].persistentModelID, models[3].persistentModelID, pending.persistentModelID]))
+        let signedBoundary = UInt64(Int64.max)
+        let pendingSignedBoundaryDescriptor = FetchDescriptor<UInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 > signedBoundary } })
+        XCTAssertEqual(
+            Set(try context.fetch(pendingSignedBoundaryDescriptor).map(\.persistentModelID)),
+            Set([
+                models[1].persistentModelID, models[2].persistentModelID,
+                models[3].persistentModelID, pending.persistentModelID,
+            ]))
+    }
+
+    @MainActor
+    func testUIntCollectionAllSatisfyOrderingUsesUnsignedComparison() throws {
+        let container = try ModelContainer(
+            for: UIntCollectionFixture.self,
+            configurations: .sqliteMemory("uint-collection-all-satisfy"))
+        let context = container.mainContext
+        let maximum = UInt.max
+        let model = UIntCollectionFixture(values: [maximum])
         context.insert(model)
         try context.save()
 
-        let lowerBound = UInt64.max - 1
-        let descriptor = FetchDescriptor<UInt64CollectionFixture>(
+        let lowerBound = maximum - 1
+        let storedDescriptor = FetchDescriptor<UIntCollectionFixture>(
+            predicate: #Predicate { $0.values.allSatisfy { $0 > lowerBound } },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.persistentModelID), [model.persistentModelID])
+
+        let pending = UIntCollectionFixture(values: [maximum])
+        context.insert(pending)
+        let pendingDescriptor = FetchDescriptor<UIntCollectionFixture>(
             predicate: #Predicate { $0.values.allSatisfy { $0 > lowerBound } })
-        XCTAssertThrowsError(try context.fetch(descriptor)) { error in
-            guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected the unsupported UInt64 ordering diagnostic, got \(error)")
-            }
-        }
+        XCTAssertEqual(
+            Set(try context.fetch(pendingDescriptor).map(\.persistentModelID)),
+            Set([model.persistentModelID, pending.persistentModelID]))
     }
 
     @MainActor

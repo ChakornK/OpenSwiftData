@@ -395,6 +395,20 @@ package enum RuntimePredicateEvaluator {
                     throw SwiftDataError.unsupportedPredicate("Codable integer collection contains malformed data")
                 }
                 return .int(values.allSatisfy { matches($0, bound) } ? 1 : 0)
+            case ("UInt", .int(let bound)),
+                ("UInt64", .int(let bound)) where bound >= 0:
+                guard let values = try? JSONDecoder().decode([UInt64].self, from: Data(bytes)) else {
+                    throw SwiftDataError.unsupportedPredicate("Codable unsigned collection contains malformed data")
+                }
+                let unsignedBound = UInt64(bound)
+                return .int(values.allSatisfy { matches($0, unsignedBound) } ? 1 : 0)
+            case ("UInt", .text(let text)), ("UInt64", .text(let text)):
+                guard let unsignedBound = UInt64(text),
+                    let values = try? JSONDecoder().decode([UInt64].self, from: Data(bytes))
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Codable unsigned collection has an invalid bound")
+                }
+                return .int(values.allSatisfy { matches($0, unsignedBound) } ? 1 : 0)
             default:
                 throw SwiftDataError.unsupportedPredicate(
                     "Codable collection allSatisfy ordering requires a matching integer capture")

@@ -555,6 +555,37 @@ final class FourLevelQuantifierLeafFixture {
 }
 
 @Model
+final class InverseNestedQuantifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var children: [InverseNestedQuantifierChildFixture] = []
+    init(name: String, children: [InverseNestedQuantifierChildFixture] = []) {
+        self.name = name
+        self.children = children
+    }
+}
+
+@Model
+final class InverseNestedQuantifierChildFixture {
+    var name: String
+    var items: [InverseNestedQuantifierItemFixture] = []
+    init(name: String, items: [InverseNestedQuantifierItemFixture] = []) {
+        self.name = name
+        self.items = items
+    }
+}
+
+@Model
+final class InverseNestedQuantifierItemFixture {
+    var title: String
+    @Relationship(inverse: \InverseNestedQuantifierChildFixture.items)
+    var child: InverseNestedQuantifierChildFixture?
+    init(title: String, child: InverseNestedQuantifierChildFixture? = nil) {
+        self.title = title
+        self.child = child
+    }
+}
+
+@Model
 final class ExplicitCodableStringCollectionFixture {
     @Attribute(.codable) var tags: [String]
     @Attribute(.codable) var optionalTags: [String]?
@@ -3223,6 +3254,59 @@ final class PersistentModelTests: XCTestCase {
                 }
             })
         XCTAssertThrowsError(try container.mainContext.fetch(descriptor))
+    }
+
+    @MainActor
+    func testNestedContainsTraversesInverseBackedCollection() throws {
+        let container = try ModelContainer(
+            for: InverseNestedQuantifierOwnerFixture.self,
+            InverseNestedQuantifierChildFixture.self,
+            InverseNestedQuantifierItemFixture.self,
+            configurations: .sqliteMemory("nested-inverse-backed-collection"))
+        let context = container.mainContext
+        let matchingItem = InverseNestedQuantifierItemFixture(title: "match")
+        let otherItem = InverseNestedQuantifierItemFixture(title: "other")
+        let child = InverseNestedQuantifierChildFixture(name: "child")
+        let owner = InverseNestedQuantifierOwnerFixture(name: "owner", children: [child])
+        let emptyChild = InverseNestedQuantifierChildFixture(name: "empty child")
+        let emptyOwner = InverseNestedQuantifierOwnerFixture(name: "empty owner", children: [emptyChild])
+        context.insert(owner)
+        context.insert(child)
+        context.insert(emptyOwner)
+        context.insert(emptyChild)
+        context.insert(matchingItem)
+        context.insert(otherItem)
+        matchingItem.child = child
+        otherItem.child = child
+        try context.save()
+
+        let needle = "match"
+        let storedDescriptor = FetchDescriptor<InverseNestedQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains { child in
+                    child.items.contains { $0.title == needle }
+                }
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["owner"])
+        XCTAssertFalse(try context.fetch(storedDescriptor).contains { $0 === emptyOwner })
+
+        let pendingItem = InverseNestedQuantifierItemFixture(title: "pending other")
+        context.insert(pendingItem)
+        pendingItem.child = child
+        let pendingDescriptor = FetchDescriptor<InverseNestedQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains { child in
+                    child.items.contains { $0.title == needle }
+                }
+            })
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.name), ["owner"])
+
+        matchingItem.child = nil
+        XCTAssertFalse(try context.fetch(pendingDescriptor).contains { $0 === owner })
+        matchingItem.child = child
+        try context.save()
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["owner"])
     }
 
     @MainActor

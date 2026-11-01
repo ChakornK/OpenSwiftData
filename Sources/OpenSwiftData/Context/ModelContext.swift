@@ -2122,13 +2122,12 @@ public final class ModelContext {
                         guard !name.contains("."),
                             let adapter = containerStorage?.relationshipAdapterTable[
                                 ObjectIdentifier(type(of: model))
-                            ]?.first(where: { $0.name == name && $0.isToMany }),
-                            adapter.metadata?.inverse == nil
+                            ]?.first(where: { $0.name == name && $0.isToMany })
                         else {
                             throw SwiftDataError.unsupportedPredicate(
-                                "Nested collection evaluation requires direct no-inverse relationships.")
+                                "Nested collection evaluation requires direct to-many relationships.")
                         }
-                        let endpoints = adapter.read(model) ?? []
+                        let endpoints = try pendingRelationshipEndpoints(adapter, owner: model)
                         relationships[name] = try endpoints.map {
                             try context(for: $0, evaluating: body, depth: depth + 1)
                         }

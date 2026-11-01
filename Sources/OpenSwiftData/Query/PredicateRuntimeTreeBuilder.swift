@@ -282,7 +282,10 @@ package enum PredicateRuntimeTreeBuilder {
                     }),
                     supportsCollectionPredicate(relationship, schema: schema),
                     !(name == "SequenceAllSatisfy" && optionalOwnerPathDepth > 1 && relationship.inverse != nil),
-                    collectionVariableScopes.count == 1 || (localOwnerParts.isEmpty && relationship.inverse == nil),
+                    collectionVariableScopes.count == 1
+                        || (collectionVariableScopes.count == 2 && localOwnerParts.isEmpty
+                            && supportsCollectionPredicate(relationship, schema: schema))
+                        || (localOwnerParts.isEmpty && relationship.inverse == nil),
                     let destinationEntity = schema.entity(forName: relationship.destination),
                     let destinationModelType = modelTypeForEntity(destinationEntity.name)
                 else {

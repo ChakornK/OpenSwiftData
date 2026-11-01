@@ -2652,6 +2652,44 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDetachedArrayAppendRoutesThroughRelationshipMutation() throws {
+        let owner = InverseCollectionLifecycleOwnerFixture(name: "owner")
+        let first = InverseCollectionLifecycleItemFixture(value: "first", owner: nil)
+        owner.items.append(first)
+        XCTAssertTrue(first.owner === owner)
+        XCTAssertEqual(owner.items.map(\.value), ["first"])
+
+        let left = DetachedManyToManyLeftFixture(name: "left")
+        let right = DetachedManyToManyRightFixture(name: "right")
+        left.rights.append(right)
+        XCTAssertTrue(right.lefts.contains(where: { $0 === left }))
+
+        let container = try ModelContainer(
+            for: InverseCollectionLifecycleOwnerFixture.self,
+            InverseCollectionLifecycleItemFixture.self,
+            configurations: .sqliteMemory("managed-relationship-array-append"))
+        let managedOwner = InverseCollectionLifecycleOwnerFixture(name: "managed owner")
+        container.mainContext.insert(managedOwner)
+        let managedItem = InverseCollectionLifecycleItemFixture(value: "managed", owner: nil)
+        container.mainContext.insert(managedItem)
+        managedOwner.items.append(managedItem)
+        XCTAssertTrue(managedItem.owner === managedOwner)
+    }
+
+    @MainActor
+    func testDetachedManyToManyAppendUpdatesInverseAfterExistingOwner() throws {
+        let firstOwner = DetachedManyToManyLeftFixture(name: "first")
+        let secondOwner = DetachedManyToManyLeftFixture(name: "second")
+        let right = DetachedManyToManyRightFixture(name: "right")
+        firstOwner.rights = [right]
+        XCTAssertEqual(right.lefts.map(\.name), ["first"])
+
+        secondOwner.rights.append(right)
+        XCTAssertEqual(secondOwner.rights.map(\.name), ["right"])
+        XCTAssertEqual(Set(right.lefts.map(\.name)), ["first", "second"])
+    }
+
+    @MainActor
     func testDetachedInverseUsesExplicitKeyPathWhenMultipleOwnerLinksExist() throws {
         let owner = DetachedInverseAmbiguityOwnerFixture(name: "owner")
         let target = DetachedInverseAmbiguityTargetFixture(name: "target")

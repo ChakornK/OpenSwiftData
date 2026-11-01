@@ -201,6 +201,17 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                         checkedIntegerArithmetic(values, operation: operation)
                     })
             }
+            for (name, operation) in [
+                ("osd_real_add", RealOperation.add),
+                ("osd_real_subtract", RealOperation.subtract),
+                ("osd_real_multiply", RealOperation.multiply),
+                ("osd_real_divide", RealOperation.divide),
+            ] {
+                database.add(
+                    function: DatabaseFunction(name, argumentCount: 2, pure: true) { values in
+                        checkedRealArithmetic(values, operation: operation)
+                    })
+            }
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
@@ -211,6 +222,10 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
 
     private enum IntegerOperation {
         case add, subtract, multiply, divide, remainder
+    }
+
+    private enum RealOperation {
+        case add, subtract, multiply, divide
     }
 
     private static func checkedIntegerArithmetic(
@@ -237,6 +252,23 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             result = rhs == 0 || (lhs == .min && rhs == -1) ? nil : lhs % rhs
         }
         return result
+    }
+
+    private static func checkedRealArithmetic(
+        _ values: [DatabaseValue], operation: RealOperation
+    ) -> Double? {
+        guard values.count == 2,
+            let lhs = Double.fromDatabaseValue(values[0]), lhs.isFinite,
+            let rhs = Double.fromDatabaseValue(values[1]), rhs.isFinite
+        else { return nil }
+        let result: Double
+        switch operation {
+        case .add: result = lhs + rhs
+        case .subtract: result = lhs - rhs
+        case .multiply: result = lhs * rhs
+        case .divide: result = lhs / rhs
+        }
+        return result.isFinite ? result : nil
     }
 
     private static func jsonArrayMembership(_ values: [DatabaseValue], all: Bool) -> Int? {

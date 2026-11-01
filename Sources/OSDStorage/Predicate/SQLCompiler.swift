@@ -50,6 +50,9 @@ package enum PredicatePlanBuilder {
         case let .arithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
+        case let .realArithmetic(op, lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
         case let .keyPath(path):
             guard !path.isEmpty else { return nil }
             return .property(path.joined(separator: "."))
@@ -279,6 +282,17 @@ package enum SQLCompiler {
                 case .multiply: "osd_int_multiply"
                 case .divide: "osd_int_divide"
                 case .remainder: "osd_int_remainder"
+                }
+            return
+                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
+        case let .realArithmetic(op, lhs, rhs):
+            let function =
+                switch op {
+                case .add: "osd_real_add"
+                case .subtract: "osd_real_subtract"
+                case .multiply: "osd_real_multiply"
+                case .divide: "osd_real_divide"
+                case .remainder: "osd_real_remainder"
                 }
             return
                 "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
@@ -667,6 +681,7 @@ package enum SQLCompiler {
         case let .comparison(op, lhs, rhs): "compare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .decimalComparison(op, lhs, rhs): "decimalCompare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .realArithmetic(op, lhs, rhs): "realArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
         case let .relationshipIsPresent(path): "relationshipIsPresent(\(path.joined(separator: ".")))"
         case let .value(value):

@@ -247,26 +247,43 @@ package enum RuntimePredicateEvaluator {
     ) throws -> RuntimeValue {
         let lhsValue = try evaluateValue(lhs, context: context)
         let rhsValue = try evaluateValue(rhs, context: context)
-        guard case let .int(left) = lhsValue, case let .int(right) = rhsValue else {
-            throw SwiftDataError.unsupportedPredicate("Checked integer arithmetic requires integer operands")
+        switch (lhsValue, rhsValue) {
+        case let (.int(left), .int(right)):
+            let result: Int64?
+            switch operation {
+            case .add:
+                let (value, overflow) = left.addingReportingOverflow(right)
+                result = overflow ? nil : value
+            case .subtract:
+                let (value, overflow) = left.subtractingReportingOverflow(right)
+                result = overflow ? nil : value
+            case .multiply:
+                let (value, overflow) = left.multipliedReportingOverflow(by: right)
+                result = overflow ? nil : value
+            case .divide:
+                result = right == 0 || (left == .min && right == -1) ? nil : left / right
+            case .remainder:
+                result = right == 0 || (left == .min && right == -1) ? nil : left % right
+            }
+            return result.map(RuntimeValue.int) ?? .null
+        case let (.double(left), .double(right)) where left.isFinite && right.isFinite:
+            guard operation != .remainder else {
+                throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported")
+            }
+            let result: Double
+            switch operation {
+            case .add: result = left + right
+            case .subtract: result = left - right
+            case .multiply: result = left * right
+            case .divide: result = left / right
+            case .remainder: return .null
+            }
+            return result.isFinite ? .double(result) : .null
+        case let (.double(left), .double(right)) where !left.isFinite || !right.isFinite:
+            return .null
+        default:
+            throw SwiftDataError.unsupportedPredicate("Arithmetic operands must have matching numeric types")
         }
-        let result: Int64?
-        switch operation {
-        case .add:
-            let (value, overflow) = left.addingReportingOverflow(right)
-            result = overflow ? nil : value
-        case .subtract:
-            let (value, overflow) = left.subtractingReportingOverflow(right)
-            result = overflow ? nil : value
-        case .multiply:
-            let (value, overflow) = left.multipliedReportingOverflow(by: right)
-            result = overflow ? nil : value
-        case .divide:
-            result = right == 0 || (left == .min && right == -1) ? nil : left / right
-        case .remainder:
-            result = right == 0 || (left == .min && right == -1) ? nil : left % right
-        }
-        return result.map(RuntimeValue.int) ?? .null
     }
 
     private static func evaluateStringPredicate(

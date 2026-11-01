@@ -769,6 +769,50 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(2), .int(1), .int(10)])
     }
 
+    func testDoubleArithmeticMatchesFiniteSQLAndPendingSemantics() throws {
+        let container = try ModelContainer(
+            for: PredicateDoubleFixture.self,
+            configurations: .sqliteMemory("double-arithmetic-functions"))
+        let rows = try XCTUnwrap(container.store).read { connection in
+            try connection.rows(
+                "SELECT osd_real_add(?, ?), osd_real_subtract(?, ?), "
+                    + "osd_real_multiply(?, ?), osd_real_divide(?, ?), "
+                    + "osd_real_add(?, ?) = 0.0, osd_real_divide(?, ?), osd_real_multiply(?, ?)",
+                arguments: [
+                    .double(2.0), .double(1.5),
+                    .double(5.0), .double(2.0),
+                    .double(3.0), .double(2.0),
+                    .double(9.0), .double(2.0),
+                    .double(-0.0), .double(0.0),
+                    .double(1.0), .double(0.0),
+                    .double(.greatestFiniteMagnitude), .double(2.0),
+                ])
+        }
+        XCTAssertEqual(
+            rows,
+            [
+                [
+                    .double(3.5), .double(3.0), .double(6.0), .double(4.5), .int(1), .null, .null,
+                ]
+            ])
+
+        let finitePlan = PredicatePlan.comparison(
+            .greaterThan,
+            .arithmetic(.multiply, .property("score"), .value(.double(2.0))),
+            .value(.double(5.0)))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(finitePlan, values: ["score": .double(3.0)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(finitePlan, values: ["score": .double(2.0)]))
+        XCTAssertFalse(
+            try RuntimePredicateEvaluator.matches(
+                finitePlan, values: ["score": .double(.greatestFiniteMagnitude)]))
+
+        let zeroDivisionPlan = PredicatePlan.comparison(
+            .greaterThan,
+            .arithmetic(.divide, .property("score"), .value(.double(0.0))),
+            .value(.double(0.0)))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(zeroDivisionPlan, values: ["score": .double(1.0)]))
+    }
+
     @MainActor
     func testFetchedDirtyModelIsReevaluatedAgainstPendingPredicate() throws {
         let container = try ModelContainer(

@@ -8,6 +8,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case comparison(ComparisonOperator, PredicateIR, PredicateIR)
     case decimalComparison(ComparisonOperator, PredicateIR, PredicateIR)
     case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
+    case realArithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
     case relationshipIsPresent([String])
     case value(StoredValue)
@@ -94,13 +95,28 @@ package enum PredicateIRBuilder {
                 let op = try arithmeticOperator(try fieldNode("op", from: fields))
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                if isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
+                {
+                    return .arithmetic(op, lhs, rhs)
+                }
+                guard op != .remainder,
+                    isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                    isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Arithmetic currently supports signed integer operands only.")
+                        "Arithmetic requires two signed integer or two Double operands.")
                 }
-                return .arithmetic(op, lhs, rhs)
+                return .realArithmetic(op, lhs, rhs)
+            case "FloatDivision":
+                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
+                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                guard isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
+                    isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Floating-point division requires Double operands.")
+                }
+                return .realArithmetic(.divide, lhs, rhs)
             case "IntDivision":
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
@@ -413,6 +429,11 @@ package enum PredicateIRBuilder {
                 op,
                 try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
                 try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
+        case let .realArithmetic(op, lhs, rhs):
+            return .realArithmetic(
+                op,
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
         case let .nilCoalesce(lhs, rhs):
             return .nilCoalesce(
                 try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
@@ -539,6 +560,7 @@ package enum PredicateIRBuilder {
             let unwrapped = type.hasSuffix("?") ? String(type.dropLast()) : type
             return unwrapped == "Decimal" || unwrapped == "Foundation.Decimal"
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+            let .realArithmetic(_, lhs, rhs),
             let .nilCoalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs), let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
@@ -743,6 +765,29 @@ package enum PredicateIRBuilder {
         }
     }
 
+    private static func isDoubleArithmeticOperand(
+        _ ir: PredicateIR,
+        attributeTypes: [String: String]
+    ) -> Bool {
+        switch ir {
+        case let .keyPath(path):
+            guard !path.isEmpty else { return false }
+            let typeName = attributeTypes[path.joined(separator: ".")] ?? attributeTypes[path.last ?? ""]
+            let unwrapped = typeName.map { $0.hasSuffix("?") ? String($0.dropLast()) : $0 }
+            return ["Double", "Swift.Double"].contains(unwrapped ?? "")
+        case .value(.double):
+            return true
+        case let .realArithmetic(_, lhs, rhs):
+            return isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                && isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
+        case let .nilCoalesce(lhs, rhs):
+            return isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                && isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
+        default:
+            return false
+        }
+    }
+
     private static func scalarCollectionElementType(_ typeName: String?) -> String? {
         guard let typeName,
             let opening = typeName.firstIndex(of: "<"), typeName.last == ">"
@@ -793,7 +838,7 @@ package enum PredicateIRBuilder {
         case "Negation": ["wrapped"]
         case "Comparison": ["op", "lhs", "rhs"]
         case "Arithmetic": ["op", "lhs", "rhs"]
-        case "IntDivision", "IntRemainder": ["lhs", "rhs"]
+        case "FloatDivision", "IntDivision", "IntRemainder": ["lhs", "rhs"]
         case "KeyPath": ["root", "keyPath"]
         case "Value": ["value"]
         case "OptionalFlatMap": ["wrapped", "transform", "variable"]

@@ -24,6 +24,7 @@ public enum PredicateNodeMetadata {
             Entry(name: "Negation", requiredChildren: ["wrapped"]),
             Entry(name: "Comparison", requiredChildren: ["op", "lhs", "rhs"]),
             Entry(name: "Arithmetic", requiredChildren: ["op", "lhs", "rhs"]),
+            Entry(name: "FloatDivision", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "IntDivision", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "IntRemainder", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "Equal", requiredChildren: ["lhs", "rhs"]),

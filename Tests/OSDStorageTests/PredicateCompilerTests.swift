@@ -96,7 +96,7 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(1), .text("UInt64"), .text("greaterThan")])
     }
 
-    func testArithmeticRejectsFloatingPointUntilRealFunctionsAreAvailable() throws {
+    func testArithmeticRejectsFloatUntilFloatFunctionsAreAvailable() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Arithmetic",
             children: [
@@ -105,10 +105,10 @@ final class PredicateCompilerTests: XCTestCase {
                 ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
             ])
         XCTAssertThrowsError(
-            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Double"])
+            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Float"])
         ) { error in
             guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected unsupported floating-point arithmetic, got \(error)")
+                return XCTFail("Expected unsupported Float arithmetic, got \(error)")
             }
         }
     }
@@ -152,6 +152,55 @@ final class PredicateCompilerTests: XCTestCase {
             try PredicateIRBuilder.build(
                 arithmetic,
                 attributeTypes: ["owner.count": "Int?"]))
+    }
+
+    func testArithmeticSelectsDoubleIRForDoubleOperands() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("lhs", .propertyReference("score")),
+                ("rhs", .typedValue(.double(1.5))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Double"]),
+            .realArithmetic(.add, .keyPath(["score"]), .value(.double(1.5))))
+
+        let division = PredicateMirrorWalker.Node.expression(
+            name: "FloatDivision",
+            children: [
+                ("lhs", .propertyReference("score")),
+                ("rhs", .typedValue(.double(2.0))),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(division, attributeTypes: ["score": "Double"]),
+            .realArithmetic(.divide, .keyPath(["score"]), .value(.double(2.0))))
+
+        let nested = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                (
+                    "lhs",
+                    .expression(
+                        name: "Arithmetic",
+                        children: [
+                            ("lhs", .propertyReference("score")),
+                            ("rhs", .typedValue(.double(2.0))),
+                            (
+                                "op",
+                                .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "multiply")
+                            ),
+                        ])
+                ),
+                ("rhs", .typedValue(.double(1.0))),
+                ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(nested, attributeTypes: ["score": "Double"]),
+            .realArithmetic(
+                .add,
+                .realArithmetic(.multiply, .keyPath(["score"]), .value(.double(2.0))),
+                .value(.double(1.0))))
     }
 
     func testOptionalStringEqualityCaptureIsNotLoweredAsNull() throws {

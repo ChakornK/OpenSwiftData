@@ -1099,7 +1099,9 @@ package enum LightweightMigration {
                     "Attribute type change requires a table rebuild for \(destination.name).\(attribute.name).")
             }
         }
-        try migrateRelationships(source: source, destination: destination, connection: connection, existing: existing)
+        try migrateRelationships(
+            source: source, destination: destination, schema: Schema(destinationEntities),
+            connection: connection, existing: existing)
         indexTransitions.append(
             (
                 indexDefinitions(for: source, schema: Schema(sourceEntities)),
@@ -1110,6 +1112,7 @@ package enum LightweightMigration {
     private static func migrateRelationships(
         source: Schema.Entity,
         destination: Schema.Entity,
+        schema: Schema,
         connection: SQLConnection,
         existing: Set<String>
     ) throws {
@@ -1132,6 +1135,53 @@ package enum LightweightMigration {
             })
         guard sourceMany == destinationMany else {
             throw SwiftDataError.migrationUnsupported("To-many relationship join layouts cannot be transformed safely.")
+        }
+        let existingColumnNames = Set(existing.map { $0.uppercased() })
+        let occupiedColumns = Set(
+            destination.attributes.flatMap { attribute in
+                attribute.options.contains(.flattened)
+                    ? attribute.components.map { "Z\($0.columnName)".uppercased() }
+                    : ["Z\(attribute.name)".uppercased()]
+            }
+                + destination.relationships.compactMap { relationship in
+                    guard
+                        source.relationships.contains(where: {
+                            $0.name == relationship.name || $0.name == relationship.originalName
+                        }), !relationship.isToMany,
+                        let mapping = schema.relationshipStorageMapping(
+                            modelEntityName: destination.name, relationshipName: relationship.name)
+                    else { return nil }
+                    return "Z\(mapping.storageColumnName)".uppercased()
+                })
+        for relationship in destination.relationships
+        where !source.relationships.contains(where: {
+            $0.name == relationship.name || $0.name == relationship.originalName
+        }) {
+            guard !relationship.isToMany,
+                relationship.isOptional,
+                relationship.inverse == nil,
+                relationship.originalName == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                relationship.destination != destination.name,
+                let target = schema.entity(forName: relationship.destination),
+                target.superentityName == nil,
+                !schema.entities.contains(where: { $0.superentityName == target.name }),
+                let mapping = schema.relationshipStorageMapping(
+                    modelEntityName: destination.name, relationshipName: relationship.name),
+                mapping.ownerRootEntityName == destination.name,
+                mapping.declaringEntityName == destination.name
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "New flat relationships must be optional owning to-one links to existing flat entities.")
+            }
+            let columnName = "Z\(mapping.storageColumnName)".uppercased()
+            guard !existingColumnNames.contains(columnName), !occupiedColumns.contains(columnName) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "New relationship column '\(columnName)' collides with an existing column.")
+            }
+            try connection.execute("ALTER TABLE Z\(destination.name.uppercased()) ADD COLUMN \(columnName) INTEGER")
         }
         for relationship in destination.relationships where !relationship.isToMany {
             guard

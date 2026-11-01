@@ -762,6 +762,124 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testAddingOptionalOwningToOneRelationshipToFlatEntity() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Person",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "pet", destination: "Pet", isOptional: true, inverse: nil)
+                ]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let sourceIDs = source.entityIDsByName
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZPERSON (Z_ENT, Z_OPT, ZNAME) VALUES (?, 1, ?)",
+                [.int(Int64(sourceIDs["Person"] ?? 0)), .text("existing")])
+            try connection.execute(
+                "INSERT INTO ZPET (Z_ENT, Z_OPT, ZNAME) VALUES (?, 1, ?)",
+                [.int(Int64(sourceIDs["Pet"] ?? 0)), .text("companion")])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let personRows = try migrated.read { try $0.rows("SELECT ZNAME, ZPET FROM ZPERSON") }
+        XCTAssertEqual(personRows, [[.text("existing"), .null]])
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        XCTAssertEqual(destinationIDs, sourceIDs)
+        let indexes = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZPERSON'")
+        }
+        XCTAssertTrue(indexes.contains([.text("ZPERSON_ZPET_INDEX")]))
+        try migrated.write { connection in
+            try connection.execute("UPDATE ZPERSON SET ZPET = 1 WHERE ZNAME = ?", [.text("existing")])
+        }
+        let linkedRows = try migrated.read {
+            try $0.rows(
+                "SELECT person.ZNAME, pet.ZNAME FROM ZPERSON AS person "
+                    + "JOIN ZPET AS pet ON pet.Z_PK = person.ZPET")
+        }
+        XCTAssertEqual(linkedRows, [[.text("existing"), .text("companion")]])
+        try migrated.close()
+    }
+
+    func testAddingRequiredOrInverseOwningToOneRelationshipFailsAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZPERSON (Z_ENT, Z_OPT, ZNAME) VALUES (?, 1, ?)",
+                [.int(Int64(source.entityIDsByName["Person"] ?? 0)), .text("existing")])
+        }
+        try initial.close()
+
+        let required = Schema([
+            Schema.Entity(
+                name: "Person",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "pet", destination: "Pet", isOptional: false, inverse: nil)
+                ]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let inverse = Schema([
+            Schema.Entity(
+                name: "Person",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "pet", destination: "Pet", inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "Pet",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "Person", isToMany: true, inverse: "pet")
+                ]),
+        ])
+        let collidingColumn = Schema([
+            Schema.Entity(
+                name: "Person",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "pet", type: "String", isOptional: true),
+                ],
+                relationships: [Schema.Relationship(name: "pet", destination: "Pet")]),
+            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        for destination in [required, inverse, collidingColumn] {
+            XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
+            let reopened = try LightweightMigration.openStore(location: location, schema: source)
+            let columns = try reopened.read { try $0.rows("PRAGMA table_info(ZPERSON)") }
+            XCTAssertFalse(columns.contains { row in row.count > 1 && row[1] == .text("ZPET") })
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT ZNAME FROM ZPERSON") },
+                [[.text("existing")]])
+            try reopened.close()
+        }
+    }
+
     func testHierarchyMigrationAddsIndependentRootWithoutRenumberingEntities() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1673,21 +1791,24 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testRenamedToOneRelationshipReconcilesForeignKeyIndexOnReopen() throws {
+    func testRenamedAndAddedToOneRelationshipsReconcileForeignKeyIndexesOnReopen() throws {
         let location = StoreLocation.memory(name: "migration-rename-relationship-index")
         let driver = try GRDBSQLiteDriver(location: location)
         let source = Schema([
             Schema.Entity(
                 name: "Owner", relationships: [Schema.Relationship(name: "child", destination: "Child")]),
             Schema.Entity(name: "Child"),
+            Schema.Entity(name: "Pet"),
         ])
         let destination = Schema([
             Schema.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "offspring", destination: "Child", originalName: "child")
+                    Schema.Relationship(name: "offspring", destination: "Child", originalName: "child"),
+                    Schema.Relationship(name: "pet", destination: "Pet"),
                 ]),
             Schema.Entity(name: "Child"),
+            Schema.Entity(name: "Pet"),
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -1696,7 +1817,10 @@ final class SchemaMigrationTests: XCTestCase {
         }
         let indexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
         XCTAssertTrue(indexes.contains([.text("ZOWNER_ZOFFSPRING_INDEX")]))
+        XCTAssertTrue(indexes.contains([.text("ZOWNER_ZPET_INDEX")]))
         XCTAssertFalse(indexes.contains([.text("ZOWNER_ZCHILD_INDEX")]))
+        XCTAssertTrue(
+            try driver.read { try $0.rows("SELECT ZOFFSPRING, ZPET FROM ZOWNER") } == [[.null, .null]])
         try driver.close()
 
         let reopened = try GRDBSQLiteDriver(location: location)

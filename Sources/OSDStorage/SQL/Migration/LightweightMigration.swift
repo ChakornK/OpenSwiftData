@@ -1081,14 +1081,18 @@ package enum LightweightMigration {
         for mapping in mappings {
             let attribute = mapping.destination
             guard let old = mapping.source else {
-                guard attribute.isOptional else {
+                let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+                guard attribute.isOptional || defaultLiteral != nil else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Adding required attribute \(destination.name).\(attribute.name) requires a table rebuild.")
+                        "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
                 }
                 let type = try SQLColumnType.resolve(
                     attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+                let required = attribute.isOptional ? "" : " NOT NULL"
+                let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
                 try connection.execute(
-                    "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)")
+                    "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
+                        + "\(required)\(defaultSQL)")
                 continue
             }
             guard old.isOptional == attribute.isOptional else {
@@ -1107,6 +1111,69 @@ package enum LightweightMigration {
                 indexDefinitions(for: source, schema: Schema(sourceEntities)),
                 indexDefinitions(for: destination, schema: Schema(destinationEntities))
             ))
+    }
+
+    private static func migrationDefaultLiteral(for attribute: Schema.Attribute) throws -> String? {
+        guard let source = attribute.defaultValue?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return nil
+        }
+        if source == "nil" {
+            guard attribute.isOptional else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Required attribute \(attribute.name) cannot use nil as a migration default.")
+            }
+            return "NULL"
+        }
+        let typeName = attribute.type.split(separator: ".").last.map(String.init) ?? attribute.type
+        switch typeName {
+        case "Bool":
+            guard source == "true" || source == "false" else { break }
+            return source == "true" ? "1" : "0"
+        case "Int", "Int64":
+            guard let value = Int64(source) else { break }
+            return String(value)
+        case "Int8":
+            guard let value = Int8(source) else { break }
+            return String(value)
+        case "Int16":
+            guard let value = Int16(source) else { break }
+            return String(value)
+        case "Int32":
+            guard let value = Int32(source) else { break }
+            return String(value)
+        case "UInt", "UInt64":
+            guard let value = UInt64(source), value <= UInt64(Int64.max) else { break }
+            return String(value)
+        case "UInt8":
+            guard let value = UInt8(source) else { break }
+            return String(value)
+        case "UInt16":
+            guard let value = UInt16(source) else { break }
+            return String(value)
+        case "UInt32":
+            guard let value = UInt32(source) else { break }
+            return String(value)
+        case "Float":
+            guard let value = Float(source), value.isFinite else { break }
+            return String(value)
+        case "Double":
+            guard let value = Double(source), value.isFinite else { break }
+            return String(value)
+        case "String":
+            guard let data = source.data(using: .utf8),
+                let value = try? JSONDecoder().decode(String.self, from: data)
+            else { break }
+            return "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
+        case "Decimal":
+            guard let value = Decimal(string: source, locale: Locale(identifier: "en_US_POSIX")), !value.isNaN
+            else { break }
+            let text = NSDecimalNumber(decimal: value).stringValue
+            return "'" + text.replacingOccurrences(of: "'", with: "''") + "'"
+        default:
+            break
+        }
+        throw SwiftDataError.migrationUnsupported(
+            "Attribute \(attribute.name) has a nonliteral or unsupported migration default.")
     }
 
     private static func migrateRelationships(

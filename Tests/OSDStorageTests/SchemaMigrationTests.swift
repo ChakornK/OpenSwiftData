@@ -349,7 +349,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testAddingDefaultedRequiredAttributeFailsBeforeChangingTable() throws {
+    func testAddingLiteralDefaultedAttributesBackfillsExistingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-required-default"))
         let source = Schema([
             Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
@@ -360,22 +360,57 @@ final class SchemaMigrationTests: XCTestCase {
                 attributes: [
                     Schema.Attribute(name: "title", type: "String"),
                     Schema.Attribute(name: "priority", type: "Int", defaultValue: "7"),
+                    Schema.Attribute(name: "label", type: "String", isOptional: true, defaultValue: "\"O'Neil\""),
+                    Schema.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
+                    Schema.Attribute(name: "ratio", type: "Double", defaultValue: "1.25"),
+                    Schema.Attribute(name: "amount", type: "Decimal", defaultValue: "12.5"),
                 ])
         ])
         try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE) VALUES (1, 1, ?)", [.text("saved")])
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let columns = "ZTITLE, ZPRIORITY, ZLABEL, ZENABLED, ZRATIO, ZAMOUNT"
+        let rows = try driver.read { try $0.rows("SELECT \(columns) FROM ZRECORD") }
+        XCTAssertEqual(rows, [[.text("saved"), .int(7), .text("O'Neil"), .int(1), .double(1.25), .text("12.5")]])
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE) VALUES (1, 1, ?)", [.text("new")])
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT \(columns) FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.text("saved"), .int(7), .text("O'Neil"), .int(1), .double(1.25), .text("12.5")],
+                [.text("new"), .int(7), .text("O'Neil"), .int(1), .double(1.25), .text("12.5")],
+            ])
+        try driver.close()
+    }
 
+    func testAddingRequiredAttributeWithNonliteralDefaultFailsAtomically() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-dynamic-default"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "identifier", type: "UUID", defaultValue: "UUID()"),
+                ])
+        ])
+        try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
-            try driver.write { connection in
-                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
             }
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
-                XCTFail("Expected migrationUnsupported, got \(error)")
-                return
+                return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
         let columns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
-        XCTAssertFalse(columns.contains { $0.count > 1 && $0[1] == .text("ZPRIORITY") })
+        XCTAssertFalse(columns.contains { $0.count > 1 && $0[1] == .text("ZIDENTIFIER") })
         try driver.close()
     }
 

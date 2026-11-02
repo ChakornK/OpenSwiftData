@@ -7,6 +7,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case negation(PredicateIR)
     case comparison(ComparisonOperator, PredicateIR, PredicateIR)
     case decimalComparison(ComparisonOperator, PredicateIR, PredicateIR)
+    case optionalComparison(ComparisonOperator, PredicateIR, PredicateIR, decimal: Bool)
     case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case realArithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
@@ -47,7 +48,8 @@ package indirect enum PredicateIR: Sendable, Equatable {
 package enum PredicateIRBuilder {
     package static func build(
         _ node: PredicateMirrorWalker.Node,
-        attributeTypes: [String: String] = [:]
+        attributeTypes: [String: String] = [:],
+        optionalAttributeNames: Set<String> = []
     ) throws -> PredicateIR {
         switch node {
         case let .propertyReference(name):
@@ -82,15 +84,12 @@ package enum PredicateIRBuilder {
                 let op = try comparisonOperator(operatorNode)
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                if referencesDecimal(lhs, attributeTypes: attributeTypes)
-                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
-                {
-                    try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
-                    return .decimalComparison(op, lhs, rhs)
-                }
-                try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
-                return .comparison(
-                    op, lhs, rhs)
+                return try comparisonIR(
+                    op,
+                    lhs,
+                    rhs,
+                    attributeTypes: attributeTypes,
+                    optionalAttributeNames: optionalAttributeNames)
             case "Arithmetic":
                 let op = try arithmeticOperator(try fieldNode("op", from: fields))
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
@@ -140,23 +139,21 @@ package enum PredicateIRBuilder {
             case "Equal":
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                try validateFlattenedBlobComparison(.equal, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
-                if referencesDecimal(lhs, attributeTypes: attributeTypes)
-                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
-                {
-                    return .decimalComparison(.equal, lhs, rhs)
-                }
-                return .comparison(.equal, lhs, rhs)
+                return try comparisonIR(
+                    .equal,
+                    lhs,
+                    rhs,
+                    attributeTypes: attributeTypes,
+                    optionalAttributeNames: optionalAttributeNames)
             case "NotEqual":
                 let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
                 let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
-                try validateFlattenedBlobComparison(.notEqual, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
-                if referencesDecimal(lhs, attributeTypes: attributeTypes)
-                    || referencesDecimal(rhs, attributeTypes: attributeTypes)
-                {
-                    return .decimalComparison(.notEqual, lhs, rhs)
-                }
-                return .comparison(.notEqual, lhs, rhs)
+                return try comparisonIR(
+                    .notEqual,
+                    lhs,
+                    rhs,
+                    attributeTypes: attributeTypes,
+                    optionalAttributeNames: optionalAttributeNames)
             case "NilLiteral":
                 return .value(.null)
             case "KeyPath":
@@ -442,6 +439,12 @@ package enum PredicateIRBuilder {
                 rhs, relationships: relationships, attributeTypes: attributeTypes)
             if case .decimalComparison = ir { return .decimalComparison(op, prefixedLHS, prefixedRHS) }
             return .comparison(op, prefixedLHS, prefixedRHS)
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            return .optionalComparison(
+                op,
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes),
+                decimal: decimal)
         case let .arithmetic(op, lhs, rhs):
             return .arithmetic(
                 op,
@@ -577,7 +580,8 @@ package enum PredicateIRBuilder {
             guard let type = attributeTypes[path.joined(separator: ".")] else { return false }
             let unwrapped = type.hasSuffix("?") ? String(type.dropLast()) : type
             return unwrapped == "Decimal" || unwrapped == "Foundation.Decimal"
-        case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+        case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
+            let .optionalComparison(_, lhs, rhs, _), let .arithmetic(_, lhs, rhs),
             let .realArithmetic(_, lhs, rhs),
             let .nilCoalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
@@ -603,6 +607,86 @@ package enum PredicateIRBuilder {
         case .codableCollectionCount:
             return false
         case .sequenceContains, .relationshipIsPresent, .relationshipCount, .value:
+            return false
+        }
+    }
+
+    private static func comparison(
+        _ op: PredicateIR.ComparisonOperator,
+        _ lhs: PredicateIR,
+        _ rhs: PredicateIR,
+        decimal: Bool
+    ) -> PredicateIR {
+        decimal ? .decimalComparison(op, lhs, rhs) : .comparison(op, lhs, rhs)
+    }
+
+    private static func comparisonIR(
+        _ op: PredicateIR.ComparisonOperator,
+        _ lhs: PredicateIR,
+        _ rhs: PredicateIR,
+        attributeTypes: [String: String],
+        optionalAttributeNames: Set<String>
+    ) throws -> PredicateIR {
+        try validateFlattenedBlobComparison(op, lhs: lhs, rhs: rhs, attributeTypes: attributeTypes)
+        let decimal =
+            referencesDecimal(lhs, attributeTypes: attributeTypes)
+            || referencesDecimal(rhs, attributeTypes: attributeTypes)
+        let hasNullLiteral = isNullLiteral(lhs) || isNullLiteral(rhs)
+        let hasNullableOperand =
+            isNullablePredicateValue(
+                lhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+            || isNullablePredicateValue(
+                rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        guard !hasNullLiteral, hasNullableOperand else {
+            return comparison(op, lhs, rhs, decimal: decimal)
+        }
+        if op == .equal || op == .notEqual {
+            return .optionalComparison(op, lhs, rhs, decimal: decimal)
+        }
+        return .optionalComparison(op, lhs, rhs, decimal: decimal)
+    }
+
+    private static func isNullLiteral(_ value: PredicateIR) -> Bool {
+        if case .value(.null) = value { return true }
+        return false
+    }
+
+    private static func isNullablePredicateValue(
+        _ value: PredicateIR,
+        attributeTypes: [String: String],
+        optionalAttributeNames: Set<String>
+    ) -> Bool {
+        switch value {
+        case let .keyPath(path):
+            let name = path.joined(separator: ".")
+            return optionalAttributeNames.contains(name) || attributeTypes[name]?.hasSuffix("?") == true
+        case .value(.null):
+            return true
+        case let .arithmetic(_, lhs, rhs), let .realArithmetic(_, lhs, rhs):
+            return isNullablePredicateValue(
+                lhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+                || isNullablePredicateValue(
+                    rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case let .nilCoalesce(lhs, rhs):
+            return isNullablePredicateValue(
+                lhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+                && isNullablePredicateValue(
+                    rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case let .conditional(_, trueBranch, falseBranch):
+            return isNullablePredicateValue(
+                trueBranch, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+                || isNullablePredicateValue(
+                    falseBranch, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
+            let .stringStartsWith(lhs, rhs):
+            return isNullablePredicateValue(
+                lhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+                || isNullablePredicateValue(
+                    rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case .comparison, .decimalComparison, .optionalComparison, .conjunction, .disjunction, .negation,
+            .relationshipIsPresent, .value, .sequenceContains, .collectionContains, .collectionAllEqual,
+            .collectionAllCompare, .codableCollectionIsEmpty, .codableCollectionCount,
+            .relationshipContains, .relationshipCount:
             return false
         }
     }
@@ -661,6 +745,12 @@ package enum PredicateIRBuilder {
                 op,
                 normalizedLHS,
                 normalizedRHS)
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            return .optionalComparison(
+                op,
+                try elementPredicate(lhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                try elementPredicate(rhs, relationship: relationship, attributeTypes: attributeTypes, depth: depth),
+                decimal: decimal)
         case let .relationshipContains(name, body):
             let prefix = "\(relationship)[]."
             let localName: String

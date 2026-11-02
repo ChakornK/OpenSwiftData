@@ -47,6 +47,28 @@ package enum PredicatePlanBuilder {
             }
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .decimalComparison(runtimeOperator(op), lhs, rhs)
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            if op == .equal || op == .notEqual {
+                let equality: PredicatePlan =
+                    decimal
+                    ? .decimalComparison(.equal, lhs, rhs)
+                    : .comparison(.equal, lhs, rhs)
+                let bothNull = PredicatePlan.conjunction(
+                    .isNull(lhs, negated: false),
+                    .isNull(rhs, negated: false))
+                let bothPresentAndEqual = PredicatePlan.conjunction(
+                    .conjunction(.isNull(lhs, negated: true), .isNull(rhs, negated: true)), equality)
+                let optionalEquality = PredicatePlan.disjunction(bothNull, bothPresentAndEqual)
+                return op == .equal ? optionalEquality : .negation(optionalEquality)
+            }
+            let ordering: PredicatePlan =
+                decimal
+                ? .decimalComparison(runtimeOperator(op), lhs, rhs)
+                : .comparison(runtimeOperator(op), lhs, rhs)
+            return .conjunction(
+                .conjunction(.isNull(lhs, negated: true), .isNull(rhs, negated: true)),
+                ordering)
         case let .arithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
@@ -274,6 +296,29 @@ package enum SQLCompiler {
                 rhs, arguments: &arguments, entity: entity, relationships: relationships,
                 tableAlias: tableAlias)
             return "(\(lhsSQL) COLLATE OSD_DECIMAL \(comparisonSymbol(op)) \(rhsSQL))"
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            let lhsSQL = try render(
+                lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+            let rhsSQL = try render(
+                rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
+            if op == .equal || op == .notEqual {
+                if decimal {
+                    let symbol = op == .equal ? "IS" : "IS NOT"
+                    return "(\(lhsSQL) COLLATE OSD_DECIMAL \(symbol) \(rhsSQL) COLLATE OSD_DECIMAL)"
+                }
+                let symbol = op == .equal ? "IS" : "IS NOT"
+                return "(\(lhsSQL) \(symbol) \(rhsSQL))"
+            }
+            let expression =
+                decimal
+                ? "(\(lhsSQL) COLLATE OSD_DECIMAL \(comparisonSymbol(op)) \(rhsSQL))"
+                : "(\(lhsSQL) \(comparisonSymbol(op)) \(rhsSQL))"
+            if decimal {
+                let ordering =
+                    "(\(lhsSQL) IS NOT NULL AND \(rhsSQL) IS NOT NULL AND \(expression))"
+                return ordering
+            }
+            return "COALESCE(\(expression), 0)"
         case let .arithmetic(op, lhs, rhs):
             let function =
                 switch op {
@@ -683,6 +728,8 @@ package enum SQLCompiler {
         case let .negation(value): "not(\(structure(value)))"
         case let .comparison(op, lhs, rhs): "compare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .decimalComparison(op, lhs, rhs): "decimalCompare(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            "optionalCompare(\(op),decimal=\(decimal),\(structure(lhs)),\(structure(rhs)))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .realArithmetic(op, lhs, rhs): "realArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"

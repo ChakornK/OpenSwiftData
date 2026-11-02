@@ -416,7 +416,9 @@ package enum PredicateRuntimeTreeBuilder {
                     capturePathRewrites: capturePathRewrites)
                 if case let .property(reference) = wrappedNode,
                     let propertyName = reference.name.split(separator: ".").last.map(String.init),
-                    activeEntity.attributes.contains(where: { $0.name == propertyName }),
+                    let wrappedAttribute = activeEntity.attributes.first(where: { $0.name == propertyName }),
+                    !wrappedAttribute.options.contains(.codable),
+                    !wrappedAttribute.options.contains(.flattened),
                     let transformMetadata = PredicateNodeMetadata.entry(
                         for: String(reflecting: type(of: transform)))
                 {
@@ -457,6 +459,43 @@ package enum PredicateRuntimeTreeBuilder {
                                 (operation.receiverLabel, wrappedNode),
                                 (operation.operandLabel, operandNode),
                             ])
+                    }
+                    if ["Comparison", "Equal", "NotEqual"].contains(transformMetadata.name) {
+                        let transformChildren = Array(Mirror(reflecting: transform).children)
+                        let transformLabels = transformChildren.compactMap(\.label)
+                        guard transformLabels.count == transformChildren.count,
+                            Set(transformLabels).count == transformLabels.count,
+                            Set(transformLabels) == transformMetadata.requiredChildren
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Malformed optional scalar comparison.")
+                        }
+                        let rewritten = try transformChildren.compactMap { child -> (String, RuntimePredicateNode)? in
+                            guard let label = child.label else { return nil }
+                            if variableIdentifier(child.value) == variableID {
+                                return (label, wrappedNode)
+                            }
+                            if label == "op" {
+                                return (
+                                    label,
+                                    .capture(
+                                        typeName: String(reflecting: type(of: child.value)),
+                                        description: String(describing: child.value))
+                                )
+                            }
+                            let captureRewrite = CapturePathRewrite(
+                                sourcePrefix: path + ["transform", label],
+                                destinationPrefix: path + [label])
+                            return (
+                                label,
+                                try visit(
+                                    child.value,
+                                    path: path + [label],
+                                    bindings: bindings,
+                                    capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                            )
+                        }
+                        return .expression(name: transformMetadata.name, children: rewritten)
                     }
                 }
                 if codableCollectionName(wrappedNode, entity: activeEntity) != nil {

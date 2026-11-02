@@ -114,6 +114,8 @@ public struct RuntimePredicateRequest: Sendable {
     public let attributeNames: Set<String>
     /// Swift type names for persisted attributes, used to validate typed predicate nodes.
     public let attributeTypes: [String: String]
+    /// Optional persisted attribute paths, used to preserve optional comparison semantics.
+    public let optionalAttributeNames: Set<String>
     /// Resolved to-one and direct to-many relationships referenced by predicate expressions.
     public let relationships: [RuntimePredicateRelationship]
 
@@ -126,6 +128,7 @@ public struct RuntimePredicateRequest: Sendable {
         captureEncoding: RuntimePredicateCaptureEncoding = .legacyDescription,
         attributeNames: Set<String> = [],
         attributeTypes: [String: String] = [:],
+        optionalAttributeNames: Set<String> = [],
         relationships: [RuntimePredicateRelationship] = []
     ) {
         self.entityName = entityName
@@ -135,6 +138,7 @@ public struct RuntimePredicateRequest: Sendable {
         self.captureEncoding = captureEncoding
         self.attributeNames = attributeNames
         self.attributeTypes = attributeTypes
+        self.optionalAttributeNames = optionalAttributeNames
         self.relationships = relationships
     }
 }

@@ -553,6 +553,36 @@ final class CodeGenTests: XCTestCase {
         XCTAssertTrue(adapters.contains("PersistentValue.encode(model.stopCount)"))
     }
 
+    func testQualifiedFoundationScalarsAvoidCodableFallback() throws {
+        let declaration = try parseClass(
+            """
+            final class QualifiedScalars {
+                var decimal: Foundation.Decimal?
+                var url: Foundation.URL?
+                var uuid: Foundation.UUID?
+                var date: Foundation.Date?
+                var data: Foundation.Data?
+                var customDecimal: Custom.Decimal?
+            }
+            """)
+
+        let generated = CodeGen.memberSources(declaration).joined(separator: "\n")
+        for property in ["decimal", "url", "uuid", "date", "data"] {
+            XCTAssertFalse(
+                generated.contains(
+                    "Schema.PropertyMetadata(name: \"\(property)\", keypath: \\QualifiedScalars.\(property), defaultValue: nil, metadata: Schema.Attribute(.codable)"
+                ))
+            let type = try XCTUnwrap(CodeGen.propertyType(property, in: declaration))
+            XCTAssertTrue(CodeGen.isSupportedScalarType(type), "Expected \(type) to be a supported scalar")
+        }
+        XCTAssertTrue(
+            generated.contains(
+                "Schema.PropertyMetadata(name: \"customDecimal\", keypath: \\QualifiedScalars.customDecimal, defaultValue: nil, metadata: Schema.Attribute(.codable)"
+            ))
+        let customType = try XCTUnwrap(CodeGen.propertyType("customDecimal", in: declaration))
+        XCTAssertFalse(CodeGen.isSupportedScalarType(customType))
+    }
+
     func testAccessorAndPeerSourcesMatchVariantAExactly() {
         XCTAssertEqual(
             CodeGen.accessorSources(property: "name"),

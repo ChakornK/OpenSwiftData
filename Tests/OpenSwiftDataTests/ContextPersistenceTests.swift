@@ -30,6 +30,28 @@ final class ReverseOrderPersistenceFixture {
     }
 }
 
+@Model
+final class OptionalComparisonFixture {
+    var zebra: String
+    var alpha: Int
+    var middle: String
+    var optionalValue: String?
+    var optionalCount: Int?
+    var optionalOther: String?
+
+    init(
+        zebra: String, alpha: Int, middle: String, optionalValue: String?, optionalCount: Int? = nil,
+        optionalOther: String? = nil
+    ) {
+        self.zebra = zebra
+        self.alpha = alpha
+        self.middle = middle
+        self.optionalValue = optionalValue
+        self.optionalCount = optionalCount
+        self.optionalOther = optionalOther
+    }
+}
+
 struct CodablePayload: Codable, Equatable {
     let label: String
     let count: Int
@@ -1124,23 +1146,23 @@ final class ContextPersistenceTests: XCTestCase {
     @MainActor
     func testOptionalStringContainsCoalescesNilForStoredAndPendingRows() throws {
         let container = try ModelContainer(
-            for: ReverseOrderPersistenceFixture.self,
+            for: OptionalComparisonFixture.self,
             configurations: .sqliteMemory("optional-string-contains"))
         let context = container.mainContext
         context.insert(
-            ReverseOrderPersistenceFixture(zebra: "a", alpha: 1, middle: "m", optionalValue: nil))
+            OptionalComparisonFixture(zebra: "a", alpha: 1, middle: "m", optionalValue: nil))
         context.insert(
-            ReverseOrderPersistenceFixture(zebra: "b", alpha: 2, middle: "m", optionalValue: "match"))
+            OptionalComparisonFixture(zebra: "b", alpha: 2, middle: "m", optionalValue: "match"))
         context.insert(
-            ReverseOrderPersistenceFixture(zebra: "c", alpha: 3, middle: "m", optionalValue: "other"))
+            OptionalComparisonFixture(zebra: "c", alpha: 3, middle: "m", optionalValue: "other"))
         try context.save()
         context.insert(
-            ReverseOrderPersistenceFixture(zebra: "d", alpha: 4, middle: "m", optionalValue: "pending match"))
+            OptionalComparisonFixture(zebra: "d", alpha: 4, middle: "m", optionalValue: "pending match"))
         let term = "match"
-        let predicate = #Predicate<ReverseOrderPersistenceFixture> {
+        let predicate = #Predicate<OptionalComparisonFixture> {
             $0.optionalValue?.contains(term) ?? false
         }
-        let descriptor = FetchDescriptor<ReverseOrderPersistenceFixture>(
+        let descriptor = FetchDescriptor<OptionalComparisonFixture>(
             predicate: predicate,
             sortBy: [SortDescriptor(\.alpha)])
 
@@ -1148,8 +1170,8 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 2)
 
-        let includeNil = FetchDescriptor<ReverseOrderPersistenceFixture>(
-            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+        let includeNil = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
                 $0.optionalValue?.contains(term) ?? true
             },
             sortBy: [SortDescriptor(\.alpha)])
@@ -1157,16 +1179,16 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(includeNil), 3)
         XCTAssertEqual(try context.fetchIdentifiers(includeNil).count, 3)
 
-        let compareToTrue = FetchDescriptor<ReverseOrderPersistenceFixture>(
-            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+        let compareToTrue = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
                 $0.optionalValue?.contains(term) == true
             },
             sortBy: [SortDescriptor(\.alpha)])
         XCTAssertEqual(try context.fetch(compareToTrue).map(\.alpha), [2, 4])
         XCTAssertEqual(try context.fetchCount(compareToTrue), 2)
 
-        let negated = FetchDescriptor<ReverseOrderPersistenceFixture>(
-            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+        let negated = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
                 !($0.optionalValue?.contains(term) ?? false)
             },
             sortBy: [SortDescriptor(\.alpha)])
@@ -1174,13 +1196,161 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchIdentifiers(negated).count, 2)
 
         let prefix = "pending"
-        let startsWith = FetchDescriptor<ReverseOrderPersistenceFixture>(
-            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+        let startsWith = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
                 $0.optionalValue?.starts(with: prefix) ?? false
             },
             sortBy: [SortDescriptor(\.alpha)])
         XCTAssertEqual(try context.fetch(startsWith).map(\.alpha), [4])
         XCTAssertEqual(try context.fetchCount(startsWith), 1)
+    }
+
+    @MainActor
+    func testOptionalStringEqualityAndNilPredicatesMatchStoredAndPendingRows() throws {
+        let container = try ModelContainer(
+            for: OptionalComparisonFixture.self,
+            configurations: .sqliteMemory("optional-string-equality"))
+        let context = container.mainContext
+        context.insert(
+            OptionalComparisonFixture(zebra: "a", alpha: 1, middle: "m", optionalValue: nil))
+        context.insert(
+            OptionalComparisonFixture(zebra: "b", alpha: 2, middle: "m", optionalValue: "match"))
+        context.insert(
+            OptionalComparisonFixture(zebra: "c", alpha: 3, middle: "m", optionalValue: "other"))
+        try context.save()
+        context.insert(
+            OptionalComparisonFixture(zebra: "d", alpha: 4, middle: "m", optionalValue: "match"))
+        let captured = "match"
+        let equal = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> { $0.optionalValue == captured },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(equal).map(\.alpha), [2, 4])
+
+        let nilPredicate = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> { $0.optionalValue == nil },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(nilPredicate).map(\.alpha), [1])
+
+        let notEqual = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> { $0.optionalValue != captured },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(notEqual).map(\.alpha), [1, 3])
+    }
+
+    @MainActor
+    func testOptionalToOptionalEqualityTreatsTwoNilValuesAsEqual() throws {
+        let container = try ModelContainer(
+            for: OptionalComparisonFixture.self,
+            configurations: .sqliteMemory("optional-to-optional-equality"))
+        let context = container.mainContext
+        context.insert(
+            OptionalComparisonFixture(
+                zebra: "a", alpha: 1, middle: "a", optionalValue: nil, optionalOther: nil))
+        context.insert(
+            OptionalComparisonFixture(
+                zebra: "b", alpha: 2, middle: "b", optionalValue: nil, optionalOther: "value"))
+        context.insert(
+            OptionalComparisonFixture(
+                zebra: "c", alpha: 3, middle: "c", optionalValue: "same", optionalOther: "same"))
+        try context.save()
+        context.insert(
+            OptionalComparisonFixture(
+                zebra: "d", alpha: 4, middle: "d", optionalValue: nil, optionalOther: nil))
+
+        let equal = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
+                $0.optionalValue == $0.optionalOther
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        let notEqual = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
+                $0.optionalValue != $0.optionalOther
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(equal).map(\.alpha), [1, 3, 4])
+        XCTAssertEqual(try context.fetch(notEqual).map(\.alpha), [2])
+        XCTAssertEqual(try context.fetchCount(equal), 3)
+    }
+
+    @MainActor
+    func testOptionalDecimalComparisonPreservesNumericEqualityAndNullSemantics() throws {
+        let container = try ModelContainer(
+            for: QualifiedOptionalScalarFixture.self,
+            configurations: .sqliteMemory("optional-decimal-comparison"))
+        let context = container.mainContext
+        let columns = try container.store?.read { connection in
+            try connection.rows("PRAGMA table_info(ZQUALIFIEDOPTIONALSCALARFIXTURE)", arguments: [])
+        }
+        XCTAssertTrue(
+            columns?.contains(where: { row in
+                row.count > 1 && row[1] == .text("ZAMOUNT") && row[2] == .text("VARCHAR")
+            }) == true)
+        let nilAmount = QualifiedOptionalScalarFixture(id: nil, link: nil, amount: nil)
+        let unitAmount = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "1.0")))
+        let largerAmount = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "2")))
+        context.insert(nilAmount)
+        context.insert(unitAmount)
+        context.insert(largerAmount)
+        try context.save()
+        let pendingUnit = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "1.00")))
+        context.insert(pendingUnit)
+
+        let unit = try XCTUnwrap(Decimal(string: "1.00"))
+        let equal = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.amount == unit },
+            includePendingChanges: false)
+        let notEqual = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.amount != unit },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(equal).count, 1)
+        XCTAssertEqual(try context.fetch(notEqual).count, 2)
+
+        let cutoff = try XCTUnwrap(Decimal(string: "1.5"))
+        let negatedOrdering = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> {
+                !($0.amount.flatMap { $0 < cutoff } ?? false)
+            },
+            includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(negatedOrdering).count, 2)
+    }
+
+    @MainActor
+    func testOptionalRelationshipScalarComparisonTreatsMissingDestinationAsNil() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("optional-relationship-comparison"))
+        let context = container.mainContext
+        let missing = PersistentRelationshipOwner(title: "missing")
+        let present = PersistentRelationshipOwner(title: "present")
+        let match = PersistentRelationshipChild(title: "match")
+        context.insert(missing)
+        context.insert(present)
+        present.favorite = match
+        try context.save()
+        let pending = PersistentRelationshipOwner(title: "pending")
+        context.insert(pending)
+
+        let captured = "match"
+        let equal = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: #Predicate<PersistentRelationshipOwner> { $0.favorite?.title == captured },
+            sortBy: [SortDescriptor(\.title)])
+        let notEqual = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: #Predicate<PersistentRelationshipOwner> { $0.favorite?.title != captured },
+            sortBy: [SortDescriptor(\.title)])
+        XCTAssertEqual(try context.fetch(equal).map(\.title), ["present"])
+        XCTAssertEqual(try context.fetch(notEqual).map(\.title), ["missing", "pending"])
+        XCTAssertEqual(try context.fetchCount(notEqual), 2)
+
+        let threshold = "m"
+        let negatedOrdering = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: #Predicate<PersistentRelationshipOwner> {
+                !($0.favorite.flatMap { $0.title < threshold } ?? false)
+            },
+            sortBy: [SortDescriptor(\.title)])
+        XCTAssertEqual(try context.fetch(negatedOrdering).map(\.title), ["missing", "pending", "present"])
     }
 
     @MainActor
@@ -1820,16 +1990,50 @@ final class ContextPersistenceTests: XCTestCase {
     @MainActor
     func testOptionalPredicateAgainstNullValues() throws {
         let container = try ModelContainer(
-            for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("optional-predicate"))
+            for: OptionalComparisonFixture.self, configurations: .sqliteMemory("optional-predicate"))
         let context = container.mainContext
-        context.insert(ReverseOrderPersistenceFixture(zebra: "a", alpha: 1, middle: "a", optionalValue: nil))
-        context.insert(ReverseOrderPersistenceFixture(zebra: "b", alpha: 2, middle: "b", optionalValue: "value"))
+        context.insert(OptionalComparisonFixture(zebra: "a", alpha: 1, middle: "a", optionalValue: nil))
+        context.insert(OptionalComparisonFixture(zebra: "b", alpha: 2, middle: "b", optionalValue: "value"))
+        context.insert(OptionalComparisonFixture(zebra: "c", alpha: 3, middle: "c", optionalValue: "other"))
         try context.save()
+        let pending = OptionalComparisonFixture(zebra: "d", alpha: 4, middle: "d", optionalValue: "value")
+        context.insert(pending)
 
-        let isNil = #Predicate<ReverseOrderPersistenceFixture> { $0.optionalValue == nil }
-        let isNotNil = #Predicate<ReverseOrderPersistenceFixture> { $0.optionalValue != nil }
+        let isNil = #Predicate<OptionalComparisonFixture> { $0.optionalValue == nil }
+        let isNotNil = #Predicate<OptionalComparisonFixture> { $0.optionalValue != nil }
+        let captured = "value"
+        let capturedNil: String? = nil
+        let equalsCaptured = #Predicate<OptionalComparisonFixture> { $0.optionalValue == captured }
+        let differsFromCaptured = #Predicate<OptionalComparisonFixture> { $0.optionalValue != captured }
+        let equalsCapturedNil = #Predicate<OptionalComparisonFixture> { $0.optionalValue == capturedNil }
+        let differsFromCapturedNil = #Predicate<OptionalComparisonFixture> { $0.optionalValue != capturedNil }
         XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: isNil)).map(\.alpha), [1])
-        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: isNotNil)).map(\.alpha), [2])
+        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: isNotNil)).map(\.alpha), [2, 3, 4])
+        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: equalsCaptured)).map(\.alpha), [2, 4])
+        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: differsFromCaptured)).map(\.alpha), [1, 3])
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor(predicate: differsFromCaptured)), 2)
+        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: equalsCapturedNil)).map(\.alpha), [1])
+        XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: differsFromCapturedNil)).map(\.alpha), [2, 3, 4])
+
+        let nilCount = OptionalComparisonFixture(
+            zebra: "e", alpha: 5, middle: "e", optionalValue: "value", optionalCount: nil)
+        let belowLimit = OptionalComparisonFixture(
+            zebra: "f", alpha: 6, middle: "f", optionalValue: "value", optionalCount: 3)
+        let aboveLimit = OptionalComparisonFixture(
+            zebra: "g", alpha: 7, middle: "g", optionalValue: "value", optionalCount: 8)
+        context.insert(nilCount)
+        context.insert(belowLimit)
+        context.insert(aboveLimit)
+        try context.save()
+        let limit = 5
+        let negatedOrdering = FetchDescriptor<OptionalComparisonFixture>(
+            predicate: #Predicate<OptionalComparisonFixture> {
+                !($0.optionalCount.flatMap { $0 < limit } ?? false)
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(negatedOrdering).map(\.alpha), [1, 2, 3, 4, 5, 7])
+        XCTAssertEqual(try context.fetchCount(negatedOrdering), 6)
+        XCTAssertEqual(try context.fetchIdentifiers(negatedOrdering).count, 6)
     }
 
     @MainActor

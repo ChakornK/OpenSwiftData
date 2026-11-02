@@ -1968,6 +1968,7 @@ public final class ModelContext {
         var attributeTypes = Dictionary(
             uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) } + flattenedAttributes)
         var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
+        var optionalAttributeNames = Set(entity.attributes.filter(\.isOptional).map(\.name))
         func addCollectionPath(
             ownerEntity: Schema.Entity,
             relationship: Schema.Relationship,
@@ -1987,6 +1988,7 @@ public final class ModelContext {
                 let elementPath = "\(path)[].\(attribute.name)"
                 attributeNames.insert(elementPath)
                 attributeTypes[elementPath] = attribute.type
+                if attribute.isOptional { optionalAttributeNames.insert(elementPath) }
             }
             guard depth < 3 else { return }
             for nestedRelationship in destination.relationships where nestedRelationship.isToMany {
@@ -2004,7 +2006,8 @@ public final class ModelContext {
             func addRelationshipPaths(
                 ownerEntity: Schema.Entity,
                 prefix: [String],
-                visited: Set<String>
+                visited: Set<String>,
+                hasOptionalPrefix: Bool
             ) {
                 guard prefix.count < schema.entities.count else { return }
                 for relationship in ownerEntity.relationships where !relationship.isToMany {
@@ -2018,10 +2021,15 @@ public final class ModelContext {
                     let relationshipPath = path.joined(separator: ".")
                     attributeNames.insert(relationshipPath)
                     attributeTypes[relationshipPath] = "OSDToOneRelationship"
+                    let relationshipMayBeMissing = hasOptionalPrefix || relationship.isOptional
+                    if relationshipMayBeMissing { optionalAttributeNames.insert(relationshipPath) }
                     for attribute in destination.attributes where !attribute.options.contains(.flattened) {
                         let scalarPath = "\(relationshipPath).\(attribute.name)"
                         attributeNames.insert(scalarPath)
                         attributeTypes[scalarPath] = attribute.type
+                        if relationshipMayBeMissing || attribute.isOptional {
+                            optionalAttributeNames.insert(scalarPath)
+                        }
                     }
                     for collection in destination.relationships where collection.isToMany {
                         guard
@@ -2038,6 +2046,7 @@ public final class ModelContext {
                             let elementPath = "\(collectionPath)[].\(attribute.name)"
                             attributeNames.insert(elementPath)
                             attributeTypes[elementPath] = attribute.type
+                            if attribute.isOptional { optionalAttributeNames.insert(elementPath) }
                         }
                         for nestedCollection in relationshipPaths
                         where nestedCollection.ownerEntityName == collectionDestination.name
@@ -2055,6 +2064,7 @@ public final class ModelContext {
                                 let nestedElementPath = "\(nestedPath)[].\(attribute.name)"
                                 attributeNames.insert(nestedElementPath)
                                 attributeTypes[nestedElementPath] = attribute.type
+                                if attribute.isOptional { optionalAttributeNames.insert(nestedElementPath) }
                             }
                         }
                     }
@@ -2062,10 +2072,15 @@ public final class ModelContext {
                     addRelationshipPaths(
                         ownerEntity: destination,
                         prefix: path,
-                        visited: visited.union([destination.name]))
+                        visited: visited.union([destination.name]),
+                        hasOptionalPrefix: relationshipMayBeMissing)
                 }
             }
-            addRelationshipPaths(ownerEntity: entity, prefix: [], visited: [entity.name])
+            addRelationshipPaths(
+                ownerEntity: entity,
+                prefix: [],
+                visited: [entity.name],
+                hasOptionalPrefix: false)
         }
         return try compiler.compile(
             RuntimePredicateRequest(
@@ -2076,6 +2091,7 @@ public final class ModelContext {
                 captureEncoding: .typed,
                 attributeNames: attributeNames,
                 attributeTypes: attributeTypes,
+                optionalAttributeNames: optionalAttributeNames,
                 relationships: relationshipPaths))
     }
 

@@ -115,7 +115,10 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
         guard consumedCaptures == Set(request.typedCaptures.keys) else {
             throw SwiftDataError.unsupportedPredicate("Predicate capture paths did not match the reflected tree")
         }
-        let ir = try PredicateIRBuilder.build(node, attributeTypes: request.attributeTypes)
+        let ir = try PredicateIRBuilder.build(
+            node,
+            attributeTypes: request.attributeTypes,
+            optionalAttributeNames: request.optionalAttributeNames)
         let plan = PredicatePlanBuilder.build(ir)
         let compiled = try SQLCompiler.compile(
             ir,

@@ -280,7 +280,7 @@ final class PredicateCompilerTests: XCTestCase {
         let ir = try PredicateIRBuilder.build(node, attributeTypes: ["optionalValue": "String?"])
         let compiled = try SQLCompiler.compile(ir, entity: "Item")
 
-        XCTAssertEqual(compiled.sql, "(t0.ZOPTIONALVALUE = ?)")
+        XCTAssertEqual(compiled.sql, "(t0.ZOPTIONALVALUE IS ?)")
         XCTAssertEqual(compiled.arguments, [.text("value")])
     }
 
@@ -293,6 +293,44 @@ final class PredicateCompilerTests: XCTestCase {
             ])
         XCTAssertNoThrow(try PredicateIRBuilder.build(node, attributeTypes: ["optionalValue": "String?"]))
         XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["optionalValue": "Int?"]))
+    }
+
+    func testOptionalInequalityRewritesNilAsNotEqualToCapturedValue() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "NotEqual",
+            children: [
+                ("lhs", .propertyReference("optionalValue")),
+                ("rhs", .typedValue(.text("value"))),
+            ])
+        let ir = try PredicateIRBuilder.build(
+            node,
+            attributeTypes: ["optionalValue": "String"],
+            optionalAttributeNames: ["optionalValue"])
+        guard case .optionalComparison(.notEqual, .keyPath(["optionalValue"]), .value(.text("value")), false) = ir
+        else {
+            return XCTFail("Expected optional inequality to retain a null-safe comparison node")
+        }
+    }
+
+    func testOptionalOrderingGuardsNullOperandsWhileRequiredOrderingStaysNative() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Comparison",
+            children: [
+                ("op", .capture(typeName: "ComparisonOperator", description: "lessThan")),
+                ("lhs", .propertyReference("optionalCount")),
+                ("rhs", .typedValue(.int(5))),
+            ])
+        let optionalIR = try PredicateIRBuilder.build(
+            node,
+            attributeTypes: ["optionalCount": "Int"],
+            optionalAttributeNames: ["optionalCount"])
+        guard case .optionalComparison(.lessThan, .keyPath(["optionalCount"]), .value(.int(5)), false) = optionalIR
+        else {
+            return XCTFail("Expected optional ordering to retain its nullability marker")
+        }
+
+        let requiredIR = try PredicateIRBuilder.build(node, attributeTypes: ["optionalCount": "Int"])
+        XCTAssertEqual(requiredIR, .comparison(.lessThan, .keyPath(["optionalCount"]), .value(.int(5))))
     }
 
     func testCollectionPredicateAcceptsQualifiedScalarAndRejectsBlobOrCodableTypes() throws {

@@ -722,13 +722,33 @@ enum CodeGen {
     static func isSupportedScalarType(_ type: TypeSyntax) -> Bool {
         if let optional = type.as(OptionalTypeSyntax.self) { return isSupportedScalarType(optional.wrappedType) }
         if let array = type.as(ArrayTypeSyntax.self) { return isSupportedScalarType(array.element) }
-        guard let identifier = type.as(IdentifierTypeSyntax.self), identifier.genericArgumentClause == nil else {
+        if let identifier = type.as(IdentifierTypeSyntax.self) {
+            guard identifier.genericArgumentClause == nil else { return false }
+            return isSupportedUnqualifiedScalar(identifier.name.text)
+        }
+        guard let member = type.as(MemberTypeSyntax.self), member.genericArgumentClause == nil,
+            let qualifier = member.baseType.as(IdentifierTypeSyntax.self), qualifier.genericArgumentClause == nil
+        else {
             return false
         }
-        return [
-            "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
-            "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
-        ].contains(identifier.name.text)
+        switch qualifier.name.text {
+        case "Foundation":
+            return ["Decimal", "URL", "UUID", "Date", "Data"].contains(member.name.text)
+        case "Swift":
+            return [
+                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                "UInt32", "UInt64", "Float", "Double",
+            ].contains(member.name.text)
+        default:
+            return false
+        }
+    }
+
+    private static func isSupportedUnqualifiedScalar(_ name: String) -> Bool {
+        [
+            "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
+            "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
+        ].contains(name)
     }
 
     static func isCodableScalarCollectionType(_ type: TypeSyntax) -> Bool {

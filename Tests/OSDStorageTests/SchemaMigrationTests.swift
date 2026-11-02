@@ -3572,6 +3572,148 @@ final class SchemaMigrationTests: XCTestCase {
         try emptyStore.close()
     }
 
+    func testIndependentRootRemovalAndAdditionComposeWithoutReusingIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Alpha", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "Beta", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "ZRemoved", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Alpha", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "Beta", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "Newcomer", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZALPHA (Z_ENT, Z_OPT, ZLABEL) VALUES (1, 2, 'alpha')")
+            try connection.execute("INSERT INTO ZBETA (Z_ENT, Z_OPT, ZLABEL) VALUES (2, 3, 'beta')")
+            try connection.execute("INSERT INTO ZZREMOVED (Z_ENT, Z_OPT, ZLABEL) VALUES (3, 4, 'removed')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.int(1), .text("Alpha")], [.int(2), .text("Beta")], [.int(4), .text("Newcomer")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZLABEL FROM ZALPHA") },
+            [[.int(1), .int(1), .int(2), .text("alpha")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZLABEL FROM ZBETA") },
+            [[.int(1), .int(2), .int(3), .text("beta")]])
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZZREMOVED'").isEmpty
+            })
+        XCTAssertEqual(try migrated.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 5)
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.int(1), .text("Alpha")], [.int(2), .text("Beta")], [.int(4), .text("Newcomer")]])
+        try reopened.close()
+    }
+
+    func testCombinedRootChangesRejectRelationshipReferencesAndObjectNameReuse() throws {
+        let relationshipSource = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "target", destination: "RemovedTarget")]),
+            Schema.Entity(name: "RemovedTarget"),
+            Schema.Entity(name: "ZRemoved"),
+        ])
+        let relationshipDestination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "target", destination: "RemovedTarget")]),
+            Schema.Entity(name: "Newcomer"),
+        ])
+
+        let nameReuseSource = Schema([
+            Schema.Entity(
+                name: "A",
+                attributes: [Schema.Attribute(name: "B_ZC", type: "Int")],
+                indexes: [Schema.Index(properties: ["B_ZC"])]),
+            Schema.Entity(name: "Keep"),
+        ])
+        let appendedEntityID = try XCTUnwrap(nameReuseSource.entityIDsByName.values.max()) + 1
+        let nameReuseDestination = try Schema(
+            [
+                Schema.Entity(name: "Keep"),
+                Schema.Entity(
+                    name: "A_ZB",
+                    attributes: [Schema.Attribute(name: "C", type: "Int")],
+                    indexes: [Schema.Index(properties: ["C"])]),
+            ],
+            entityIDs: [
+                "Keep": try XCTUnwrap(nameReuseSource.entityIDsByName["Keep"]),
+                "A_ZB": appendedEntityID,
+            ])
+        let cases: [(String, Schema, Schema)] = [
+            ("relationship", relationshipSource, relationshipDestination),
+            ("index-object", nameReuseSource, nameReuseDestination),
+        ]
+        for (name, source, destination) in cases {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-entity-change-reject-\(name)"))
+            try bootstrap(source, driver: driver)
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected combined \(name) change to fail closed, got \(error)")
+                }
+            }
+            let sourceEntityNames = source.entities.map { $0.name.uppercased() }
+            let physicalTableNames = try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }.compactMap { row -> String? in
+                guard case let .text(tableName)? = row.first else { return nil }
+                return tableName
+            }
+            for entityName in sourceEntityNames {
+                XCTAssertTrue(physicalTableNames.contains("Z\(entityName)"))
+            }
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZNEWCOMER'").isEmpty
+                })
+            try driver.close()
+        }
+    }
+
+    func testCombinedRootChangesRejectCaseInsensitiveTableNameReuse() throws {
+        let source = Schema([Schema.Entity(name: "Foo"), Schema.Entity(name: "Keep")])
+        let nextID = try XCTUnwrap(source.entityIDsByName.values.max()) + 1
+        let destination = try Schema(
+            [Schema.Entity(name: "Keep"), Schema.Entity(name: "foo")],
+            entityIDs: [
+                "Keep": try XCTUnwrap(source.entityIDsByName["Keep"]),
+                "foo": nextID,
+            ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-entity-case-table-reuse"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-insensitive object reuse to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZFOO'") },
+            [[.text("ZFOO")]])
+        try driver.close()
+    }
+
     func testRenamedUniqueAttributeReconcilesGeneratedIndexName() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-unique-index"))
         let source = Schema([

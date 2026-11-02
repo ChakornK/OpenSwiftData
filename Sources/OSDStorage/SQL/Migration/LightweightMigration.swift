@@ -534,8 +534,8 @@ package enum LightweightMigration {
             } else if destinationNames.isSubset(of: sourceNames) {
                 try applyFlatIndependentRootRemovals(source: source, destination: destination, connection: connection)
             } else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Adding and removing entities in one migration requires an explicit row mapping.")
+                try applyFlatIndependentRootAdditionsAndRemovals(
+                    source: source, destination: destination, connection: connection)
             }
             return
         }
@@ -682,6 +682,79 @@ package enum LightweightMigration {
                     "Entity identifier row for \(removedEntity.name) is missing.")
             }
         }
+    }
+
+    private static func applyFlatIndependentRootAdditionsAndRemovals(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws {
+        let sourceNames = Set(source.entities.map(\.name))
+        let destinationNames = Set(destination.entities.map(\.name))
+        let retainedNames = sourceNames.intersection(destinationNames)
+        let removedNames = sourceNames.subtracting(destinationNames)
+        let addedNames = destinationNames.subtracting(sourceNames)
+        guard !retainedNames.isEmpty, !removedNames.isEmpty, !addedNames.isEmpty,
+            !source.entities.contains(where: { $0.superentityName != nil }),
+            !destination.entities.contains(where: { $0.superentityName != nil })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined entity changes require at least one retained, removed, and added flat root.")
+        }
+        for retainedName in retainedNames {
+            guard let sourceEntity = source.entity(forName: retainedName),
+                let destinationEntity = destination.entity(forName: retainedName),
+                equivalentEntityMetadata(sourceEntity, destinationEntity)
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Combined entity changes cannot modify retained entities.")
+            }
+        }
+        let removedEntities = source.entities.filter { removedNames.contains($0.name) }
+        let addedEntities = destination.entities.filter { addedNames.contains($0.name) }
+        guard removedEntities.allSatisfy({ $0.relationships.isEmpty }),
+            addedEntities.allSatisfy({ $0.relationships.isEmpty && $0.superentityName == nil }),
+            source.entities.filter({ !removedNames.contains($0.name) }).allSatisfy({ entity in
+                entity.relationships.allSatisfy { !removedNames.contains($0.destination) }
+            }),
+            addedEntities.allSatisfy({ entity in
+                entity.attributes.allSatisfy({ !$0.options.contains(.externalStorage) })
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined entity changes only support unrelated flat roots without external storage.")
+        }
+        let sourceMaximumID = source.entityIDsByName.values.max() ?? 0
+        guard
+            addedEntities.allSatisfy({
+                guard let identifier = destination.entityIDsByName[$0.name] else { return false }
+                return identifier > sourceMaximumID
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Added entity identifiers must append after all source identifiers, including removed entities.")
+        }
+        let removedObjects = Set(
+            removedEntities.flatMap { entity in
+                ["Z\(entity.name.uppercased())"]
+                    + indexDefinitions(for: entity, schema: source).map { $0.name.uppercased() }
+            })
+        let addedObjects = Set(
+            addedEntities.flatMap { entity in
+                ["Z\(entity.name.uppercased())"]
+                    + indexDefinitions(for: entity, schema: destination).map { $0.name.uppercased() }
+            })
+        guard removedObjects.isDisjoint(with: addedObjects) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Added entity tables or indexes collide with objects removed by the same migration.")
+        }
+        let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
+        let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
+        let retainedSchema = try Schema(retainedEntities, version: source.version, entityIDs: retainedIDs)
+        try applyFlatIndependentRootRemovals(
+            source: source, destination: retainedSchema, connection: connection)
+        try applyFlatIndependentRootAdditions(
+            source: retainedSchema, destination: destination, connection: connection)
     }
 
     private static func equivalentEntityMetadata(_ lhs: Schema.Entity, _ rhs: Schema.Entity) -> Bool {

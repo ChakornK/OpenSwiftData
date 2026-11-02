@@ -2262,6 +2262,47 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPartialFetchPredicateAndSortUseUnselectedProperty() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-predicate-sort"))
+        let writer = container.mainContext
+        for (title, count) in [("third", 3), ("first", 1), ("second", 2)] {
+            let model = PersistenceTestModel(title: title)
+            model.count = count
+            writer.insert(model)
+        }
+        try writer.save()
+
+        let lowerBound = 1
+        let upperBound = 3
+        let storedDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate { $0.count >= lowerBound && $0.count <= upperBound },
+            sortBy: [SortDescriptor(\.count)],
+            includePendingChanges: false,
+            propertiesToFetch: [\.title])
+        let storedReader = container.makeContext()
+        let storedRows = try storedReader.fetch(storedDescriptor)
+        XCTAssertEqual(storedRows.map(\.title), ["first", "second", "third"])
+        XCTAssertEqual(storedRows.map(\.persistentModelID), try storedReader.fetchIdentifiers(storedDescriptor))
+        XCTAssertEqual(try storedReader.fetchCount(storedDescriptor), 3)
+
+        let pendingReader = container.makeContext()
+        let pending = PersistenceTestModel(title: "pending")
+        pending.count = 0
+        pendingReader.insert(pending)
+        let mergedDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate { $0.count >= lowerBound && $0.count <= upperBound },
+            sortBy: [SortDescriptor(\.count)],
+            propertiesToFetch: [\.title])
+        let mergedRows = try pendingReader.fetch(mergedDescriptor)
+        XCTAssertEqual(mergedRows.map(\.title), ["first", "second", "third"])
+        XCTAssertEqual(
+            mergedRows.map(\.persistentModelID),
+            try pendingReader.fetchIdentifiers(mergedDescriptor))
+        XCTAssertEqual(try pendingReader.fetchCount(mergedDescriptor), 3)
+    }
+
+    @MainActor
     func testPartialFetchPreservesValuesAlreadyLoadedInIdentityMap() throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-fault-identity"))

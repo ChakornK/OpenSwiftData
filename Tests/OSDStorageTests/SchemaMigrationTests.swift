@@ -386,6 +386,175 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testOptionalToRequiredAttributeBackfillsNullsAndPreservesIndexedRows() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZPRIORITY) VALUES (?, ?, ?, ?)",
+                [.int(1), .int(4), .text("kept"), .int(3)])
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZPRIORITY) VALUES (?, ?, ?, NULL)",
+                [.int(1), .int(9), .text("backfilled")])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let rows = try migrated.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE, ZPRIORITY FROM ZRECORD ORDER BY Z_PK")
+        }
+        XCTAssertEqual(
+            rows,
+            [
+                [.int(1), .int(4), .text("kept"), .int(3)],
+                [.int(2), .int(9), .text("backfilled"), .int(7)],
+            ])
+        let indexNames = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ZRECORD%'")
+        }
+        let storedIndexNames = indexNames.compactMap { row -> String? in
+            guard case let .text(name)? = row.first else { return nil }
+            return name
+        }
+        XCTAssertEqual(Set(storedIndexNames), ["ZRECORD_ZPRIORITY_UNIQUE_INDEX", "ZRECORD_ZTITLE_INDEX"])
+        let hash = try migrated.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        XCTAssertEqual(hash, .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPRIORITY FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(4), .int(3)], [.int(2), .int(9), .int(7)]])
+        try reopened.close()
+    }
+
+    func testOptionalToRequiredUniqueDefaultCollisionRollsBackAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZPRIORITY) VALUES (?, ?, ?, ?)",
+                [.int(1), .int(1), .text("existing-seven"), .int(7)])
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZPRIORITY) VALUES (?, ?, ?, NULL)",
+                [.int(1), .int(1), .text("null-one")])
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZPRIORITY) VALUES (?, ?, ?, NULL)",
+                [.int(1), .int(1), .text("null-two")])
+        }
+        let sourceHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT ZTITLE, ZPRIORITY FROM ZRECORD ORDER BY Z_PK") },
+            [[.text("existing-seven"), .int(7)], [.text("null-one"), .null], [.text("null-two"), .null]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?
+                .first
+            },
+            sourceHash)
+        try reopened.close()
+    }
+
+    func testOptionalToRequiredWithoutDefaultAndCombinedEntityChangesFailClosed() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int", isOptional: true)])
+        ])
+        let missingDefault = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int")])
+        ])
+        let combinedChange = Schema([
+            Schema.Entity(name: "Extra"),
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int", defaultValue: "0")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (?, ?, NULL)", [.int(1), .int(1)])
+        }
+        try initial.close()
+
+        for destination in [missingDefault, combinedChange] {
+            XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+            let unchanged = try LightweightMigration.openStore(location: location, schema: source)
+            XCTAssertEqual(
+                try unchanged.read { try $0.rows("SELECT ZVALUE FROM ZRECORD") },
+                [[.null]])
+            try unchanged.close()
+        }
+    }
+
     func testAddingRequiredAttributeWithNonliteralDefaultFailsAtomically() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-dynamic-default"))
         let source = Schema([

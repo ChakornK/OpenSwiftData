@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import OSDCore
 
 package enum LightweightMigration {
@@ -467,6 +468,8 @@ package enum LightweightMigration {
                 to: entity,
                 sourceEntities: source.entities,
                 destinationEntities: destination.entities,
+                sourceEntityIDs: source.entityIDsByName,
+                destinationEntityIDs: destination.entityIDsByName,
                 indexTransitions: &indexTransitions,
                 connection: connection)
         }
@@ -1121,6 +1124,8 @@ package enum LightweightMigration {
         to destination: Schema.Entity,
         sourceEntities: [Schema.Entity],
         destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int],
         indexTransitions: inout [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
@@ -1128,6 +1133,42 @@ package enum LightweightMigration {
         let existing = try tableColumns(table, connection: connection)
         let mappings = try attributeMappings(source: source, destination: destination)
         try validateAttributeColumns(mappings, destination: destination, existing: existing)
+        if let optionalityChange = try optionalToRequiredAttributeChange(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            guard let literal = try migrationDefaultLiteral(for: optionalityChange.destination) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Making attribute \(destination.name).\(optionalityChange.destination.name) required requires a literal default."
+                )
+            }
+            let column = "Z\(optionalityChange.destination.name.uppercased())"
+            try validateOptionalityBackfillSideEffects(table: table, column: column, connection: connection)
+            do {
+                try connection.execute("UPDATE \(table) SET \(column) = \(literal) WHERE \(column) IS NULL")
+            } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
+                throw SwiftDataError.migrationUnsupported(
+                    "Backfilling \(destination.name).\(optionalityChange.destination.name) violates a uniqueness constraint."
+                )
+            }
+            let nullRows = try connection.rows("SELECT COUNT(*) FROM \(table) WHERE \(column) IS NULL")
+            guard case let .int(count)? = nullRows.first?.first, count == 0 else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Required attribute \(destination.name).\(optionalityChange.destination.name) still contains NULL values."
+                )
+            }
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         for mapping in mappings {
             guard let old = mapping.source else { continue }
             let oldIsFlattened = old.options.contains(.flattened)
@@ -1171,7 +1212,8 @@ package enum LightweightMigration {
                 continue
             }
             guard old.isOptional == attribute.isOptional else {
-                throw SwiftDataError.migrationUnsupported("Optionality changes require a table rebuild.")
+                throw SwiftDataError.migrationUnsupported(
+                    "Optionality changes require an eligible literal-default backfill migration.")
             }
             guard old.type == attribute.type else {
                 throw SwiftDataError.migrationUnsupported(
@@ -1186,6 +1228,115 @@ package enum LightweightMigration {
                 indexDefinitions(for: source, schema: Schema(sourceEntities)),
                 indexDefinitions(for: destination, schema: Schema(destinationEntities))
             ))
+    }
+
+    private static func optionalToRequiredAttributeChange(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changes = mappings.filter { mapping in
+            guard let source = mapping.source else { return false }
+            return source.isOptional != mapping.destination.isOptional
+        }
+        guard !changes.isEmpty else { return nil }
+        guard changes.count == 1,
+            let change = changes.first,
+            let oldAttribute = change.source,
+            oldAttribute.isOptional,
+            !change.destination.isOptional,
+            oldAttribute.name == change.destination.name,
+            oldAttribute.type == change.destination.type,
+            oldAttribute.options == change.destination.options,
+            oldAttribute.originalName == change.destination.originalName,
+            oldAttribute.components == change.destination.components,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return old == oldAttribute || old == mapping.destination
+            }),
+            source.name == destination.name,
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && sourceEntity.indexes == destinationEntity.indexes
+                }
+                return sourceEntity.superentityName == destinationEntity.superentityName
+                    && sourceEntity.attributes.count == destinationEntity.attributes.count
+                    && sourceEntity.attributes.allSatisfy { attribute in
+                        destinationEntity.attributes.contains(attribute)
+                    }
+                    && sourceEntity.relationships == destinationEntity.relationships
+                    && sourceEntity.indexes == destinationEntity.indexes
+            }),
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
+            destinationEntities.allSatisfy({ $0.relationships.isEmpty })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Optional-to-required migration must change one flat scalar attribute without other schema edits.")
+        }
+        _ = try SQLColumnType.resolve(
+            change.destination.type,
+            property: "\(destination.name).\(change.destination.name)",
+            options: change.destination.options)
+        return change
+    }
+
+    private static func validateOptionalityBackfillSideEffects(
+        table: String,
+        column: String,
+        connection: SQLConnection
+    ) throws {
+        let triggers = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE LIMIT 1",
+            [.text(table)])
+        guard triggers.isEmpty else {
+            throw SwiftDataError.migrationUnsupported(
+                "Optional-to-required backfill does not run user-defined triggers on \(table).")
+        }
+        let tables = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        for row in tables {
+            guard case let .text(name)? = row.first else { continue }
+            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
+            for foreignKey in foreignKeys {
+                guard foreignKey.count > 4,
+                    case let .text(referencedTable) = foreignKey[2],
+                    case let .text(referencingColumn) = foreignKey[3]
+                else { continue }
+                let referencesColumn: Bool
+                if case let .text(referencedColumn) = foreignKey[4] {
+                    referencesColumn = referencedColumn.caseInsensitiveCompare(column) == .orderedSame
+                } else {
+                    referencesColumn = false
+                }
+                let referencesUpdatedColumn =
+                    referencedTable.caseInsensitiveCompare(table) == .orderedSame && referencesColumn
+                let updatesForeignKeyColumn =
+                    name.caseInsensitiveCompare(table) == .orderedSame
+                    && referencingColumn.caseInsensitiveCompare(column) == .orderedSame
+                guard !referencesUpdatedColumn, !updatesForeignKeyColumn else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Optional-to-required backfill cannot change a foreign-key column in \(table).")
+                }
+            }
+        }
     }
 
     private static func migrationDefaultLiteral(for attribute: Schema.Attribute) throws -> String? {

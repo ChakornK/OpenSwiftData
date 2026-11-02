@@ -2896,6 +2896,79 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testFlatMigrationRollsBackAddedColumnsWhenUniqueIndexCreationFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "code", type: "Int")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "Int"),
+                    Schema.Attribute(name: "rank", type: "Int", defaultValue: "0"),
+                    Schema.Attribute(name: "token", type: "Int", defaultValue: "0", options: [.unique]),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE) VALUES (1, 3, 10)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE) VALUES (1, 4, 20)")
+        }
+        let originalHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        let originalEntityRows = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let originalVersion = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        let columns = try reopened.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        XCTAssertFalse(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZRANK") }))
+        XCTAssertFalse(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZTOKEN") }))
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZCODE FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(3), .int(10)], [.int(2), .int(4), .int(20)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?
+                .first
+            },
+            originalHash)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            originalEntityRows)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)]
+                ).first?.first
+            },
+            originalVersion)
+        XCTAssertTrue(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZTOKEN_UNIQUE_INDEX'"
+                )
+                .isEmpty
+            })
+        try reopened.close()
+    }
+
     func testIndependentRootEntityRemovalPreservesRetainedRowsAndIDs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

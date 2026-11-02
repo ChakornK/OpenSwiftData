@@ -638,18 +638,18 @@ package enum LightweightMigration {
         let destinationHasHierarchy = destination.entities.contains { $0.superentityName != nil }
         let destinationEntityNames = Set(destination.entities.map(\.name))
         let retainedIDs = source.entityIDsByName.filter { destinationEntityNames.contains($0.key) }
-        let removedEntity = removedNames.first.flatMap(source.entity(forName:))
-        guard removedNames.count == 1,
+        let removedEntityNames = Set(removedNames)
+        let removedEntities = source.entities.filter { removedEntityNames.contains($0.name) }
+        guard !removedNames.isEmpty,
             !sourceHasHierarchy,
             !destinationHasHierarchy,
-            removedEntity?.relationships.isEmpty == true,
-            let removedName = removedNames.first,
-            source.entities.allSatisfy({ entity in
-                entity.name == removedName || entity.relationships.allSatisfy { $0.destination != removedName }
+            removedEntities.allSatisfy({ $0.relationships.isEmpty && $0.superentityName == nil }),
+            source.entities.filter({ !removedEntityNames.contains($0.name) }).allSatisfy({ entity in
+                entity.relationships.allSatisfy { !removedEntityNames.contains($0.destination) }
             })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Entity removal is limited to one unreferenced flat root without relationships or inheritance.")
+                "Entity removal is limited to unreferenced flat roots without relationships or inheritance.")
         }
         guard retainedIDs == destination.entityIDsByName else {
             throw SwiftDataError.migrationUnsupported("Entity removal cannot renumber retained entity identifiers.")
@@ -663,24 +663,24 @@ package enum LightweightMigration {
             }
         }
         try validateEntityRemovalSideEffects(source: source, destination: destination, connection: connection)
-        guard let removedName = removedNames.first,
-            let removedID = source.entityIDsByName[removedName],
-            let removedEntity = source.entity(forName: removedName),
-            removedEntity.superentityName == nil
-        else {
-            throw SwiftDataError.migrationUnsupported("Removed entity metadata is incomplete.")
-        }
-        let table = "Z\(removedName.uppercased())"
-        let tableExists = try connection.rows(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE LIMIT 1",
-            [.text(table)])
-        guard !tableExists.isEmpty else {
-            throw SwiftDataError.migrationUnsupported("Physical table for removed entity \(removedName) is missing.")
-        }
-        try connection.execute("DROP TABLE \(table)")
-        try connection.execute("DELETE FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(removedID))])
-        guard connection.changesCount() == 1 else {
-            throw SwiftDataError.migrationUnsupported("Entity identifier row for \(removedName) is missing.")
+        for removedEntity in removedEntities {
+            guard let removedID = source.entityIDsByName[removedEntity.name] else {
+                throw SwiftDataError.migrationUnsupported("Removed entity metadata is incomplete.")
+            }
+            let table = "Z\(removedEntity.name.uppercased())"
+            let tableExists = try connection.rows(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE LIMIT 1",
+                [.text(table)])
+            guard !tableExists.isEmpty else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Physical table for removed entity \(removedEntity.name) is missing.")
+            }
+            try connection.execute("DROP TABLE \(table)")
+            try connection.execute("DELETE FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(removedID))])
+            guard connection.changesCount() == 1 else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Entity identifier row for \(removedEntity.name) is missing.")
+            }
         }
     }
 

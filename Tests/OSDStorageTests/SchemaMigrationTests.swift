@@ -2704,6 +2704,7 @@ final class SchemaMigrationTests: XCTestCase {
                 name: "ZRemoved",
                 attributes: [Schema.Attribute(name: "value", type: "String")],
                 indexes: [Schema.Index(properties: ["value"])]),
+            Schema.Entity(name: "ZZRemoved", attributes: [Schema.Attribute(name: "value", type: "String")]),
         ])
         let destination = Schema([
             Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")])
@@ -2712,6 +2713,7 @@ final class SchemaMigrationTests: XCTestCase {
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
             try connection.execute("INSERT INTO ZZREMOVED (Z_ENT, Z_OPT, ZVALUE) VALUES (2, 1, 'discarded')")
+            try connection.execute("INSERT INTO ZZZREMOVED (Z_ENT, Z_OPT, ZVALUE) VALUES (3, 1, 'also-discarded')")
             try connection.execute(
                 "INSERT INTO ZRETAINED (Z_ENT, Z_OPT, ZNAME) VALUES (?, ?, ?)",
                 [
@@ -2729,6 +2731,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertTrue(
             try migrated.read {
                 try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZZREMOVED'").isEmpty
+                    && $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZZZREMOVED'").isEmpty
             })
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY") },
@@ -2748,8 +2751,8 @@ final class SchemaMigrationTests: XCTestCase {
         let added = try LightweightMigration.openStore(location: location, schema: addedSchema)
         XCTAssertEqual(
             try added.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
-            [[.int(1), .text("Retained")], [.int(3), .text("Newcomer")]])
-        XCTAssertEqual(try added.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 4)
+            [[.int(1), .text("Retained")], [.int(4), .text("Newcomer")]])
+        XCTAssertEqual(try added.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 5)
         try added.close()
 
         let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty-schema.sqlite"))

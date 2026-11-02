@@ -1982,24 +1982,36 @@ package enum LightweightMigration {
             return signedIntegerWidth(old.type) != nil || signedIntegerWidth(mapping.destination.type) != nil
         }
         guard hasSignedIntegerType else { return false }
-        guard changes.count == 1,
-            let change = changes.first,
-            let oldAttribute = change.source,
-            oldAttribute.name == change.destination.name,
-            oldAttribute.isOptional == change.destination.isOptional,
-            oldAttribute.defaultValue == change.destination.defaultValue,
-            oldAttribute.options == change.destination.options,
-            oldAttribute.originalName == change.destination.originalName,
-            oldAttribute.components.isEmpty,
-            change.destination.components.isEmpty,
-            let sourceWidth = signedIntegerWidth(oldAttribute.type),
-            let destinationWidth = signedIntegerWidth(change.destination.type),
-            destinationWidth > sourceWidth,
+        guard !changes.isEmpty,
             mappings.count == source.attributes.count,
             mappings.count == destination.attributes.count,
-            mappings.allSatisfy({ mapping in
+            try mappings.allSatisfy({ mapping in
                 guard let old = mapping.source else { return false }
-                return old == oldAttribute || old == mapping.destination
+                if old.type == mapping.destination.type {
+                    return old == mapping.destination
+                }
+                guard old.name == mapping.destination.name,
+                    old.isOptional == mapping.destination.isOptional,
+                    old.defaultValue == mapping.destination.defaultValue,
+                    old.options == mapping.destination.options,
+                    old.originalName == mapping.destination.originalName,
+                    old.components.isEmpty,
+                    mapping.destination.components.isEmpty,
+                    let sourceWidth = signedIntegerWidth(old.type),
+                    let destinationWidth = signedIntegerWidth(mapping.destination.type),
+                    destinationWidth > sourceWidth,
+                    !old.options.contains(.codable),
+                    !old.options.contains(.flattened),
+                    !old.options.contains(.externalStorage),
+                    !old.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+                    try SQLColumnType.resolve(old.type, property: "\(source.name).\(old.name)", options: old.options)
+                        == .integer,
+                    try SQLColumnType.resolve(
+                        mapping.destination.type,
+                        property: "\(destination.name).\(mapping.destination.name)",
+                        options: mapping.destination.options) == .integer
+                else { return false }
+                return true
             }),
             source.name == destination.name,
             sourceEntityIDs == destinationEntityIDs,
@@ -2020,21 +2032,11 @@ package enum LightweightMigration {
                     && sourceEntity.indexes == destinationEntity.indexes
             }),
             source.superentityName == nil,
-            destination.superentityName == nil,
-            !oldAttribute.options.contains(.codable),
-            !oldAttribute.options.contains(.flattened),
-            !oldAttribute.options.contains(.externalStorage),
-            !oldAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
-            try SQLColumnType.resolve(
-                oldAttribute.type, property: "\(source.name).\(oldAttribute.name)", options: oldAttribute.options)
-                == .integer,
-            try SQLColumnType.resolve(
-                change.destination.type,
-                property: "\(destination.name).\(change.destination.name)",
-                options: change.destination.options) == .integer
+            destination.superentityName == nil
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Numeric widening must be a single signed-integer change with unchanged storage metadata.")
+                "Numeric widening must contain only compatible signed-integer widenings with unchanged storage metadata."
+            )
         }
         return true
     }
@@ -2060,7 +2062,12 @@ package enum LightweightMigration {
     }
 
     private static func signedIntegerWidth(_ typeName: String) -> Int? {
-        let name = typeName.split(separator: ".").last.map(String.init) ?? typeName
+        let trimmedTypeName = typeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nonOptionalTypeName =
+            trimmedTypeName.hasSuffix("?")
+            ? String(trimmedTypeName.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+            : trimmedTypeName
+        let name = nonOptionalTypeName.split(separator: ".").last.map(String.init) ?? nonOptionalTypeName
         return switch name {
         case "Int8": 8
         case "Int16": 16

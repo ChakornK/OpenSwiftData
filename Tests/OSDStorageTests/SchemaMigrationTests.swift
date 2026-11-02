@@ -739,6 +739,227 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testMultipleSignedIntegerAttributesWidenTogether() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-integer-widening.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "Int8", options: [.unique]),
+                    Schema.Attribute(name: "rank", type: "Int16"),
+                    Schema.Attribute(name: "untouched", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["code", "rank"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "Int32", options: [.unique]),
+                    Schema.Attribute(name: "rank", type: "Int64"),
+                    Schema.Attribute(name: "untouched", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["code", "rank"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE, ZRANK, ZUNTOUCHED) VALUES (1, 9, -128, 32767, 'kept')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZCODE, ZRANK, ZUNTOUCHED FROM ZRECORD") },
+            [[.int(1), .int(1), .int(9), .int(-128), .int(32767), .text("kept")]])
+        let indexes = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+        }
+        XCTAssertEqual(
+            indexes,
+            [[.text("ZRECORD_ZCODE_UNIQUE_INDEX")], [.text("ZRECORD_ZCODE_ZRANK_INDEX")]])
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE, ZRANK, ZUNTOUCHED) VALUES (1, 2, 128, 32768, 'wide')")
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT ZCODE, ZRANK FROM ZRECORD WHERE Z_PK = 2") },
+            [[.int(128), .int(32768)]])
+        XCTAssertThrowsError(
+            try migrated.write {
+                try $0.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE, ZRANK, ZUNTOUCHED) VALUES (1, 3, 128, 32769, 'duplicate')"
+                )
+            })
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
+        try reopened.close()
+    }
+
+    func testOptionalSuffixIntegerTypesWidenTogether() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("optional-integer-widening.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int8?", isOptional: true),
+                    Schema.Attribute(name: "medium", type: "Int16?", isOptional: true),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int32?", isOptional: true),
+                    Schema.Attribute(name: "medium", type: "Int64?", isOptional: true),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM) VALUES (1, 4, -128, NULL)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZSMALL, ZMEDIUM FROM ZRECORD") },
+            [[.int(1), .int(4), .int(-128), .null]])
+        try migrated.close()
+    }
+
+    func testMixedIntegerWideningAndNarrowingFailsWithoutChangingStore() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("mixed-integer-widening.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int8"),
+                    Schema.Attribute(name: "narrow", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int16"),
+                    Schema.Attribute(name: "narrow", type: "Int32"),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZWIDE, ZNARROW) VALUES (1, 6, 12, 2147483648)")
+        }
+        let originalHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed widening/narrowing to fail closed, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZNARROW FROM ZRECORD") },
+            [[.int(1), .int(6), .int(12), .int(2_147_483_648)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            originalHash)
+        try reopened.close()
+    }
+
+    func testMixedIntegerWideningAndFloatConversionFailsWithoutChangingStore() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int8"),
+                    Schema.Attribute(name: "fraction", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int16"),
+                    Schema.Attribute(name: "fraction", type: "Double"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-integer-float-widening"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZWIDE, ZFRACTION) VALUES (1, 7, 12, 24)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed integer and floating conversion to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZFRACTION FROM ZRECORD") },
+            [[.int(1), .int(7), .int(12), .int(24)]])
+        try driver.close()
+    }
+
+    func testIntegerWideningCombinedWithRenameFailsWithoutChangingStore() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int8"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int16"),
+                    Schema.Attribute(name: "title", type: "String", originalName: "label"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-widening-plus-rename"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZWIDE, ZLABEL) VALUES (1, 8, 13, 'kept')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected widening combined with rename to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZLABEL FROM ZRECORD") },
+            [[.int(1), .int(8), .int(13), .text("kept")]])
+        try driver.close()
+    }
+
     func testSignedIntegerNarrowingFailsWithoutChangingStore() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

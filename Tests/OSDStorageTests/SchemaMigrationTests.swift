@@ -2693,6 +2693,163 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testOptionalOwningToOneRelationshipRemovalDropsColumnAndIndex() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZFAVORITE) VALUES (1, 3, 'owner', 1)")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 4, 'target')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let ownerColumns = try migrated.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertFalse(ownerColumns.contains(where: { $0.count > 1 && $0[1] == .text("ZFAVORITE") }))
+        let relationshipIndex = try migrated.read {
+            try $0.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZFAVORITE_INDEX'")
+        }
+        XCTAssertTrue(relationshipIndex.isEmpty)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZOWNER") },
+            [[.int(1), .int(3), .text("owner")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTARGET") },
+            [[.int(1), .int(4), .text("target")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertTrue(
+            try reopened.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+                .allSatisfy({ $0.count <= 1 || $0[1] != .text("ZFAVORITE") }))
+        try reopened.close()
+    }
+
+    func testRelationshipRemovalRejectsRequiredCascadeAndInverseLinks() throws {
+        let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
+            (
+                "required",
+                Schema.Relationship(name: "favorite", destination: "Target", isOptional: false),
+                nil
+            ),
+            (
+                "cascade",
+                Schema.Relationship(name: "favorite", destination: "Target", deleteRule: .cascade),
+                nil
+            ),
+            (
+                "inverse",
+                Schema.Relationship(name: "favorite", destination: "Target", inverse: "owner"),
+                Schema.Relationship(name: "owner", destination: "Owner", inverse: "favorite")
+            ),
+        ]
+        for (caseName, ownerRelationship, targetRelationship) in cases {
+            let source = Schema([
+                Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
+                Schema.Entity(name: "Target", relationships: targetRelationship.map { [$0] } ?? []),
+            ])
+            let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-\(caseName)"))
+            try bootstrap(source, driver: driver)
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+            XCTAssertTrue(
+                try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+                    .contains(where: { $0.count > 1 && $0[1] == .text("ZFAVORITE") }))
+            try driver.close()
+        }
+    }
+
+    func testRelationshipRemovalRejectsCustomIndexesTriggersViewsAndForeignKeys() throws {
+        let sideObjects: [(String, String)] = [
+            ("index", "CREATE INDEX USER_FAVORITE_INDEX ON ZOWNER (ZFAVORITE)"),
+            ("trigger", "CREATE TRIGGER USER_FAVORITE_TRIGGER AFTER UPDATE ON ZOWNER BEGIN SELECT 1; END"),
+            ("view", "CREATE VIEW USER_FAVORITE_VIEW AS SELECT ZFAVORITE FROM ZOWNER"),
+            ("foreign-key", "CREATE TABLE USER_FAVORITE_FK (owner_id INTEGER REFERENCES ZOWNER(ZFAVORITE))"),
+        ]
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        for (name, statement) in sideObjects {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-side-object-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { try $0.execute(statement) }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }, "Expected removal to reject \(name)"
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported for \(name), got \(error)")
+                }
+            }
+            XCTAssertTrue(
+                try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+                    .contains(where: { $0.count > 1 && $0[1] == .text("ZFAVORITE") }))
+            try driver.close()
+        }
+    }
+
+    func testRelationshipRemovalCannotCombineWithRename() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "favorite", destination: "Target"),
+                    Schema.Relationship(name: "backup", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "fallback", destination: "Target", originalName: "backup")
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-plus-rename"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFAVORITE") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZBACKUP") }))
+        try driver.close()
+    }
+
     func testIndependentRootEntityRemovalPreservesRetainedRowsAndIDs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

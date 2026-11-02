@@ -1496,7 +1496,8 @@ package enum LightweightMigration {
             }
         }
         try migrateRelationships(
-            source: source, destination: destination, schema: Schema(destinationEntities),
+            source: source, destination: destination,
+            sourceSchema: Schema(sourceEntities), schema: Schema(destinationEntities),
             connection: connection, existing: existing)
         indexTransitions.append(
             (
@@ -1854,6 +1855,7 @@ package enum LightweightMigration {
     private static func migrateRelationships(
         source: Schema.Entity,
         destination: Schema.Entity,
+        sourceSchema: Schema,
         schema: Schema,
         connection: SQLConnection,
         existing: Set<String>
@@ -1864,9 +1866,70 @@ package enum LightweightMigration {
                     $0.name == relationship.name || $0.name == relationship.originalName
                 })?.name
             })
-        guard mappedSources.count == source.relationships.count else {
+        let removedRelationships = source.relationships.filter { !mappedSources.contains($0.name) }
+        let addedRelationships = destination.relationships.filter { relationship in
+            !source.relationships.contains(where: {
+                $0.name == relationship.name || $0.name == relationship.originalName
+            })
+        }
+        guard removedRelationships.count + mappedSources.count == source.relationships.count else {
             throw SwiftDataError.migrationUnsupported(
                 "Adding or removing relationships requires graph transformation metadata.")
+        }
+        if !removedRelationships.isEmpty {
+            guard removedRelationships.count == 1, addedRelationships.isEmpty,
+                let relationship = removedRelationships.first,
+                source.attributes.count == destination.attributes.count,
+                source.attributes.allSatisfy({ destination.attributes.contains($0) }),
+                destination.relationships.count == source.relationships.count - 1,
+                source.relationships.filter({ $0.name != relationship.name }).allSatisfy({ retainedRelationship in
+                    destination.relationships.contains(retainedRelationship)
+                }),
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName,
+                sourceSchema.entityIDsByName == schema.entityIDsByName,
+                sourceSchema.entities.count == schema.entities.count,
+                sourceSchema.entities.filter({ $0.name != source.name }).allSatisfy({ sourceEntity in
+                    guard let destinationEntity = schema.entity(forName: sourceEntity.name) else { return false }
+                    return equivalentEntityMetadata(sourceEntity, destinationEntity)
+                }),
+                !relationship.isToMany,
+                relationship.isOptional,
+                relationship.inverse == nil,
+                relationship.originalName == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                relationship.destination != source.name,
+                source.superentityName == nil,
+                !sourceSchema.entities.contains(where: { $0.superentityName == source.name }),
+                !sourceSchema.entities.contains(where: { entity in
+                    entity.name != source.name
+                        && entity.relationships.contains(where: {
+                            $0.inverse == relationship.name
+                        })
+                }),
+                let mapping = sourceSchema.relationshipStorageMapping(
+                    modelEntityName: source.name, relationshipName: relationship.name),
+                !SchemaBuilder.isNonOwner(source, relationship, schema: sourceSchema),
+                mapping.ownerRootEntityName == source.name,
+                mapping.declaringEntityName == source.name
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Only unconstrained owning optional to-one relationships can be removed without a graph migration.")
+            }
+            let column = "Z\(mapping.storageColumnName.uppercased())"
+            guard existing.contains(column), Database.sqliteLibVersionNumber >= 3_035_000 else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Relationship removal requires an existing foreign-key column and SQLite 3.35 or newer.")
+            }
+            try validateOptionalRelationshipColumnRemoval(
+                table: "Z\(source.name.uppercased())",
+                column: column,
+                relationship: relationship,
+                owner: source,
+                schema: sourceSchema,
+                connection: connection)
         }
         let sourceMany = Set(source.relationships.filter(\.isToMany).map(\.name))
         let destinationMany = Set(
@@ -1925,6 +1988,15 @@ package enum LightweightMigration {
             }
             try connection.execute("ALTER TABLE Z\(destination.name.uppercased()) ADD COLUMN \(columnName) INTEGER")
         }
+        for relationship in removedRelationships {
+            let mapping = try validatedRemovedRelationshipMapping(
+                relationship, owner: source, sourceSchema: sourceSchema)
+            let column = "Z\(mapping.storageColumnName.uppercased())"
+            let indexName =
+                "Z\(mapping.ownerRootEntityName.uppercased())_Z\(mapping.relationshipName.uppercased())_INDEX"
+            try connection.execute("DROP INDEX IF EXISTS \(indexName)")
+            try connection.execute("ALTER TABLE Z\(source.name.uppercased()) DROP COLUMN \(column)")
+        }
         for relationship in destination.relationships where !relationship.isToMany {
             guard
                 let old = source.relationships.first(where: {
@@ -1939,6 +2011,81 @@ package enum LightweightMigration {
                     "ALTER TABLE Z\(destination.name.uppercased()) RENAME COLUMN Z\(old.name.uppercased()) TO Z\(relationship.name.uppercased())"
                 )
             }
+        }
+    }
+
+    private static func validatedRemovedRelationshipMapping(
+        _ relationship: Schema.Relationship,
+        owner: Schema.Entity,
+        sourceSchema: Schema
+    ) throws -> Schema.RelationshipStorageMapping {
+        guard
+            let mapping = sourceSchema.relationshipStorageMapping(
+                modelEntityName: owner.name, relationshipName: relationship.name),
+            !SchemaBuilder.isNonOwner(owner, relationship, schema: sourceSchema),
+            mapping.ownerRootEntityName == owner.name,
+            mapping.declaringEntityName == owner.name
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Relationship removal requires an owning to-one foreign-key column on the entity root.")
+        }
+        return mapping
+    }
+
+    private static func validateOptionalRelationshipColumnRemoval(
+        table: String,
+        column: String,
+        relationship: Schema.Relationship,
+        owner: Schema.Entity,
+        schema: Schema,
+        connection: SQLConnection
+    ) throws {
+        let sideObjects = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1")
+        guard sideObjects.isEmpty else {
+            throw SwiftDataError.migrationUnsupported(
+                "Relationship removal is unsupported when triggers or views exist.")
+        }
+        try validateOptionalityBackfillSideEffects(table: table, column: column, connection: connection)
+        let expectedIndexes = try expectedIndexNames(schema)
+        let tableIndexes = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
+        for row in tableIndexes {
+            guard case let .text(name)? = row.first, expectedIndexes.contains(name.uppercased()) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Relationship removal cannot preserve an untracked index on \(table).")
+            }
+        }
+        let mapping = try validatedRemovedRelationshipMapping(relationship, owner: owner, sourceSchema: schema)
+        let generatedIndex =
+            "Z\(mapping.ownerRootEntityName.uppercased())_Z\(mapping.relationshipName.uppercased())_INDEX"
+        guard expectedIndexes.contains(generatedIndex.uppercased()),
+            tableIndexes.contains(where: { row in
+                guard case let .text(name)? = row.first else { return false }
+                return name.caseInsensitiveCompare(generatedIndex) == .orderedSame
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Generated relationship index \(generatedIndex) is missing.")
+        }
+        let quotedIndex = "\"\(generatedIndex.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let indexMetadata = try connection.rows("PRAGMA index_list(\"\(table)\")")
+        guard
+            let generatedMetadata = indexMetadata.first(where: { row in
+                guard row.count > 4, case let .text(name) = row[1] else { return false }
+                return name.caseInsensitiveCompare(generatedIndex) == .orderedSame
+            }), generatedMetadata[2] == .int(0), generatedMetadata[4] == .int(0)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Generated relationship index \(generatedIndex) has incompatible flags.")
+        }
+        let indexedColumns = try connection.rows("PRAGMA index_info(\(quotedIndex))")
+        guard indexedColumns.count == 1,
+            indexedColumns[0].count > 2,
+            case let .text(indexedColumn) = indexedColumns[0][2],
+            indexedColumn.caseInsensitiveCompare(column) == .orderedSame
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Generated relationship index \(generatedIndex) does not index only \(column).")
         }
     }
 

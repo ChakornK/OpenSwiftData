@@ -48,6 +48,29 @@ package enum PredicateRuntimeTreeBuilder {
         var activeRelationshipName: String?
         var activePredicateRootType: Any.Type = Model.self
         var collectionVariableScopes: [UInt] = []
+        func capturedPartialIntegerRange(_ value: Any) throws -> (
+            name: String, boundName: String, value: Any, stored: StoredValue
+        )? {
+            let reflectedName = String(reflecting: type(of: value))
+            let name =
+                reflectedName.split(separator: "<", maxSplits: 1).first
+                .map(String.init)?.split(separator: ".").last.map(String.init) ?? reflectedName
+            let boundName: String
+            switch name {
+            case "PartialRangeFrom": boundName = "lowerBound"
+            case "PartialRangeThrough", "PartialRangeUpTo": boundName = "upperBound"
+            default: return nil
+            }
+            let children = Array(Mirror(reflecting: value).children)
+            guard children.count == 1, children[0].label == boundName else {
+                throw SwiftDataError.unsupportedPredicate("Malformed captured \(name) range")
+            }
+            let stored = try StoredValue(predicateScalar: children[0].value, type: type(of: children[0].value))
+            guard case .int = stored else {
+                throw SwiftDataError.unsupportedPredicate("Partial range bounds require integer captures")
+            }
+            return (name, boundName, children[0].value, stored)
+        }
         func keyPathRootVariableID(_ value: Any) -> UInt? {
             guard let root = Mirror(reflecting: value).children.first(where: { $0.label == "root" })?.value else {
                 return nil
@@ -158,6 +181,30 @@ package enum PredicateRuntimeTreeBuilder {
             guard labels == requiredLabels else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Malformed predicate node \(name): expected \(requiredLabels.sorted()), found \(labels.sorted())")
+            }
+            if name == "Value",
+                let capturedValue = children.first(where: { $0.label == "value" })?.value,
+                let range = try capturedPartialIntegerRange(capturedValue)
+            {
+                let boundPath = capturePathRewrites.reduce(path + [range.boundName]) { $1.apply(to: $0) }
+                captures[RuntimePredicatePath(labels: boundPath)] = range.stored
+                return .expression(
+                    name: range.name,
+                    children: [
+                        (
+                            range.boundName,
+                            .expression(
+                                name: "Value",
+                                children: [
+                                    (
+                                        "value",
+                                        .capture(
+                                            typeName: String(reflecting: type(of: range.value)),
+                                            description: String(describing: range.value))
+                                    )
+                                ])
+                        )
+                    ])
             }
             if name == "SequenceContainsWhere" || name == "SequenceAllSatisfy" {
                 guard let schema,

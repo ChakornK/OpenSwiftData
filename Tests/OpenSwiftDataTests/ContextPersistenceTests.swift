@@ -625,6 +625,38 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(2), .int(10)])
     }
 
+    func testExpressionEvaluateRebasesCapturedPartialRangeBound() throws {
+        guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
+            throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
+        }
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-partial-range"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let range: PartialRangeFrom<Int> = 3...
+        let expression: Foundation.Expression<PartialRangeFrom<Int>, Int, Bool> =
+            #Expression<PartialRangeFrom<Int>, Int, Bool> { range, value in range.contains(value) }
+        let input = PredicateExpressions.build_KeyPath(
+            root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \.count)
+        let evaluated = PredicateExpressions.build_evaluate(
+            PredicateExpressions.Value(expression), PredicateExpressions.Value(range), input)
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            evaluated, modelType: PersistenceTestModel.self, entity: entity)
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
+        XCTAssertEqual(compiled.sql, "(t0.ZCOUNT >= ?)")
+        XCTAssertEqual(compiled.arguments, [.int(3)])
+    }
+
     func testExpressionEvaluateSupportsMultipleInputBindings() throws {
         guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
             throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
@@ -1331,6 +1363,54 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(descriptor).map(\.count), [2, 6, 6])
         XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 3)
         XCTAssertEqual(try context.fetchCount(descriptor), 3)
+    }
+
+    @MainActor
+    func testCapturedPartialIntegerRangesMatchStoredAndPendingRows() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self,
+            configurations: .sqliteMemory("captured-partial-integer-ranges"))
+        let context = container.mainContext
+        for count in [1, 3, 7, 9] {
+            let model = PersistenceTestModel(title: "range-\(count)")
+            model.count = count
+            context.insert(model)
+        }
+        try context.save()
+
+        let pending = PersistenceTestModel(title: "range-pending")
+        pending.count = 5
+        context.insert(pending)
+
+        let lower: PartialRangeFrom<Int> = 3...
+        let through: PartialRangeThrough<Int> = ...7
+        let upTo: PartialRangeUpTo<Int> = ..<7
+        let fromDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate { lower.contains($0.count) },
+            sortBy: [SortDescriptor(\.count)])
+        let throughDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate { through.contains($0.count) },
+            sortBy: [SortDescriptor(\.count)])
+        let upToDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate { upTo.contains($0.count) },
+            sortBy: [SortDescriptor(\.count)])
+
+        XCTAssertEqual(try context.fetch(fromDescriptor).map(\.count), [3, 5, 7, 9])
+        XCTAssertEqual(try context.fetch(throughDescriptor).map(\.count), [1, 3, 5, 7])
+        XCTAssertEqual(try context.fetch(upToDescriptor).map(\.count), [1, 3, 5])
+        XCTAssertEqual(try context.fetchCount(upToDescriptor), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(upToDescriptor).count, 3)
+    }
+
+    @MainActor
+    func testCapturedPartialFloatingRangeFailsClosed() throws {
+        let container = try ModelContainer(
+            for: PredicateDoubleFixture.self,
+            configurations: .sqliteMemory("captured-partial-floating-range"))
+        let range: PartialRangeFrom<Double> = 3.5...
+        let descriptor = FetchDescriptor<PredicateDoubleFixture>(
+            predicate: #Predicate { range.contains($0.score) })
+        XCTAssertThrowsError(try container.mainContext.fetch(descriptor))
     }
 
     @MainActor

@@ -234,21 +234,39 @@ package enum PredicateIRBuilder {
                     throw SwiftDataError.unsupportedPredicate(
                         "Only integer range containment on direct attributes is supported")
                 }
-                guard rangeName == "ClosedRange" || rangeName == "Range" else {
-                    throw SwiftDataError.unsupportedPredicate("Only integer Range and ClosedRange are supported")
+                switch rangeName {
+                case "ClosedRange", "Range":
+                    let rangeFields = try validatedFields(
+                        rangeChildren, nodeName: rangeName, expected: ["lower", "upper"])
+                    let lower = try field("lower", from: rangeFields, attributeTypes: attributeTypes)
+                    let upper = try field("upper", from: rangeFields, attributeTypes: attributeTypes)
+                    guard case .value(.int) = lower, case .value(.int) = upper else {
+                        throw SwiftDataError.unsupportedPredicate("Range bounds must be typed integer captures")
+                    }
+                    return .conjunction(
+                        .comparison(.greaterThanOrEqual, element, lower),
+                        .comparison(
+                            rangeName == "ClosedRange" ? .lessThanOrEqual : .lessThan,
+                            element,
+                            upper))
+                case "PartialRangeFrom", "PartialRangeThrough", "PartialRangeUpTo":
+                    let expectedBound = rangeName == "PartialRangeFrom" ? "lowerBound" : "upperBound"
+                    let rangeFields = try validatedFields(
+                        rangeChildren, nodeName: rangeName, expected: [expectedBound])
+                    let bound = try field(expectedBound, from: rangeFields, attributeTypes: attributeTypes)
+                    guard case .value(.int) = bound else {
+                        throw SwiftDataError.unsupportedPredicate("Partial range bounds require integer captures.")
+                    }
+                    let operation: PredicateIR.ComparisonOperator =
+                        switch rangeName {
+                        case "PartialRangeFrom": .greaterThanOrEqual
+                        case "PartialRangeThrough": .lessThanOrEqual
+                        default: .lessThan
+                        }
+                    return .comparison(operation, element, bound)
+                default:
+                    throw SwiftDataError.unsupportedPredicate("Unsupported integer range kind '\(rangeName)'.")
                 }
-                let rangeFields = try validatedFields(rangeChildren, nodeName: rangeName, expected: ["lower", "upper"])
-                let lower = try field("lower", from: rangeFields, attributeTypes: attributeTypes)
-                let upper = try field("upper", from: rangeFields, attributeTypes: attributeTypes)
-                guard case .value(.int) = lower, case .value(.int) = upper else {
-                    throw SwiftDataError.unsupportedPredicate("Range bounds must be typed integer captures")
-                }
-                return .conjunction(
-                    .comparison(.greaterThanOrEqual, element, lower),
-                    .comparison(
-                        rangeName == "ClosedRange" ? .lessThanOrEqual : .lessThan,
-                        element,
-                        upper))
             case "SequenceContains":
                 let sequence = try field("sequence", from: fields, attributeTypes: attributeTypes)
                 let element = try field("element", from: fields, attributeTypes: attributeTypes)
@@ -861,6 +879,8 @@ package enum PredicateIRBuilder {
         case "OSDCodableCollectionCount": ["collection"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]
+        case "PartialRangeFrom": ["lowerBound"]
+        case "PartialRangeThrough", "PartialRangeUpTo": ["upperBound"]
         case "NilLiteral": []
         default: nil
         }

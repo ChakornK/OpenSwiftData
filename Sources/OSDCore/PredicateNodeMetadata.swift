@@ -59,6 +59,9 @@ public enum PredicateNodeMetadata {
             Entry(name: "RangeExpressionContains", requiredChildren: ["range", "element"]),
             Entry(name: "ClosedRange", requiredChildren: ["lower", "upper"]),
             Entry(name: "Range", requiredChildren: ["lower", "upper"]),
+            Entry(name: "PartialRangeFrom", requiredChildren: ["lowerBound"]),
+            Entry(name: "PartialRangeThrough", requiredChildren: ["upperBound"]),
+            Entry(name: "PartialRangeUpTo", requiredChildren: ["upperBound"]),
             Entry(name: "Conditional", requiredChildren: ["test", "trueBranch", "falseBranch"]),
         ].map { ($0.name, $0) })
 

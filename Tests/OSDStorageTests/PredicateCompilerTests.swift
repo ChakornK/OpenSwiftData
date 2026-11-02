@@ -224,6 +224,40 @@ final class PredicateCompilerTests: XCTestCase {
             try PredicateIRBuilder.build(qualified, attributeTypes: ["owner.amount": "Double"]))
     }
 
+    func testPartialIntegerRangeNodesLowerWithCorrectBoundSemantics() throws {
+        let cases: [(String, String, Int64, PredicateIR.ComparisonOperator)] = [
+            ("PartialRangeFrom", "lowerBound", 3, .greaterThanOrEqual),
+            ("PartialRangeThrough", "upperBound", 7, .lessThanOrEqual),
+            ("PartialRangeUpTo", "upperBound", 7, .lessThan),
+        ]
+        for (name, boundName, bound, operation) in cases {
+            let range = PredicateMirrorWalker.Node.expression(
+                name: name, children: [(boundName, .typedValue(.int(bound)))])
+            let node = PredicateMirrorWalker.Node.expression(
+                name: "RangeExpressionContains",
+                children: [
+                    ("range", range),
+                    ("element", .propertyReference("age")),
+                ])
+            XCTAssertEqual(
+                try PredicateIRBuilder.build(node, attributeTypes: ["age": "Int"]),
+                .comparison(operation, .keyPath(["age"]), .value(.int(bound))))
+        }
+    }
+
+    func testPartialIntegerRangeRejectsNonIntegerBound() throws {
+        let range = PredicateMirrorWalker.Node.expression(
+            name: "PartialRangeFrom",
+            children: [("lowerBound", .typedValue(.double(3.5)))])
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "RangeExpressionContains",
+            children: [
+                ("range", range),
+                ("element", .propertyReference("age")),
+            ])
+        XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["age": "Int"]))
+    }
+
     func testRealArithmeticSQLAndPlanUseMatchingExpression() throws {
         let ir = PredicateIR.comparison(
             .greaterThan,
@@ -542,23 +576,6 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["count": "Int"]))
     }
 
-    func testCapturedPartialRangeFailsClosedUntilRangeCaptureEncodingExists() {
-        let node = PredicateMirrorWalker.Node.expression(
-            name: "RangeExpressionContains",
-            children: [
-                (
-                    "range",
-                    .expression(
-                        name: "Value",
-                        children: [
-                            ("value", .capture(typeName: "Swift.PartialRangeFrom<Swift.Int>", description: "3..."))
-                        ])
-                ),
-                ("element", .propertyReference("count")),
-            ])
-
-        XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["count": "Int"]))
-    }
 }
 
 private struct CompilerRow {

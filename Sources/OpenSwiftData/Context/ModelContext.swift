@@ -7,6 +7,29 @@ package enum ModelContextAffinity: @unchecked Sendable {
     case unchecked
 }
 
+package struct ModelContextQueryExecutor: @unchecked Sendable {
+    private let affinity: ModelContextAffinity
+    private let token: ModelExecutorAffinityToken?
+
+    package init(affinity: ModelContextAffinity, token: ModelExecutorAffinityToken?) {
+        self.affinity = affinity
+        self.token = token
+    }
+
+    package func assertCurrent() {
+        if let token {
+            token.checkIsolated()
+            return
+        }
+        switch affinity {
+        case .mainActor:
+            MainActor.preconditionIsolated("Query refresh called outside the context's MainActor")
+        case .unchecked:
+            break
+        }
+    }
+}
+
 /// A synchronous unit of work for inserting, fetching, and saving persistent models.
 public final class ModelContext {
     /// The container that owns this context, when it was created by a container.
@@ -98,7 +121,21 @@ public final class ModelContext {
         storeHubSubscription = hub.subscribe(changeInbox)
     }
 
+    package func queryChangeSource() throws -> (
+        storeIdentifier: ObjectIdentifier, changes: ChangeInbox, executor: ModelContextQueryExecutor
+    ) {
+        assertAffinity()
+        guard let storeIdentifier = storeHubStoreIdentifier else {
+            throw SwiftDataError.unsupportedStore("Query change streams require a SQLite-backed context.")
+        }
+        return (
+            storeIdentifier, changeInbox,
+            ModelContextQueryExecutor(affinity: affinity, token: affinityToken)
+        )
+    }
+
     deinit {
+        changeInbox.finish()
         if let storeHubSubscription {
             storeHub?.unsubscribe(storeHubSubscription)
         }

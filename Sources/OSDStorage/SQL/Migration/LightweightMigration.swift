@@ -7,6 +7,7 @@ package enum LightweightMigration {
     package static let schemaDescriptionKey = "schema.definition.v1"
     package static let schemaVersionKey = "schema.version.v1"
     package static let entityIDsKey = "schema.entity-ids.v1"
+    package static let entityIDHighWatermarkKey = "schema.entity-id-next.v1"
     package static let pendingMigrationKey = "schema.migration.pending.v1"
 
     package static func storedEntityIDs(schema: Schema, connection: SQLConnection) throws -> [String: Int]? {
@@ -27,6 +28,21 @@ package enum LightweightMigration {
         try connection.execute(
             "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [.text(entityIDsKey), .blob(try EntityIDMapCodec.encode(identifiers, for: schema))])
+    }
+
+    package static func storedNextEntityIdentifier(connection: SQLConnection) throws -> Int? {
+        guard
+            let row = try connection.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(entityIDHighWatermarkKey)]
+            ).first
+        else { return nil }
+        guard case let .blob(bytes)? = row.first,
+            let text = String(bytes: bytes, encoding: .utf8),
+            let value = Int(text), value > 0, String(value) == text
+        else {
+            throw SwiftDataError.migrationUnsupported("Stored next entity identifier is invalid.")
+        }
+        return value
     }
 
     package static func storedSchemaVersion(connection: SQLConnection) throws -> RuntimeSchemaVersionState {
@@ -96,19 +112,56 @@ package enum LightweightMigration {
         let resolvedSourceEntityIDs = sourceEntityIDs ?? persistedSource.entityIDsByName
         let sourceSchema = try persistedSource.reconciled(with: resolvedSourceEntityIDs)
         try validatePhysicalSchema(sourceSchema, connection: connection)
-        let reconciledDestination = try destination.reconciled(with: resolvedSourceEntityIDs)
+        let physicalMaximumEntityID = try connection.rows("SELECT MAX(Z_ENT) FROM Z_PRIMARYKEY")
+            .first?.first
+        let physicalNextEntityID: Int
+        if case let .int(maximumEntityID)? = physicalMaximumEntityID {
+            guard let maximum = Int(exactly: maximumEntityID) else {
+                throw SwiftDataError.migrationUnsupported("Physical entity identifier exceeds the supported range.")
+            }
+            let (next, overflow) = maximum.addingReportingOverflow(1)
+            guard !overflow else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Physical entity identifiers leave no appendable identifier space.")
+            }
+            physicalNextEntityID = next
+        } else {
+            physicalNextEntityID = 1
+        }
+        let minimumNextEntityID = max(
+            try nextEntityIdentifier(after: resolvedSourceEntityIDs.values),
+            max(try storedNextEntityIdentifier(connection: connection) ?? 1, physicalNextEntityID))
+        let destinationEntityNames = Set(destination.entities.map(\.name))
+        let retainedEntityIDs = resolvedSourceEntityIDs.filter { destinationEntityNames.contains($0.key) }
+        let reconciledDestination = try destination.reconciled(
+            with: retainedEntityIDs, minimumNextIdentifier: minimumNextEntityID)
         if stored == destinationHash {
             if sourceEntityIDs == nil {
-                try writeSchemaMetadata(reconciledDestination, connection: connection)
+                try connection.execute("SAVEPOINT osd_schema_metadata_backfill")
+                do {
+                    try writeSchemaMetadata(
+                        reconciledDestination, minimumNextEntityID: minimumNextEntityID, connection: connection)
+                    try connection.execute("RELEASE SAVEPOINT osd_schema_metadata_backfill")
+                } catch {
+                    try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_metadata_backfill")
+                    try? connection.execute("RELEASE SAVEPOINT osd_schema_metadata_backfill")
+                    throw error
+                }
             } else {
                 try writeSchemaVersion(destination.version, connection: connection)
+                try writeEntityIDHighWatermark(
+                    max(
+                        minimumNextEntityID,
+                        try nextEntityIdentifier(after: reconciledDestination.entityIDsByName.values)),
+                    connection: connection)
             }
             return
         }
         try connection.execute("SAVEPOINT osd_schema_migration")
         do {
             try migrate(source: sourceSchema, destination: reconciledDestination, connection: connection)
-            try writeSchemaMetadata(reconciledDestination, connection: connection)
+            try writeSchemaMetadata(
+                reconciledDestination, minimumNextEntityID: minimumNextEntityID, connection: connection)
             try connection.execute("RELEASE SAVEPOINT osd_schema_migration")
         } catch {
             try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_migration")
@@ -388,13 +441,39 @@ package enum LightweightMigration {
         return try SchemaHash.decodeCanonicalDescription(description)
     }
 
-    private static func writeSchemaMetadata(_ schema: Schema, connection: SQLConnection) throws {
+    private static func writeSchemaMetadata(
+        _ schema: Schema,
+        minimumNextEntityID: Int? = nil,
+        connection: SQLConnection
+    ) throws {
         try writeHash(SchemaHash.hexDigest(schema), connection: connection)
         try connection.execute(
             "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [.text(schemaDescriptionKey), .blob(Array(SchemaHash.canonicalDescription(of: schema).utf8))])
         try writeEntityIDs(schema.entityIDsByName, schema: schema, connection: connection)
+        try writeEntityIDHighWatermark(
+            max(minimumNextEntityID ?? 1, try nextEntityIdentifier(after: schema.entityIDsByName.values)),
+            connection: connection)
         try writeSchemaVersion(schema.version, connection: connection)
+    }
+
+    private static func writeEntityIDHighWatermark(_ nextIdentifier: Int, connection: SQLConnection) throws {
+        guard nextIdentifier > 0 else {
+            throw SwiftDataError.migrationUnsupported("Next entity identifier must be positive.")
+        }
+        try connection.execute(
+            "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [.text(entityIDHighWatermarkKey), .blob(Array(String(nextIdentifier).utf8))])
+    }
+
+    private static func nextEntityIdentifier<S: Sequence>(after identifiers: S) throws -> Int
+    where S.Element == Int {
+        let maximumIdentifier = identifiers.max() ?? 0
+        let (nextIdentifier, overflow) = maximumIdentifier.addingReportingOverflow(1)
+        guard !overflow else {
+            throw SwiftDataError.migrationUnsupported("Stored entity identifiers leave no appendable identifier space.")
+        }
+        return nextIdentifier
     }
 
     private static func writeSchemaVersion(_ version: Schema.Version?, connection: SQLConnection) throws {
@@ -449,11 +528,15 @@ package enum LightweightMigration {
         }
         let sourceNames = Set(source.entities.map(\.name))
         let destinationNames = Set(destination.entities.map(\.name))
-        guard sourceNames.isSubset(of: destinationNames) else {
-            throw SwiftDataError.migrationUnsupported("Entity removals require a versioned row mapping.")
-        }
         if sourceNames != destinationNames {
-            try applyFlatIndependentRootAdditions(source: source, destination: destination, connection: connection)
+            if sourceNames.isSubset(of: destinationNames) {
+                try applyFlatIndependentRootAdditions(source: source, destination: destination, connection: connection)
+            } else if destinationNames.isSubset(of: sourceNames) {
+                try applyFlatIndependentRootRemovals(source: source, destination: destination, connection: connection)
+            } else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding and removing entities in one migration requires an explicit row mapping.")
+            }
             return
         }
         try validateDestinationIndexNames(destination)
@@ -542,6 +625,159 @@ package enum LightweightMigration {
             try connection.execute(
                 "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, 0, 0)",
                 [.int(plan.identifier), .text(plan.entity.name)])
+        }
+    }
+
+    private static func applyFlatIndependentRootRemovals(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws {
+        let removedNames = source.entities.filter { destination.entity(forName: $0.name) == nil }.map(\.name)
+        let sourceHasHierarchy = source.entities.contains { $0.superentityName != nil }
+        let destinationHasHierarchy = destination.entities.contains { $0.superentityName != nil }
+        let destinationEntityNames = Set(destination.entities.map(\.name))
+        let retainedIDs = source.entityIDsByName.filter { destinationEntityNames.contains($0.key) }
+        let removedEntity = removedNames.first.flatMap(source.entity(forName:))
+        guard removedNames.count == 1,
+            !sourceHasHierarchy,
+            !destinationHasHierarchy,
+            removedEntity?.relationships.isEmpty == true,
+            let removedName = removedNames.first,
+            source.entities.allSatisfy({ entity in
+                entity.name == removedName || entity.relationships.allSatisfy { $0.destination != removedName }
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal is limited to one unreferenced flat root without relationships or inheritance.")
+        }
+        guard retainedIDs == destination.entityIDsByName else {
+            throw SwiftDataError.migrationUnsupported("Entity removal cannot renumber retained entity identifiers.")
+        }
+        for retained in destination.entities {
+            guard let original = source.entity(forName: retained.name),
+                equivalentEntityMetadata(original, retained)
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Entity removal cannot be combined with changes to retained entities.")
+            }
+        }
+        try validateEntityRemovalSideEffects(source: source, destination: destination, connection: connection)
+        guard let removedName = removedNames.first,
+            let removedID = source.entityIDsByName[removedName],
+            let removedEntity = source.entity(forName: removedName),
+            removedEntity.superentityName == nil
+        else {
+            throw SwiftDataError.migrationUnsupported("Removed entity metadata is incomplete.")
+        }
+        let table = "Z\(removedName.uppercased())"
+        let tableExists = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE LIMIT 1",
+            [.text(table)])
+        guard !tableExists.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Physical table for removed entity \(removedName) is missing.")
+        }
+        try connection.execute("DROP TABLE \(table)")
+        try connection.execute("DELETE FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(removedID))])
+        guard connection.changesCount() == 1 else {
+            throw SwiftDataError.migrationUnsupported("Entity identifier row for \(removedName) is missing.")
+        }
+    }
+
+    private static func equivalentEntityMetadata(_ lhs: Schema.Entity, _ rhs: Schema.Entity) -> Bool {
+        lhs.name == rhs.name
+            && lhs.superentityName == rhs.superentityName
+            && lhs.attributes.count == rhs.attributes.count
+            && lhs.attributes.allSatisfy { rhs.attributes.contains($0) }
+            && lhs.relationships.count == rhs.relationships.count
+            && lhs.relationships.allSatisfy { rhs.relationships.contains($0) }
+            && lhs.indexes.count == rhs.indexes.count
+            && lhs.indexes.allSatisfy { rhs.indexes.contains($0) }
+    }
+
+    private static func validateEntityRemovalSideEffects(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws {
+        let removedEntities = source.entities.filter { destination.entity(forName: $0.name) == nil }
+        guard
+            removedEntities.allSatisfy({ entity in
+                !entity.attributes.contains(where: { $0.options.contains(.externalStorage) })
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal is unsupported for entities with external-storage attributes.")
+        }
+        let sideObjects = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1")
+        guard sideObjects.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Entity removal is unsupported when triggers or views exist.")
+        }
+        let actualIndexNames = Set(
+            try connection.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
+                .compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name.uppercased()
+                })
+        let expectedIndexes = try expectedIndexNames(source)
+        guard actualIndexNames == expectedIndexes else {
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal is unsupported when physical indexes differ from the source schema.")
+        }
+        let removedTableNames = Set(
+            source.entities.filter { destination.entity(forName: $0.name) == nil }
+                .map { "Z\($0.name.uppercased())" })
+        for row in try connection.rows("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'") {
+            guard row.count > 1, case let .text(name) = row[0], case let .text(table) = row[1],
+                removedTableNames.contains(table.uppercased()), !expectedIndexes.contains(name.uppercased())
+            else { continue }
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal is unsupported when untracked index \(name) exists on \(table).")
+        }
+        let tables = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        let generatedTables = try SchemaBuilder.build(source).statements.compactMap { statement -> String? in
+            guard statement.hasPrefix("CREATE TABLE "),
+                let tableName = statement.split(separator: " ").dropFirst(2).first
+            else { return nil }
+            return String(tableName).trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+        }
+        let physicalTables = Set(
+            tables.compactMap { row -> String? in
+                guard case let .text(name)? = row.first else { return nil }
+                return name.uppercased()
+            })
+        guard generatedTables.allSatisfy({ physicalTables.contains($0.uppercased()) }) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal requires every source table and relationship join table to exist.")
+        }
+        let expectedTables = Set(
+            generatedTables.map { $0.uppercased() }
+                + ["_OSD_HISTORY_TRANSACTIONS", "_OSD_HISTORY_CHANGES"])
+        let destinationTables = Set(
+            try SchemaBuilder.build(destination).statements.compactMap { statement -> String? in
+                guard statement.hasPrefix("CREATE TABLE "),
+                    let tableName = statement.split(separator: " ").dropFirst(2).first
+                else { return nil }
+                return String(tableName).trimmingCharacters(in: CharacterSet(charactersIn: ";")).uppercased()
+            })
+        let sourceJoinTables = Set(
+            generatedTables.map({ $0.uppercased() }).filter { $0.hasPrefix("Z_") })
+        guard sourceJoinTables.isSubset(of: destinationTables) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Entity removal cannot change relationship join-table layouts.")
+        }
+        for row in tables {
+            guard case let .text(name)? = row.first else { continue }
+            guard expectedTables.contains(name.uppercased()) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Entity removal is unsupported when unexpected table \(name) exists.")
+            }
+            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            guard try connection.rows("PRAGMA foreign_key_list(\(quotedName))").isEmpty else {
+                throw SwiftDataError.migrationUnsupported("Entity removal is unsupported when foreign keys exist.")
+            }
         }
     }
 
@@ -1300,8 +1536,8 @@ package enum LightweightMigration {
                 return old == oldAttribute || old == mapping.destination
             }),
             source.name == destination.name,
-            sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
+            sourceEntityIDs == destinationEntityIDs,
             sourceEntities.allSatisfy({ sourceEntity in
                 guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
                     return false

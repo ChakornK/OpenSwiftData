@@ -406,26 +406,28 @@ public struct Schema: Sendable {
         persistedEntityIDs = entityIDs
     }
 
-    package func reconciled(with storedEntityIDs: [String: Int]) throws -> Schema {
-        guard !storedEntityIDs.isEmpty else { return self }
+    package func reconciled(
+        with storedEntityIDs: [String: Int],
+        minimumNextIdentifier: Int? = nil
+    ) throws -> Schema {
+        guard minimumNextIdentifier.map({ $0 > 0 }) ?? true else {
+            throw SwiftDataError.migrationUnsupported("Next entity identifier must be positive.")
+        }
         try Self.validateEntityIdentifiers(storedEntityIDs, entities: entities, requiresCompleteMap: false)
 
         var resolved = storedEntityIDs
         let orderedEntities = Self.rootFirstEntities(entities)
         let newEntities = orderedEntities.filter { resolved[$0.name] == nil }
         var nextIdentifier: Int?
+        let (firstUnusedIdentifier, overflow) = (storedEntityIDs.values.max() ?? 0).addingReportingOverflow(1)
+        guard !overflow else {
+            throw SwiftDataError.migrationUnsupported("Stored entity identifiers leave no appendable identifier space.")
+        }
+        nextIdentifier = max(firstUnusedIdentifier, minimumNextIdentifier ?? firstUnusedIdentifier)
         for (index, entity) in newEntities.enumerated() {
             if let parentName = entity.superentityName, resolved[parentName] == nil {
                 throw SwiftDataError.migrationUnsupported(
                     "New entity '\(entity.name)' has no stored or reconciled parent identifier.")
-            }
-            if nextIdentifier == nil {
-                let (firstIdentifier, overflow) = (storedEntityIDs.values.max() ?? 0).addingReportingOverflow(1)
-                guard !overflow else {
-                    throw SwiftDataError.migrationUnsupported(
-                        "Stored entity identifiers leave no appendable identifier space.")
-                }
-                nextIdentifier = firstIdentifier
             }
             guard let identifier = nextIdentifier else {
                 throw SwiftDataError.migrationUnsupported(

@@ -346,10 +346,14 @@ public enum OpenSwiftDataSQLite {
         let driver = try LightweightMigration.openStore(
             location: driverLocation, schema: schema, externalColumns: externalDataColumns)
         do {
-            let entityIDs = try driver.read { connection in
-                try LightweightMigration.storedEntityIDs(schema: schema, connection: connection)
+            let (entityIDs, minimumNextIdentifier) = try driver.read { connection in
+                (
+                    try LightweightMigration.storedEntityIDs(schema: schema, connection: connection),
+                    try LightweightMigration.storedNextEntityIdentifier(connection: connection)
+                )
             }
-            let runtimeSchema = try entityIDs.map { try schema.reconciled(with: $0) } ?? schema
+            let runtimeSchema = try schema.reconciled(
+                with: entityIDs ?? [:], minimumNextIdentifier: minimumNextIdentifier)
             return SQLiteRuntimeStore(
                 driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema)
         } catch {

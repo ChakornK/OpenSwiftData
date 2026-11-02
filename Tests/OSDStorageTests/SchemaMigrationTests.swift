@@ -686,6 +686,353 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testRelationshipBearingEntityRemovalFailsWithoutChangingStore() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZFAVORITE) VALUES (1, 1, 'owner', 1)")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 1, 'target')")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT ZNAME, ZFAVORITE FROM ZOWNER") },
+            [[.text("owner"), .int(1)]])
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT ZNAME FROM ZTARGET") }, [[.text("target")]])
+        try reopened.close()
+    }
+
+    func testEntityRemovalRejectsExternalStorageAndOrphanTables() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceWithExternalStorage = Schema([
+            Schema.Entity(
+                name: "Removed",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+            Schema.Entity(name: "Retained"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Retained")])
+        let externalLocation = StoreLocation.file(directory.appendingPathComponent("external.sqlite"))
+        let externalStore = try LightweightMigration.openStore(
+            location: externalLocation, schema: sourceWithExternalStorage)
+        try externalStore.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: externalLocation, schema: destination)) {
+            error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let externalReopened = try LightweightMigration.openStore(
+            location: externalLocation, schema: sourceWithExternalStorage)
+        XCTAssertTrue(
+            try externalReopened.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZREMOVED'").count == 1
+            })
+        try externalReopened.close()
+
+        let plainSource = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])
+        let orphanLocation = StoreLocation.file(directory.appendingPathComponent("orphan.sqlite"))
+        let orphanStore = try LightweightMigration.openStore(location: orphanLocation, schema: plainSource)
+        try orphanStore.write { connection in
+            try connection.execute("CREATE TABLE ZORPHAN_JOIN (Z_A INTEGER, Z_B INTEGER)")
+        }
+        try orphanStore.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: orphanLocation, schema: destination)) {
+            error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let orphanReopened = try LightweightMigration.openStore(location: orphanLocation, schema: plainSource)
+        XCTAssertTrue(
+            try orphanReopened.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZORPHAN_JOIN'").count == 1
+            })
+        try orphanReopened.close()
+    }
+
+    func testEntityRemovalRejectsUntrackedIndexes() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-untracked-index"))
+        let source = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])
+        let destination = try Schema(
+            [Schema.Entity(name: "Retained")],
+            entityIDs: ["Retained": try XCTUnwrap(source.entityIDsByName["Retained"])])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE INDEX USER_REMOVAL_INDEX ON ZREMOVED (Z_PK)")
+            XCTAssertThrowsError(
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected migrationUnsupported, got \(error)")
+                }
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?", [.text("USER_REMOVAL_INDEX")])
+            },
+            [[.text("USER_REMOVAL_INDEX")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZREMOVED'")
+            },
+            [[.text("ZREMOVED")]])
+        try driver.close()
+    }
+
+    func testEntityRemovalPreservesRetainedRelationshipJoinTables() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
+                ]),
+            Schema.Entity(name: "RetainedRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Tag",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                ]),
+            Schema.Entity(name: "ZRemovedRoot"),
+        ])
+        let destination = Schema(source.entities.filter { $0.name != "ZRemovedRoot" })
+        let built = try SchemaBuilder.build(source)
+        let joinStatement = try XCTUnwrap(
+            built.statements.first { statement in
+                let components = statement.split(separator: " ")
+                return components.count > 2 && components[0] == "CREATE" && components[1] == "TABLE"
+                    && components[2].hasPrefix("Z_") && components[2] != "Z_PRIMARYKEY"
+            })
+        let joinTable = try XCTUnwrap(joinStatement.split(separator: " ").dropFirst(2).first).description
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["Owner"]))), .int(1),
+                ])
+            try connection.execute(
+                "INSERT INTO ZTAG (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["Tag"]))), .int(1),
+                ])
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+            try connection.execute(
+                "INSERT INTO ZZREMOVEDROOT (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["ZRemovedRoot"]))), .int(1),
+                ])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable)") }, [[.int(1), .int(1)]])
+        try migrated.close()
+    }
+
+    func testEntityRemovalRejectsJoinTableOwnedByRemovedInverseDeclaration() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(
+                name: "Tag",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                ]),
+            Schema.Entity(name: "ZRemovedRoot"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let joinStatement = try XCTUnwrap(
+            SchemaBuilder.build(source).statements.first(where: { statement in
+                let components = statement.split(separator: " ")
+                return components.count > 2 && components[0] == "CREATE" && components[1] == "TABLE"
+                    && components[2].hasPrefix("Z_") && components[2] != "Z_PRIMARYKEY"
+            }))
+        let joinTable = try XCTUnwrap(joinStatement.split(separator: " ").dropFirst(2).first).description
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["Owner"]))), .int(1),
+                ])
+            try connection.execute(
+                "INSERT INTO ZTAG (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["Tag"]))), .int(1),
+                ])
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+            try connection.execute(
+                "INSERT INTO ZZREMOVEDROOT (Z_ENT, Z_OPT) VALUES (?, ?)",
+                [
+                    .int(Int64(try XCTUnwrap(source.entityIDsByName["ZRemovedRoot"]))), .int(1),
+                ])
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable)") }, [[.int(1), .int(1)]])
+        try reopened.close()
+    }
+
+    func testEntityRemovalRejectsMissingRetainedJoinTable() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "missing-retained-join-table"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
+                ]),
+            Schema.Entity(name: "RetainedRoot"),
+            Schema.Entity(
+                name: "Tag",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                ]),
+            Schema.Entity(name: "ZRemovedRoot"),
+        ])
+        let destinationNames = Set(source.entities.map(\.name).filter { $0 != "ZRemovedRoot" })
+        let destinationEntities = source.entities.filter { destinationNames.contains($0.name) }
+        let destinationIDs = source.entityIDsByName.filter { destinationNames.contains($0.key) }
+        let destination = try Schema(destinationEntities, entityIDs: destinationIDs)
+        let joinStatement = try XCTUnwrap(
+            SchemaBuilder.build(source).statements.first(where: { statement in
+                let components = statement.split(separator: " ")
+                return components.count > 2 && components[0] == "CREATE" && components[1] == "TABLE"
+                    && components[2].hasPrefix("Z_") && components[2] != "Z_PRIMARYKEY"
+            }))
+        let joinTable = try XCTUnwrap(joinStatement.split(separator: " ").dropFirst(2).first).description
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (?, 1)",
+                    [
+                        .int(Int64(try XCTUnwrap(source.entityIDsByName["Owner"])))
+                    ])
+                try connection.execute(
+                    "INSERT INTO ZTAG (Z_ENT, Z_OPT) VALUES (?, 1)",
+                    [
+                        .int(Int64(try XCTUnwrap(source.entityIDsByName["Tag"])))
+                    ])
+                try connection.execute(
+                    "INSERT INTO ZZREMOVEDROOT (Z_ENT, Z_OPT) VALUES (?, 1)",
+                    [
+                        .int(Int64(try XCTUnwrap(source.entityIDsByName["ZRemovedRoot"])))
+                    ])
+                try connection.execute("DROP TABLE \(joinTable)")
+                try LightweightMigration.migrate(
+                    source: source, destination: destination, connection: connection)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZZREMOVEDROOT'").count == 1
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY WHERE Z_NAME = 'ZRemovedRoot'") },
+            [[.int(4), .text("ZRemovedRoot")]])
+        try driver.close()
+    }
+
+    func testEntityIDMetadataBackfillRollsBackAsOneUnit() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let schema = Schema([Schema.Entity(name: "Record")])
+        let initial = try LightweightMigration.openStore(location: location, schema: schema)
+        let originalHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.write { connection in
+            try connection.execute("DELETE FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDsKey)])
+            try connection.execute(
+                "CREATE TRIGGER fail_entity_id_allocator BEFORE INSERT ON _osd_meta "
+                    + "WHEN NEW.key = '\(LightweightMigration.entityIDHighWatermarkKey)' "
+                    + "BEGIN SELECT RAISE(ABORT, 'allocator backfill failure'); END")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: schema))
+        let inspected = try GRDBSQLiteDriver(location: location)
+        XCTAssertNil(
+            try inspected.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDsKey)]
+                ).first
+            })
+        XCTAssertEqual(
+            try inspected.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?
+                .first
+            },
+            originalHash)
+        try inspected.write { connection in
+            try connection.execute("DROP TRIGGER fail_entity_id_allocator")
+        }
+        try inspected.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: schema)
+        XCTAssertNotNil(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDsKey)]
+                ).first
+            })
+        XCTAssertEqual(try reopened.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 2)
+        try reopened.close()
+    }
+
     func testOptionalToRequiredUniqueDefaultCollisionRollsBackAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2344,6 +2691,84 @@ final class SchemaMigrationTests: XCTestCase {
         }
         XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
         try driver.close()
+    }
+
+    func testIndependentRootEntityRemovalPreservesRetainedRowsAndIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "ZRemoved",
+                attributes: [Schema.Attribute(name: "value", type: "String")],
+                indexes: [Schema.Index(properties: ["value"])]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let sourceRetainedID = try XCTUnwrap(source.entityIDsByName["Retained"])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZZREMOVED (Z_ENT, Z_OPT, ZVALUE) VALUES (2, 1, 'discarded')")
+            try connection.execute(
+                "INSERT INTO ZRETAINED (Z_ENT, Z_OPT, ZNAME) VALUES (?, ?, ?)",
+                [
+                    .int(Int64(sourceRetainedID)), .int(5), .text("preserved"),
+                ])
+            try connection.execute(
+                "DELETE FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDHighWatermarkKey)])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZRETAINED") },
+            [[.int(1), .int(Int64(sourceRetainedID)), .int(5), .text("preserved")]])
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZZREMOVED'").isEmpty
+            })
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY") },
+            [[.int(Int64(sourceRetainedID)), .text("Retained")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, ZNAME FROM ZRETAINED") },
+            [[.int(1), .text("preserved")]])
+        try reopened.close()
+
+        let addedSchema = Schema([
+            Schema.Entity(name: "Newcomer"),
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let added = try LightweightMigration.openStore(location: location, schema: addedSchema)
+        XCTAssertEqual(
+            try added.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.int(1), .text("Retained")], [.int(3), .text("Newcomer")]])
+        XCTAssertEqual(try added.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 4)
+        try added.close()
+
+        let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty-schema.sqlite"))
+        let onlyEntity = Schema([
+            Schema.Entity(name: "Only", attributes: [Schema.Attribute(name: "value", type: "String")])
+        ])
+        let emptySchema = Schema([])
+        let onlyInitial = try LightweightMigration.openStore(location: emptyLocation, schema: onlyEntity)
+        try onlyInitial.write { connection in
+            try connection.execute("INSERT INTO ZONLY (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 1, 'removed')")
+        }
+        try onlyInitial.close()
+        let emptyStore = try LightweightMigration.openStore(location: emptyLocation, schema: emptySchema)
+        XCTAssertTrue(
+            try emptyStore.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZONLY'").isEmpty
+            })
+        XCTAssertTrue(try emptyStore.read { try $0.rows("SELECT Z_ENT FROM Z_PRIMARYKEY").isEmpty })
+        try emptyStore.close()
     }
 
     func testRenamedUniqueAttributeReconcilesGeneratedIndexName() throws {

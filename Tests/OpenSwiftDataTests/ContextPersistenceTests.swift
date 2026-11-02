@@ -1318,6 +1318,39 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testOptionalURLAndUUIDPredicatesMatchStoredAndPendingRows() throws {
+        let container = try ModelContainer(
+            for: QualifiedOptionalScalarFixture.self,
+            configurations: .sqliteMemory("optional-url-uuid-predicates"))
+        let context = container.mainContext
+        let identifier = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let url = try XCTUnwrap(URL(string: "https://example.com/item"))
+        let missing = QualifiedOptionalScalarFixture(id: nil, link: nil, amount: nil)
+        let match = QualifiedOptionalScalarFixture(id: identifier, link: url, amount: nil)
+        let other = QualifiedOptionalScalarFixture(
+            id: try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002")),
+            link: try XCTUnwrap(URL(string: "https://example.com/other")), amount: nil)
+        context.insert(missing)
+        context.insert(match)
+        context.insert(other)
+        try context.save()
+        context.insert(QualifiedOptionalScalarFixture(id: identifier, link: url, amount: nil))
+
+        let matchingID = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.id == identifier })
+        let differentID = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.id != identifier })
+        let matchingURL = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.link == url })
+        let differentURL = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            predicate: #Predicate<QualifiedOptionalScalarFixture> { $0.link != url })
+        XCTAssertEqual(try context.fetch(matchingID).count, 2)
+        XCTAssertEqual(try context.fetch(differentID).count, 2)
+        XCTAssertEqual(try context.fetch(matchingURL).count, 2)
+        XCTAssertEqual(try context.fetch(differentURL).count, 2)
+    }
+
+    @MainActor
     func testOptionalRelationshipScalarComparisonTreatsMissingDestinationAsNil() throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,

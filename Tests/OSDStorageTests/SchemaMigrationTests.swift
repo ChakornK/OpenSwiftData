@@ -2316,6 +2316,36 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testUniqueAttributeRemovalDropsConstraintAndPreservesRows() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-unique-removal"))
+        let unique = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "email", type: "String")])
+        ])
+        try bootstrap(unique, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("same")])
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("other")])
+            try LightweightMigration.migrate(source: unique, destination: destination, connection: connection)
+        }
+        let remainingIndexes = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+        }
+        XCTAssertFalse(remainingIndexes.contains([.text("ZRECORD_ZEMAIL_UNIQUE_INDEX")]))
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, ZEMAIL FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .text("same")], [.int(2), .text("other")]])
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 1, ?)", [.text("same")])
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        try driver.close()
+    }
+
     func testRenamedUniqueAttributeReconcilesGeneratedIndexName() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-unique-index"))
         let source = Schema([

@@ -453,6 +453,59 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testOptionalToRequiredBackfillUsesTypedScalarDefaults() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cases: [(String, String, String, StoredValue)] = [
+            ("name", "String", "\"O'Neil\"", .text("O'Neil")),
+            ("enabled", "Bool", "true", .int(1)),
+            ("ratio", "Double", "1.25", .double(1.25)),
+            ("amount", "Decimal", "12.5", .text("12.5")),
+        ]
+        for (name, type, defaultValue, expected) in cases {
+            let source = Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: name, type: type, isOptional: true)])
+            ])
+            let destination = Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: name, type: type, defaultValue: defaultValue)])
+            ])
+            let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            try initial.write { connection in
+                let column = "Z\(name.uppercased())"
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, \(column)) VALUES (1, 2, NULL)")
+            }
+            try initial.close()
+
+            let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+            let column = "Z\(name.uppercased())"
+            XCTAssertEqual(try migrated.read { try $0.rows("SELECT \(column) FROM ZRECORD") }, [[expected]])
+            try migrated.close()
+        }
+
+        let emptySource = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)])
+        ])
+        let emptyDestination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "String", defaultValue: "\"value\"")])
+        ])
+        let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty.sqlite"))
+        let emptyInitial = try LightweightMigration.openStore(location: emptyLocation, schema: emptySource)
+        try emptyInitial.close()
+        let emptyMigrated = try LightweightMigration.openStore(location: emptyLocation, schema: emptyDestination)
+        XCTAssertEqual(try emptyMigrated.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(0)]])
+        try emptyMigrated.close()
+    }
+
     func testOptionalToRequiredUniqueDefaultCollisionRollsBackAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

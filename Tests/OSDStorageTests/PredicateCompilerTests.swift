@@ -284,6 +284,17 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.text("value")])
     }
 
+    func testStringContainsAcceptsOptionalStringAndRejectsOptionalInteger() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "CollectionContainsCollection",
+            children: [
+                ("base", .propertyReference("optionalValue")),
+                ("other", .typedValue(.text("term"))),
+            ])
+        XCTAssertNoThrow(try PredicateIRBuilder.build(node, attributeTypes: ["optionalValue": "String?"]))
+        XCTAssertThrowsError(try PredicateIRBuilder.build(node, attributeTypes: ["optionalValue": "Int?"]))
+    }
+
     func testCollectionPredicateAcceptsQualifiedScalarAndRejectsBlobOrCodableTypes() throws {
         func node(for property: String) -> PredicateMirrorWalker.Node {
             .expression(

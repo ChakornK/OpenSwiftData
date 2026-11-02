@@ -414,6 +414,51 @@ package enum PredicateRuntimeTreeBuilder {
                 let wrappedNode = try visit(
                     wrapped, path: path + ["wrapped"], bindings: bindings,
                     capturePathRewrites: capturePathRewrites)
+                if case let .property(reference) = wrappedNode,
+                    let propertyName = reference.name.split(separator: ".").last.map(String.init),
+                    activeEntity.attributes.contains(where: { $0.name == propertyName }),
+                    let transformMetadata = PredicateNodeMetadata.entry(
+                        for: String(reflecting: type(of: transform)))
+                {
+                    let operation: (nodeName: String, receiverLabel: String, operandLabel: String)? =
+                        switch transformMetadata.name {
+                        case "CollectionContainsCollection": ("CollectionContainsCollection", "base", "other")
+                        case "SequenceStartsWith": ("SequenceStartsWith", "base", "prefix")
+                        default: nil
+                        }
+                    if let operation {
+                        let transformChildren = Array(Mirror(reflecting: transform).children)
+                        let transformLabels = transformChildren.compactMap(\.label)
+                        guard transformLabels.count == transformChildren.count,
+                            Set(transformLabels).count == transformLabels.count,
+                            Set(transformLabels) == transformMetadata.requiredChildren
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Malformed optional String operation \(operation.nodeName).")
+                        }
+                        let transformFields = Dictionary(
+                            uniqueKeysWithValues: zip(transformLabels, transformChildren.map(\.value)))
+                        guard let base = transformFields[operation.receiverLabel],
+                            variableIdentifier(base) == variableID,
+                            let operand = transformFields[operation.operandLabel]
+                        else {
+                            throw SwiftDataError.unsupportedPredicate(
+                                "Optional String operations must use the bound value as the receiver.")
+                        }
+                        let captureRewrite = CapturePathRewrite(
+                            sourcePrefix: path + ["transform", operation.operandLabel],
+                            destinationPrefix: path + [operation.operandLabel])
+                        let operandNode = try visit(
+                            operand, path: path + [operation.operandLabel], bindings: bindings,
+                            capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                        return .expression(
+                            name: operation.nodeName,
+                            children: [
+                                (operation.receiverLabel, wrappedNode),
+                                (operation.operandLabel, operandNode),
+                            ])
+                    }
+                }
                 if codableCollectionName(wrappedNode, entity: activeEntity) != nil {
                     var scopedBindings = bindings
                     scopedBindings[variableID] = ExpressionBinding(

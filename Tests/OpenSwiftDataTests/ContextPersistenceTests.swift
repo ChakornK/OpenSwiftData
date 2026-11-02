@@ -1122,6 +1122,68 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testOptionalStringContainsCoalescesNilForStoredAndPendingRows() throws {
+        let container = try ModelContainer(
+            for: ReverseOrderPersistenceFixture.self,
+            configurations: .sqliteMemory("optional-string-contains"))
+        let context = container.mainContext
+        context.insert(
+            ReverseOrderPersistenceFixture(zebra: "a", alpha: 1, middle: "m", optionalValue: nil))
+        context.insert(
+            ReverseOrderPersistenceFixture(zebra: "b", alpha: 2, middle: "m", optionalValue: "match"))
+        context.insert(
+            ReverseOrderPersistenceFixture(zebra: "c", alpha: 3, middle: "m", optionalValue: "other"))
+        try context.save()
+        context.insert(
+            ReverseOrderPersistenceFixture(zebra: "d", alpha: 4, middle: "m", optionalValue: "pending match"))
+        let term = "match"
+        let predicate = #Predicate<ReverseOrderPersistenceFixture> {
+            $0.optionalValue?.contains(term) ?? false
+        }
+        let descriptor = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.alpha)])
+
+        XCTAssertEqual(try context.fetch(descriptor).map(\.alpha), [2, 4])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 2)
+
+        let includeNil = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+                $0.optionalValue?.contains(term) ?? true
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(includeNil).map(\.alpha), [1, 2, 4])
+        XCTAssertEqual(try context.fetchCount(includeNil), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(includeNil).count, 3)
+
+        let compareToTrue = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+                $0.optionalValue?.contains(term) == true
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(compareToTrue).map(\.alpha), [2, 4])
+        XCTAssertEqual(try context.fetchCount(compareToTrue), 2)
+
+        let negated = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+                !($0.optionalValue?.contains(term) ?? false)
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(negated).map(\.alpha), [1, 3])
+        XCTAssertEqual(try context.fetchIdentifiers(negated).count, 2)
+
+        let prefix = "pending"
+        let startsWith = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            predicate: #Predicate<ReverseOrderPersistenceFixture> {
+                $0.optionalValue?.starts(with: prefix) ?? false
+            },
+            sortBy: [SortDescriptor(\.alpha)])
+        XCTAssertEqual(try context.fetch(startsWith).map(\.alpha), [4])
+        XCTAssertEqual(try context.fetchCount(startsWith), 1)
+    }
+
+    @MainActor
     func testConditionalPredicateMatchesStoredAndPendingRows() throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("conditional-predicate"))

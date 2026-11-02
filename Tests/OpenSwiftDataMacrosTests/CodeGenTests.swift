@@ -581,6 +581,18 @@ final class CodeGenTests: XCTestCase {
             ))
         let customType = try XCTUnwrap(CodeGen.propertyType("customDecimal", in: declaration))
         XCTAssertFalse(CodeGen.isSupportedScalarType(customType))
+        let foundationCollection = try XCTUnwrap(
+            CodeGen.propertyType(
+                "decimalValues",
+                in: try parseClass(
+                    "final class FoundationValues { var decimalValues: [Foundation.Decimal] }")))
+        let customCollection = try XCTUnwrap(
+            CodeGen.propertyType(
+                "decimalValues",
+                in: try parseClass(
+                    "final class CustomValues { var decimalValues: [Custom.Decimal] }")))
+        XCTAssertTrue(CodeGen.isCodableScalarCollectionType(foundationCollection))
+        XCTAssertFalse(CodeGen.isCodableScalarCollectionType(customCollection))
     }
 
     func testAccessorAndPeerSourcesMatchVariantAExactly() {

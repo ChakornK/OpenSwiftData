@@ -333,6 +333,17 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(requiredIR, .comparison(.lessThan, .keyPath(["optionalCount"]), .value(.int(5))))
     }
 
+    func testOptionalDecimalOrderingKeepsOneBoundOperand() throws {
+        let ir = PredicateIR.optionalComparison(
+            .lessThan,
+            .keyPath(["amount"]),
+            .value(.text("1.5")),
+            decimal: true)
+        let compiled = try SQLCompiler.compile(ir, entity: "Item")
+        XCTAssertEqual(compiled.sql, "COALESCE((t0.ZAMOUNT COLLATE OSD_DECIMAL < ?), 0)")
+        XCTAssertEqual(compiled.arguments, [.text("1.5")])
+    }
+
     func testCollectionPredicateAcceptsQualifiedScalarAndRejectsBlobOrCodableTypes() throws {
         func node(for property: String) -> PredicateMirrorWalker.Node {
             .expression(

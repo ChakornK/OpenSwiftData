@@ -768,12 +768,7 @@ enum CodeGen {
         let isNominal =
             scalarType.as(IdentifierTypeSyntax.self)?.genericArgumentClause == nil
             || scalarType.is(MemberTypeSyntax.self)
-        let name = scalarType.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
-        return isNominal
-            && [
-                "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
-                "UInt32", "UInt64", "Float", "Double", "UUID", "Date", "URL", "Decimal", "Data",
-            ].contains(name)
+        return isNominal && isSupportedScalarType(scalarType)
     }
 
     static func propertyType(_ name: String, in declaration: ClassDeclSyntax) -> TypeSyntax? {

@@ -313,11 +313,6 @@ package enum SQLCompiler {
                 decimal
                 ? "(\(lhsSQL) COLLATE OSD_DECIMAL \(comparisonSymbol(op)) \(rhsSQL))"
                 : "(\(lhsSQL) \(comparisonSymbol(op)) \(rhsSQL))"
-            if decimal {
-                let ordering =
-                    "(\(lhsSQL) IS NOT NULL AND \(rhsSQL) IS NOT NULL AND \(expression))"
-                return ordering
-            }
             return "COALESCE(\(expression), 0)"
         case let .arithmetic(op, lhs, rhs):
             let function =

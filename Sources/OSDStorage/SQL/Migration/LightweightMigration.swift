@@ -1441,13 +1441,17 @@ package enum LightweightMigration {
                     let columns = index.properties.map { "Z\($0.uppercased())" }
                     return "Z\(source.name.uppercased())_\(columns.joined(separator: "_"))_INDEX"
                 })
+            let generatedUniqueIndexName =
+                "Z\(source.name.uppercased())_Z\(removedAttribute.name.uppercased())_UNIQUE_INDEX"
+            let removableIndexNames = removedIndexNames.union(
+                removedAttribute.options.contains(.unique) ? [generatedUniqueIndexName] : [])
             let removedIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities)).filter {
-                removedIndexNames.contains($0.name.uppercased())
+                removableIndexNames.contains($0.name.uppercased())
             }
             try validateIndexesForAttributeRemoval(
                 table: table,
                 column: column,
-                removableIndexNames: removedIndexNames,
+                removableIndexNames: removableIndexNames,
                 knownIndexNames: Set(
                     indexDefinitions(for: source, schema: Schema(sourceEntities)).map {
                         $0.name.uppercased()
@@ -1694,10 +1698,20 @@ package enum LightweightMigration {
             let removedAttribute = removed.first,
             let remainingSourceEntity = destinationEntities.first(where: { $0.name == destination.name }),
             source.indexes.filter({
-                !(!$0.isUnique && $0.properties.contains(removedAttribute.name))
+                let ordinaryIndexRemoval = !$0.isUnique && $0.properties.contains(removedAttribute.name)
+                let duplicateAttributeUniqueIndex =
+                    $0.isUnique && $0.properties == [removedAttribute.name]
+                    && removedAttribute.options.contains(.unique)
+                return !ordinaryIndexRemoval && !duplicateAttributeUniqueIndex
             }) == remainingSourceEntity.indexes,
-            removedAttribute.options.isDisjoint(with: [.unique, .codable, .flattened, .externalStorage]),
+            !removedAttribute.options.contains(.codable),
+            !removedAttribute.options.contains(.flattened),
+            !removedAttribute.options.contains(.externalStorage),
             !removedAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            !source.indexes.contains(where: { index in
+                guard index.isUnique, index.properties.contains(removedAttribute.name) else { return false }
+                return !(index.properties == [removedAttribute.name] && removedAttribute.options.contains(.unique))
+            }),
             !destination.attributes.contains(where: { $0.originalName == removedAttribute.name }),
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ mapping in
@@ -1719,7 +1733,11 @@ package enum LightweightMigration {
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
                         && sourceEntity.indexes.filter({
-                            !(!$0.isUnique && $0.properties.contains(removedAttribute.name))
+                            let ordinaryIndexRemoval = !$0.isUnique && $0.properties.contains(removedAttribute.name)
+                            let duplicateAttributeUniqueIndex =
+                                $0.isUnique && $0.properties == [removedAttribute.name]
+                                && removedAttribute.options.contains(.unique)
+                            return !ordinaryIndexRemoval && !duplicateAttributeUniqueIndex
                         }) == destinationEntity.indexes
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName

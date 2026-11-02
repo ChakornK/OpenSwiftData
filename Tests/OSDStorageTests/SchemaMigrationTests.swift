@@ -765,6 +765,52 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testAttributeUniqueConstraintRemovalPreservesRowsAndAllowsDuplicates() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "email", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["email"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "label", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL, ZLABEL) VALUES (1, 4, 'one', 'a')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL, ZLABEL) VALUES (1, 5, 'two', 'b')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertFalse(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZEMAIL") }))
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZEMAIL_UNIQUE_INDEX'"
+                )
+                .isEmpty
+            })
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLABEL FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(4), .text("a")], [.int(2), .int(5), .text("b")]])
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLABEL) VALUES (1, 6, 'duplicate email no longer constrained')")
+        }
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        try migrated.close()
+    }
+
     func testCompositeUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "composite-unique-attribute-removal"))
         let source = Schema([

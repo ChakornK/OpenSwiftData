@@ -1185,6 +1185,28 @@ package enum LightweightMigration {
                 ))
             return
         }
+        if let removedAttribute = try removableScalarAttribute(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            guard Database.sqliteLibVersionNumber >= 3_035_000 else {
+                throw SwiftDataError.migrationUnsupported("SQLite does not support dropping table columns.")
+            }
+            let column = "Z\(removedAttribute.name.uppercased())"
+            try validateColumnRemovalSideEffects(table: table, connection: connection)
+            try connection.execute("ALTER TABLE \(table) DROP COLUMN \(column)")
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         for mapping in mappings {
             guard let old = mapping.source else { continue }
             let oldIsFlattened = old.options.contains(.flattened)
@@ -1202,7 +1224,8 @@ package enum LightweightMigration {
         }
         let mappedSources = Set(mappings.compactMap { $0.source?.name })
         guard mappedSources.count == source.attributes.count else {
-            throw SwiftDataError.migrationUnsupported("Attribute removal requires a table rebuild.")
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal requires an eligible unindexed scalar column.")
         }
         let renamePlan = try orderedRenames(mappings)
         for (sourceName, destinationName) in renamePlan {
@@ -1393,6 +1416,97 @@ package enum LightweightMigration {
         case "Int64": 64
         case "Int": Int.bitWidth
         default: nil
+        }
+    }
+
+    private static func removableScalarAttribute(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> Schema.Attribute? {
+        let removed = source.attributes.filter { sourceAttribute in
+            !mappings.contains(where: { $0.source?.name == sourceAttribute.name })
+        }
+        guard !removed.isEmpty else { return nil }
+        guard removed.count == 1,
+            let removedAttribute = removed.first,
+            removedAttribute.options.isDisjoint(with: [.unique, .codable, .flattened, .externalStorage]),
+            !removedAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            !source.indexes.contains(where: { $0.properties.contains(removedAttribute.name) }),
+            !destination.attributes.contains(where: { $0.originalName == removedAttribute.name }),
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return old == mapping.destination
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && sourceEntity.indexes == destinationEntity.indexes
+                }
+                return sourceEntity.superentityName == destinationEntity.superentityName
+                    && sourceEntity.attributes.count == destinationEntity.attributes.count
+                    && sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                    && sourceEntity.relationships == destinationEntity.relationships
+                    && sourceEntity.indexes == destinationEntity.indexes
+            }),
+            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
+            destinationEntities.allSatisfy({ $0.relationships.isEmpty })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal must remove one unindexed scalar from a flat schema without other edits.")
+        }
+        _ = try SQLColumnType.resolve(
+            removedAttribute.type,
+            property: "\(source.name).\(removedAttribute.name)",
+            options: removedAttribute.options)
+        return removedAttribute
+    }
+
+    private static func validateColumnRemovalSideEffects(
+        table: String,
+        connection: SQLConnection
+    ) throws {
+        let sideObjects = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1")
+        guard sideObjects.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Attribute removal is unsupported when triggers or views exist.")
+        }
+        let tables = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        for row in tables {
+            guard case let .text(name)? = row.first else { continue }
+            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
+            guard foreignKeys.isEmpty else {
+                throw SwiftDataError.migrationUnsupported("Attribute removal is unsupported when foreign keys exist.")
+            }
+        }
+        let tableInfo = try connection.rows("PRAGMA table_info(\(table))")
+        guard
+            tableInfo.contains(where: { row in
+                row.count > 5
+                    && row[1] == .text("Z_PK")
+                    && row[2] == .text("INTEGER")
+                    && row[5] == .int(1)
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Attribute removal requires the standard INTEGER primary key.")
         }
     }
 

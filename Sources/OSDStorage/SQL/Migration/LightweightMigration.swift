@@ -1507,6 +1507,77 @@ package enum LightweightMigration {
         let existing = try tableColumns(table, connection: connection)
         let mappings = try attributeMappings(source: source, destination: destination)
         try validateAttributeColumns(mappings, destination: destination, existing: existing)
+        let mappedRelationshipSources = Set(
+            destination.relationships.compactMap { relationship in
+                source.relationships.first(where: {
+                    $0.name == relationship.name || $0.name == relationship.originalName
+                })?.name
+            })
+        let removedRelationships = source.relationships.filter { !mappedRelationshipSources.contains($0.name) }
+        let removedRelationshipNames = Set(removedRelationships.map(\.name))
+        let addedRelationships = destination.relationships.filter { relationship in
+            !source.relationships.contains(where: {
+                $0.name == relationship.name
+                    || ($0.name == relationship.originalName && !removedRelationshipNames.contains($0.name))
+            })
+        }
+        if removedRelationships.count > 1,
+            addedRelationships.isEmpty,
+            removedRelationships.allSatisfy({ !$0.isToMany })
+        {
+            guard
+                !destination.relationships.contains(where: {
+                    $0.originalName.map(removedRelationshipNames.contains) == true
+                        || removedRelationshipNames.contains($0.name)
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "A relationship rename cannot be combined with multiple relationship removals.")
+            }
+            let sourceSchema = Schema(sourceEntities)
+            let destinationSchema = Schema(destinationEntities)
+            let removals = try planOptionalToOneRelationshipRemovals(
+                removedRelationships,
+                addedRelationships: addedRelationships,
+                source: source,
+                destination: destination,
+                sourceSchema: sourceSchema,
+                destinationSchema: destinationSchema)
+            guard Database.sqliteLibVersionNumber >= 3_035_000,
+                removals.allSatisfy({ existing.contains($0.column) })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Relationship removal requires existing root foreign-key columns and SQLite 3.35 or newer.")
+            }
+            try validateColumnRemovalSideEffects(
+                table: table,
+                entity: source,
+                schema: sourceSchema,
+                removedColumns: Set(removals.map(\.column)),
+                connection: connection)
+            for removal in removals {
+                try validateOptionalRelationshipColumnRemoval(
+                    table: table,
+                    column: removal.column,
+                    relationship: removal.relationship,
+                    owner: source,
+                    schema: sourceSchema,
+                    connection: connection,
+                    validatePhysicalLayout: false)
+            }
+            for removal in removals.sorted(by: { $0.indexName < $1.indexName }) {
+                try connection.execute("DROP INDEX IF EXISTS \(removal.indexName)")
+            }
+            for removal in removals.sorted(by: { $0.column < $1.column }) {
+                try connection.execute("ALTER TABLE \(table) DROP COLUMN \(removal.column)")
+            }
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: sourceSchema),
+                    indexDefinitions(for: destination, schema: destinationSchema)
+                ))
+            return
+        }
         if let optionalityChange = try optionalToRequiredAttributeChange(
             mappings,
             source: source,
@@ -1627,6 +1698,7 @@ package enum LightweightMigration {
             try validateColumnRemovalSideEffects(
                 table: table,
                 entity: source,
+                schema: Schema(sourceEntities),
                 removedColumns: Set(removedAttributes.map { "Z\($0.name.uppercased())" }),
                 connection: connection)
             let removableIndexNames = Set(
@@ -2196,6 +2268,7 @@ package enum LightweightMigration {
     private static func validateColumnRemovalSideEffects(
         table: String,
         entity: Schema.Entity,
+        schema: Schema,
         removedColumns: Set<String>,
         connection: SQLConnection
     ) throws {
@@ -2255,17 +2328,29 @@ package enum LightweightMigration {
                     attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
                 return ("Z\(attribute.name.uppercased())", type.rawValue, 0, 0)
             })
-        guard tableInfo.count == expectedColumns.count,
-            tableInfo.enumerated().allSatisfy({ offset, row in
-                guard row.count > 5 else { return false }
-                let expected = expectedColumns[offset]
-                return row[0] == .int(Int64(offset)) && row[1] == .text(expected.name)
-                    && row[2] == .text(expected.type) && row[3] == .int(expected.notNull)
-                    && row[4] == .null && row[5] == .int(expected.primaryKey)
+            + entity.relationships.compactMap { relationship in
+                guard !relationship.isToMany,
+                    !SchemaBuilder.isNonOwner(entity, relationship, schema: schema),
+                    let mapping = schema.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name)
+                else { return nil }
+                return ("Z\(mapping.storageColumnName.uppercased())", "INTEGER", 0, 0)
+            }
+        let expectedByName = Dictionary(uniqueKeysWithValues: expectedColumns.map { ($0.name, $0) })
+        let normalizedRemovedColumns = Set(removedColumns.map { $0.uppercased() })
+        guard normalizedRemovedColumns.isSubset(of: Set(expectedColumns.map(\.name))),
+            tableInfo.count == expectedColumns.count,
+            tableInfo.allSatisfy({ row in
+                guard row.count > 5, case let .text(columnName) = row[1],
+                    let expected = expectedByName[columnName]
+                else { return false }
+                return row[2] == .text(expected.type)
+                    && row[3] == .int(expected.notNull) && row[4] == .null
+                    && row[5] == .int(expected.primaryKey)
             })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Attribute removal requires a physical table matching the flat source schema layout.")
+                "Column removal requires a physical table matching the flat source schema layout.")
         }
         let extendedTableInfo = try connection.rows("PRAGMA table_xinfo(\(table))")
         guard
@@ -2474,6 +2559,86 @@ package enum LightweightMigration {
             "Attribute \(attribute.name) has a nonliteral or unsupported migration default.")
     }
 
+    private struct RelationshipColumnRemoval {
+        let relationship: Schema.Relationship
+        let column: String
+        let indexName: String
+    }
+
+    private static func planOptionalToOneRelationshipRemovals(
+        _ removedRelationships: [Schema.Relationship],
+        addedRelationships: [Schema.Relationship],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema
+    ) throws -> [RelationshipColumnRemoval] {
+        let removedNames = Set(removedRelationships.map(\.name))
+        let retainedRelationships = source.relationships.filter { !removedNames.contains($0.name) }
+        guard !removedRelationships.isEmpty,
+            addedRelationships.isEmpty,
+            source.attributes.count == destination.attributes.count,
+            source.attributes.allSatisfy({ destination.attributes.contains($0) }),
+            destination.relationships.count == source.relationships.count - removedRelationships.count,
+            retainedRelationships.allSatisfy({ destination.relationships.contains($0) }),
+            destination.relationships.count == retainedRelationships.count,
+            destination.relationships.allSatisfy({ relationship in
+                retainedRelationships.contains(relationship)
+            }),
+            source.indexes == destination.indexes,
+            source.superentityName == destination.superentityName,
+            sourceSchema.entityIDsByName == destinationSchema.entityIDsByName,
+            Set(sourceSchema.entities.map(\.name)) == Set(destinationSchema.entities.map(\.name)),
+            sourceSchema.entities.filter({ $0.name != source.name }).allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationSchema.entity(forName: sourceEntity.name) else { return false }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !sourceSchema.entities.contains(where: { $0.superentityName == source.name })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Multiple relationship removals must be the only edit to a flat root schema.")
+        }
+
+        return try removedRelationships.map { relationship in
+            guard !relationship.isToMany,
+                relationship.isOptional,
+                relationship.inverse == nil,
+                relationship.originalName == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                relationship.destination != source.name,
+                let targetSource = sourceSchema.entity(forName: relationship.destination),
+                let targetDestination = destinationSchema.entity(forName: relationship.destination),
+                targetSource.superentityName == nil,
+                targetDestination.superentityName == nil,
+                !sourceSchema.entities.contains(where: { $0.superentityName == targetSource.name }),
+                !destinationSchema.entities.contains(where: { $0.superentityName == targetDestination.name }),
+                !sourceSchema.entities.contains(where: { candidate in
+                    candidate.relationships.contains(where: { $0.inverse == relationship.name })
+                }),
+                !destinationSchema.entities.contains(where: { candidate in
+                    candidate.relationships.contains(where: { $0.inverse == relationship.name })
+                }),
+                let mapping = sourceSchema.relationshipStorageMapping(
+                    modelEntityName: source.name, relationshipName: relationship.name),
+                !SchemaBuilder.isNonOwner(source, relationship, schema: sourceSchema),
+                mapping.ownerRootEntityName == source.name,
+                mapping.declaringEntityName == source.name
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Only optional owning no-inverse to-one relationships to retained roots can be removed.")
+            }
+            return RelationshipColumnRemoval(
+                relationship: relationship,
+                column: "Z\(mapping.storageColumnName.uppercased())",
+                indexName:
+                    "Z\(mapping.ownerRootEntityName.uppercased())_Z\(mapping.relationshipName.uppercased())_INDEX")
+        }
+    }
+
     private static func migrateRelationships(
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2558,9 +2723,7 @@ package enum LightweightMigration {
                 !sourceSchema.entities.contains(where: { $0.superentityName == source.name }),
                 !sourceSchema.entities.contains(where: { entity in
                     entity.name != source.name
-                        && entity.relationships.contains(where: {
-                            $0.inverse == relationship.name
-                        })
+                        && entity.relationships.contains(where: { $0.inverse == relationship.name })
                 }),
                 let mapping = sourceSchema.relationshipStorageMapping(
                     modelEntityName: source.name, relationshipName: relationship.name),
@@ -2569,7 +2732,7 @@ package enum LightweightMigration {
                 mapping.declaringEntityName == source.name
             else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Only unconstrained owning optional to-one relationships can be removed without a graph migration.")
+                    "Only one unconstrained owning optional to-one relationship can be removed here.")
             }
             let column = "Z\(mapping.storageColumnName.uppercased())"
             guard existing.contains(column), Database.sqliteLibVersionNumber >= 3_035_000 else {
@@ -2984,8 +3147,17 @@ package enum LightweightMigration {
         relationship: Schema.Relationship,
         owner: Schema.Entity,
         schema: Schema,
-        connection: SQLConnection
+        connection: SQLConnection,
+        validatePhysicalLayout: Bool = true
     ) throws {
+        if validatePhysicalLayout {
+            try validateColumnRemovalSideEffects(
+                table: table,
+                entity: owner,
+                schema: schema,
+                removedColumns: [column.uppercased()],
+                connection: connection)
+        }
         let sideObjects = try connection.rows(
             "SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1")
         guard sideObjects.isEmpty else {

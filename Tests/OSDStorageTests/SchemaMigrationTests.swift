@@ -4261,6 +4261,314 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMultipleOptionalOwningToOneRelationshipsCanBeRemovedTogether() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-to-one-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "primary", destination: "Target"),
+                    Schema.Relationship(name: "secondary", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 7, 'target')")
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZPRIMARY, ZSECONDARY) VALUES (1, 4, 'owner', NULL, NULL)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let ownerColumns = try migrated.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertFalse(
+            ownerColumns.contains(where: { row in
+                guard row.count > 1, case let .text(name) = row[1] else { return false }
+                return ["ZPRIMARY", "ZSECONDARY"].contains(name)
+            }))
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'").isEmpty
+            })
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZOWNER") },
+            [[.int(1), .int(1), .int(4), .text("owner")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET") },
+            [[.int(1), .int(2), .int(7), .text("target")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT ZNAME FROM ZOWNER") }, [[.text("owner")]])
+        try reopened.close()
+    }
+
+    func testMultipleToOneRemovalDiscardsLinksWhilePreservingOwnerAndTargetRows() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-nonnull"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 5, NULL, 2)")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 8)")
+        }
+        try driver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZOWNER") },
+            [[.int(1), .int(1), .int(5)]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET") },
+            [[.int(1), .int(2), .int(8)]])
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertFalse(
+            columns.contains(where: { row in
+                guard row.count > 1, case let .text(name) = row[1] else { return false }
+                return ["ZFIRST", "ZSECOND"].contains(name)
+            }))
+        try driver.close()
+    }
+
+    func testMultipleToOneRemovalPreflightsEveryRelationshipBeforeDroppingIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-preflight"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZOWNER_ZSECOND_INDEX")
+            try connection.execute("CREATE INDEX CUSTOM_SECOND_INDEX ON ZOWNER (ZSECOND)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unsafe second relationship index to reject the removal, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZSECOND") }))
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER' ORDER BY name")
+            },
+            [[.text("CUSTOM_SECOND_INDEX")], [.text("ZOWNER_ZFIRST_INDEX")]])
+        try driver.close()
+    }
+
+    func testMultipleToOneRemovalRejectsCheckDependencyBeforeDroppingIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-check-dependency"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP TABLE ZOWNER")
+            try connection.execute(
+                "CREATE TABLE ZOWNER (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZFIRST INTEGER, ZSECOND INTEGER CHECK (ZSECOND IS NULL OR ZSECOND > 0))"
+            )
+            try connection.execute("INSERT INTO ZOWNER (Z_PK, Z_ENT, Z_OPT) VALUES (1, 1, 1)")
+            try connection.execute("CREATE INDEX ZOWNER_ZFIRST_INDEX ON ZOWNER (ZFIRST)")
+            try connection.execute("CREATE INDEX ZOWNER_ZSECOND_INDEX ON ZOWNER (ZSECOND)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected CHECK dependency to reject relationship removal, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZSECOND") }))
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZFIRST_INDEX'")
+                    .count == 1
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZSECOND_INDEX'")
+                    .count == 1
+            })
+        try driver.close()
+    }
+
+    func testMultipleToOneRelationshipRemovalRejectsCombinedScalarRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-combined-scalar"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined scalar/relationship removal to fail closed, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZSECOND") }))
+        try driver.close()
+    }
+
+    func testMultipleToOneRemovalRejectsChangedRetainedRelationshipMetadata() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "removedA", destination: "Target"),
+                    Schema.Relationship(name: "removedB", destination: "Target"),
+                    Schema.Relationship(name: "retained", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "retained", destination: "Target", deleteRule: .noAction)
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-retained-change"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected changed retained relationship to fail closed, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        for column in ["ZREMOVEDA", "ZREMOVEDB", "ZRETAINED"] {
+            XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text(column) }))
+        }
+        try driver.close()
+    }
+
+    func testMultipleToOneRemovalRejectsRenameFromRemovedRelationship() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "renamed", destination: "Target", originalName: "first")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-removed-rename"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected relationship rename to be rejected in batched removal, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        for column in ["ZFIRST", "ZSECOND"] {
+            XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text(column) }))
+        }
+        try driver.close()
+    }
+
+    func testMultipleToOneRemovalRejectsInverseDeclaredOutsideTargetEntity() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "Target"),
+                    Schema.Relationship(name: "second", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target"),
+            Schema.Entity(
+                name: "Unrelated",
+                relationships: [Schema.Relationship(name: "back", destination: "Owner", inverse: "first")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Target"),
+            Schema.Entity(
+                name: "Unrelated",
+                relationships: [Schema.Relationship(name: "back", destination: "Owner", inverse: "first")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-external-inverse"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inverse reference from another entity to reject removal, got \(error)")
+            }
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") }))
+        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZSECOND") }))
+        try driver.close()
+    }
+
     func testFlatScalarAndOptionalRelationshipAdditionsComposeAtomically() throws {
         let location = StoreLocation.file(
             FileManager.default.temporaryDirectory.appendingPathComponent(

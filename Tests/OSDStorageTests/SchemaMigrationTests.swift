@@ -453,6 +453,171 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testRequiredToOptionalMetadataMigrationPreservesRowsAndAllowsNullWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("required-to-optional.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "label", type: "String"),
+                    Schema.Attribute(name: "rank", type: "Int32", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["label"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "label", type: "String"),
+                    Schema.Attribute(name: "rank", type: "Int32", isOptional: true, options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["label"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLABEL, ZRANK) VALUES (1, 4, 'first', 10)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLABEL, ZRANK) VALUES (1, 9, 'second', 20)")
+        }
+        let allocator = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZLABEL, ZRANK FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .int(1), .int(4), .text("first"), .int(10)],
+                [.int(2), .int(1), .int(9), .text("second"), .int(20)],
+            ])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            allocator)
+        let rankColumn = try migrated.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+            .first(where: { $0.count > 3 && $0[1] == .text("ZRANK") })
+        XCTAssertEqual(rankColumn?[3], .int(0))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZLABEL_INDEX")], [.text("ZRECORD_ZRANK_UNIQUE_INDEX")]])
+        let expectedTableDDL = try XCTUnwrap(
+            SchemaBuilder.build(destination).statements.first(where: { $0.hasPrefix("CREATE TABLE ZRECORD ") })
+        )
+        .trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            .text(expectedTableDDL))
+        try migrated.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLABEL, ZRANK) VALUES (1, 1, 'optional', NULL)")
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, ZRANK FROM ZRECORD WHERE ZLABEL = 'optional'") },
+            [[.int(3), .null]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        try reopened.close()
+    }
+
+    func testRequiredToOptionalMetadataMigrationRejectsCombinedEditsAtomically() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "String")]),
+            Schema.Entity(name: "Other"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)]),
+            Schema.Entity(
+                name: "Other", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
+        ])
+        let location = StoreLocation.file(directory.appendingPathComponent("combined.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 'kept')")
+        }
+        let originalHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]).first?
+                .first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined schema edit to fail closed, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") },
+            [[.int(1), .int(3), .text("kept")]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        try reopened.close()
+    }
+
+    func testRequiredToOptionalMetadataMigrationPreservesCustomIndexesAndTriggers() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)])
+        ])
+        for (name, statement) in [
+            ("index", "CREATE INDEX USER_VALUE_INDEX ON ZRECORD (ZVALUE)"),
+            (
+                "trigger",
+                "CREATE TRIGGER USER_RECORD_TRIGGER AFTER INSERT ON ZRECORD BEGIN UPDATE ZRECORD SET Z_OPT = Z_OPT WHERE Z_PK = NEW.Z_PK; END"
+            ),
+        ] {
+            let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            try initial.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 'kept')")
+                try connection.execute(statement)
+            }
+            try initial.close()
+
+            let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+            XCTAssertEqual(
+                try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") },
+                [[.int(1), .int(5), .text("kept")]])
+            let objects = try migrated.read {
+                try $0.rows("SELECT type, name FROM sqlite_master WHERE name LIKE 'USER_%' ORDER BY name")
+            }
+            let expectedName = name == "index" ? "USER_VALUE_INDEX" : "USER_RECORD_TRIGGER"
+            let expectedType = name == "index" ? "index" : "trigger"
+            XCTAssertEqual(objects, [[.text(expectedType), .text(expectedName)]])
+            try migrated.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, NULL)")
+            }
+            try migrated.close()
+        }
+    }
+
     func testOptionalToRequiredBackfillUsesTypedScalarDefaults() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

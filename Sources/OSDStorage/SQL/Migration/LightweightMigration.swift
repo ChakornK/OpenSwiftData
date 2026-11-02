@@ -1478,6 +1478,35 @@ package enum LightweightMigration {
                 ))
             return
         }
+        if let optionalityChange = try requiredToOptionalAttributeChange(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            guard let old = optionalityChange.source,
+                try SQLColumnType.resolve(
+                    old.type, property: "\(source.name).\(old.name)", options: old.options)
+                    == SQLColumnType.resolve(
+                        optionalityChange.destination.type,
+                        property: "\(destination.name).\(optionalityChange.destination.name)",
+                        options: optionalityChange.destination.options)
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Required-to-optional scalar storage affinity changed unexpectedly.")
+            }
+            try validateFlatOptionalityDDLCompatibility(
+                source: Schema(sourceEntities), destination: Schema(destinationEntities))
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         if try compatibleIntegerWidening(
             mappings,
             source: source,
@@ -1641,6 +1670,9 @@ package enum LightweightMigration {
             return source.isOptional != mapping.destination.isOptional
         }
         guard !changes.isEmpty else { return nil }
+        guard changes.contains(where: { $0.source?.isOptional == true && !$0.destination.isOptional }) else {
+            return nil
+        }
         guard changes.count == 1,
             let change = changes.first,
             let oldAttribute = change.source,
@@ -1691,6 +1723,92 @@ package enum LightweightMigration {
             change.destination.type,
             property: "\(destination.name).\(change.destination.name)",
             options: change.destination.options)
+        return change
+    }
+
+    private static func requiredToOptionalAttributeChange(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changes = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.isOptional != mapping.destination.isOptional
+        }
+        guard !changes.isEmpty else { return nil }
+        guard changes.count == 1,
+            let change = changes.first,
+            let old = change.source,
+            !old.isOptional,
+            change.destination.isOptional,
+            old.name == change.destination.name,
+            old.type == change.destination.type,
+            old.defaultValue == change.destination.defaultValue,
+            old.options == change.destination.options,
+            old.originalName == change.destination.originalName,
+            old.components == change.destination.components,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let original = mapping.source else { return false }
+                return original == old || original == mapping.destination
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            sourceEntityIDs == destinationEntityIDs,
+            Set(sourceEntities.map(\.name)) == Set(destinationEntities.map(\.name)),
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    let oldAttributes = sourceEntity.attributes.filter { $0.name != old.name }
+                    let newAttributes = destinationEntity.attributes.filter { $0.name != change.destination.name }
+                    return sourceEntity.indexes == destinationEntity.indexes
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && oldAttributes.count == newAttributes.count
+                        && oldAttributes.allSatisfy({ newAttributes.contains($0) })
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
+            destinationEntities.allSatisfy({ $0.relationships.isEmpty }),
+            sourceEntities.allSatisfy({ entity in
+                entity.attributes.allSatisfy { attribute in
+                    !attribute.options.contains(.codable)
+                        && !attribute.options.contains(.flattened)
+                        && !attribute.options.contains(.externalStorage)
+                        && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                }
+            }),
+            destinationEntities.allSatisfy({ entity in
+                entity.attributes.allSatisfy { attribute in
+                    !attribute.options.contains(.codable)
+                        && !attribute.options.contains(.flattened)
+                        && !attribute.options.contains(.externalStorage)
+                        && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                }
+            }),
+            !old.options.contains(.codable),
+            !old.options.contains(.flattened),
+            !old.options.contains(.externalStorage),
+            !old.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            try SQLColumnType.resolve(old.type, property: "\(source.name).\(old.name)", options: old.options)
+                == SQLColumnType.resolve(
+                    change.destination.type,
+                    property: "\(destination.name).\(change.destination.name)",
+                    options: change.destination.options)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Required-to-optional migration must change one flat scalar attribute without other edits.")
+        }
         return change
     }
 
@@ -1768,6 +1886,26 @@ package enum LightweightMigration {
                 "Numeric widening must be a single signed-integer change with unchanged storage metadata.")
         }
         return true
+    }
+
+    private static func validateFlatOptionalityDDLCompatibility(
+        source: Schema,
+        destination: Schema
+    ) throws {
+        let sourceBuilt = try SchemaBuilder.build(source)
+        let destinationBuilt = try SchemaBuilder.build(destination)
+        let sourceTables = sourceBuilt.statements.filter { $0.hasPrefix("CREATE TABLE Z") }
+        let destinationTables = destinationBuilt.statements.filter { $0.hasPrefix("CREATE TABLE Z") }
+        guard sourceTables == destinationTables else {
+            throw SwiftDataError.migrationUnsupported(
+                "Required-to-optional migration changes physical DDL and requires explicit rebuild support.")
+        }
+        let sourceIndexes = source.entities.flatMap { indexDefinitions(for: $0, schema: source) }
+        let destinationIndexes = destination.entities.flatMap { indexDefinitions(for: $0, schema: destination) }
+        guard sourceIndexes == destinationIndexes else {
+            throw SwiftDataError.migrationUnsupported(
+                "Required-to-optional migration cannot combine index or uniqueness changes.")
+        }
     }
 
     private static func signedIntegerWidth(_ typeName: String) -> Int? {

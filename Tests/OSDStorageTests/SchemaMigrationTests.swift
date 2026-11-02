@@ -726,6 +726,102 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testDoubleToFloatNarrowingAcceptsOnlyExactlyRepresentableValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("double-narrowing.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            for (version, literal) in [
+                (Int64(1), "0.125"),
+                (Int64(2), "1.401298464324817e-45"),
+                (Int64(3), "1.0e999"),
+                (Int64(4), "-1.0e999"),
+            ] {
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, \(literal))", [.int(version)])
+            }
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, NULL)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(1), .double(0.125)],
+                [.int(2), .int(2), .double(1.401298464324817e-45)],
+                [.int(3), .int(3), .double(Double.infinity)],
+                [.int(4), .int(4), .double(-Double.infinity)],
+                [.int(5), .int(5), .null],
+            ])
+        try migrated.close()
+    }
+
+    func testDoubleToFloatNarrowingRejectsLossyValuesAndRollsBack() throws {
+        let cases: [(String, String)] = [
+            ("precision", "0.1"),
+            ("underflow", "1.0e-46"),
+            ("overflow", "3.5e38"),
+        ]
+        for (name, literal) in cases {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+            ])
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            try initial.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 7, \(literal))")
+            }
+            let originalValue = try initial.read { try $0.rows("SELECT ZVALUE FROM ZRECORD").first?.first }
+            let originalHash = try initial.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            }
+            try initial.close()
+
+            XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected lossy \(name) conversion to fail, got \(error)")
+                }
+            }
+            let reopened = try LightweightMigration.openStore(location: location, schema: source)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT ZVALUE FROM ZRECORD") },
+                [[try XCTUnwrap(originalValue)]])
+            XCTAssertEqual(
+                try reopened.read {
+                    try $0.rows(
+                        "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                    ).first?.first
+                },
+                originalHash)
+            try reopened.close()
+        }
+    }
+
     func testUnindexedScalarAttributeRemovalPreservesRowsAndReopens() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

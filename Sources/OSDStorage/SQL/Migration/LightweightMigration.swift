@@ -1421,7 +1421,7 @@ package enum LightweightMigration {
                 ))
             return
         }
-        if let floatingWidening = try compatibleFloatToDoubleWidening(
+        if let floatingTypeChange = try compatibleFloatTypeChange(
             mappings,
             source: source,
             destination: destination,
@@ -1430,11 +1430,12 @@ package enum LightweightMigration {
             sourceEntityIDs: sourceEntityIDs,
             destinationEntityIDs: destinationEntityIDs)
         {
-            let column = "Z\(floatingWidening.destination.name.uppercased())"
+            let column = "Z\(floatingTypeChange.destination.name.uppercased())"
             try validateFloatValuesForWidening(
                 table: table,
                 column: column,
-                isOptional: floatingWidening.source?.isOptional ?? false,
+                isOptional: floatingTypeChange.source?.isOptional ?? false,
+                requiresExactFloatRoundTrip: true,
                 connection: connection)
             indexTransitions.append(
                 (
@@ -1708,7 +1709,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func compatibleFloatToDoubleWidening(
+    private static func compatibleFloatTypeChange(
         _ mappings: [AttributeMapping],
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -1725,8 +1726,8 @@ package enum LightweightMigration {
         guard changed.count == 1,
             let mapping = changed.first,
             let sourceAttribute = mapping.source,
-            sourceAttribute.type == "Float",
-            mapping.destination.type == "Double",
+            (sourceAttribute.type == "Float" && mapping.destination.type == "Double")
+                || (sourceAttribute.type == "Double" && mapping.destination.type == "Float"),
             sourceAttribute.name == mapping.destination.name,
             sourceAttribute.isOptional == mapping.destination.isOptional,
             sourceAttribute.defaultValue == mapping.destination.defaultValue,
@@ -1773,7 +1774,7 @@ package enum LightweightMigration {
                 options: mapping.destination.options) == .float
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Numeric widening must be a single Float-to-Double change with unchanged storage metadata.")
+                "Float/Double type changes must be a single flat scalar change with unchanged storage metadata.")
         }
         return mapping
     }
@@ -1782,6 +1783,7 @@ package enum LightweightMigration {
         table: String,
         column: String,
         isOptional: Bool,
+        requiresExactFloatRoundTrip: Bool,
         connection: SQLConnection
     ) throws {
         let rows = try connection.rows(
@@ -1796,14 +1798,14 @@ package enum LightweightMigration {
             case ("null", .null):
                 throw SwiftDataError.migrationUnsupported("Required Float column \(column) contains NULL.")
             case ("integer", .int(let value)):
-                guard value >= -16_777_216, value <= 16_777_216 else {
+                let floatValue = Float(value)
+                guard Int64(exactly: floatValue) == value else {
                     throw SwiftDataError.migrationUnsupported(
                         "Float column \(column) contains an integer not exactly representable as Float.")
                 }
             case ("real", .double(let value)):
-                if value.isNaN { continue }
                 let floatValue = Float(value)
-                guard Double(floatValue) == value else {
+                guard !requiresExactFloatRoundTrip || Double(floatValue) == value else {
                     throw SwiftDataError.migrationUnsupported(
                         "Float column \(column) contains a value not exactly representable as Float.")
                 }

@@ -1,3 +1,9 @@
+/// Names internal properties synthesized for runtime predicate plans.
+package enum PredicatePlanProperty {
+    /// The pending model's complete persistent identifier.
+    package static let persistentIdentifier = "__osd_persistent_identifier"
+}
+
 /// A storage-independent predicate plan used by SQL and in-memory evaluation.
 public indirect enum PredicatePlan: Sendable, Equatable {
     case conjunction(PredicatePlan, PredicatePlan)

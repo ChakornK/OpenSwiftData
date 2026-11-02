@@ -98,6 +98,14 @@ final class InheritanceMacroKittenFixture: InheritanceMacroBaseFixture {
 }
 
 @Model
+final class InheritanceIdentifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var favorite: InheritanceMacroBaseFixture?
+
+    init(name: String) { self.name = name }
+}
+
+@Model
 final class IndependentRelationshipRootFixture {
     var name: String
     @Relationship(inverse: nil) var target: InheritedToOneMigrationTargetFixture?
@@ -5523,6 +5531,23 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(baseIdentifiers[1].entityName, "InheritanceMacroChildFixture")
         XCTAssertEqual(baseIdentifiers[2].entityName, "InheritanceMacroGrandchildFixture")
 
+        let childPredicateID = baseIdentifiers[1]
+        let childIdentityPredicate = #Predicate<InheritanceMacroBaseFixture> {
+            $0.persistentModelID == childPredicateID
+        }
+        XCTAssertEqual(try reader.fetch(FetchDescriptor(predicate: childIdentityPredicate)).map(\.name), ["child"])
+        let grandchildPredicateID = baseIdentifiers[2]
+        let grandchildIdentityPredicate = #Predicate<InheritanceMacroBaseFixture> {
+            $0.persistentModelID == grandchildPredicateID
+        }
+        XCTAssertEqual(
+            try reader.fetch(FetchDescriptor(predicate: grandchildIdentityPredicate)).map(\.name), ["grandchild"])
+        let basePredicateID = baseIdentifiers[0]
+        let baseIdentityPredicate = #Predicate<InheritanceMacroBaseFixture> {
+            $0.persistentModelID == basePredicateID
+        }
+        XCTAssertEqual(try reader.fetch(FetchDescriptor(predicate: baseIdentityPredicate)).map(\.name), ["base"])
+
         let pagedRoot = try reader.fetch(
             FetchDescriptor<InheritanceMacroBaseFixture>(
                 sortBy: [SortDescriptor(\InheritanceMacroBaseFixture.name)],
@@ -5647,6 +5672,37 @@ final class PersistentModelTests: XCTestCase {
             XCTFail("Reverse root fetch failed: \(error)"); return
         }
         XCTAssertTrue(reverseRoots[1] === reverseChildren[0])
+    }
+
+    @MainActor
+    func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() throws {
+        let container = try ModelContainer(
+            for: InheritanceIdentifierOwnerFixture.self,
+            InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("relationship-inherited-identifier"))
+        let context = container.mainContext
+        let owner = InheritanceIdentifierOwnerFixture(name: "owner")
+        let missing = InheritanceIdentifierOwnerFixture(name: "missing")
+        let child = InheritanceMacroChildFixture(name: "child", age: 4)
+        context.insert(owner)
+        context.insert(missing)
+        context.insert(child)
+        owner.favorite = child
+        try context.save()
+
+        let identifier = child.persistentModelID
+        let equal = FetchDescriptor<InheritanceIdentifierOwnerFixture>(
+            predicate: #Predicate<InheritanceIdentifierOwnerFixture> {
+                $0.favorite?.persistentModelID == identifier
+            })
+        let notEqual = FetchDescriptor<InheritanceIdentifierOwnerFixture>(
+            predicate: #Predicate<InheritanceIdentifierOwnerFixture> {
+                $0.favorite?.persistentModelID != identifier
+            })
+        XCTAssertEqual(try context.fetch(equal).map(\.name), ["owner"])
+        XCTAssertEqual(try context.fetch(notEqual).map(\.name), ["missing"])
     }
 
     @MainActor

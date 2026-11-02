@@ -69,6 +69,20 @@ package enum PredicatePlanBuilder {
             return .conjunction(
                 .conjunction(.isNull(lhs, negated: true), .isNull(rhs, negated: true)),
                 ordering)
+        case let .persistentIdentifierComparison(op, identifier, path):
+            guard let bytes = try? identifier.predicateIdentityBytes() else { return nil }
+            let property =
+                (path + [PredicatePlanProperty.persistentIdentifier]).joined(separator: ".")
+            let lhs = PredicatePlan.property(property)
+            let rhs = PredicatePlan.value(.blob(bytes))
+            let equality = PredicatePlan.disjunction(
+                .conjunction(.isNull(lhs, negated: false), .isNull(rhs, negated: false)),
+                .conjunction(
+                    .conjunction(.isNull(lhs, negated: true), .isNull(rhs, negated: true)),
+                    .comparison(.equal, lhs, rhs)))
+            return op == .equal ? equality : .negation(equality)
+        case .persistentIdentifier, .identifierValue:
+            return nil
         case let .arithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
@@ -153,18 +167,169 @@ package enum SQLCompiler {
         _ ir: PredicateIR,
         entity: String,
         ordering: [String] = [],
-        relationships: [RuntimePredicateRelationship] = []
+        relationships: [RuntimePredicateRelationship] = [],
+        storeIdentifier: String = "",
+        entityIDsByName: [String: Int] = [:]
     ) throws -> CompiledPredicate {
-        let key = structuralKey(ir, entity: entity, ordering: ordering, relationships: relationships)
+        let resolvedIR = resolvePersistentIdentifierComparisons(
+            ir, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName)
+        let key = structuralKey(
+            ir,
+            entity: entity,
+            ordering: ordering,
+            relationships: relationships,
+            entityIDsByName: entityIDsByName)
         if let cached = cache.value(for: key) {
             var arguments: [StoredValue] = []
-            _ = try render(ir, arguments: &arguments, entity: entity, relationships: relationships)
+            _ = try render(resolvedIR, arguments: &arguments, entity: entity, relationships: relationships)
             return CompiledPredicate(sql: cached.sql, arguments: arguments, cacheKey: key)
         }
         var arguments: [StoredValue] = []
-        let sql = try render(ir, arguments: &arguments, entity: entity, relationships: relationships)
+        let sql = try render(resolvedIR, arguments: &arguments, entity: entity, relationships: relationships)
         cache.insert(Plan(sql: sql), for: key)
         return CompiledPredicate(sql: sql, arguments: arguments, cacheKey: key)
+    }
+
+    private static func resolvePersistentIdentifierComparisons(
+        _ ir: PredicateIR,
+        storeIdentifier: String,
+        entityIDsByName: [String: Int]
+    ) -> PredicateIR {
+        switch ir {
+        case let .persistentIdentifierComparison(op, identifier, path):
+            let entityID = identifier.primaryKey == nil ? 0 : entityIDsByName[identifier.entityName] ?? 0
+            let primaryKey = identifier.primaryKey.map(StoredValue.int) ?? .null
+            let sameStore = PredicateIR.comparison(
+                .equal,
+                .value(.text(identifier.storeIdentifier)),
+                .value(.text(storeIdentifier)))
+            let sameEntity = PredicateIR.comparison(
+                .equal,
+                .keyPath(path + ["__osd_z_ent"]),
+                .value(.int(Int64(entityID))))
+            let samePrimaryKey = PredicateIR.optionalComparison(
+                .equal,
+                .keyPath(path + ["__osd_z_pk"]),
+                .value(primaryKey),
+                decimal: false)
+            let match = PredicateIR.conjunction(
+                sameStore,
+                .conjunction(sameEntity, samePrimaryKey))
+            return op == .equal ? match : .negation(match)
+        case let .conjunction(lhs, rhs):
+            return .conjunction(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .disjunction(lhs, rhs):
+            return .disjunction(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .negation(value):
+            return .negation(
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .comparison(op, lhs, rhs):
+            return .comparison(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .decimalComparison(op, lhs, rhs):
+            return .decimalComparison(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .optionalComparison(op, lhs, rhs, decimal):
+            return .optionalComparison(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                decimal: decimal)
+        case let .arithmetic(op, lhs, rhs):
+            return .arithmetic(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .realArithmetic(op, lhs, rhs):
+            return .realArithmetic(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .nilCoalesce(lhs, rhs):
+            return .nilCoalesce(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .conditional(test, trueBranch, falseBranch):
+            return .conditional(
+                resolvePersistentIdentifierComparisons(
+                    test, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    trueBranch, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    falseBranch, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .relationshipContains(name, body):
+            return .relationshipContains(
+                name,
+                resolvePersistentIdentifierComparisons(
+                    body, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .localizedStandardContains(lhs, rhs):
+            return .localizedStandardContains(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .stringContains(lhs, rhs):
+            return .stringContains(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .stringStartsWith(lhs, rhs):
+            return .stringStartsWith(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .sequenceContains(lhs, rhs):
+            return .sequenceContains(
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .collectionContains(name, type, value):
+            return .collectionContains(
+                name, type,
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .collectionAllEqual(name, type, value):
+            return .collectionAllEqual(
+                name, type,
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .collectionAllCompare(name, type, op, value):
+            return .collectionAllCompare(
+                name, type, op,
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case .keyPath, .persistentIdentifier, .identifierValue, .relationshipIsPresent, .value,
+            .codableCollectionIsEmpty, .codableCollectionCount, .relationshipCount:
+            return ir
+        }
     }
 
     package static func compile(
@@ -253,6 +418,9 @@ package enum SQLCompiler {
         tableAlias: String = "t0"
     ) throws -> String {
         switch ir {
+        case .persistentIdentifier, .identifierValue, .persistentIdentifierComparison:
+            throw SwiftDataError.unsupportedPredicate(
+                "Persistent identifier comparison was not resolved before SQL rendering.")
         case let .conjunction(lhs, rhs):
             return
                 "(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) AND \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
@@ -340,6 +508,11 @@ package enum SQLCompiler {
             return
                 "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .keyPath(path):
+            if path.count == 1, let property = path.first,
+                property == "__osd_z_ent" || property == "__osd_z_pk"
+            {
+                return "\(tableAlias).\(identityColumnName(for: property))"
+            }
             guard let property = path.last, Self.validIdentifier(property) else {
                 throw SwiftDataError.unsupportedPredicate("Invalid key path")
             }
@@ -388,7 +561,7 @@ package enum SQLCompiler {
                     let alias = "osd_rel_\(index + 1)"
                     let selected =
                         index + 1 == relationshipNames.count
-                        ? "\(alias).Z\(property.uppercased())"
+                        ? "\(alias).\(identityColumnName(for: property))"
                         : try renderHop(index + 1, ownerEntityName: destinationEntityName, ownerAlias: alias)
                     let placeholders = Array(repeating: "?", count: destinationEntityIDs.count)
                         .joined(separator: ", ")
@@ -423,7 +596,7 @@ package enum SQLCompiler {
                         .joined(separator: ", ")
                     arguments.append(contentsOf: relationship.inverseOwnerEntityIDs.map { .int(Int64($0)) })
                     return
-                        "(SELECT t1.Z\(property.uppercased()) FROM Z\(inverseOwnerRoot.uppercased()) AS t1 "
+                        "(SELECT t1.\(identityColumnName(for: property)) FROM Z\(inverseOwnerRoot.uppercased()) AS t1 "
                         + "WHERE t1.Z\(relationship.foreignKeyColumnName.uppercased()) = t0.Z_PK "
                         + "AND t1.Z_ENT IN (\(placeholders)) ORDER BY t1.Z_PK ASC LIMIT 1)"
                 }
@@ -434,7 +607,7 @@ package enum SQLCompiler {
                 let placeholders = Array(repeating: "?", count: destinationIDs.count).joined(separator: ", ")
                 arguments.append(contentsOf: destinationIDs.map { .int(Int64($0)) })
                 return
-                    "(SELECT t1.Z\(property.uppercased()) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
+                    "(SELECT t1.\(identityColumnName(for: property)) FROM Z\(relationship.destinationRootEntityName.uppercased()) AS t1 "
                     + "WHERE t1.Z_PK = t0.Z\(relationship.foreignKeyColumnName.uppercased()) "
                     + "AND t1.Z_ENT IN (\(placeholders)) LIMIT 1)"
             }
@@ -706,14 +879,18 @@ package enum SQLCompiler {
         _ ir: PredicateIR,
         entity: String,
         ordering: [String],
-        relationships: [RuntimePredicateRelationship]
+        relationships: [RuntimePredicateRelationship],
+        entityIDsByName: [String: Int]
     ) -> String {
         let relationshipKey = relationships.sorted {
             "\($0.ownerEntityName).\($0.propertyName)" < "\($1.ownerEntityName).\($1.propertyName)"
         }.map {
             "\($0.ownerEntityName).\($0.propertyName)[toMany=\($0.isToMany),destinationFK=\($0.storesForeignKeyOnDestination)]->\($0.destinationRootEntityName).\($0.foreignKeyColumnName).\($0.joinTableName ?? "").\($0.ownerJoinColumnName).\($0.destinationJoinColumnName).\($0.destinationEntityIDs)"
         }.joined(separator: ";")
-        return "\(entity)|\(ordering.joined(separator: ","))|\(relationshipKey)|\(structure(ir))"
+        let entityIDKey = entityIDsByName.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ";")
+        return "\(entity)|\(ordering.joined(separator: ","))|\(relationshipKey)|\(entityIDKey)|\(structure(ir))"
     }
 
     private static func structure(_ ir: PredicateIR) -> String {
@@ -725,9 +902,13 @@ package enum SQLCompiler {
         case let .decimalComparison(op, lhs, rhs): "decimalCompare(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .optionalComparison(op, lhs, rhs, decimal):
             "optionalCompare(\(op),decimal=\(decimal),\(structure(lhs)),\(structure(rhs)))"
+        case let .persistentIdentifierComparison(op, _, path):
+            "persistentIdentifierCompare(\(op),\(path.joined(separator: ".")))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .realArithmetic(op, lhs, rhs): "realArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
+        case .persistentIdentifier: "persistentIdentifier"
+        case .identifierValue: "identifierValue"
         case let .relationshipIsPresent(path): "relationshipIsPresent(\(path.joined(separator: ".")))"
         case let .value(value):
             if case .null = value { "value(NULL)" } else { "value(?)" }
@@ -756,6 +937,14 @@ package enum SQLCompiler {
             && value.utf8.allSatisfy { byte in
                 (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
             }
+    }
+
+    private static func identityColumnName(for property: String) -> String {
+        switch property {
+        case "__osd_z_ent": "Z_ENT"
+        case "__osd_z_pk": "Z_PK"
+        default: "Z\(property.uppercased())"
+        }
     }
 
     private static func nextAliasIndex(after alias: String) -> Int {

@@ -7,6 +7,8 @@ package enum PredicateMirrorWalker {
         case capture(typeName: String, description: String)
         case propertyReference(String)
         case typedValue(StoredValue)
+        case persistentIdentifierReference([String])
+        case identifierCapture(PersistentIdentifier)
 
         package static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
@@ -17,6 +19,10 @@ package enum PredicateMirrorWalker {
             case let (.propertyReference(lhsName), .propertyReference(rhsName)):
                 lhsName == rhsName
             case let (.typedValue(lhsValue), .typedValue(rhsValue)):
+                lhsValue == rhsValue
+            case let (.persistentIdentifierReference(lhsPath), .persistentIdentifierReference(rhsPath)):
+                lhsPath == rhsPath
+            case let (.identifierCapture(lhsValue), .identifierCapture(rhsValue)):
                 lhsValue == rhsValue
             default:
                 false

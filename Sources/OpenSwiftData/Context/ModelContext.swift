@@ -2092,6 +2092,8 @@ public final class ModelContext {
                 attributeNames: attributeNames,
                 attributeTypes: attributeTypes,
                 optionalAttributeNames: optionalAttributeNames,
+                identifierCaptures: tree.identifierCaptures,
+                storeIdentifier: storeIdentifier,
                 relationships: relationshipPaths))
     }
 
@@ -2401,6 +2403,10 @@ public final class ModelContext {
             guard components.count >= 2 else { continue }
             values[name] = try runtimeValue(on: model, path: components, fullPath: name)
         }
+        if names?.contains(PredicatePlanProperty.persistentIdentifier) == true {
+            values[PredicatePlanProperty.persistentIdentifier] = .blob(
+                try model.persistentModelID.predicateIdentityBytes())
+        }
         return values
     }
 
@@ -2435,6 +2441,9 @@ public final class ModelContext {
     ) throws -> RuntimeValue {
         guard let first = path.first else { return .null }
         if path.count == 1 {
+            if first == PredicatePlanProperty.persistentIdentifier {
+                return .blob(try model.persistentModelID.predicateIdentityBytes())
+            }
             if let relationship = containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?
                 .first(where: { $0.name == first && !$0.isToMany })
             {

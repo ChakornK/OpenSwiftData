@@ -31,6 +31,7 @@ package enum PredicateRuntimeTreeBuilder {
     package struct Result {
         package let root: RuntimePredicateNode
         package let captures: [RuntimePredicatePath: StoredValue]
+        package let identifierCaptures: [RuntimePredicatePath: PersistentIdentifier]
     }
 
     package static func build<Model: PersistentModel>(
@@ -41,6 +42,7 @@ package enum PredicateRuntimeTreeBuilder {
         modelTypeForEntity: (String) -> (any PersistentModel.Type)? = { _ in nil }
     ) throws -> Result {
         var captures: [RuntimePredicatePath: StoredValue] = [:]
+        var identifierCaptures: [RuntimePredicatePath: PersistentIdentifier] = [:]
         var unsignedCollectionBoundPaths = Set<RuntimePredicatePath>()
         var activeModelType: any PersistentModel.Type = modelType
         var activeEntity = entity
@@ -181,6 +183,23 @@ package enum PredicateRuntimeTreeBuilder {
             guard labels == requiredLabels else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Malformed predicate node \(name): expected \(requiredLabels.sorted()), found \(labels.sorted())")
+            }
+            if name == "Value",
+                let capturedValue = children.first(where: { $0.label == "value" })?.value,
+                let identifier = capturedValue as? PersistentIdentifier
+            {
+                let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
+                identifierCaptures[RuntimePredicatePath(labels: rewrittenPath)] = identifier
+                return .expression(
+                    name: "Value",
+                    children: [
+                        (
+                            "value",
+                            .capture(
+                                typeName: String(reflecting: PersistentIdentifier.self),
+                                description: "persistent identifier")
+                        )
+                    ])
             }
             if name == "Value",
                 let capturedValue = children.first(where: { $0.label == "value" })?.value,
@@ -698,7 +717,7 @@ package enum PredicateRuntimeTreeBuilder {
             }
             return .expression(name: name, children: converted)
         }
-        return Result(root: try visit(value), captures: captures)
+        return Result(root: try visit(value), captures: captures, identifierCaptures: identifierCaptures)
     }
 
     private static func visitExpressionEvaluate(
@@ -889,6 +908,14 @@ package enum PredicateRuntimeTreeBuilder {
         expectedRootType: Any.Type
     ) throws -> RuntimePredicateNode {
         let keyPathRootType = type(of: keyPath).rootType
+        if ObjectIdentifier(type(of: keyPath).valueType) == ObjectIdentifier(PersistentIdentifier.self),
+            ObjectIdentifier(keyPathRootType) == ObjectIdentifier(expectedRootType),
+            modelType.propertyName(forKeyPath: keyPath) == nil
+        {
+            let path = relationshipName?.split(separator: ".").map(String.init) ?? []
+            let name = (path + [PredicatePlanProperty.persistentIdentifier]).joined(separator: ".")
+            return .property(RuntimePropertyReference(name: name))
+        }
         if let schema,
             ObjectIdentifier(keyPathRootType) == ObjectIdentifier(expectedRootType),
             let destinationModelType = keyPathRootType as? any PersistentModel.Type,

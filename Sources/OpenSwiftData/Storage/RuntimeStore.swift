@@ -108,6 +108,8 @@ public struct RuntimePredicateRequest: Sendable {
     public let ordering: [String]
     /// Typed scalar captures keyed by their reflected value-node paths.
     public let typedCaptures: [RuntimePredicatePath: StoredValue]
+    /// Persistent identifier captures keyed by their reflected value-node paths.
+    public let identifierCaptures: [RuntimePredicatePath: PersistentIdentifier]
     /// The capture encoding used by this request.
     public let captureEncoding: RuntimePredicateCaptureEncoding
     /// Persisted attribute names accepted as direct property references.
@@ -116,6 +118,8 @@ public struct RuntimePredicateRequest: Sendable {
     public let attributeTypes: [String: String]
     /// Optional persisted attribute paths, used to preserve optional comparison semantics.
     public let optionalAttributeNames: Set<String>
+    /// The identifier of the store that owns this query context.
+    public let storeIdentifier: String?
     /// Resolved to-one and direct to-many relationships referenced by predicate expressions.
     public let relationships: [RuntimePredicateRelationship]
 
@@ -129,16 +133,20 @@ public struct RuntimePredicateRequest: Sendable {
         attributeNames: Set<String> = [],
         attributeTypes: [String: String] = [:],
         optionalAttributeNames: Set<String> = [],
+        identifierCaptures: [RuntimePredicatePath: PersistentIdentifier] = [:],
+        storeIdentifier: String? = nil,
         relationships: [RuntimePredicateRelationship] = []
     ) {
         self.entityName = entityName
         self.root = root
         self.ordering = ordering
         self.typedCaptures = typedCaptures
+        self.identifierCaptures = identifierCaptures
         self.captureEncoding = captureEncoding
         self.attributeNames = attributeNames
         self.attributeTypes = attributeTypes
         self.optionalAttributeNames = optionalAttributeNames
+        self.storeIdentifier = storeIdentifier
         self.relationships = relationships
     }
 }

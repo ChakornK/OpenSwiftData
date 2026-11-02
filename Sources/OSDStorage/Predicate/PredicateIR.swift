@@ -11,6 +11,9 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case arithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case realArithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case keyPath([String])
+    case persistentIdentifier([String])
+    case identifierValue(PersistentIdentifier)
+    case persistentIdentifierComparison(ComparisonOperator, PersistentIdentifier, [String])
     case relationshipIsPresent([String])
     case value(StoredValue)
     case nilCoalesce(PredicateIR, PredicateIR)
@@ -51,9 +54,25 @@ package enum PredicateIRBuilder {
         attributeTypes: [String: String] = [:],
         optionalAttributeNames: Set<String> = []
     ) throws -> PredicateIR {
+        func field(_ name: String, from fields: [String: PredicateMirrorWalker.Node]) throws -> PredicateIR {
+            guard let node = fields[name] else {
+                throw PredicateCatalogError.malformedNode("PredicateIR", missingChildren: [name])
+            }
+            return try build(
+                node,
+                attributeTypes: attributeTypes,
+                optionalAttributeNames: optionalAttributeNames)
+        }
         switch node {
         case let .propertyReference(name):
+            if let path = persistentIdentifierPath(name) {
+                return .persistentIdentifier(path)
+            }
             return .keyPath([name])
+        case let .persistentIdentifierReference(path):
+            return .persistentIdentifier(path)
+        case let .identifierCapture(identifier):
+            return .identifierValue(identifier)
         case let .typedValue(value):
             return .value(value)
         case let .capture(typeName, description):
@@ -69,21 +88,29 @@ package enum PredicateIRBuilder {
             switch name {
             case "Conjunction":
                 return .conjunction(
-                    try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                    try field("lhs", from: fields),
+                    try field("rhs", from: fields))
             case "Disjunction":
                 return .disjunction(
-                    try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                    try field("lhs", from: fields),
+                    try field("rhs", from: fields))
             case "Negation":
-                return .negation(try field("wrapped", from: fields, attributeTypes: attributeTypes))
+                return .negation(try field("wrapped", from: fields))
             case "Comparison":
                 guard let operatorNode = fields["op"] else {
                     throw PredicateCatalogError.malformedNode("Comparison", missingChildren: ["op"])
                 }
                 let op = try comparisonOperator(operatorNode)
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
+                if let capture = persistentIdentifierCapture(lhs, comparedTo: rhs) {
+                    return try persistentIdentifierComparison(
+                        op, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
+                if let capture = persistentIdentifierCapture(rhs, comparedTo: lhs) {
+                    return try persistentIdentifierComparison(
+                        op, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
                 return try comparisonIR(
                     op,
                     lhs,
@@ -92,8 +119,8 @@ package enum PredicateIRBuilder {
                     optionalAttributeNames: optionalAttributeNames)
             case "Arithmetic":
                 let op = try arithmeticOperator(try fieldNode("op", from: fields))
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
                 if isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 {
@@ -108,8 +135,8 @@ package enum PredicateIRBuilder {
                 }
                 return .realArithmetic(op, lhs, rhs)
             case "FloatDivision":
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
                 guard isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
@@ -117,8 +144,8 @@ package enum PredicateIRBuilder {
                 }
                 return .realArithmetic(.divide, lhs, rhs)
             case "IntDivision":
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
                 guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
@@ -127,8 +154,8 @@ package enum PredicateIRBuilder {
                 }
                 return .arithmetic(.divide, lhs, rhs)
             case "IntRemainder":
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
                 guard isIntegerArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isIntegerArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
@@ -137,8 +164,16 @@ package enum PredicateIRBuilder {
                 }
                 return .arithmetic(.remainder, lhs, rhs)
             case "Equal":
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
+                if let capture = persistentIdentifierCapture(lhs, comparedTo: rhs) {
+                    return try persistentIdentifierComparison(
+                        .equal, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
+                if let capture = persistentIdentifierCapture(rhs, comparedTo: lhs) {
+                    return try persistentIdentifierComparison(
+                        .equal, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
                 return try comparisonIR(
                     .equal,
                     lhs,
@@ -146,8 +181,16 @@ package enum PredicateIRBuilder {
                     attributeTypes: attributeTypes,
                     optionalAttributeNames: optionalAttributeNames)
             case "NotEqual":
-                let lhs = try field("lhs", from: fields, attributeTypes: attributeTypes)
-                let rhs = try field("rhs", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("lhs", from: fields)
+                let rhs = try field("rhs", from: fields)
+                if let capture = persistentIdentifierCapture(lhs, comparedTo: rhs) {
+                    return try persistentIdentifierComparison(
+                        .notEqual, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
+                if let capture = persistentIdentifierCapture(rhs, comparedTo: lhs) {
+                    return try persistentIdentifierComparison(
+                        .notEqual, capture.identifier, path: capture.path, attributeTypes: attributeTypes)
+                }
                 return try comparisonIR(
                     .notEqual,
                     lhs,
@@ -163,18 +206,21 @@ package enum PredicateIRBuilder {
                 if case let .capture("Swift.KeyPath", description) = field {
                     return .keyPath(try keyPath(description))
                 }
-                return try build(field, attributeTypes: attributeTypes)
+                return try build(
+                    field,
+                    attributeTypes: attributeTypes,
+                    optionalAttributeNames: optionalAttributeNames)
             case "Swift.KeyPath":
                 throw SwiftDataError.unsupportedPredicate("Swift.KeyPath must be captured as a leaf")
             case "Value":
-                return try field("value", from: fields, attributeTypes: attributeTypes)
+                return try field("value", from: fields)
             case "NilCoalesce":
                 return .nilCoalesce(
-                    try field("lhs", from: fields, attributeTypes: attributeTypes),
-                    try field("rhs", from: fields, attributeTypes: attributeTypes))
+                    try field("lhs", from: fields),
+                    try field("rhs", from: fields))
             case "OptionalFlatMap":
-                let wrapped = try field("wrapped", from: fields, attributeTypes: attributeTypes)
-                let transform = try field("transform", from: fields, attributeTypes: attributeTypes)
+                let wrapped = try field("wrapped", from: fields)
+                let transform = try field("transform", from: fields)
                 if case let .keyPath(path) = wrapped, path.count == 1,
                     let collectionElement = scalarCollectionElementType(attributeTypes[path[0]]),
                     case let .collectionContains(name, elementType, element) = transform,
@@ -199,31 +245,31 @@ package enum PredicateIRBuilder {
                 return prefixedTransform
             case "Conditional":
                 return .conditional(
-                    try field("test", from: fields, attributeTypes: attributeTypes),
-                    try field("trueBranch", from: fields, attributeTypes: attributeTypes),
-                    try field("falseBranch", from: fields, attributeTypes: attributeTypes))
+                    try field("test", from: fields),
+                    try field("trueBranch", from: fields),
+                    try field("falseBranch", from: fields))
             case "StringLocalizedStandardContains", "OSDLocalizedStandardContains":
-                let lhs = try field("root", from: fields, attributeTypes: attributeTypes)
+                let lhs = try field("root", from: fields)
                 try validateStringOperand(lhs, attributeTypes: attributeTypes)
-                return .localizedStandardContains(lhs, try field("other", from: fields, attributeTypes: attributeTypes))
+                return .localizedStandardContains(lhs, try field("other", from: fields))
             case "CollectionContainsCollection":
-                let base = try field("base", from: fields, attributeTypes: attributeTypes)
+                let base = try field("base", from: fields)
                 guard case let .keyPath(path) = base, path.count == 1,
                     hasStringType(for: path, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate("Only direct persisted string contains is supported")
                 }
-                return .stringContains(base, try field("other", from: fields, attributeTypes: attributeTypes))
+                return .stringContains(base, try field("other", from: fields))
             case "SequenceStartsWith":
-                let base = try field("base", from: fields, attributeTypes: attributeTypes)
+                let base = try field("base", from: fields)
                 guard case let .keyPath(path) = base, path.count == 1,
                     hasStringType(for: path, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate("Only direct persisted string prefixes are supported")
                 }
-                return .stringStartsWith(base, try field("prefix", from: fields, attributeTypes: attributeTypes))
+                return .stringStartsWith(base, try field("prefix", from: fields))
             case "RangeExpressionContains":
-                let element = try field("element", from: fields, attributeTypes: attributeTypes)
+                let element = try field("element", from: fields)
                 guard case let .keyPath(path) = element, path.count == 1,
                     hasIntegerType(for: path, attributeTypes: attributeTypes),
                     case let .expression(rangeName, rangeChildren) = fields["range"]
@@ -235,8 +281,8 @@ package enum PredicateIRBuilder {
                 case "ClosedRange", "Range":
                     let rangeFields = try validatedFields(
                         rangeChildren, nodeName: rangeName, expected: ["lower", "upper"])
-                    let lower = try field("lower", from: rangeFields, attributeTypes: attributeTypes)
-                    let upper = try field("upper", from: rangeFields, attributeTypes: attributeTypes)
+                    let lower = try field("lower", from: rangeFields)
+                    let upper = try field("upper", from: rangeFields)
                     guard case .value(.int) = lower, case .value(.int) = upper else {
                         throw SwiftDataError.unsupportedPredicate("Range bounds must be typed integer captures")
                     }
@@ -250,7 +296,7 @@ package enum PredicateIRBuilder {
                     let expectedBound = rangeName == "PartialRangeFrom" ? "lowerBound" : "upperBound"
                     let rangeFields = try validatedFields(
                         rangeChildren, nodeName: rangeName, expected: [expectedBound])
-                    let bound = try field(expectedBound, from: rangeFields, attributeTypes: attributeTypes)
+                    let bound = try field(expectedBound, from: rangeFields)
                     guard case .value(.int) = bound else {
                         throw SwiftDataError.unsupportedPredicate("Partial range bounds require integer captures.")
                     }
@@ -265,8 +311,8 @@ package enum PredicateIRBuilder {
                     throw SwiftDataError.unsupportedPredicate("Unsupported integer range kind '\(rangeName)'.")
                 }
             case "SequenceContains":
-                let sequence = try field("sequence", from: fields, attributeTypes: attributeTypes)
-                let element = try field("element", from: fields, attributeTypes: attributeTypes)
+                let sequence = try field("sequence", from: fields)
+                let element = try field("element", from: fields)
                 guard case let .keyPath(path) = sequence, path.count == 1,
                     let elementType = scalarCollectionElementType(attributeTypes[path[0]])
                 else {
@@ -279,7 +325,7 @@ package enum PredicateIRBuilder {
                 }
                 return .collectionContains(path[0], elementType, element)
             case "OSDSequenceContainsWhere":
-                guard case let .keyPath(path) = try field("sequence", from: fields, attributeTypes: attributeTypes),
+                guard case let .keyPath(path) = try field("sequence", from: fields),
                     !path.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -289,12 +335,12 @@ package enum PredicateIRBuilder {
                 return .relationshipContains(
                     relationship,
                     try elementPredicate(
-                        field("test", from: fields, attributeTypes: attributeTypes), relationship: relationship,
+                        field("test", from: fields), relationship: relationship,
                         attributeTypes: attributeTypes))
             case "OSDSequenceIsEmpty":
                 guard
                     case let .keyPath(path) = try field(
-                        "sequence", from: fields, attributeTypes: attributeTypes),
+                        "sequence", from: fields),
                     !path.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate("Collection isEmpty requires a relationship path.")
@@ -319,7 +365,7 @@ package enum PredicateIRBuilder {
             case "OSDSequenceCount":
                 guard
                     case let .keyPath(path) = try field(
-                        "sequence", from: fields, attributeTypes: attributeTypes), !path.isEmpty
+                        "sequence", from: fields), !path.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate("Collection count requires a relationship path.")
                 }
@@ -329,9 +375,9 @@ package enum PredicateIRBuilder {
             case "OSDScalarCollectionAllEqual":
                 guard
                     case let .keyPath(path) = try field(
-                        "sequence", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                        "sequence", from: fields), path.count == 1,
                     let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
-                    case let .value(value) = try field("value", from: fields, attributeTypes: attributeTypes)
+                    case let .value(value) = try field("value", from: fields)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection allSatisfy requires a direct scalar collection and capture.")
@@ -341,11 +387,11 @@ package enum PredicateIRBuilder {
                 "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
                 guard
                     case let .keyPath(path) = try field(
-                        "sequence", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                        "sequence", from: fields), path.count == 1,
                     let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
                     ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
                         .contains(elementType),
-                    case let .value(value) = try field("value", from: fields, attributeTypes: attributeTypes)
+                    case let .value(value) = try field("value", from: fields)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection ordering allSatisfy requires an integer collection and capture.")
@@ -361,7 +407,7 @@ package enum PredicateIRBuilder {
             case "OSDCodableCollectionIsEmpty":
                 guard
                     case let .keyPath(path) = try field(
-                        "collection", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                        "collection", from: fields), path.count == 1,
                     scalarCollectionElementType(attributeTypes[path[0]]) != nil
                 else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -371,7 +417,7 @@ package enum PredicateIRBuilder {
             case "OSDCodableCollectionCount":
                 guard
                     case let .keyPath(path) = try field(
-                        "collection", from: fields, attributeTypes: attributeTypes), path.count == 1,
+                        "collection", from: fields), path.count == 1,
                     scalarCollectionElementType(attributeTypes[path[0]]) != nil
                 else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -381,13 +427,13 @@ package enum PredicateIRBuilder {
             case "OSDSequenceAllSatisfy":
                 guard
                     case let .keyPath(path) = try field(
-                        "sequence", from: fields, attributeTypes: attributeTypes), !path.isEmpty
+                        "sequence", from: fields), !path.isEmpty
                 else {
                     throw SwiftDataError.unsupportedPredicate("allSatisfy requires a relationship collection path.")
                 }
                 let relationship = path.joined(separator: ".")
                 let body = try elementPredicate(
-                    field("test", from: fields, attributeTypes: attributeTypes),
+                    field("test", from: fields),
                     relationship: relationship,
                     attributeTypes: attributeTypes)
                 return .negation(.relationshipContains(relationship, .negation(body)))
@@ -404,6 +450,23 @@ package enum PredicateIRBuilder {
     ) throws -> PredicateIR {
         let normalizedRelationships = relationships.flatMap { $0.split(separator: ".").map(String.init) }
         switch ir {
+        case let .persistentIdentifier(path):
+            let fullPath =
+                path.starts(with: normalizedRelationships)
+                ? path
+                : normalizedRelationships + path
+            return .persistentIdentifier(fullPath)
+        case .identifierValue:
+            return ir
+        case let .persistentIdentifierComparison(op, identifier, path):
+            let fullPath =
+                path.starts(with: normalizedRelationships)
+                ? path
+                : normalizedRelationships + path
+            return .persistentIdentifierComparison(
+                op,
+                identifier,
+                try validatedPersistentIdentifierPath(fullPath, attributeTypes: attributeTypes))
         case let .keyPath(path):
             guard !path.isEmpty else {
                 throw SwiftDataError.unsupportedPredicate(
@@ -415,6 +478,16 @@ package enum PredicateIRBuilder {
                 ? Array(expandedPath.dropFirst(normalizedRelationships.count)) : expandedPath
             let fullPath = normalizedRelationships + normalizedPath
             let fullName = fullPath.joined(separator: ".")
+            if fullPath.last == PredicatePlanProperty.persistentIdentifier {
+                let relationshipPath = fullPath.dropLast().joined(separator: ".")
+                guard !relationshipPath.isEmpty,
+                    attributeTypes[relationshipPath] == "OSDToOneRelationship"
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Persistent identifier relationship paths must resolve to a to-one relationship.")
+                }
+                return .keyPath(fullPath)
+            }
             if attributeTypes[fullName] == "OSDToOneRelationship" {
                 return .keyPath(fullPath)
             }
@@ -606,7 +679,8 @@ package enum PredicateIRBuilder {
             return false
         case .codableCollectionCount:
             return false
-        case .sequenceContains, .relationshipIsPresent, .relationshipCount, .value:
+        case .sequenceContains, .relationshipIsPresent, .relationshipCount, .persistentIdentifier,
+            .identifierValue, .persistentIdentifierComparison, .value:
             return false
         }
     }
@@ -640,10 +714,55 @@ package enum PredicateIRBuilder {
         guard !hasNullLiteral, hasNullableOperand else {
             return comparison(op, lhs, rhs, decimal: decimal)
         }
-        if op == .equal || op == .notEqual {
-            return .optionalComparison(op, lhs, rhs, decimal: decimal)
-        }
         return .optionalComparison(op, lhs, rhs, decimal: decimal)
+    }
+
+    private static func persistentIdentifierPath(_ name: String) -> [String]? {
+        let components = name.split(separator: ".").map(String.init)
+        guard components.last == PredicatePlanProperty.persistentIdentifier else { return nil }
+        return Array(components.dropLast())
+    }
+
+    private static func persistentIdentifierCapture(
+        _ lhs: PredicateIR,
+        comparedTo rhs: PredicateIR
+    ) -> (identifier: PersistentIdentifier, path: [String])? {
+        guard case let .persistentIdentifier(path) = lhs,
+            case let .identifierValue(identifier) = rhs
+        else { return nil }
+        return (identifier, path)
+    }
+
+    private static func persistentIdentifierComparison(
+        _ op: PredicateIR.ComparisonOperator,
+        _ identifier: PersistentIdentifier,
+        path: [String],
+        attributeTypes: [String: String]
+    ) throws -> PredicateIR {
+        guard op == .equal || op == .notEqual else {
+            throw SwiftDataError.unsupportedPredicate("PersistentIdentifier supports equality comparisons only.")
+        }
+        let validatedPath = try validatedPersistentIdentifierPath(path, attributeTypes: attributeTypes)
+        return .persistentIdentifierComparison(op, identifier, validatedPath)
+    }
+
+    private static func validatedPersistentIdentifierPath(
+        _ path: [String],
+        attributeTypes: [String: String]
+    ) throws -> [String] {
+        guard !path.contains(where: { $0.isEmpty || $0 == PredicatePlanProperty.persistentIdentifier }) else {
+            throw SwiftDataError.unsupportedPredicate("Invalid persistent identifier relationship path.")
+        }
+        guard !path.isEmpty else { return path }
+        var relationshipPath: [String] = []
+        for component in path {
+            relationshipPath.append(component)
+            guard attributeTypes[relationshipPath.joined(separator: ".")] == "OSDToOneRelationship" else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Persistent identifier paths must contain only declared to-one relationships.")
+            }
+        }
+        return path
     }
 
     private static func isNullLiteral(_ value: PredicateIR) -> Bool {
@@ -684,6 +803,7 @@ package enum PredicateIRBuilder {
                 || isNullablePredicateValue(
                     rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
         case .comparison, .decimalComparison, .optionalComparison, .conjunction, .disjunction, .negation,
+            .persistentIdentifier, .identifierValue, .persistentIdentifierComparison,
             .relationshipIsPresent, .value, .sequenceContains, .collectionContains, .collectionAllEqual,
             .collectionAllCompare, .codableCollectionIsEmpty, .codableCollectionCount,
             .relationshipContains, .relationshipCount:
@@ -993,17 +1113,6 @@ package enum PredicateIRBuilder {
                 "Malformed predicate node \(nodeName): expected \(expected.sorted()), found \(actual.sorted())")
         }
         return fields
-    }
-
-    private static func field(
-        _ name: String,
-        from fields: [String: PredicateMirrorWalker.Node],
-        attributeTypes: [String: String]
-    ) throws -> PredicateIR {
-        guard let node = fields[name] else {
-            throw PredicateCatalogError.malformedNode("PredicateIR", missingChildren: [name])
-        }
-        return try build(node, attributeTypes: attributeTypes)
     }
 
     private static func capturedValue(typeName: String, description: String) throws -> PredicateIR {

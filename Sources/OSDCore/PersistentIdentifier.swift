@@ -32,6 +32,13 @@ public struct PersistentIdentifier: Hashable, Codable, Sendable {
         temporaryIdentifier != nil
     }
 
+    /// Encodes the complete identifier as deterministic bytes for pending predicate comparison.
+    package func predicateIdentityBytes() throws -> [UInt8] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return Array(try encoder.encode(self))
+    }
+
     private enum CodingKeys: String, CodingKey {
         case storeIdentifier
         case entityName

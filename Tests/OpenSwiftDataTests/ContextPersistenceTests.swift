@@ -1351,6 +1351,90 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentIdentifierEqualityPredicateMatchesStoredAndPendingModels() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self,
+            configurations: .sqliteMemory("persistent-identifier-predicate"))
+        let context = container.mainContext
+        let storedMatch = PersistenceTestModel(title: "match")
+        let storedOther = PersistenceTestModel(title: "other")
+        context.insert(storedMatch)
+        context.insert(storedOther)
+        try context.save()
+        let pendingMatch = PersistenceTestModel(title: "pending")
+        context.insert(pendingMatch)
+        let identifier = storedMatch.persistentModelID
+        let pendingIdentifier = pendingMatch.persistentModelID
+        let identifierPredicate = #Predicate<PersistenceTestModel> {
+            $0.persistentModelID == identifier
+        }
+        let descriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: identifierPredicate)
+        let pendingDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == pendingIdentifier })
+        let notEqualDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID != identifier })
+        let foreignIdentifier = PersistentIdentifier(
+            storeIdentifier: "another-store", entityName: "PersistenceTestModel", primaryKey: 1)
+        let foreignDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == foreignIdentifier })
+        let wrongEntityIdentifier = PersistentIdentifier(
+            storeIdentifier: identifier.storeIdentifier, entityName: "OtherEntity", primaryKey: 1)
+        let wrongEntityDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == wrongEntityIdentifier })
+        let encodedIdentifier = try JSONEncoder().encode(identifier)
+        let decodedIdentifier = try JSONDecoder().decode(PersistentIdentifier.self, from: encodedIdentifier)
+        let decodedDescriptor = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == decodedIdentifier })
+
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let predicateTree = try PredicateRuntimeTreeBuilder.build(
+            identifierPredicate.expression,
+            modelType: PersistenceTestModel.self,
+            entity: entity)
+        guard let queryStore = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected query-capable store")
+        }
+        let compiled = try queryStore.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: predicateTree.root,
+                ordering: [],
+                typedCaptures: predicateTree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)),
+                attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) }),
+                identifierCaptures: predicateTree.identifierCaptures,
+                storeIdentifier: identifier.storeIdentifier))
+        XCTAssertTrue(compiled.sql.contains("Z_ENT"))
+        XCTAssertTrue(compiled.sql.contains("Z_PK"))
+        XCTAssertEqual(compiled.arguments.count, 4)
+
+        XCTAssertEqual(try context.fetch(descriptor).map(\.title), ["match"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [identifier])
+        XCTAssertEqual(try context.fetch(pendingDescriptor).map(\.title), ["pending"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 1)
+        XCTAssertEqual(Set(try context.fetch(notEqualDescriptor).map(\.title)), ["other", "pending"])
+        XCTAssertTrue(try context.fetch(foreignDescriptor).isEmpty)
+        XCTAssertTrue(try context.fetch(wrongEntityDescriptor).isEmpty)
+        XCTAssertEqual(try context.fetch(decodedDescriptor).map(\.title), ["match"])
+
+        let temporaryIdentifier = PersistentIdentifier(
+            storeIdentifier: identifier.storeIdentifier,
+            entityName: identifier.entityName,
+            temporaryIdentifier: try XCTUnwrap(
+                UUID(uuidString: "00000000-0000-0000-0000-000000000099")))
+        let temporaryNotEqual = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID != temporaryIdentifier })
+        let foreignNotEqual = FetchDescriptor<PersistenceTestModel>(
+            predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID != foreignIdentifier })
+        let storedOnlyContext = container.makeContext()
+        XCTAssertEqual(Set(try storedOnlyContext.fetch(temporaryNotEqual).map(\.title)), ["match", "other"])
+        XCTAssertEqual(Set(try storedOnlyContext.fetch(foreignNotEqual).map(\.title)), ["match", "other"])
+    }
+
+    @MainActor
     func testOptionalRelationshipScalarComparisonTreatsMissingDestinationAsNil() throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
@@ -1384,6 +1468,36 @@ final class ContextPersistenceTests: XCTestCase {
             },
             sortBy: [SortDescriptor(\.title)])
         XCTAssertEqual(try context.fetch(negatedOrdering).map(\.title), ["missing", "pending", "present"])
+    }
+
+    @MainActor
+    func testOptionalRelationshipPersistentIdentifierPredicateMatchesEndpoint() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("optional-relationship-identifier"))
+        let context = container.mainContext
+        let missing = PersistentRelationshipOwner(title: "missing")
+        let present = PersistentRelationshipOwner(title: "present")
+        let child = PersistentRelationshipChild(title: "child")
+        context.insert(missing)
+        context.insert(present)
+        present.favorite = child
+        try context.save()
+        let pending = PersistentRelationshipOwner(title: "pending")
+        context.insert(pending)
+        let childIdentifier = child.persistentModelID
+        let equal = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: #Predicate<PersistentRelationshipOwner> {
+                $0.favorite?.persistentModelID == childIdentifier
+            },
+            sortBy: [SortDescriptor(\.title)])
+        let notEqual = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: #Predicate<PersistentRelationshipOwner> {
+                $0.favorite?.persistentModelID != childIdentifier
+            },
+            sortBy: [SortDescriptor(\.title)])
+        XCTAssertEqual(try context.fetch(equal).map(\.title), ["present"])
+        XCTAssertEqual(try context.fetch(notEqual).map(\.title), ["missing", "pending"])
     }
 
     @MainActor

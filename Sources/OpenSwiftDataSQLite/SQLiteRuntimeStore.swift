@@ -109,11 +109,22 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
             throw SwiftDataError.unsupportedPredicate("Unsupported predicate capture encoding")
         }
         var consumedCaptures = Set<RuntimePredicatePath>()
+        var consumedIdentifierCaptures = Set<RuntimePredicatePath>()
         let node = try storageNode(
-            request.root, path: [], captures: request.typedCaptures, attributeNames: request.attributeNames,
-            usesTypedCaptures: request.captureEncoding == .typed, consumed: &consumedCaptures)
+            request.root,
+            path: [],
+            captures: request.typedCaptures,
+            identifierCaptures: request.identifierCaptures,
+            attributeNames: request.attributeNames,
+            usesTypedCaptures: request.captureEncoding == .typed,
+            consumed: &consumedCaptures,
+            consumedIdentifierCaptures: &consumedIdentifierCaptures)
         guard consumedCaptures == Set(request.typedCaptures.keys) else {
             throw SwiftDataError.unsupportedPredicate("Predicate capture paths did not match the reflected tree")
+        }
+        guard consumedIdentifierCaptures == Set(request.identifierCaptures.keys) else {
+            throw SwiftDataError.unsupportedPredicate(
+                "Persistent identifier capture paths did not match the reflected tree")
         }
         let ir = try PredicateIRBuilder.build(
             node,
@@ -124,7 +135,9 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
             ir,
             entity: request.entityName,
             ordering: request.ordering,
-            relationships: request.relationships)
+            relationships: request.relationships,
+            storeIdentifier: request.storeIdentifier ?? "",
+            entityIDsByName: runtimeSchema.entityIDsByName)
         return RuntimeCompiledPredicate(
             sql: compiled.sql, arguments: compiled.arguments.map(runtimeValue), evaluatorPlan: plan)
     }
@@ -133,9 +146,11 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
         _ node: RuntimePredicateNode,
         path: [String],
         captures: [RuntimePredicatePath: StoredValue],
+        identifierCaptures: [RuntimePredicatePath: PersistentIdentifier],
         attributeNames: Set<String>,
         usesTypedCaptures: Bool,
-        consumed: inout Set<RuntimePredicatePath>
+        consumed: inout Set<RuntimePredicatePath>,
+        consumedIdentifierCaptures: inout Set<RuntimePredicatePath>
     ) throws -> PredicateMirrorWalker.Node {
         switch node {
         case let .expression(name, children):
@@ -151,7 +166,11 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
             {
                 let resolved = try storageNode(
                     property, path: path + ["keyPath"], captures: captures,
-                    attributeNames: attributeNames, usesTypedCaptures: usesTypedCaptures, consumed: &consumed)
+                    identifierCaptures: identifierCaptures,
+                    attributeNames: attributeNames,
+                    usesTypedCaptures: usesTypedCaptures,
+                    consumed: &consumed,
+                    consumedIdentifierCaptures: &consumedIdentifierCaptures)
                 guard case .propertyReference = resolved else {
                     throw SwiftDataError.unsupportedPredicate("Predicate KeyPath did not resolve to a model attribute")
                 }
@@ -162,6 +181,13 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
                     throw SwiftDataError.unsupportedPredicate("Malformed typed Value predicate node")
                 }
                 let capturePath = RuntimePredicatePath(labels: path)
+                if let identifier = identifierCaptures[capturePath] {
+                    guard consumedIdentifierCaptures.insert(capturePath).inserted else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Duplicate persistent identifier capture at \(path)")
+                    }
+                    return .expression(name: name, children: [("value", .identifierCapture(identifier))])
+                }
                 guard let value = captures[capturePath] else {
                     throw SwiftDataError.unsupportedPredicate("Missing typed predicate capture at \(path)")
                 }
@@ -177,11 +203,18 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
                         label,
                         try storageNode(
                             child, path: path + [label], captures: captures,
+                            identifierCaptures: identifierCaptures,
                             attributeNames: attributeNames,
-                            usesTypedCaptures: usesTypedCaptures, consumed: &consumed)
+                            usesTypedCaptures: usesTypedCaptures,
+                            consumed: &consumed,
+                            consumedIdentifierCaptures: &consumedIdentifierCaptures)
                     )
                 })
         case let .property(reference):
+            let components = reference.name.split(separator: ".").map(String.init)
+            if components.last == PredicatePlanProperty.persistentIdentifier {
+                return .persistentIdentifierReference(Array(components.dropLast()))
+            }
             guard attributeNames.contains(reference.name) else {
                 throw SwiftDataError.unsupportedPredicate(
                     "Predicate references unknown attribute '\(reference.name)'; allowed: \(attributeNames.sorted())")

@@ -1169,6 +1169,22 @@ package enum LightweightMigration {
                 ))
             return
         }
+        if try compatibleIntegerWidening(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         for mapping in mappings {
             guard let old = mapping.source else { continue }
             let oldIsFlattened = old.options.contains(.flattened)
@@ -1295,6 +1311,89 @@ package enum LightweightMigration {
             property: "\(destination.name).\(change.destination.name)",
             options: change.destination.options)
         return change
+    }
+
+    private static func compatibleIntegerWidening(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> Bool {
+        let changes = mappings.filter { mapping in
+            guard let source = mapping.source else { return false }
+            return source.type != mapping.destination.type
+        }
+        guard !changes.isEmpty else { return false }
+        guard changes.count == 1,
+            let change = changes.first,
+            let oldAttribute = change.source,
+            oldAttribute.name == change.destination.name,
+            oldAttribute.isOptional == change.destination.isOptional,
+            oldAttribute.defaultValue == change.destination.defaultValue,
+            oldAttribute.options == change.destination.options,
+            oldAttribute.originalName == change.destination.originalName,
+            oldAttribute.components.isEmpty,
+            change.destination.components.isEmpty,
+            let sourceWidth = signedIntegerWidth(oldAttribute.type),
+            let destinationWidth = signedIntegerWidth(change.destination.type),
+            destinationWidth > sourceWidth,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return old == oldAttribute || old == mapping.destination
+            }),
+            source.name == destination.name,
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && sourceEntity.indexes == destinationEntity.indexes
+                }
+                return sourceEntity.superentityName == destinationEntity.superentityName
+                    && sourceEntity.attributes.count == destinationEntity.attributes.count
+                    && sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                    && sourceEntity.relationships == destinationEntity.relationships
+                    && sourceEntity.indexes == destinationEntity.indexes
+            }),
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !oldAttribute.options.contains(.codable),
+            !oldAttribute.options.contains(.flattened),
+            !oldAttribute.options.contains(.externalStorage),
+            !oldAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            try SQLColumnType.resolve(
+                oldAttribute.type, property: "\(source.name).\(oldAttribute.name)", options: oldAttribute.options)
+                == .integer,
+            try SQLColumnType.resolve(
+                change.destination.type,
+                property: "\(destination.name).\(change.destination.name)",
+                options: change.destination.options) == .integer
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Numeric widening must be a single signed-integer change with unchanged storage metadata.")
+        }
+        return true
+    }
+
+    private static func signedIntegerWidth(_ typeName: String) -> Int? {
+        let name = typeName.split(separator: ".").last.map(String.init) ?? typeName
+        return switch name {
+        case "Int8": 8
+        case "Int16": 16
+        case "Int32": 32
+        case "Int64": 64
+        case "Int": Int.bitWidth
+        default: nil
+        }
     }
 
     private static func validateOptionalityBackfillSideEffects(

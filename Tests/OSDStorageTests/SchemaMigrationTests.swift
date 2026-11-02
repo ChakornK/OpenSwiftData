@@ -656,7 +656,7 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
-    func testIndexedAttributeRemovalFailsWithoutChangingStore() throws {
+    func testIndexedAttributeRemovalDropsOrdinaryIndexAndPreservesRows() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -674,16 +674,218 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try initial.close()
 
-        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertFalse(
+            try reopened.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZVALUE") }))
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT FROM ZRECORD") },
+            [[.int(1), .int(2)]])
+        XCTAssertTrue(
+            try reopened.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZVALUE_INDEX'")
+                    .isEmpty
+            })
+        try reopened.close()
+    }
+
+    func testUnindexedScalarRemovalDropsDependentOrdinaryIndexes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int"),
+                    Schema.Attribute(name: "category", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["obsolete"]),
+                    Schema.Index(properties: ["category", "obsolete"]),
+                    Schema.Index(properties: ["title"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "category", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZTITLE, ZOBSOLETE, ZCATEGORY) VALUES (1, 6, 'kept', 9, 'group')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let columns = try migrated.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        XCTAssertFalse(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
+        let indexNames = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+        }.compactMap { row -> String? in
+            guard case let .text(name)? = row.first else { return nil }
+            return name
+        }
+        XCTAssertEqual(indexNames, ["ZRECORD_ZTITLE_INDEX"])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE, ZCATEGORY FROM ZRECORD") },
+            [[.int(1), .int(6), .text("kept"), .text("group")]])
+        try migrated.close()
+    }
+
+    func testUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "unique-indexed-attribute-removal"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "obsolete", type: "Int")],
+                indexes: [Schema.Index(properties: ["obsolete"], isUnique: true)])
+        ])
+        let destination = Schema([Schema.Entity(name: "Record")])
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected migrationUnsupported, got \(error)")
+                return XCTFail("Expected unique index removal to fail closed, got \(error)")
             }
         }
-        let reopened = try LightweightMigration.openStore(location: location, schema: source)
-        XCTAssertEqual(
-            try reopened.read { try $0.rows("SELECT ZVALUE FROM ZRECORD") },
-            [[.int(5)]])
-        try reopened.close()
+        XCTAssertTrue(
+            try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
+        try driver.close()
+    }
+
+    func testCompositeUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "composite-unique-attribute-removal"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "Int"),
+                    Schema.Attribute(name: "scope", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["obsolete", "scope"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "scope", type: "String")])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE, ZSCOPE) VALUES (1, 1, 5, 'a')")
+            XCTAssertThrowsError(
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected composite unique constraint removal to fail closed, got \(error)")
+                }
+            }
+            XCTAssertEqual(try connection.rows("SELECT ZOBSOLETE, ZSCOPE FROM ZRECORD"), [[.int(5), .text("a")]])
+            XCTAssertTrue(
+                try connection.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZOBSOLETE_ZSCOPE_UNIQUE_INDEX'"
+                )
+                .count == 1)
+        }
+        try driver.close()
+    }
+
+    func testIndexedAttributeRemovalPreflightsSideEffectsBeforeDroppingIndexes() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "indexed-removal-preflight"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "Int"),
+                    Schema.Attribute(name: "title", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["obsolete"]),
+                    Schema.Index(properties: ["title"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "CREATE TRIGGER BLOCK_REMOVAL AFTER UPDATE ON ZRECORD BEGIN SELECT 1; END")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected removal side-effect preflight to reject, got \(error)")
+            }
+        }
+        let indexNames = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+        }.compactMap { row -> String? in
+            guard case let .text(name)? = row.first else { return nil }
+            return name
+        }
+        XCTAssertTrue(indexNames.contains("ZRECORD_ZOBSOLETE_INDEX"))
+        XCTAssertTrue(indexNames.contains("ZRECORD_ZTITLE_INDEX"))
+        XCTAssertTrue(
+            try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
+        try driver.close()
+    }
+
+    func testIndexedAttributeRemovalRejectsPartialAndExpressionIndexes() throws {
+        let rawIndexes = [
+            ("partial", "CREATE INDEX USER_PARTIAL_INDEX ON ZRECORD (ZTITLE) WHERE ZOBSOLETE > 0"),
+            ("expression", "CREATE INDEX USER_EXPRESSION_INDEX ON ZRECORD (ZOBSOLETE + 1)"),
+        ]
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "Int"),
+                    Schema.Attribute(name: "title", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["obsolete"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        ])
+        for (kind, statement) in rawIndexes {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "attribute-removal-raw-index-\(kind)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { try $0.execute(statement) }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(kind) index to reject removal, got \(error)")
+                }
+            }
+            XCTAssertTrue(
+                try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                    .contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
+            let indexName = kind == "partial" ? "USER_PARTIAL_INDEX" : "USER_EXPRESSION_INDEX"
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?", [.text(indexName)])
+                        .count
+                },
+                1)
+            try driver.close()
+        }
     }
 
     func testRelationshipBearingEntityRemovalFailsWithoutChangingStore() throws {

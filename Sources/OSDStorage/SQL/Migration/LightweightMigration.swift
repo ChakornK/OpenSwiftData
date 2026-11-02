@@ -1435,6 +1435,27 @@ package enum LightweightMigration {
             }
             let column = "Z\(removedAttribute.name.uppercased())"
             try validateColumnRemovalSideEffects(table: table, connection: connection)
+            let removedIndexNames = Set(
+                source.indexes.compactMap { index -> String? in
+                    guard !index.isUnique, index.properties.contains(removedAttribute.name) else { return nil }
+                    let columns = index.properties.map { "Z\($0.uppercased())" }
+                    return "Z\(source.name.uppercased())_\(columns.joined(separator: "_"))_INDEX"
+                })
+            let removedIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities)).filter {
+                removedIndexNames.contains($0.name.uppercased())
+            }
+            try validateIndexesForAttributeRemoval(
+                table: table,
+                column: column,
+                removableIndexNames: removedIndexNames,
+                knownIndexNames: Set(
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)).map {
+                        $0.name.uppercased()
+                    }),
+                connection: connection)
+            for definition in removedIndexDefinitions {
+                try connection.execute("DROP INDEX IF EXISTS \(definition.name)")
+            }
             try connection.execute("ALTER TABLE \(table) DROP COLUMN \(column)")
             indexTransitions.append(
                 (
@@ -1671,9 +1692,12 @@ package enum LightweightMigration {
         guard !removed.isEmpty else { return nil }
         guard removed.count == 1,
             let removedAttribute = removed.first,
+            let remainingSourceEntity = destinationEntities.first(where: { $0.name == destination.name }),
+            source.indexes.filter({
+                !(!$0.isUnique && $0.properties.contains(removedAttribute.name))
+            }) == remainingSourceEntity.indexes,
             removedAttribute.options.isDisjoint(with: [.unique, .codable, .flattened, .externalStorage]),
             !removedAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
-            !source.indexes.contains(where: { $0.properties.contains(removedAttribute.name) }),
             !destination.attributes.contains(where: { $0.originalName == removedAttribute.name }),
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ mapping in
@@ -1694,7 +1718,9 @@ package enum LightweightMigration {
                 if sourceEntity.name == source.name {
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && sourceEntity.indexes == destinationEntity.indexes
+                        && sourceEntity.indexes.filter({
+                            !(!$0.isUnique && $0.properties.contains(removedAttribute.name))
+                        }) == destinationEntity.indexes
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName
                     && sourceEntity.attributes.count == destinationEntity.attributes.count
@@ -1744,6 +1770,45 @@ package enum LightweightMigration {
             })
         else {
             throw SwiftDataError.migrationUnsupported("Attribute removal requires the standard INTEGER primary key.")
+        }
+    }
+
+    private static func validateIndexesForAttributeRemoval(
+        table: String,
+        column: String,
+        removableIndexNames: Set<String>,
+        knownIndexNames: Set<String>,
+        connection: SQLConnection
+    ) throws {
+        let indexes = try connection.rows(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE",
+            [.text(table)])
+        for row in indexes {
+            guard row.count > 1, case let .text(name) = row[0] else { continue }
+            let normalizedName = name.uppercased()
+            if removableIndexNames.contains(normalizedName) { continue }
+            guard !knownIndexNames.contains(normalizedName) else { continue }
+
+            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            let indexedColumns = try connection.rows("PRAGMA index_info(\(quotedName))")
+            let referencesColumn = indexedColumns.contains { indexRow in
+                guard indexRow.count > 2, case let .text(indexedName) = indexRow[2] else { return false }
+                return indexedName.caseInsensitiveCompare(column) == .orderedSame
+            }
+            let sqlReferencesColumn: Bool
+            if case let .text(sql) = row[1] {
+                sqlReferencesColumn =
+                    sql.range(
+                        of: #"(?i)(?<![A-Za-z0-9_])"# + NSRegularExpression.escapedPattern(for: column)
+                            + #"(?![A-Za-z0-9_])"#,
+                        options: .regularExpression) != nil
+            } else {
+                sqlReferencesColumn = false
+            }
+            guard !referencesColumn, !sqlReferencesColumn else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Attribute removal cannot preserve untracked index \(name) referencing \(column).")
+            }
         }
     }
 

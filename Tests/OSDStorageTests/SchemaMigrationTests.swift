@@ -616,6 +616,116 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testFloatToDoubleWideningValidatesStoredValuesAndPreservesRows() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("float-widening.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            for (version, literal) in [
+                (Int64(1), "0.125"),
+                (Int64(2), "-0.0"),
+                (Int64(3), "1.401298464324817e-45"),
+                (Int64(4), "1.0e999"),
+                (Int64(5), "-1.0e999"),
+            ] {
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, \(literal))", [.int(version)])
+            }
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, 16777216)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 7, NULL)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .int(1), .text("real"), .double(0.125)],
+                [.int(2), .int(2), .text("real"), .double(0.0)],
+                [.int(3), .int(3), .text("real"), .double(1.401298464324817e-45)],
+                [.int(4), .int(4), .text("real"), .double(Double.infinity)],
+                [.int(5), .int(5), .text("real"), .double(-Double.infinity)],
+                [.int(6), .int(6), .text("real"), .double(16_777_216.0)],
+                [.int(7), .int(7), .text("null"), .null],
+            ])
+        let retainedIndexes = try migrated.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+        }
+        XCTAssertEqual(retainedIndexes, [[.text("ZRECORD_ZVALUE_INDEX")]])
+        try migrated.close()
+    }
+
+    func testFloatToDoubleWideningRejectsInexactAndMalformedValuesAtomically() throws {
+        let failures: [(String, String)] = [
+            ("inexact", "0.1"),
+            ("underflow", "1.0e-46"),
+            ("overflow", "1.0e39"),
+        ]
+        for (name, literal) in failures {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            ])
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            try initial.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, \(literal))")
+            }
+            let originalValue = try initial.read { try $0.rows("SELECT ZVALUE FROM ZRECORD").first?.first }
+            let sourceHash = try initial.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?
+                .first
+            }
+            try initial.close()
+
+            XCTAssertThrowsError(
+                try LightweightMigration.openStore(location: location, schema: destination),
+                "Expected \(name) value to fail widening validation"
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) value to fail widening validation, got \(error)")
+                }
+            }
+            let reopened = try LightweightMigration.openStore(location: location, schema: source)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT ZVALUE FROM ZRECORD") },
+                [[try XCTUnwrap(originalValue)]])
+            XCTAssertEqual(
+                try reopened.read {
+                    try $0.rows(
+                        "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                    ).first?
+                    .first
+                },
+                sourceHash)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY") },
+                [[.int(1), .text("Record")]])
+            try reopened.close()
+        }
+    }
+
     func testUnindexedScalarAttributeRemovalPreservesRowsAndReopens() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

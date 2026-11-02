@@ -1421,6 +1421,28 @@ package enum LightweightMigration {
                 ))
             return
         }
+        if let floatingWidening = try compatibleFloatToDoubleWidening(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            let column = "Z\(floatingWidening.destination.name.uppercased())"
+            try validateFloatValuesForWidening(
+                table: table,
+                column: column,
+                isOptional: floatingWidening.source?.isOptional ?? false,
+                connection: connection)
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         if let removedAttribute = try removableScalarAttribute(
             mappings,
             source: source,
@@ -1612,6 +1634,11 @@ package enum LightweightMigration {
             return source.type != mapping.destination.type
         }
         guard !changes.isEmpty else { return false }
+        let hasSignedIntegerType = changes.contains { mapping in
+            guard let old = mapping.source else { return false }
+            return signedIntegerWidth(old.type) != nil || signedIntegerWidth(mapping.destination.type) != nil
+        }
+        guard hasSignedIntegerType else { return false }
         guard changes.count == 1,
             let change = changes.first,
             let oldAttribute = change.source,
@@ -1678,6 +1705,112 @@ package enum LightweightMigration {
         case "Int64": 64
         case "Int": Int.bitWidth
         default: nil
+        }
+    }
+
+    private static func compatibleFloatToDoubleWidening(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changed = mappings.filter { mapping in
+            guard let source = mapping.source else { return false }
+            return source.type != mapping.destination.type
+        }
+        guard !changed.isEmpty else { return nil }
+        guard changed.count == 1,
+            let mapping = changed.first,
+            let sourceAttribute = mapping.source,
+            sourceAttribute.type == "Float",
+            mapping.destination.type == "Double",
+            sourceAttribute.name == mapping.destination.name,
+            sourceAttribute.isOptional == mapping.destination.isOptional,
+            sourceAttribute.defaultValue == mapping.destination.defaultValue,
+            sourceAttribute.options == mapping.destination.options,
+            sourceAttribute.originalName == mapping.destination.originalName,
+            sourceAttribute.components.isEmpty,
+            mapping.destination.components.isEmpty,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ candidate in
+                guard let old = candidate.source else { return false }
+                return old == sourceAttribute || old == candidate.destination
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            source.indexes == destination.indexes,
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.relationships == destinationEntity.relationships
+                        && sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.indexes == destinationEntity.indexes
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            !sourceAttribute.options.contains(.codable),
+            !sourceAttribute.options.contains(.flattened),
+            !sourceAttribute.options.contains(.externalStorage),
+            !sourceAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            try SQLColumnType.resolve(
+                sourceAttribute.type, property: "\(source.name).\(sourceAttribute.name)",
+                options: sourceAttribute.options)
+                == .float,
+            try SQLColumnType.resolve(
+                mapping.destination.type,
+                property: "\(destination.name).\(mapping.destination.name)",
+                options: mapping.destination.options) == .float
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Numeric widening must be a single Float-to-Double change with unchanged storage metadata.")
+        }
+        return mapping
+    }
+
+    private static func validateFloatValuesForWidening(
+        table: String,
+        column: String,
+        isOptional: Bool,
+        connection: SQLConnection
+    ) throws {
+        let rows = try connection.rows(
+            "SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
+        for row in rows {
+            guard row.count > 1, case let .text(storageType) = row[0] else {
+                throw SwiftDataError.migrationUnsupported("Float column \(column) has invalid SQLite storage metadata.")
+            }
+            switch (storageType, row[1]) {
+            case ("null", .null) where isOptional:
+                continue
+            case ("null", .null):
+                throw SwiftDataError.migrationUnsupported("Required Float column \(column) contains NULL.")
+            case ("integer", .int(let value)):
+                guard value >= -16_777_216, value <= 16_777_216 else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Float column \(column) contains an integer not exactly representable as Float.")
+                }
+            case ("real", .double(let value)):
+                if value.isNaN { continue }
+                let floatValue = Float(value)
+                guard Double(floatValue) == value else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Float column \(column) contains a value not exactly representable as Float.")
+                }
+            default:
+                throw SwiftDataError.migrationUnsupported(
+                    "Float column \(column) contains unsupported SQLite storage type '\(storageType)'.")
+            }
         }
     }
 

@@ -4572,6 +4572,282 @@ final class SchemaMigrationTests: XCTestCase {
         try emptyStore.close()
     }
 
+    func testIndependentRootRemovalDropsOutgoingOptionalToOneStorage() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("owner-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 6, 'target')")
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 4, 'owner', 1)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET") },
+            [[.int(1), .int(2), .int(6), .text("target")]])
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER'").isEmpty
+            })
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZTARGET_INDEX'")
+                    .isEmpty
+            })
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'Owner'").isEmpty
+            })
+        XCTAssertEqual(try migrated.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 3)
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT ZNAME FROM ZTARGET") }, [[.text("target")]])
+        try reopened.close()
+    }
+
+    func testIndependentRootRemovalRejectsOutgoingLinkToAnotherRemovedRoot() throws {
+        let source = Schema([
+            Schema.Entity(name: "Retained"),
+            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Retained")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-two-linked-roots"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected linked root removals to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ZOWNER', 'ZTARGET') ORDER BY name"
+                )
+            },
+            [[.text("ZOWNER")], [.text("ZTARGET")]])
+        try driver.close()
+    }
+
+    func testMixedRemovalOfRelationshipOwnerAndAdditionPreservesTargetAndIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("mixed-owner-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Alpha"),
+            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Alpha"),
+            Schema.Entity(name: "NewRoot"),
+            Schema.Entity(name: "Target"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (3, 8)")
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZTARGET) VALUES (2, 5, 1)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET") }, [[.int(1), .int(3), .int(8)]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.int(1), .text("Alpha")], [.int(3), .text("Target")], [.int(4), .text("NewRoot")]])
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER'").isEmpty
+            })
+        XCTAssertEqual(try migrated.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 5)
+        try migrated.close()
+    }
+
+    func testMixedRelationshipOwnerRemovalRejectsGeneratedIndexTableCollision() throws {
+        let source = Schema([
+            Schema.Entity(name: "Retained"),
+            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let nextID = try XCTUnwrap(source.entityIDsByName.values.max()) + 1
+        let destination = try Schema(
+            [
+                Schema.Entity(name: "Retained"),
+                Schema.Entity(name: "Target"),
+                Schema.Entity(name: "OWNER_ZFAVORITE_INDEX"),
+            ],
+            entityIDs: [
+                "Retained": try XCTUnwrap(source.entityIDsByName["Retained"]),
+                "Target": try XCTUnwrap(source.entityIDsByName["Target"]),
+                "OWNER_ZFAVORITE_INDEX": nextID,
+            ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-owner-index-table-collision"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected generated relationship index/table collision to fail, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER'").count == 1
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER_ZFAVORITE_INDEX'")
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testIndependentRootRemovalRejectsUnsafeOutgoingAndInboundRelationships() throws {
+        let cases: [(String, Schema, Schema)] = [
+            (
+                "required",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [Schema.Relationship(name: "target", destination: "Target", isOptional: false)]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "cascade",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [
+                            Schema.Relationship(name: "target", destination: "Target", deleteRule: .cascade)
+                        ]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "inbound",
+                Schema([
+                    Schema.Entity(name: "Owner"),
+                    Schema.Entity(
+                        name: "Target", relationships: [Schema.Relationship(name: "owner", destination: "Owner")]),
+                ]),
+                Schema([
+                    Schema.Entity(
+                        name: "Target", relationships: [Schema.Relationship(name: "owner", destination: "Owner")])
+                ])
+            ),
+            (
+                "to-many",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "inverse",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [Schema.Relationship(name: "target", destination: "Target", inverse: "owner")]),
+                    Schema.Entity(
+                        name: "Target",
+                        relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "target")]),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "minimum-count",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [
+                            Schema.Relationship(name: "target", destination: "Target", minimumModelCount: 1)
+                        ]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "maximum-count",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [
+                            Schema.Relationship(name: "target", destination: "Target", maximumModelCount: 2)
+                        ]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "deny",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        relationships: [Schema.Relationship(name: "target", destination: "Target", deleteRule: .deny)]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+            (
+                "external-storage",
+                Schema([
+                    Schema.Entity(
+                        name: "Owner",
+                        attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                        relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+                    Schema.Entity(name: "Target"),
+                ]),
+                Schema([Schema.Entity(name: "Target")])
+            ),
+        ]
+        for (name, source, destination) in cases {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-unsafe-relationship-\(name)"))
+            try bootstrap(source, driver: driver)
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) relationship removal to fail closed, got \(error)")
+                }
+            }
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER'").count == 1
+                })
+            try driver.close()
+        }
+    }
+
     func testIndependentRootRemovalAndAdditionComposeWithoutReusingIDs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -4617,6 +4893,34 @@ final class SchemaMigrationTests: XCTestCase {
             try reopened.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
             [[.int(1), .text("Alpha")], [.int(2), .text("Beta")], [.int(4), .text("Newcomer")]])
         try reopened.close()
+    }
+
+    func testMixedRootRemovalAndAdditionRejectsCollisionWithRetainedTable() throws {
+        let source = Schema([
+            Schema.Entity(name: "A"),
+            Schema.Entity(name: "B"),
+            Schema.Entity(name: "Removed"),
+        ])
+        let destination = Schema([Schema.Entity(name: "A"), Schema.Entity(name: "b")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-root-retained-table-collision"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected collision with retained table to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ZA', 'ZB', 'ZREMOVED') ORDER BY name"
+                )
+            },
+            [[.text("ZA")], [.text("ZB")], [.text("ZREMOVED")]])
+        try driver.close()
     }
 
     func testCombinedRootChangesRejectRelationshipReferencesAndObjectNameReuse() throws {

@@ -643,7 +643,12 @@ package enum LightweightMigration {
         guard !removedNames.isEmpty,
             !sourceHasHierarchy,
             !destinationHasHierarchy,
-            removedEntities.allSatisfy({ $0.relationships.isEmpty && $0.superentityName == nil }),
+            removedEntities.allSatisfy({ entity in
+                entity.relationships.allSatisfy({ destination.entity(forName: $0.destination) != nil })
+            }),
+            removedEntities.allSatisfy({
+                isSafelyRemovableRootEntity($0, source: source, destination: destination)
+            }),
             source.entities.filter({ !removedEntityNames.contains($0.name) }).allSatisfy({ entity in
                 entity.relationships.allSatisfy { !removedEntityNames.contains($0.destination) }
             })
@@ -712,7 +717,13 @@ package enum LightweightMigration {
         }
         let removedEntities = source.entities.filter { removedNames.contains($0.name) }
         let addedEntities = destination.entities.filter { addedNames.contains($0.name) }
-        guard removedEntities.allSatisfy({ $0.relationships.isEmpty }),
+        guard
+            removedEntities.allSatisfy({ entity in
+                entity.relationships.allSatisfy({ destination.entity(forName: $0.destination) != nil })
+            }),
+            removedEntities.allSatisfy({
+                isSafelyRemovableRootEntity($0, source: source, destination: destination)
+            }),
             addedEntities.allSatisfy({ $0.relationships.isEmpty && $0.superentityName == nil }),
             source.entities.filter({ !removedNames.contains($0.name) }).allSatisfy({ entity in
                 entity.relationships.allSatisfy { !removedNames.contains($0.destination) }
@@ -744,9 +755,24 @@ package enum LightweightMigration {
                 ["Z\(entity.name.uppercased())"]
                     + indexDefinitions(for: entity, schema: destination).map { $0.name.uppercased() }
             })
-        guard removedObjects.isDisjoint(with: addedObjects) else {
+        let retainedObjects = Set(
+            source.entities.filter({ retainedNames.contains($0.name) }).flatMap { entity in
+                ["Z\(entity.name.uppercased())"]
+                    + indexDefinitions(for: entity, schema: source).map { $0.name.uppercased() }
+            })
+        let physicalRetainedObjects = Set(
+            try connection.rows("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")
+                .compactMap { row -> String? in
+                    guard case let .text(name)? = row.first,
+                        retainedObjects.contains(name.uppercased())
+                    else { return nil }
+                    return name.uppercased()
+                })
+        guard removedObjects.isDisjoint(with: addedObjects),
+            physicalRetainedObjects.isDisjoint(with: addedObjects)
+        else {
             throw SwiftDataError.migrationUnsupported(
-                "Added entity tables or indexes collide with objects removed by the same migration.")
+                "Added entity tables or indexes collide with existing schema objects.")
         }
         let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
         let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
@@ -766,6 +792,45 @@ package enum LightweightMigration {
             && lhs.relationships.allSatisfy { rhs.relationships.contains($0) }
             && lhs.indexes.count == rhs.indexes.count
             && lhs.indexes.allSatisfy { rhs.indexes.contains($0) }
+    }
+
+    private static func isSafelyRemovableRootEntity(
+        _ entity: Schema.Entity,
+        source: Schema,
+        destination: Schema
+    ) -> Bool {
+        guard entity.superentityName == nil,
+            !source.entities.contains(where: { $0.superentityName == entity.name }),
+            !entity.attributes.contains(where: { $0.options.contains(.externalStorage) }),
+            entity.relationships.allSatisfy({ relationship in
+                guard !relationship.isToMany,
+                    relationship.isOptional,
+                    relationship.inverse == nil,
+                    relationship.originalName == nil,
+                    relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                    relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                    relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                    destination.entity(forName: relationship.destination) != nil,
+                    source.entity(forName: relationship.destination) != nil
+                else { return false }
+                guard
+                    let mapping = source.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name),
+                    !SchemaBuilder.isNonOwner(entity, relationship, schema: source),
+                    mapping.declaringEntityName == entity.name,
+                    mapping.ownerRootEntityName == entity.name
+                else { return false }
+                return true
+            }),
+            !source.entities.contains(where: { candidate in
+                candidate.name != entity.name
+                    && candidate.relationships.contains(where: { candidateRelationship in
+                        candidateRelationship.destination == entity.name
+                            || entity.relationships.contains(where: { $0.name == candidateRelationship.inverse })
+                    })
+            })
+        else { return false }
+        return true
     }
 
     private static func validateEntityRemovalSideEffects(

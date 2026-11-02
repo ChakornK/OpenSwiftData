@@ -2163,6 +2163,37 @@ package enum LightweightMigration {
                 $0.name == relationship.name || $0.name == relationship.originalName
             })
         }
+        let changedMappedToMany = destination.relationships.contains { relationship in
+            guard relationship.isToMany,
+                let original = source.relationships.first(where: {
+                    $0.name == relationship.name || $0.name == relationship.originalName
+                })
+            else { return false }
+            return original != relationship
+        }
+        guard !changedMappedToMany else {
+            throw SwiftDataError.migrationUnsupported(
+                "Changing a to-many relationship requires explicit join-table migration metadata.")
+        }
+        let removedToMany = removedRelationships.filter(\.isToMany)
+        let addedToMany = addedRelationships.filter(\.isToMany)
+        if !removedToMany.isEmpty || !addedToMany.isEmpty {
+            guard removedRelationships.count + addedRelationships.count == 1,
+                removedToMany.count + addedToMany.count == 1
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "To-many join migration must add or remove exactly one relationship.")
+            }
+            try migrateFlatOwnerOnlyToMany(
+                source: source,
+                destination: destination,
+                sourceSchema: sourceSchema,
+                destinationSchema: schema,
+                removed: removedToMany.first,
+                added: addedToMany.first,
+                connection: connection)
+            return
+        }
         guard removedRelationships.count + mappedSources.count == source.relationships.count else {
             throw SwiftDataError.migrationUnsupported(
                 "Adding or removing relationships requires graph transformation metadata.")
@@ -2302,6 +2333,299 @@ package enum LightweightMigration {
                     "ALTER TABLE Z\(destination.name.uppercased()) RENAME COLUMN Z\(old.name.uppercased()) TO Z\(relationship.name.uppercased())"
                 )
             }
+        }
+    }
+
+    private static func migrateFlatOwnerOnlyToMany(
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema,
+        removed: Schema.Relationship?,
+        added: Schema.Relationship?,
+        connection: SQLConnection
+    ) throws {
+        let expectedDestinationRelationshipCount = source.relationships.count + (added == nil ? -1 : 1)
+        guard (removed == nil) != (added == nil),
+            let relationship = removed ?? added,
+            relationship.isToMany,
+            relationship.inverse == nil,
+            relationship.originalName == nil,
+            relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+            relationship.maximumModelCount == nil,
+            relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+            relationship.destination != source.name,
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !sourceSchema.entities.contains(where: { $0.superentityName == source.name }),
+            !destinationSchema.entities.contains(where: { $0.superentityName == destination.name }),
+            source.attributes.count == destination.attributes.count,
+            source.attributes.allSatisfy({ destination.attributes.contains($0) }),
+            source.indexes == destination.indexes,
+            source.superentityName == destination.superentityName,
+            sourceSchema.entityIDsByName == destinationSchema.entityIDsByName,
+            Set(sourceSchema.entities.map(\.name)) == Set(destinationSchema.entities.map(\.name)),
+            sourceSchema.entities.filter({ $0.name != source.name }).allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationSchema.entity(forName: sourceEntity.name) else { return false }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            source.relationships.filter({ $0.name != removed?.name }).allSatisfy({ retained in
+                destination.relationships.contains(retained)
+            }),
+            destination.relationships.filter({ $0.name != added?.name }).allSatisfy({ retained in
+                source.relationships.contains(retained)
+            }),
+            destination.relationships.count == expectedDestinationRelationshipCount,
+            let targetSource = sourceSchema.entity(forName: relationship.destination),
+            let targetDestination = destinationSchema.entity(forName: relationship.destination),
+            targetSource.superentityName == nil,
+            targetDestination.superentityName == nil,
+            !sourceSchema.entities.contains(where: { $0.superentityName == targetSource.name }),
+            !destinationSchema.entities.contains(where: { $0.superentityName == targetDestination.name })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "To-many migration is limited to one unconstrained no-inverse relationship between flat root entities.")
+        }
+        guard
+            !hasReciprocalRelationship(
+                named: relationship.name, from: source.name, to: relationship.destination, schema: sourceSchema),
+            !hasReciprocalRelationship(
+                named: relationship.name, from: source.name, to: relationship.destination, schema: destinationSchema)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Inverse-backed to-many relationships require graph migration metadata.")
+        }
+        let relationshipSchema = removed == nil ? destinationSchema : sourceSchema
+        let relationshipOwner = removed == nil ? destination : source
+        guard
+            let joinTable = SchemaBuilder.joinTableName(
+                for: relationshipOwner, relationship: relationship, schema: relationshipSchema)
+        else {
+            throw SwiftDataError.migrationUnsupported("Relationship does not map to an owner-only join table.")
+        }
+        let schema = relationshipSchema
+        let built = try SchemaBuilder.build(schema)
+        let tablePrefix = "CREATE TABLE \(joinTable) "
+        let tableStatement = built.statements.first(where: { $0.hasPrefix(tablePrefix) })
+        let uniqueIndexName = "\(joinTable)_UNIQUE_INDEX"
+        let reverseIndexName = "\(joinTable)_Z_B_INDEX"
+        let uniqueIndexStatement = built.statements.first(where: {
+            $0.hasPrefix("CREATE UNIQUE INDEX \(uniqueIndexName) ")
+        })
+        let reverseIndexStatement = built.statements.first(where: {
+            $0.hasPrefix("CREATE INDEX \(reverseIndexName) ")
+        })
+        guard let tableStatement, let uniqueIndexStatement, let reverseIndexStatement else {
+            throw SwiftDataError.migrationUnsupported("SchemaBuilder did not generate the expected join-table objects.")
+        }
+        if added != nil {
+            let plannedNames = [joinTable, uniqueIndexName, reverseIndexName].map { $0.uppercased() }
+            let existingNames = Set(
+                try connection.rows(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger')"
+                )
+                .compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name.uppercased()
+                })
+            guard Set(plannedNames).isDisjoint(with: existingNames) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "New relationship join-table objects collide with existing objects.")
+            }
+            try validateJoinTableNoPhysicalForeignKeys(
+                table: joinTable, checkReferences: false, connection: connection)
+            try validateNoJoinTableDependencies(joinTable, connection: connection)
+            try connection.execute(tableStatement)
+            try connection.execute(uniqueIndexStatement)
+            try connection.execute(reverseIndexStatement)
+            return
+        }
+
+        try validateJoinTableNoPhysicalForeignKeys(
+            table: joinTable, checkReferences: true, connection: connection)
+        try validateExistingOwnerOnlyJoinTable(
+            table: joinTable,
+            uniqueIndexName: uniqueIndexName,
+            reverseIndexName: reverseIndexName,
+            connection: connection)
+        try connection.execute("DROP TABLE \(joinTable)")
+    }
+
+    private static func validateJoinTableNoPhysicalForeignKeys(
+        table joinTable: String,
+        checkReferences: Bool,
+        connection: SQLConnection
+    ) throws {
+        let quotedJoinTable = "\"\(joinTable.replacingOccurrences(of: "\"", with: "\"\""))\""
+        guard try connection.rows("PRAGMA foreign_key_list(\(quotedJoinTable))").isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Join table has unexpected foreign-key constraints.")
+        }
+        if checkReferences {
+            try validateNoJoinTableDependencies(joinTable, connection: connection)
+            let tables = try connection.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+            for row in tables {
+                guard case let .text(name)? = row.first else { continue }
+                let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+                let references = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
+                guard
+                    !references.contains(where: { foreignKey in
+                        guard foreignKey.count > 2, case let .text(target) = foreignKey[2] else { return false }
+                        return target.caseInsensitiveCompare(joinTable) == .orderedSame
+                    })
+                else {
+                    throw SwiftDataError.migrationUnsupported("A physical foreign key references the join table.")
+                }
+            }
+        }
+    }
+
+    private static func hasReciprocalRelationship(
+        named relationshipName: String,
+        from ownerName: String,
+        to destinationName: String,
+        schema: Schema
+    ) -> Bool {
+        schema.entity(forName: destinationName)?.relationships.contains(where: { candidate in
+            guard candidate.destination == ownerName else { return false }
+            return candidate.inverse == nil || candidate.inverse == relationshipName
+        }) ?? false
+    }
+
+    private static func validateNoJoinTableDependencies(_ table: String, connection: SQLConnection) throws {
+        let sideObjects = try connection.rows(
+            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'view')")
+        let escapedName = NSRegularExpression.escapedPattern(for: table.uppercased())
+        let tableIdentifier = try NSRegularExpression(pattern: "(?<![A-Z0-9_])\(escapedName)(?![A-Z0-9_])")
+        guard
+            !sideObjects.contains(where: { row in
+                guard row.count > 2, case let .text(sql) = row[2] else { return false }
+                let normalizedSQL = sql.uppercased()
+                let range = NSRange(normalizedSQL.startIndex..<normalizedSQL.endIndex, in: normalizedSQL)
+                return tableIdentifier.firstMatch(in: normalizedSQL, range: range) != nil
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Join-table creation conflicts with an existing trigger or view.")
+        }
+    }
+
+    private static func validateExistingOwnerOnlyJoinTable(
+        table: String,
+        uniqueIndexName: String,
+        reverseIndexName: String,
+        connection: SQLConnection
+    ) throws {
+        let tables = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+            [.text(table)])
+        guard tables.count == 1 else {
+            throw SwiftDataError.migrationUnsupported("Expected join table \(table) is missing or ambiguous.")
+        }
+        let columns = try connection.rows("PRAGMA table_info(\(table))")
+        guard columns.count == 2,
+            columns[0].count > 5, columns[0][0] == .int(0), columns[0][1] == .text("Z_A"),
+            columns[0][2] == .text("INTEGER"), columns[0][3] == .int(0), columns[0][4] == .null,
+            columns[0][5] == .int(0),
+            columns[1][0] == .int(1), columns[1][1] == .text("Z_B"), columns[1][2] == .text("INTEGER"),
+            columns[1][3] == .int(0), columns[1][4] == .null, columns[1][5] == .int(0)
+        else {
+            throw SwiftDataError.migrationUnsupported("Join table \(table) has an unexpected physical layout.")
+        }
+        let indexRows = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE",
+            [.text(table)])
+        let actualIndexNames = Set(
+            indexRows.compactMap { row -> String? in
+                guard case let .text(name)? = row.first else { return nil }
+                return name.uppercased()
+            })
+        let expectedIndexNames = Set([uniqueIndexName, reverseIndexName].map { $0.uppercased() })
+        let quotedTable = "\"\(table.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let indexList = try connection.rows("PRAGMA index_list(\(quotedTable))")
+        guard actualIndexNames == expectedIndexNames, indexList.count == 2 else {
+            throw SwiftDataError.migrationUnsupported("Join table \(table) has unexpected physical indexes.")
+        }
+        try validateJoinIndex(
+            name: uniqueIndexName,
+            table: table,
+            unique: true,
+            columns: ["Z_A", "Z_B"],
+            indexList: indexList,
+            connection: connection)
+        try validateJoinIndex(
+            name: reverseIndexName,
+            table: table,
+            unique: false,
+            columns: ["Z_B"],
+            indexList: indexList,
+            connection: connection)
+    }
+
+    private static func validateJoinIndex(
+        name: String,
+        table: String,
+        unique: Bool,
+        columns: [String],
+        indexList: [[StoredValue]],
+        connection: SQLConnection
+    ) throws {
+        let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let matchingRows = indexList.filter { item in
+            guard item.count > 4, case let .text(indexName) = item[1] else { return false }
+            return indexName.caseInsensitiveCompare(name) == .orderedSame
+        }
+        guard matchingRows.count == 1,
+            let row = matchingRows.first,
+            row[2] == .int(unique ? 1 : 0),
+            row[3] == .text("c"),
+            row[4] == .int(0)
+        else {
+            throw SwiftDataError.migrationUnsupported("Join index \(name) has unexpected flags.")
+        }
+        let info = try connection.rows("PRAGMA index_info(\(quotedName))")
+        guard info.count == columns.count,
+            info.enumerated().allSatisfy({ offset, item in
+                guard item.count > 2,
+                    item[0] == .int(Int64(offset)),
+                    case let .int(columnID) = item[1], columnID >= 0,
+                    case let .text(column) = item[2]
+                else { return false }
+                return column.uppercased() == columns[offset]
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Join index \(name) has unexpected columns.")
+        }
+        let indexSQL = try connection.rows(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE",
+            [.text(name)])
+        let expectedSQL =
+            unique
+            ? "CREATE UNIQUE INDEX \(name) ON \(table) (Z_A, Z_B)"
+            : "CREATE INDEX \(name) ON \(table) (Z_B)"
+        let normalizedExpectedSQL = expectedSQL.lowercased().filter { !$0.isWhitespace }
+        let normalizedActualSQL = indexSQL.first?.first.flatMap { value -> String? in
+            guard case let .text(sql) = value else { return nil }
+            return sql.lowercased().filter { !$0.isWhitespace && $0 != "`" && $0 != "\"" }
+        }
+        guard indexSQL.count == 1, normalizedActualSQL == normalizedExpectedSQL else {
+            throw SwiftDataError.migrationUnsupported("Join index \(name) has unexpected SQL semantics.")
+        }
+        let extendedInfo = try connection.rows("PRAGMA index_xinfo(\(quotedName))")
+        let keyRows = extendedInfo.filter { row in row.count > 5 && row[5] == .int(1) }
+        guard keyRows.count == columns.count,
+            keyRows.enumerated().allSatisfy({ offset, item in
+                guard item.count > 5,
+                    item[0] == .int(Int64(offset)),
+                    case let .int(columnID) = item[1], columnID >= 0,
+                    item[3] == .int(0)
+                else { return false }
+                return item[2] == .text(columns[offset]) && item[4] == .text("BINARY")
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Join index \(name) has unexpected key metadata.")
         }
     }
 

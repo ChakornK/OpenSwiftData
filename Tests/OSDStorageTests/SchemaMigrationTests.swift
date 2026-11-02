@@ -2121,6 +2121,533 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testFlatOwnerOnlyToManyRelationshipCanBeAddedAndRemoved() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let withRelationship = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let owner = try XCTUnwrap(withRelationship.entity(forName: "Owner"))
+        let relationship = try XCTUnwrap(owner.relationships.first)
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: owner, relationship: relationship, schema: withRelationship))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 2, 'owner')")
+            try connection.execute("INSERT INTO ZTAG (Z_ENT, Z_OPT, ZNAME) VALUES (2, 3, 'tag')")
+        }
+        try initial.close()
+
+        let added = try LightweightMigration.openStore(location: location, schema: withRelationship)
+        XCTAssertEqual(try added.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable)") }, [])
+        XCTAssertEqual(
+            try added.read { try $0.rows("SELECT Z_PK, ZNAME FROM ZOWNER") },
+            [[.int(1), .text("owner")]])
+        XCTAssertEqual(
+            try added.read { try $0.rows("SELECT Z_PK, ZNAME FROM ZTAG") },
+            [[.int(1), .text("tag")]])
+        let joinIndexes = try added.read {
+            try $0.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name",
+                [
+                    .text(joinTable)
+                ])
+        }
+        XCTAssertEqual(joinIndexes.count, 2)
+        try added.write { connection in
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        try added.close()
+
+        let removed = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertTrue(
+            try removed.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        XCTAssertEqual(
+            try removed.read { try $0.rows("SELECT Z_PK, ZNAME FROM ZOWNER") },
+            [[.int(1), .text("owner")]])
+        XCTAssertEqual(
+            try removed.read { try $0.rows("SELECT Z_PK, ZNAME FROM ZTAG") },
+            [[.int(1), .text("tag")]])
+        try removed.close()
+    }
+
+    func testFlatToManyMigrationRejectsInverseConstraintsAndCombinedEdits() throws {
+        let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
+            (
+                "inverse",
+                Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners"),
+                Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+            ),
+            (
+                "minimum",
+                Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, minimumModelCount: 1),
+                nil
+            ),
+        ]
+        for (name, ownerRelationship, targetRelationship) in cases {
+            let source = Schema([
+                Schema.Entity(name: "Owner"),
+                Schema.Entity(name: "Tag"),
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
+                Schema.Entity(name: "Tag", relationships: targetRelationship.map { [$0] } ?? []),
+            ])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-reject-\(name)"))
+            try bootstrap(source, driver: driver)
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) relationship to fail closed, got \(error)")
+                }
+            }
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'Z_OWNER_TAGS_TAG'"
+                    ).isEmpty
+                })
+            try driver.close()
+        }
+
+        let source = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Other"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(
+                name: "Other", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
+        ])
+        let combined = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-combined-edit"))
+        try bootstrap(source, driver: combined)
+        XCTAssertThrowsError(
+            try combined.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined relationship/scalar change to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try combined.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'Z_OWNER_TAGS_TAG'").isEmpty
+            })
+        try combined.close()
+
+        let membershipDestination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "NewRoot"),
+        ])
+        let membershipDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-membership-edit"))
+        try bootstrap(source, driver: membershipDriver)
+        XCTAssertThrowsError(
+            try membershipDriver.write {
+                try LightweightMigration.migrate(source: source, destination: membershipDestination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined relationship/entity change to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try membershipDriver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'Z_OWNER_TAGS_TAG'").isEmpty
+            })
+        try membershipDriver.close()
+    }
+
+    func testFlatToManyInverseDetectionUsesRelationshipEndpoints() throws {
+        let source = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Other", relationships: [Schema.Relationship(name: "tags", destination: "Other")]),
+        ])
+        let unrelatedInverseCollision = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Other", relationships: [Schema.Relationship(name: "tags", destination: "Other")]),
+        ])
+        let allowedDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-unrelated-inverse-name"))
+        try bootstrap(source, driver: allowedDriver)
+        try allowedDriver.write {
+            try LightweightMigration.migrate(source: source, destination: unrelatedInverseCollision, connection: $0)
+        }
+        try allowedDriver.close()
+
+        let reciprocalSource = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(
+                name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner", inverse: "tags")]
+            ),
+        ])
+        let reciprocalDestination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let rejectedDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-reciprocal"))
+        try bootstrap(reciprocalSource, driver: rejectedDriver)
+        XCTAssertThrowsError(
+            try rejectedDriver.write {
+                try LightweightMigration.migrate(
+                    source: reciprocalSource, destination: reciprocalDestination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected reciprocal relationship to fail closed, got \(error)")
+            }
+        }
+        try rejectedDriver.close()
+
+        let inferredInverseSource = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner")]),
+        ])
+        let inferredInverseDestination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner")]),
+        ])
+        let inferredDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-inferred-inverse"))
+        try bootstrap(inferredInverseSource, driver: inferredDriver)
+        XCTAssertThrowsError(
+            try inferredDriver.write {
+                try LightweightMigration.migrate(
+                    source: inferredInverseSource, destination: inferredInverseDestination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected differently named inferred inverse to fail closed, got \(error)")
+            }
+        }
+        try inferredDriver.close()
+    }
+
+    func testFlatToManyRelationshipRenameFailsClosed() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "labels", destination: "Tag", isToMany: true, originalName: "tags")
+                ]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-rename"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected to-many rename to fail closed, got \(error)")
+            }
+        }
+        let tables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'Z_%'")
+        }
+        XCTAssertFalse(tables.isEmpty)
+        try driver.close()
+    }
+
+    func testFlatToManyDestinationChangeFailsClosed() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "items", destination: "First", isToMany: true)]),
+            Schema.Entity(name: "First"),
+            Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [Schema.Relationship(name: "items", destination: "Second", isToMany: true)]),
+            Schema.Entity(name: "First"),
+            Schema.Entity(name: "Second"),
+        ])
+        let sourceJoin = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: try XCTUnwrap(source.entity(forName: "Owner")),
+                relationship: try XCTUnwrap(source.entity(forName: "Owner")?.relationships.first),
+                schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-destination-change"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected to-many destination change to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(sourceJoin)])
+            },
+            [[.text(sourceJoin)]])
+        try driver.close()
+    }
+
+    func testFlatToManyAdditionRejectsJoinObjectNameCollisionBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let owner = try XCTUnwrap(destination.entity(forName: "Owner"))
+        let relation = try XCTUnwrap(owner.relationships.first)
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: relation, schema: destination))
+        let conflictingIndex = "\(joinTable)_Z_B_INDEX"
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-add-collision"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE ZUNRELATED (Z_PK INTEGER PRIMARY KEY)")
+            try connection.execute("CREATE INDEX \(conflictingIndex) ON ZUNRELATED (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected join-index name collision to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testFlatToManyAdditionAllowsUnrelatedPhysicalForeignKeys() throws {
+        let source = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Unrelated"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Unrelated"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-add-unrelated-fk"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE USER_REFERENCE (Z_TARGET INTEGER REFERENCES ZUNRELATED(Z_PK))")
+        }
+        try driver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        let owner = try XCTUnwrap(destination.entity(forName: "Owner"))
+        let relation = try XCTUnwrap(owner.relationships.first)
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: relation, schema: destination))
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+            },
+            [[.text(joinTable)]])
+        try driver.close()
+    }
+
+    func testFlatToManyAdditionAllowsUnrelatedViewsAndTriggers() throws {
+        let source = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Unrelated"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Unrelated"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-add-unrelated-view-trigger"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE VIEW USER_UNRELATED_VIEW AS SELECT Z_PK FROM ZUNRELATED")
+            try connection.execute("CREATE VIEW USER_PREFIX_VIEW AS SELECT Z_PK FROM Z_OWNER_TAGS_TAG_PREFIX")
+            try connection.execute(
+                "CREATE TRIGGER USER_UNRELATED_TRIGGER AFTER INSERT ON ZUNRELATED BEGIN UPDATE ZUNRELATED SET Z_OPT = Z_OPT WHERE Z_PK = NEW.Z_PK; END"
+            )
+        }
+        try driver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        let owner = try XCTUnwrap(destination.entity(forName: "Owner"))
+        let relationship = try XCTUnwrap(owner.relationships.first)
+        let table = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: relationship, schema: destination))
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+            },
+            [[.text(table)]])
+        try driver.close()
+    }
+
+    func testFlatToManyRemovalRejectsUnexpectedJoinObjectsBeforeDrop() throws {
+        let owner = Schema.Entity(
+            name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)])
+        let source = Schema([owner, Schema.Entity(name: "Tag")])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Tag")])
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: owner, relationship: try XCTUnwrap(owner.relationships.first), schema: source))
+        let sideObjects = [
+            ("index", "CREATE INDEX USER_JOIN_INDEX ON \(joinTable) (Z_A)"),
+            ("view", "CREATE VIEW USER_JOIN_VIEW AS SELECT Z_A FROM \(joinTable)"),
+        ]
+        for (name, statement) in sideObjects {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-drop-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+                try connection.execute(statement)
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unexpected \(name) to block join removal, got \(error)")
+                }
+            }
+            XCTAssertEqual(try driver.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable)") }, [[.int(1), .int(1)]])
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                        .count == 1
+                })
+            try driver.close()
+        }
+
+        let foreignKeyDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-drop-foreign-key"))
+        try bootstrap(source, driver: foreignKeyDriver)
+        try foreignKeyDriver.write { connection in
+            try connection.execute("CREATE TABLE USER_REFERENCE (Z_LINK INTEGER REFERENCES \(joinTable)(Z_A))")
+        }
+        XCTAssertThrowsError(
+            try foreignKeyDriver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected physical foreign key to block join removal, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try foreignKeyDriver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+            },
+            [[.text(joinTable)]])
+        try foreignKeyDriver.close()
+
+        let unrelatedViewDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-drop-unrelated-view"))
+        try bootstrap(source, driver: unrelatedViewDriver)
+        try unrelatedViewDriver.write { connection in
+            try connection.execute("CREATE VIEW USER_UNRELATED_VIEW AS SELECT Z_PK FROM ZOWNER")
+        }
+        try unrelatedViewDriver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        XCTAssertTrue(
+            try unrelatedViewDriver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        try unrelatedViewDriver.close()
+    }
+
+    func testFlatToManyRemovalRejectsMissingGeneratedIndexesAndAlteredColumns() throws {
+        let owner = Schema.Entity(
+            name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)])
+        let source = Schema([owner, Schema.Entity(name: "Tag")])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Tag")])
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: owner, relationship: try XCTUnwrap(owner.relationships.first), schema: source))
+        let uniqueIndexName = "\(joinTable)_UNIQUE_INDEX"
+        for name in ["missing-index", "altered-ddl", "partial-index"] {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-corrupt-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                if name == "missing-index" {
+                    try connection.execute("DROP INDEX \(uniqueIndexName)")
+                } else if name == "partial-index" {
+                    try connection.execute("DROP TABLE \(joinTable)")
+                    try connection.execute("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER)")
+                    try connection.execute(
+                        "CREATE UNIQUE INDEX \(uniqueIndexName) ON \(joinTable) (Z_A, Z_B) WHERE Z_A > 0")
+                    try connection.execute("CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B)")
+                } else {
+                    try connection.execute("DROP TABLE \(joinTable)")
+                    try connection.execute("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER, Z_EXTRA BLOB)")
+                    try connection.execute("CREATE UNIQUE INDEX \(uniqueIndexName) ON \(joinTable) (Z_A, Z_B)")
+                    try connection.execute(
+                        "CREATE INDEX \(joinTable)_Z_B_INDEX ON \(joinTable) (Z_B)")
+                }
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) to fail closed, got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                },
+                [[.text(joinTable)]])
+            try driver.close()
+        }
+    }
+
     func testAddingRequiredOrInverseOwningToOneRelationshipFailsAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

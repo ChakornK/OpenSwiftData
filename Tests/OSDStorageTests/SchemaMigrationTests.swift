@@ -1111,6 +1111,314 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testMultipleScalarAttributesCanBeRemovedWithDependentOrdinaryIndexes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-removals.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "first", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["first"]),
+                    Schema.Index(properties: ["second", "first"]),
+                    Schema.Index(properties: ["kept"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "kept", type: "String")],
+                indexes: [Schema.Index(properties: ["kept"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND) VALUES (1, 4, 'one', 12, 2.5)")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND) VALUES (1, 9, 'two', NULL, NULL)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZKEPT FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(1), .int(4), .text("one")], [.int(2), .int(1), .int(9), .text("two")]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZKEPT_INDEX")]])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
+        try reopened.close()
+    }
+
+    func testMultipleScalarRemovalAllowsCompositeIndexWhollyOnRemovedColumns() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-composite-index"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "left", type: "Int32"),
+                    Schema.Attribute(name: "right", type: "Int32"),
+                ],
+                indexes: [Schema.Index(properties: ["left", "right"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZLEFT, ZRIGHT) VALUES (1, 5, 'kept', 1, 2)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZKEPT FROM ZRECORD") }, [[.text("kept")]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testMultipleScalarRemovalRejectsUniqueIndexesSharedWithRetainedAttributes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "removed", type: "Int32"),
+                ],
+                indexes: [Schema.Index(properties: ["kept", "removed"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-mixed-unique"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed unique index removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }.count, 5)
+        try driver.close()
+    }
+
+    func testMultipleScalarRemovalRejectsTamperedGeneratedUniqueIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "removed", type: "Int32", options: [.unique]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-tampered-unique"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZRECORD_ZREMOVED_UNIQUE_INDEX")
+            try connection.execute("CREATE INDEX ZRECORD_ZREMOVED_UNIQUE_INDEX ON ZRECORD (ZREMOVED)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered generated unique index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZREMOVED") }
+                )
+            })
+        try driver.close()
+    }
+
+    func testMultipleScalarRemovalPreservesSameNamedIndexOnOtherTable() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"), Schema.Attribute(name: "removed", type: "Int32"),
+                ]),
+            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")]),
+            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-index-other-table"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE ZUNRELATED (Z_PK INTEGER PRIMARY KEY, ZREMOVED INTEGER)")
+            try connection.execute("CREATE INDEX ZRECORD_ZREMOVED_INDEX ON ZUNRELATED (ZREMOVED)")
+        }
+        try driver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZREMOVED_INDEX'")
+            },
+            [[.text("ZUNRELATED")]])
+        try driver.close()
+    }
+
+    func testMultipleScalarRemovalRejectsCheckDependenciesBeforeDdl() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-drop-rollback.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int32"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND) VALUES (1, 2, 'kept', 3, 4)")
+        }
+        let originalHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        try initial.close()
+
+        let tampered = try GRDBSQLiteDriver(location: location)
+        try tampered.write { connection in
+            try connection.execute(
+                "CREATE TABLE ZRECORD_TMP (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, "
+                    + "ZKEPT VARCHAR, ZFIRST INTEGER, ZSECOND INTEGER, CHECK (ZSECOND >= 0))")
+            try connection.execute(
+                "INSERT INTO ZRECORD_TMP (Z_PK, Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND) "
+                    + "SELECT Z_PK, Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND FROM ZRECORD")
+            try connection.execute("DROP TABLE ZRECORD")
+            try connection.execute("ALTER TABLE ZRECORD_TMP RENAME TO ZRECORD")
+        }
+        try tampered.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZKEPT, ZFIRST, ZSECOND FROM ZRECORD") },
+            [[.int(1), .int(2), .text("kept"), .int(3), .int(4)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertTrue(
+            try reopened.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") })
+            })
+        try reopened.close()
+    }
+
+    func testMultipleScalarRemovalRejectsUnexpectedPhysicalColumns() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("unexpected-column.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int32"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZFIRST, ZSECOND) VALUES (1, 7, 'kept', 1, 2)")
+            try connection.execute("ALTER TABLE ZRECORD ADD COLUMN ZUNTRACKED BLOB")
+        }
+        let originalHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unexpected physical column to fail closed, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZKEPT, ZFIRST, ZSECOND, ZUNTRACKED FROM ZRECORD") },
+            [[.int(1), .int(7), .text("kept"), .int(1), .int(2), .null]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        try reopened.close()
+    }
+
+    func testMultipleScalarRemovalAllowsUnrelatedForeignKeys() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-unrelated-fk"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "removed", type: "Int32"),
+                ]),
+            Schema.Entity(name: "Other"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")]),
+            Schema.Entity(name: "Other"),
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE USER_REFERENCE (Z_TARGET INTEGER REFERENCES ZOTHER(Z_PK))")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZREMOVED) VALUES (1, 3, 'kept', 7)")
+        }
+        try driver.write {
+            try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZKEPT FROM ZRECORD") }, [[.text("kept")]])
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA foreign_key_list(USER_REFERENCE)") }.count, 1)
+        try driver.close()
+    }
+
     func testUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "unique-indexed-attribute-removal"))
         let source = Schema([

@@ -1546,7 +1546,7 @@ package enum LightweightMigration {
                 ))
             return
         }
-        if let removedAttribute = try removableScalarAttribute(
+        if let removedAttributes = try removableScalarAttributes(
             mappings,
             source: source,
             destination: destination,
@@ -1558,34 +1558,48 @@ package enum LightweightMigration {
             guard Database.sqliteLibVersionNumber >= 3_035_000 else {
                 throw SwiftDataError.migrationUnsupported("SQLite does not support dropping table columns.")
             }
-            let column = "Z\(removedAttribute.name.uppercased())"
-            try validateColumnRemovalSideEffects(table: table, connection: connection)
-            let removedIndexNames = Set(
+            let removedAttributeNames = Set(removedAttributes.map(\.name))
+            try validateColumnRemovalSideEffects(
+                table: table,
+                entity: source,
+                removedColumns: Set(removedAttributes.map { "Z\($0.name.uppercased())" }),
+                connection: connection)
+            let removableIndexNames = Set(
                 source.indexes.compactMap { index -> String? in
-                    guard !index.isUnique, index.properties.contains(removedAttribute.name) else { return nil }
+                    guard !index.properties.isEmpty,
+                        index.properties.contains(where: { removedAttributeNames.contains($0) }),
+                        !index.isUnique || index.properties.allSatisfy({ removedAttributeNames.contains($0) })
+                    else { return nil }
                     let columns = index.properties.map { "Z\($0.uppercased())" }
                     return "Z\(source.name.uppercased())_\(columns.joined(separator: "_"))_INDEX"
-                })
-            let generatedUniqueIndexName =
-                "Z\(source.name.uppercased())_Z\(removedAttribute.name.uppercased())_UNIQUE_INDEX"
-            let removableIndexNames = removedIndexNames.union(
-                removedAttribute.options.contains(.unique) ? [generatedUniqueIndexName] : [])
+                }
+                    + removedAttributes.compactMap { attribute in
+                        attribute.options.contains(.unique)
+                            ? "Z\(source.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX" : nil
+                    })
             let removedIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities)).filter {
                 removableIndexNames.contains($0.name.uppercased())
             }
-            try validateIndexesForAttributeRemoval(
+            try validateGeneratedIndexesForAttributeRemoval(
                 table: table,
-                column: column,
-                removableIndexNames: removableIndexNames,
-                knownIndexNames: Set(
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)).map {
-                        $0.name.uppercased()
-                    }),
+                definitions: indexDefinitions(for: source, schema: Schema(sourceEntities)),
                 connection: connection)
+            let knownIndexNames = Set(
+                indexDefinitions(for: source, schema: Schema(sourceEntities)).map { $0.name.uppercased() })
+            for attribute in removedAttributes {
+                try validateIndexesForAttributeRemoval(
+                    table: table,
+                    column: "Z\(attribute.name.uppercased())",
+                    removableIndexNames: removableIndexNames,
+                    knownIndexNames: knownIndexNames,
+                    connection: connection)
+            }
             for definition in removedIndexDefinitions {
                 try connection.execute("DROP INDEX IF EXISTS \(definition.name)")
             }
-            try connection.execute("ALTER TABLE \(table) DROP COLUMN \(column)")
+            for attribute in removedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
+                try connection.execute("ALTER TABLE \(table) DROP COLUMN Z\(attribute.name.uppercased())")
+            }
             indexTransitions.append(
                 (
                     indexDefinitions(for: source, schema: Schema(sourceEntities)),
@@ -2027,7 +2041,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func removableScalarAttribute(
+    private static func removableScalarAttributes(
         _ mappings: [AttributeMapping],
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2035,30 +2049,41 @@ package enum LightweightMigration {
         destinationEntities: [Schema.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
-    ) throws -> Schema.Attribute? {
+    ) throws -> [Schema.Attribute]? {
         let removed = source.attributes.filter { sourceAttribute in
             !mappings.contains(where: { $0.source?.name == sourceAttribute.name })
         }
         guard !removed.isEmpty else { return nil }
-        guard removed.count == 1,
-            let removedAttribute = removed.first,
-            let remainingSourceEntity = destinationEntities.first(where: { $0.name == destination.name }),
-            source.indexes.filter({
-                let ordinaryIndexRemoval = !$0.isUnique && $0.properties.contains(removedAttribute.name)
-                let duplicateAttributeUniqueIndex =
-                    $0.isUnique && $0.properties == [removedAttribute.name]
-                    && removedAttribute.options.contains(.unique)
-                return !ordinaryIndexRemoval && !duplicateAttributeUniqueIndex
-            }) == remainingSourceEntity.indexes,
-            !removedAttribute.options.contains(.codable),
-            !removedAttribute.options.contains(.flattened),
-            !removedAttribute.options.contains(.externalStorage),
-            !removedAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+        let removedNames = Set(removed.map(\.name))
+        guard
             !source.indexes.contains(where: { index in
-                guard index.isUnique, index.properties.contains(removedAttribute.name) else { return false }
-                return !(index.properties == [removedAttribute.name] && removedAttribute.options.contains(.unique))
+                guard index.isUnique,
+                    index.properties.contains(where: { removedNames.contains($0) })
+                else { return false }
+                return
+                    !(index.properties.count == 1
+                    && removed.count == 1
+                    && index.properties.first == removed[0].name
+                    && removed[0].options.contains(.unique))
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Removing attributes cannot alter schema-level unique indexes.")
+        }
+        guard
+            let remainingSourceEntity = destinationEntities.first(where: { $0.name == destination.name }),
+            source.indexes.filter({ index in
+                !index.properties.contains(where: { removedNames.contains($0) })
+            }) == remainingSourceEntity.indexes,
+            removed.allSatisfy({ attribute in
+                !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
             }),
-            !destination.attributes.contains(where: { $0.originalName == removedAttribute.name }),
+            !destination.attributes.contains(where: { attribute in
+                attribute.originalName.map { removedNames.contains($0) } ?? false
+            }),
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ mapping in
                 guard let old = mapping.source else { return false }
@@ -2076,15 +2101,12 @@ package enum LightweightMigration {
                     return false
                 }
                 if sourceEntity.name == source.name {
+                    let retainedIndexes = sourceEntity.indexes.filter {
+                        !$0.properties.contains(where: { removedNames.contains($0) })
+                    }
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && sourceEntity.indexes.filter({
-                            let ordinaryIndexRemoval = !$0.isUnique && $0.properties.contains(removedAttribute.name)
-                            let duplicateAttributeUniqueIndex =
-                                $0.isUnique && $0.properties == [removedAttribute.name]
-                                && removedAttribute.options.contains(.unique)
-                            return !ordinaryIndexRemoval && !duplicateAttributeUniqueIndex
-                        }) == destinationEntity.indexes
+                        && retainedIndexes == destinationEntity.indexes
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName
                     && sourceEntity.attributes.count == destinationEntity.attributes.count
@@ -2096,17 +2118,20 @@ package enum LightweightMigration {
             destinationEntities.allSatisfy({ $0.relationships.isEmpty })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Attribute removal must remove one unindexed scalar from a flat schema without other edits.")
+                "Attribute removal must remove flat scalar columns without changing retained metadata or partial indexes."
+            )
         }
-        _ = try SQLColumnType.resolve(
-            removedAttribute.type,
-            property: "\(source.name).\(removedAttribute.name)",
-            options: removedAttribute.options)
-        return removedAttribute
+        for attribute in removed {
+            _ = try SQLColumnType.resolve(
+                attribute.type, property: "\(source.name).\(attribute.name)", options: attribute.options)
+        }
+        return removed
     }
 
     private static func validateColumnRemovalSideEffects(
         table: String,
+        entity: Schema.Entity,
+        removedColumns: Set<String>,
         connection: SQLConnection
     ) throws {
         let sideObjects = try connection.rows(
@@ -2114,26 +2139,129 @@ package enum LightweightMigration {
         guard sideObjects.isEmpty else {
             throw SwiftDataError.migrationUnsupported("Attribute removal is unsupported when triggers or views exist.")
         }
+        let tableSQL = try connection.rows(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
+        guard tableSQL.count == 1,
+            case let .text(createSQL)? = tableSQL.first?.first
+        else {
+            throw SwiftDataError.migrationUnsupported("Attribute removal requires a tracked physical table.")
+        }
+        let normalizedSQL = createSQL.uppercased()
+        let checkConstraintPattern = try NSRegularExpression(pattern: #"(?i)\bCHECK\s*\("#)
+        let sqlRange = NSRange(normalizedSQL.startIndex..<normalizedSQL.endIndex, in: normalizedSQL)
+        guard checkConstraintPattern.firstMatch(in: normalizedSQL, range: sqlRange) == nil else {
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal is unsupported for tables with CHECK constraints.")
+        }
         let tables = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
         for row in tables {
             guard case let .text(name)? = row.first else { continue }
             let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
             let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
-            guard foreignKeys.isEmpty else {
-                throw SwiftDataError.migrationUnsupported("Attribute removal is unsupported when foreign keys exist.")
+            let referencesRemovedColumn = foreignKeys.contains { foreignKey in
+                guard foreignKey.count > 4,
+                    case let .text(referencedTable) = foreignKey[2],
+                    case let .text(referencingColumn) = foreignKey[3]
+                else { return false }
+                if name.caseInsensitiveCompare(table) == .orderedSame {
+                    return removedColumns.contains(referencingColumn.uppercased())
+                }
+                guard referencedTable.caseInsensitiveCompare(table) == .orderedSame,
+                    case let .text(referencedColumn) = foreignKey[4]
+                else { return false }
+                return removedColumns.contains(referencedColumn.uppercased())
+            }
+            guard !referencesRemovedColumn else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Attribute removal cannot change a column referenced by a foreign key.")
             }
         }
         let tableInfo = try connection.rows("PRAGMA table_info(\(table))")
-        guard
-            tableInfo.contains(where: { row in
-                row.count > 5
-                    && row[1] == .text("Z_PK")
-                    && row[2] == .text("INTEGER")
-                    && row[5] == .int(1)
+        let expectedColumns: [(name: String, type: String, notNull: Int64, primaryKey: Int64)] =
+            [
+                ("Z_PK", "INTEGER", 0, 1),
+                ("Z_ENT", "INTEGER", 0, 0),
+                ("Z_OPT", "INTEGER", 0, 0),
+            ]
+            + (try entity.attributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }).map {
+                attribute in
+                let type = try SQLColumnType.resolve(
+                    attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
+                return ("Z\(attribute.name.uppercased())", type.rawValue, 0, 0)
+            })
+        guard tableInfo.count == expectedColumns.count,
+            tableInfo.enumerated().allSatisfy({ offset, row in
+                guard row.count > 5 else { return false }
+                let expected = expectedColumns[offset]
+                return row[0] == .int(Int64(offset)) && row[1] == .text(expected.name)
+                    && row[2] == .text(expected.type) && row[3] == .int(expected.notNull)
+                    && row[4] == .null && row[5] == .int(expected.primaryKey)
             })
         else {
-            throw SwiftDataError.migrationUnsupported("Attribute removal requires the standard INTEGER primary key.")
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal requires a physical table matching the flat source schema layout.")
+        }
+        let extendedTableInfo = try connection.rows("PRAGMA table_xinfo(\(table))")
+        guard
+            !extendedTableInfo.contains(where: { row in
+                row.count > 6 && row[6] != .int(0)
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal is unsupported for tables with generated or hidden columns.")
+        }
+    }
+
+    private static func validateGeneratedIndexesForAttributeRemoval(
+        table: String,
+        definitions: [IndexDefinition],
+        connection: SQLConnection
+    ) throws {
+        for definition in definitions {
+            let rows = try connection.rows(
+                "SELECT sql, tbl_name FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE",
+                [.text(definition.name)])
+            let normalizedExpected = definition.statement.lowercased().filter { !$0.isWhitespace && $0 != ";" }
+            let normalizedActual = rows.first?.first.flatMap { value -> String? in
+                guard case let .text(sql) = value else { return nil }
+                return sql.lowercased().filter { !$0.isWhitespace && $0 != ";" && $0 != "`" && $0 != "\"" }
+            }
+            guard rows.count == 1,
+                normalizedActual == normalizedExpected,
+                rows[0].count > 1,
+                rows[0][1] == .text(table)
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Generated index \(definition.name) has unexpected SQL or constraint semantics.")
+            }
+            let quotedIndex = "\"\(definition.name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            let indexList = try connection.rows("PRAGMA index_list(\(table))")
+            guard
+                let metadata = indexList.first(where: { row in
+                    guard row.count > 4, case let .text(indexName) = row[1] else { return false }
+                    return indexName.caseInsensitiveCompare(definition.name) == .orderedSame
+                }),
+                metadata[2] == .int(definition.statement.hasPrefix("CREATE UNIQUE INDEX") ? 1 : 0),
+                metadata[4] == .int(0)
+            else {
+                throw SwiftDataError.migrationUnsupported("Generated index \(definition.name) is partial or missing.")
+            }
+            let expectedColumns =
+                definition.statement
+                .split(separator: "(").last?
+                .split(separator: ")").first?
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces).uppercased() } ?? []
+            let info = try connection.rows("PRAGMA index_info(\(quotedIndex))")
+            guard info.count == expectedColumns.count,
+                info.enumerated().allSatisfy({ offset, row in
+                    row.count > 2 && row[0] == .int(Int64(offset))
+                        && row[2] == .text(expectedColumns[offset])
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported("Generated index \(definition.name) has unexpected keys.")
+            }
         }
     }
 

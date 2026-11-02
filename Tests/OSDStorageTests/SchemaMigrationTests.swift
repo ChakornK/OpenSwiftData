@@ -1033,6 +1033,74 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testEntityIDHighWatermarkRejectsMalformedValuesAndRepairsLowValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = Schema([Schema.Entity(name: "Alpha"), Schema.Entity(name: "Beta")])
+        let location = StoreLocation.file(directory.appendingPathComponent("allocator.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: schema)
+        try initial.write { connection in
+            try connection.execute(
+                "UPDATE _osd_meta SET value = ? WHERE key = ?",
+                [.blob(Array("invalid".utf8)), .text(LightweightMigration.entityIDHighWatermarkKey)])
+            XCTAssertEqual(
+                try connection.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDHighWatermarkKey)]
+                ).first?.first,
+                .blob(Array("invalid".utf8)))
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: schema)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected invalid allocator metadata to fail closed, got \(error)")
+            }
+        }
+        let repair = try GRDBSQLiteDriver(location: location)
+        try repair.write { connection in
+            try connection.execute(
+                "UPDATE _osd_meta SET value = ? WHERE key = ?",
+                [.blob(Array("1".utf8)), .text(LightweightMigration.entityIDHighWatermarkKey)])
+            XCTAssertEqual(
+                try connection.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDHighWatermarkKey)]
+                ).first?.first,
+                .blob(Array("1".utf8)))
+        }
+        try repair.close()
+
+        let addedSchema = Schema([
+            Schema.Entity(name: "Alpha"),
+            Schema.Entity(name: "Beta"),
+            Schema.Entity(name: "Gamma"),
+        ])
+        let added = try LightweightMigration.openStore(location: location, schema: addedSchema)
+        XCTAssertEqual(
+            try added.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.int(1), .text("Alpha")], [.int(2), .text("Beta")], [.int(3), .text("Gamma")]])
+        XCTAssertEqual(try added.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 4)
+        try added.close()
+
+        let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty.sqlite"))
+        let empty = try LightweightMigration.openStore(location: emptyLocation, schema: Schema([]))
+        XCTAssertEqual(try empty.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 1)
+        XCTAssertEqual(
+            try empty.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.entityIDHighWatermarkKey)]
+                ).first?.first
+            },
+            .blob(Array("1".utf8)))
+        try empty.close()
+        let firstEntity = try LightweightMigration.openStore(
+            location: emptyLocation, schema: Schema([Schema.Entity(name: "First")]))
+        XCTAssertEqual(
+            try firstEntity.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY") },
+            [[.int(1), .text("First")]])
+        try firstEntity.close()
+    }
+
     func testOptionalToRequiredUniqueDefaultCollisionRollsBackAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

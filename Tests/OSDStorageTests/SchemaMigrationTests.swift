@@ -3102,6 +3102,59 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleFlattenedAttributesCanBeRemovedTogether() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "address",
+                        type: "Address",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "zip", columnName: "address_zip", type: "Int32"),
+                        ]),
+                    Schema.Attribute(
+                        name: "dimensions",
+                        type: "Dimensions",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "width", columnName: "dimensions_width", type: "Double"),
+                            .init(name: "height", columnName: "dimensions_height", type: "Double"),
+                        ]),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-multiple-flattened-attributes"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZADDRESS_CITY, ZADDRESS_ZIP, "
+                    + "ZDIMENSIONS_WIDTH, ZDIMENSIONS_HEIGHT, ZRETAINED) "
+                    + "VALUES (1, 7, 'Rome', 12345, 1.5, 2.5, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZRETAINED", "ZNOTE"])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZNOTE FROM ZRECORD") },
+            [[.int(1), .int(7), .text("keep"), .null]])
+        try driver.close()
+    }
+
     func testFlattenedAttributeRemovalRejectsMissingLeafBeforeDDL() throws {
         let source = Schema([
             Schema.Entity(

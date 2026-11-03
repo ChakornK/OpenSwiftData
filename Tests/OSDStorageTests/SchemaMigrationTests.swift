@@ -2955,6 +2955,116 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testFlattenedAttributeCanBeRemovedAsAWhole() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "address",
+                        type: "Address",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "zip", columnName: "address_zip", type: "Int32"),
+                        ]),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-whole-flattened-attribute"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZADDRESS_CITY, ZADDRESS_ZIP, ZRETAINED) "
+                    + "VALUES (1, 5, 'Paris', 75000, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZRETAINED"])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD") },
+            [[.int(1), .int(5), .text("keep")]])
+        try driver.close()
+    }
+
+    func testFlattenedAttributeRemovalRejectsMissingLeafBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "address",
+                        type: "Address",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "zip", columnName: "address_zip", type: "Int32"),
+                        ])
+                ])
+        ])
+        let destination = Schema([Schema.Entity(name: "Record")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-missing-leaf"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP TABLE ZRECORD")
+            try connection.execute(
+                "CREATE TABLE ZRECORD (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZADDRESS_CITY VARCHAR)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected missing flattened leaf to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZADDRESS_CITY")
+                })
+            })
+        try driver.close()
+    }
+
+    func testFlattenedAttributeRemovalRejectsPartiallyMissingPhysicalComponents() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "address",
+                        type: "Address",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "zip", columnName: "address_zip", type: "Int32"),
+                        ])
+                ])
+        ])
+        let destination = Schema([Schema.Entity(name: "Record")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-partial-component"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("ALTER TABLE ZRECORD DROP COLUMN ZADDRESS_ZIP")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+        try driver.close()
+    }
+
     func testScalarOptionalAdditionComposesWithOptionalToOneRemoval() throws {
         let source = Schema([
             Schema.Entity(

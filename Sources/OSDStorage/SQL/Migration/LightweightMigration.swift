@@ -2268,11 +2268,17 @@ package enum LightweightMigration {
                 throw SwiftDataError.migrationUnsupported("SQLite does not support dropping table columns.")
             }
             let removedAttributeNames = Set(removedAttributes.map(\.name))
+            let removedPhysicalColumns = Set(
+                removedAttributes.flatMap { attribute in
+                    attribute.options.contains(.flattened)
+                        ? attribute.components.map { "Z\($0.columnName.uppercased())" }
+                        : ["Z\(attribute.name.uppercased())"]
+                })
             try validateColumnRemovalSideEffects(
                 table: table,
                 entity: source,
                 schema: Schema(sourceEntities),
-                removedColumns: Set(removedAttributes.map { "Z\($0.name.uppercased())" }),
+                removedColumns: removedPhysicalColumns,
                 connection: connection)
             let removableIndexNames = Set(
                 source.indexes.compactMap { index -> String? in
@@ -2294,9 +2300,20 @@ package enum LightweightMigration {
                 table: table,
                 definitions: indexDefinitions(for: source, schema: Schema(sourceEntities)),
                 connection: connection)
+            for column in removedPhysicalColumns {
+                try validateIndexesForAttributeRemoval(
+                    table: table,
+                    column: column,
+                    removableIndexNames: removableIndexNames,
+                    knownIndexNames: Set(
+                        indexDefinitions(for: source, schema: Schema(sourceEntities)).map {
+                            $0.name.uppercased()
+                        }),
+                    connection: connection)
+            }
             let knownIndexNames = Set(
                 indexDefinitions(for: source, schema: Schema(sourceEntities)).map { $0.name.uppercased() })
-            for attribute in removedAttributes {
+            for attribute in removedAttributes where !attribute.options.contains(.flattened) {
                 try validateIndexesForAttributeRemoval(
                     table: table,
                     column: "Z\(attribute.name.uppercased())",
@@ -2308,7 +2325,13 @@ package enum LightweightMigration {
                 try connection.execute("DROP INDEX IF EXISTS \(definition.name)")
             }
             for attribute in removedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
-                try connection.execute("ALTER TABLE \(table) DROP COLUMN Z\(attribute.name.uppercased())")
+                let columns =
+                    attribute.options.contains(.flattened)
+                    ? attribute.components.map { "Z\($0.columnName.uppercased())" }
+                    : ["Z\(attribute.name.uppercased())"]
+                for column in columns.sorted() {
+                    try connection.execute("ALTER TABLE \(table) DROP COLUMN \(column)")
+                }
             }
             let addedAttributes = mappings.filter { $0.source == nil }.map(\.destination)
             for attribute in addedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
@@ -3598,11 +3621,18 @@ package enum LightweightMigration {
         }
         guard !removed.isEmpty else { return nil }
         let removedNames = Set(removed.map(\.name))
+        let normalizedRemovedNames = Set(removed.map { $0.name.uppercased() })
+        let removedFlattenedColumnNames = Set(
+            removed.filter { $0.options.contains(.flattened) }
+                .flatMap { attribute in [attribute.name] + attribute.components.map(\.columnName) }
+                .map { $0.uppercased() })
+        let removedIndexPropertyNames = normalizedRemovedNames.union(removedFlattenedColumnNames)
         let addedMappings = mappings.filter { $0.source == nil }
         let destinationIndexes = destination.indexes
         guard
             destinationIndexes.allSatisfy({ index in
-                !index.properties.contains(where: { removedNames.contains($0) })
+                !index.properties.contains(where: { normalizedRemovedNames.contains($0.uppercased()) })
+                    && !index.properties.contains(where: { removedFlattenedColumnNames.contains($0.uppercased()) })
                     && (addedMappings.isEmpty
                         ? !index.isUnique
                         : equivalentUniqueIndexes(source.indexes, destination.indexes))
@@ -3614,7 +3644,10 @@ package enum LightweightMigration {
         guard
             !source.indexes.contains(where: { index in
                 guard index.isUnique,
-                    index.properties.contains(where: { removedNames.contains($0) })
+                    index.properties.contains(where: {
+                        normalizedRemovedNames.contains($0.uppercased())
+                            || removedFlattenedColumnNames.contains($0.uppercased())
+                    })
                 else { return false }
                 return
                     !(index.properties.count == 1
@@ -3628,11 +3661,7 @@ package enum LightweightMigration {
         }
         guard
             destinationEntities.contains(where: { $0.name == destination.name }),
-            removed.allSatisfy({ attribute in
-                !attribute.options.contains(.flattened)
-                    && !attribute.options.contains(.externalStorage)
-                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
-            }),
+            try removed.allSatisfy({ try isRemovableAttributeStorage($0, entity: source) }),
             !destination.attributes.contains(where: { attribute in
                 attribute.originalName.map { removedNames.contains($0) } ?? false
             }),
@@ -3657,6 +3686,11 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
+            !destination.indexes.contains(where: { index in
+                index.properties.contains(where: {
+                    removedIndexPropertyNames.contains($0.uppercased())
+                })
+            }),
             sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
             sourceEntities.allSatisfy({ sourceEntity in
@@ -3696,10 +3730,40 @@ package enum LightweightMigration {
             )
         }
         for attribute in removed {
-            _ = try SQLColumnType.resolve(
-                attribute.type, property: "\(source.name).\(attribute.name)", options: attribute.options)
+            if attribute.options.contains(.flattened) {
+                for component in attribute.components {
+                    _ = try SQLColumnType.resolve(
+                        component.type, property: "\(source.name).\(component.columnName)")
+                }
+            } else {
+                _ = try SQLColumnType.resolve(
+                    attribute.type, property: "\(source.name).\(attribute.name)", options: attribute.options)
+            }
         }
         return removed
+    }
+
+    private static func isRemovableAttributeStorage(_ attribute: Schema.Attribute, entity: Schema.Entity) throws -> Bool
+    {
+        guard !attribute.options.contains(.externalStorage),
+            !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+        else { return false }
+        guard attribute.options.contains(.flattened) else { return true }
+        guard !attribute.isOptional,
+            !attribute.options.contains(.unique),
+            !attribute.components.isEmpty,
+            Set(attribute.components.map(\.name)).count == attribute.components.count
+        else { return false }
+        for component in attribute.components {
+            guard component.columnName == "\(attribute.name)_\(component.name)",
+                component.name.utf8.allSatisfy({
+                    ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
+                })
+            else { return false }
+            _ = try SQLColumnType.resolve(
+                component.type, property: "\(entity.name).\(component.columnName)")
+        }
+        return true
     }
 
     private static func validateColumnRemovalSideEffects(
@@ -3759,11 +3823,18 @@ package enum LightweightMigration {
                 ("Z_ENT", "INTEGER", 0, 0),
                 ("Z_OPT", "INTEGER", 0, 0),
             ]
-            + (try entity.attributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }).map {
+            + (try entity.attributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }).flatMap {
                 attribute in
+                if attribute.options.contains(.flattened) {
+                    return try attribute.components.map { component in
+                        let type = try SQLColumnType.resolve(
+                            component.type, property: "\(entity.name).\(component.columnName)")
+                        return ("Z\(component.columnName.uppercased())", type.rawValue, Int64(0), Int64(0))
+                    }
+                }
                 let type = try SQLColumnType.resolve(
                     attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
-                return ("Z\(attribute.name.uppercased())", type.rawValue, 0, 0)
+                return [("Z\(attribute.name.uppercased())", type.rawValue, Int64(0), Int64(0))]
             })
             + entity.relationships.compactMap { relationship in
                 guard !relationship.isToMany,

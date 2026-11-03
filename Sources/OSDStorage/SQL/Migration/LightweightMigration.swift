@@ -2280,6 +2280,22 @@ package enum LightweightMigration {
                 schema: Schema(sourceEntities),
                 removedColumns: removedPhysicalColumns,
                 connection: connection)
+            let renamePlan = try orderedRenames(mappings)
+            if !renamePlan.isEmpty {
+                let renameNames = Set(renamePlan.flatMap { [$0.0.uppercased(), $0.1.uppercased()] })
+                guard renameNames.isDisjoint(with: removedPhysicalColumns) else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "A scalar rename cannot target or free a column removed in the same migration.")
+                }
+            }
+            let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
+            let renameIndexNames = Set(
+                sourceIndexDefinitions.compactMap { definition -> String? in
+                    renamePlan.contains(where: { sourceName, _ in
+                        definition.columns == ["Z\(sourceName.uppercased())"]
+                            && definition.statement.hasPrefix("CREATE INDEX")
+                    }) ? definition.name.uppercased() : nil
+                })
             let removableIndexNames = Set(
                 source.indexes.compactMap { index -> String? in
                     guard !index.properties.isEmpty,
@@ -2292,9 +2308,12 @@ package enum LightweightMigration {
                     + removedAttributes.compactMap { attribute in
                         attribute.options.contains(.unique)
                             ? "Z\(source.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX" : nil
-                    })
-            let removedIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities)).filter {
-                removableIndexNames.contains($0.name.uppercased())
+                    }
+                    + Array(renameIndexNames))
+            let removedIndexDefinitions = sourceIndexDefinitions.filter {
+                let name = $0.name.uppercased()
+                return removableIndexNames.contains(name)
+                    || renameIndexNames.contains(name)
             }
             try validateGeneratedIndexesForAttributeRemoval(
                 table: table,
@@ -2320,14 +2339,6 @@ package enum LightweightMigration {
                     removableIndexNames: removableIndexNames,
                     knownIndexNames: knownIndexNames,
                     connection: connection)
-            }
-            let renamePlan = try orderedRenames(mappings)
-            if !renamePlan.isEmpty {
-                let renameNames = Set(renamePlan.flatMap { [$0.0.uppercased(), $0.1.uppercased()] })
-                guard renameNames.isDisjoint(with: removedPhysicalColumns) else {
-                    throw SwiftDataError.migrationUnsupported(
-                        "A scalar rename cannot target or free a column removed in the same migration.")
-                }
             }
             for definition in removedIndexDefinitions {
                 try connection.execute("DROP INDEX IF EXISTS \(definition.name)")
@@ -3648,6 +3659,85 @@ package enum LightweightMigration {
         let renamedDestinationNames = Set(renameMappings.map { $0.destination.name.uppercased() })
         let renameIndexPropertyNames = renamedSourceNames.union(renamedDestinationNames)
         let addedMappings = mappings.filter { $0.source == nil }
+        let sourceOrdinaryRenameIndexes = Set(
+            source.indexes.filter { index in
+                !index.isUnique && index.properties.count == 1
+                    && renamedSourceNames.contains(index.properties[0].uppercased())
+            })
+        let destinationOrdinaryRenameIndexes = Set(
+            destination.indexes.filter { index in
+                !index.isUnique && index.properties.count == 1
+                    && renamedDestinationNames.contains(index.properties[0].uppercased())
+            })
+        let targetEntityMatches = sourceEntities.allSatisfy({ sourceEntity in
+            guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                return false
+            }
+            guard sourceEntity.name == source.name else {
+                return sourceEntity.superentityName == destinationEntity.superentityName
+                    && sourceEntity.attributes.count == destinationEntity.attributes.count
+                    && sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                    && sourceEntity.relationships == destinationEntity.relationships
+                    && sourceEntity.indexes == destinationEntity.indexes
+            }
+            let retainedSourceAttributes = sourceEntity.attributes.filter { !removedNames.contains($0.name) }
+            let destinationAttributes = destinationEntity.attributes
+            let additions = addedMappings.map(\.destination)
+            let removableAttributeUniqueIndex =
+                removed.count == 1
+                    && removed[0].options.contains(.unique)
+                ? removed[0].name : nil
+            let sourceUniqueIndexes = sourceEntity.indexes.filter { index in
+                index.isUnique
+                    && !(index.properties.count == 1 && index.properties.first == removableAttributeUniqueIndex)
+            }
+            let destinationUniqueIndexes = destinationEntity.indexes.filter(\.isUnique)
+            return sourceEntity.superentityName == destinationEntity.superentityName
+                && sourceEntity.relationships == destinationEntity.relationships
+                && retainedSourceAttributes.count + additions.count == destinationAttributes.count
+                && retainedSourceAttributes.allSatisfy({ old in
+                    guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else { return false }
+                    return destinationAttributes.contains(mapping.destination)
+                        && (old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
+                            ? old == mapping.destination
+                            : renameMappings.contains(where: {
+                                $0.source?.name == old.name && $0.destination == mapping.destination
+                            }))
+                })
+                && additions.allSatisfy({ destinationAttributes.contains($0) })
+                && sourceUniqueIndexes.count == destinationUniqueIndexes.count
+                && sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
+                && sourceOrdinaryRenameIndexes.count == destinationOrdinaryRenameIndexes.count
+                && (!additions.isEmpty
+                    ? Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                        == Set(destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                    : true)
+                && sourceEntity.indexes.allSatisfy({ index in
+                    !index.properties.contains(where: { property in
+                        renameIndexPropertyNames.contains(property.uppercased())
+                    }) || (!index.isUnique && index.properties.count == 1)
+                })
+                && destinationEntity.indexes.allSatisfy({ index in
+                    !index.properties.contains(where: { property in
+                        renameIndexPropertyNames.contains(property.uppercased())
+                    }) || (!index.isUnique && index.properties.count == 1)
+                })
+        })
+        guard targetEntityMatches else {
+            throw SwiftDataError.migrationUnsupported(
+                "Removal target entity metadata does not match the migration plan.")
+        }
+        let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
+        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: Schema(destinationEntities))
+        let renameIndexesAreOrdinary = renameMappings.allSatisfy({ mapping in
+            guard let old = mapping.source else { return false }
+            let sourceOnOld = sourceIndexDefinitions.filter { $0.columns == ["Z\(old.name.uppercased())"] }
+            let destinationOnNew = destinationIndexDefinitions.filter {
+                $0.columns == ["Z\(mapping.destination.name.uppercased())"]
+            }
+            return sourceOnOld.allSatisfy({ $0.statement.hasPrefix("CREATE INDEX") })
+                && destinationOnNew.allSatisfy({ $0.statement.hasPrefix("CREATE INDEX") })
+        })
         let destinationIndexes = destination.indexes
         guard
             destinationIndexes.allSatisfy({ index in
@@ -3724,62 +3814,15 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
+            renameIndexesAreOrdinary,
             !destination.indexes.contains(where: { index in
                 index.properties.contains(where: {
                     removedIndexPropertyNames.contains($0.uppercased())
-                        || renameIndexPropertyNames.contains($0.uppercased())
-                })
-            }),
-            !source.indexes.contains(where: { index in
-                index.properties.contains(where: {
-                    renameIndexPropertyNames.contains($0.uppercased())
                 })
             }),
             sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
-            sourceEntities.allSatisfy({ sourceEntity in
-                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
-                    return false
-                }
-                if sourceEntity.name == source.name {
-                    let retainedSourceAttributes = sourceEntity.attributes.filter { !removedNames.contains($0.name) }
-                    let destinationAttributes = destinationEntity.attributes
-                    let additions = addedMappings.map(\.destination)
-                    return sourceEntity.superentityName == destinationEntity.superentityName
-                        && sourceEntity.relationships == destinationEntity.relationships
-                        && retainedSourceAttributes.count + additions.count == destinationAttributes.count
-                        && retainedSourceAttributes.allSatisfy({ old in
-                            guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else {
-                                return false
-                            }
-                            return destinationAttributes.contains(mapping.destination)
-                                && (old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
-                                    ? old == mapping.destination
-                                    : renameMappings.contains(where: {
-                                        $0.source?.name == old.name && $0.destination == mapping.destination
-                                    }))
-                        })
-                        && additions.allSatisfy({ destinationAttributes.contains($0) })
-                        && (!additions.isEmpty
-                            ? equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
-                                && Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                                    == Set(
-                                        destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(
-                                            \.name))
-                            : destinationEntity.indexes.allSatisfy({ index in
-                                !index.properties.contains(where: { property in
-                                    removedIndexPropertyNames.contains(property.uppercased())
-                                        || renameIndexPropertyNames.contains(property.uppercased())
-                                })
-                                    && (renameMappings.isEmpty ? !index.isUnique : true)
-                            }))
-                }
-                return sourceEntity.superentityName == destinationEntity.superentityName
-                    && sourceEntity.attributes.count == destinationEntity.attributes.count
-                    && sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
-                    && sourceEntity.relationships == destinationEntity.relationships
-                    && sourceEntity.indexes == destinationEntity.indexes
-            }),
+            targetEntityMatches,
             sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
             destinationEntities.allSatisfy({ $0.relationships.isEmpty })
         else {

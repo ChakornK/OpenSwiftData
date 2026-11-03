@@ -2869,6 +2869,42 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarRenameWithGeneratedOrdinaryIndexComposesWithRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["legacyTitle"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle")
+                ],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-index-remove-scalar"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE, ZOBSOLETE) VALUES (1, 4, 'kept', 'drop')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE FROM ZRECORD") },
+            [[.int(1), .int(4), .text("kept")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZTITLE_INDEX"), .text("CREATE INDEX ZRECORD_ZTITLE_INDEX ON ZRECORD (ZTITLE)")]])
+        try driver.close()
+    }
+
     func testScalarRemovalComposesWithOptionalAndDefaultedAdditions() throws {
         let source = Schema([
             Schema.Entity(

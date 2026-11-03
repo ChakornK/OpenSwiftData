@@ -671,6 +671,224 @@ final class SchemaMigrationTests: XCTestCase {
         try emptyMigrated.close()
     }
 
+    func testMultipleOptionalAttributesBackfillTypedDefaultsTogether() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "count", type: "Int32", isOptional: true, defaultValue: "9"),
+                    Schema.Attribute(name: "enabled", type: "Bool", isOptional: true, defaultValue: "true"),
+                    Schema.Attribute(name: "retained", type: "String", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "count", type: "Int32", defaultValue: "9"),
+                    Schema.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
+                    Schema.Attribute(name: "retained", type: "String", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-optional-to-required-defaults"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCOUNT, ZENABLED, ZRETAINED) VALUES (1, 3, NULL, NULL, NULL)")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCOUNT, ZENABLED, ZRETAINED) VALUES (1, 7, 4, 0, 'kept')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZCOUNT, ZENABLED, ZRETAINED FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(3), .int(9), .int(1), .null],
+                [.int(2), .int(7), .int(4), .int(0), .text("kept")],
+            ])
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count, 1)
+        try driver.close()
+    }
+
+    func testMultipleOptionalBackfillsRollbackWhenLaterUniqueValueCollides() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "5"),
+                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["second"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "5"),
+                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["second"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-optional-backfill-unique-rollback"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, NULL, NULL)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 4, 9, 7)")
+        }
+        let originalHash = try driver.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected later unique backfill collision to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(2), .null, .null], [.int(2), .int(4), .int(9), .int(7)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZFIRST") && $0[3] == .int(0)
+                })
+            })
+        try driver.close()
+    }
+
+    func testMultipleOptionalBackfillsRollbackOnCompositeUniqueCollision() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
+                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "3"),
+                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-backfill-composite-unique-rollback"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, NULL, NULL)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 3, 3, NULL)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalHash = try driver.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected composite unique backfill collision, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(2), .null, .null], [.int(2), .int(3), .int(3), .null]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        try driver.close()
+    }
+
+    func testOpeningStoreRollsBackCompositeBackfillCollisionAndMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(
+            directory.appendingPathComponent("optional-backfill-composite-rollback.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
+                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "3"),
+                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, NULL, NULL)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 3, 3, NULL)")
+        }
+        let originalHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        let originalDDL = try initial.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected composite backfill collision to fail opening, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(2), .null, .null], [.int(2), .int(3), .int(3), .null]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testSignedIntegerWideningPreservesRowsAndIndexes() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

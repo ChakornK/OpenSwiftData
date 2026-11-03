@@ -2071,7 +2071,7 @@ package enum LightweightMigration {
                 ))
             return
         }
-        if let optionalityChange = try optionalToRequiredAttributeChange(
+        if let optionalityChanges = try optionalToRequiredAttributeChanges(
             mappings,
             source: source,
             destination: destination,
@@ -2080,25 +2080,45 @@ package enum LightweightMigration {
             sourceEntityIDs: sourceEntityIDs,
             destinationEntityIDs: destinationEntityIDs)
         {
-            guard let literal = try migrationDefaultLiteral(for: optionalityChange.destination) else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Making attribute \(destination.name).\(optionalityChange.destination.name) required requires a literal default."
-                )
+            let backfills = try optionalityChanges.sorted {
+                $0.destination.name.utf8.lexicographicallyPrecedes($1.destination.name.utf8)
+            }.map { mapping -> (mapping: AttributeMapping, literal: String, column: String) in
+                guard let literal = try migrationDefaultLiteral(for: mapping.destination), literal != "NULL" else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Making attribute \(destination.name).\(mapping.destination.name) required requires a non-NULL literal default."
+                    )
+                }
+                guard let old = mapping.source,
+                    try SQLColumnType.resolve(
+                        old.type, property: "\(source.name).\(old.name)", options: old.options)
+                        == SQLColumnType.resolve(
+                            mapping.destination.type,
+                            property: "\(destination.name).\(mapping.destination.name)",
+                            options: mapping.destination.options)
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Optional-to-required backfill changed storage affinity for \(destination.name).\(mapping.destination.name)."
+                    )
+                }
+                let column = "Z\(mapping.destination.name.uppercased())"
+                try validateOptionalityBackfillSideEffects(table: table, column: column, connection: connection)
+                return (mapping, literal, column)
             }
-            let column = "Z\(optionalityChange.destination.name.uppercased())"
-            try validateOptionalityBackfillSideEffects(table: table, column: column, connection: connection)
-            do {
-                try connection.execute("UPDATE \(table) SET \(column) = \(literal) WHERE \(column) IS NULL")
-            } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
-                throw SwiftDataError.migrationUnsupported(
-                    "Backfilling \(destination.name).\(optionalityChange.destination.name) violates a uniqueness constraint."
-                )
-            }
-            let nullRows = try connection.rows("SELECT COUNT(*) FROM \(table) WHERE \(column) IS NULL")
-            guard case let .int(count)? = nullRows.first?.first, count == 0 else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Required attribute \(destination.name).\(optionalityChange.destination.name) still contains NULL values."
-                )
+            for backfill in backfills {
+                do {
+                    try connection.execute(
+                        "UPDATE \(table) SET \(backfill.column) = \(backfill.literal) WHERE \(backfill.column) IS NULL")
+                } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Backfilling \(destination.name).\(backfill.mapping.destination.name) violates a uniqueness constraint."
+                    )
+                }
+                let nullRows = try connection.rows("SELECT COUNT(*) FROM \(table) WHERE \(backfill.column) IS NULL")
+                guard case let .int(count)? = nullRows.first?.first, count == 0 else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Required attribute \(destination.name).\(backfill.mapping.destination.name) still contains NULL values."
+                    )
+                }
             }
             indexTransitions.append(
                 (
@@ -2517,7 +2537,7 @@ package enum LightweightMigration {
             ))
     }
 
-    private static func optionalToRequiredAttributeChange(
+    private static func optionalToRequiredAttributeChanges(
         _ mappings: [AttributeMapping],
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2525,30 +2545,31 @@ package enum LightweightMigration {
         destinationEntities: [Schema.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
-    ) throws -> AttributeMapping? {
+    ) throws -> [AttributeMapping]? {
         let changes = mappings.filter { mapping in
             guard let source = mapping.source else { return false }
             return source.isOptional != mapping.destination.isOptional
-        }
+        }.sorted { $0.destination.name.utf8.lexicographicallyPrecedes($1.destination.name.utf8) }
         guard !changes.isEmpty else { return nil }
         guard changes.contains(where: { $0.source?.isOptional == true && !$0.destination.isOptional }) else {
             return nil
         }
-        guard changes.count == 1,
-            let change = changes.first,
-            let oldAttribute = change.source,
-            oldAttribute.isOptional,
-            !change.destination.isOptional,
-            oldAttribute.name == change.destination.name,
-            oldAttribute.type == change.destination.type,
-            oldAttribute.options == change.destination.options,
-            oldAttribute.originalName == change.destination.originalName,
-            oldAttribute.components == change.destination.components,
+        guard
+            changes.allSatisfy({ change in
+                guard let oldAttribute = change.source else { return false }
+                return oldAttribute.isOptional
+                    && !change.destination.isOptional
+                    && oldAttribute.name == change.destination.name
+                    && oldAttribute.type == change.destination.type
+                    && oldAttribute.options == change.destination.options
+                    && oldAttribute.originalName == change.destination.originalName
+                    && oldAttribute.components == change.destination.components
+            }),
             mappings.count == source.attributes.count,
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ mapping in
                 guard let old = mapping.source else { return false }
-                return old == oldAttribute || old == mapping.destination
+                return changes.contains(where: { $0.source?.name == old.name }) || old == mapping.destination
             }),
             source.name == destination.name,
             sourceEntities.count == destinationEntities.count,
@@ -2587,13 +2608,15 @@ package enum LightweightMigration {
             destinationEntities.allSatisfy({ $0.relationships.isEmpty })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Optional-to-required migration must change one flat scalar attribute without other schema edits.")
+                "Optional-to-required migration must change only flat scalar attributes without other schema edits.")
         }
-        _ = try SQLColumnType.resolve(
-            change.destination.type,
-            property: "\(destination.name).\(change.destination.name)",
-            options: change.destination.options)
-        return change
+        for change in changes {
+            _ = try SQLColumnType.resolve(
+                change.destination.type,
+                property: "\(destination.name).\(change.destination.name)",
+                options: change.destination.options)
+        }
+        return changes
     }
 
     private static func requiredToOptionalAttributeChange(

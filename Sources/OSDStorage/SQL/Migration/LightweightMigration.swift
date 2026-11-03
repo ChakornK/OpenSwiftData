@@ -357,37 +357,97 @@ package enum LightweightMigration {
             })
     }
 
-    private static func reconcileHierarchyIndexes(
-        sourceStatements: [String], destinationStatements: [String], connection: SQLConnection
-    ) throws {
-        func indexStatements(_ statements: [String]) throws -> [String: String] {
-            var result: [String: String] = [:]
-            for statement in statements
-            where statement.hasPrefix("CREATE INDEX") || statement.hasPrefix("CREATE UNIQUE INDEX") {
-                let tokens = statement.split(separator: " ")
-                guard let indexPosition = tokens.firstIndex(of: "INDEX"), tokens.indices.contains(indexPosition + 1)
-                else {
-                    throw SwiftDataError.migrationUnsupported("Unable to parse a generated hierarchy index statement.")
-                }
-                let name = String(tokens[indexPosition + 1])
-                guard result.updateValue(statement, forKey: name.uppercased()) == nil else {
-                    throw SwiftDataError.migrationUnsupported("Hierarchy index names are not unique.")
-                }
-            }
-            return result
-        }
-        let sourceIndexes = try indexStatements(sourceStatements)
-        let destinationIndexes = try indexStatements(destinationStatements)
+    private struct HierarchyIndexPlan {
+        let source: [String: String]
+        let destination: [String: String]
+        let destinationDefinitions: [String: IndexDefinition]
+    }
+
+    private static func planHierarchyIndexes(
+        sourceStatements: [String],
+        destinationStatements: [String],
+        connection: SQLConnection
+    ) throws -> HierarchyIndexPlan {
+        let sourceIndexes = try indexStatementsByName(sourceStatements)
+        let destinationIndexes = try indexStatementsByName(destinationStatements)
+        let destinationDefinitions = try indexDefinitions(from: destinationIndexes)
         guard Set(sourceIndexes.keys).isSubset(of: Set(destinationIndexes.keys)) else {
             throw SwiftDataError.migrationUnsupported("Hierarchy migration cannot remove existing indexes.")
         }
-        for name in destinationIndexes.keys.sorted() {
-            guard let statement = destinationIndexes[name] else { continue }
-            if sourceIndexes[name] == statement { continue }
-            if sourceIndexes[name] != nil {
+        for name in destinationIndexes.keys {
+            let physicalObjects = try connection.rows(
+                "SELECT type, sql FROM sqlite_master WHERE name = ? COLLATE NOCASE",
+                [.text(name)])
+            guard let object = physicalObjects.first else { continue }
+            let allowedSourceIndex: Bool
+            if physicalObjects.count == 1,
+                let oldStatement = sourceIndexes[name],
+                object.count > 1,
+                case .text("index") = object[0],
+                case let .text(actualSQL) = object[1]
+            {
+                allowedSourceIndex = normalizedIndexSQL(actualSQL) == normalizedIndexSQL(oldStatement)
+            } else {
+                allowedSourceIndex = false
+            }
+            guard allowedSourceIndex else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy index \(name) collides with an existing physical object.")
+            }
+        }
+        return HierarchyIndexPlan(
+            source: sourceIndexes, destination: destinationIndexes, destinationDefinitions: destinationDefinitions)
+    }
+
+    private static func indexStatementsByName(_ statements: [String]) throws -> [String: String] {
+        var result: [String: String] = [:]
+        for statement in statements
+        where statement.hasPrefix("CREATE INDEX") || statement.hasPrefix("CREATE UNIQUE INDEX") {
+            let tokens = statement.split(whereSeparator: \.isWhitespace)
+            guard let indexPosition = tokens.firstIndex(of: "INDEX"), tokens.indices.contains(indexPosition + 1)
+            else {
+                throw SwiftDataError.migrationUnsupported("Unable to parse a generated index statement.")
+            }
+            let name = String(tokens[indexPosition + 1])
+            guard result.updateValue(statement, forKey: name.uppercased()) == nil else {
+                throw SwiftDataError.migrationUnsupported("Generated index names are not unique.")
+            }
+        }
+        return result
+    }
+
+    private static func indexDefinitions(from statements: [String: String]) throws -> [String: IndexDefinition] {
+        var definitions: [String: IndexDefinition] = [:]
+        for (name, statement) in statements {
+            guard let table = expectedIndexTable(in: statement),
+                let columns = indexColumns(in: statement),
+                !columns.isEmpty
+            else {
+                throw SwiftDataError.migrationUnsupported("Unable to parse generated hierarchy index keys.")
+            }
+            definitions[name] = IndexDefinition(name: name, statement: statement, table: table, columns: columns)
+        }
+        return definitions
+    }
+
+    private static func reconcileHierarchyIndexes(
+        _ plan: HierarchyIndexPlan,
+        connection: SQLConnection
+    ) throws {
+        for name in plan.destination.keys.sorted() {
+            guard let statement = plan.destination[name] else { continue }
+            if plan.source[name] == statement { continue }
+            if plan.source[name] != nil {
                 try connection.execute("DROP INDEX \(name)")
             }
             try connection.execute(statement)
+            guard let definition = plan.destinationDefinitions[name] else {
+                throw SwiftDataError.migrationUnsupported("Hierarchy index definition is missing.")
+            }
+            try validatePhysicalIndexMetadata(
+                definition,
+                connection: connection,
+                expectedPartial: statement.range(of: " WHERE ") != nil)
         }
     }
 
@@ -526,16 +586,24 @@ package enum LightweightMigration {
                     "Lightweight migration does not support inherited relationships or indexes.")
             }
         }
+        let validatedSourceIndexSQL = try validateSourceIndexLayout(source, connection: connection)
         let sourceNames = Set(source.entities.map(\.name))
         let destinationNames = Set(destination.entities.map(\.name))
         if sourceNames != destinationNames {
             if sourceNames.isSubset(of: destinationNames) {
-                try applyFlatIndependentRootAdditions(source: source, destination: destination, connection: connection)
+                try applyFlatIndependentRootAdditions(
+                    source: source,
+                    destination: destination,
+                    validatedSourceIndexSQL: validatedSourceIndexSQL,
+                    connection: connection)
             } else if destinationNames.isSubset(of: sourceNames) {
                 try applyFlatIndependentRootRemovals(source: source, destination: destination, connection: connection)
             } else {
                 try applyFlatIndependentRootAdditionsAndRemovals(
-                    source: source, destination: destination, connection: connection)
+                    source: source,
+                    destination: destination,
+                    validatedSourceIndexSQL: validatedSourceIndexSQL,
+                    connection: connection)
             }
             return
         }
@@ -556,14 +624,24 @@ package enum LightweightMigration {
                 indexTransitions: &indexTransitions,
                 connection: connection)
         }
-        try reconcileIndexes(indexTransitions, connection: connection)
+        try reconcileIndexes(indexTransitions, validatedSourceIndexSQL: validatedSourceIndexSQL, connection: connection)
     }
 
     private static func applyFlatIndependentRootAdditions(
         source: Schema,
         destination: Schema,
+        validatedSourceIndexSQL: [String: String],
         connection: SQLConnection
     ) throws {
+        let sourceIndexDefinitions = source.entities.flatMap { indexDefinitions(for: $0, schema: source) }
+        guard
+            sourceIndexDefinitions.allSatisfy({
+                validatedSourceIndexSQL[$0.name.uppercased()] == normalizedIndexSQL($0.statement)
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Adding root entities requires every source generated index to be validated.")
+        }
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         let destinationEntities = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
         guard source.entities.allSatisfy({ destinationEntities[$0.name] == $0 }) else {
@@ -692,6 +770,7 @@ package enum LightweightMigration {
     private static func applyFlatIndependentRootAdditionsAndRemovals(
         source: Schema,
         destination: Schema,
+        validatedSourceIndexSQL: [String: String],
         connection: SQLConnection
     ) throws {
         let sourceNames = Set(source.entities.map(\.name))
@@ -777,10 +856,21 @@ package enum LightweightMigration {
         let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
         let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
         let retainedSchema = try Schema(retainedEntities, version: source.version, entityIDs: retainedIDs)
+        let retainedIndexNames = Set(
+            retainedSchema.entities.flatMap { indexDefinitions(for: $0, schema: retainedSchema) }
+                .map { $0.name.uppercased() })
+        let retainedIndexSQL = validatedSourceIndexSQL.filter { retainedIndexNames.contains($0.key) }
+        guard retainedIndexSQL.count == retainedIndexNames.count else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined entity changes require validated source indexes for every retained entity.")
+        }
         try applyFlatIndependentRootRemovals(
             source: source, destination: retainedSchema, connection: connection)
         try applyFlatIndependentRootAdditions(
-            source: retainedSchema, destination: destination, connection: connection)
+            source: retainedSchema,
+            destination: destination,
+            validatedSourceIndexSQL: retainedIndexSQL,
+            connection: connection)
     }
 
     private static func equivalentEntityMetadata(_ lhs: Schema.Entity, _ rhs: Schema.Entity) -> Bool {
@@ -852,24 +942,29 @@ package enum LightweightMigration {
         guard sideObjects.isEmpty else {
             throw SwiftDataError.migrationUnsupported("Entity removal is unsupported when triggers or views exist.")
         }
-        let actualIndexNames = Set(
-            try connection.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
-                .compactMap { row -> String? in
-                    guard case let .text(name)? = row.first else { return nil }
-                    return name.uppercased()
-                })
+        _ = try validateSourceIndexLayout(source, connection: connection)
         let expectedIndexes = try expectedIndexNames(source)
-        guard actualIndexNames == expectedIndexes else {
-            throw SwiftDataError.migrationUnsupported(
-                "Entity removal is unsupported when physical indexes differ from the source schema.")
+        let removalStatements = try SchemaBuilder.build(source).statements.filter {
+            $0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")
         }
+        let removalDefinitions = try indexDefinitions(from: indexStatementsByName(removalStatements))
+        try validatePhysicalIndexStatements(
+            removalStatements,
+            definitionsByName: removalDefinitions,
+            connection: connection)
         let removedTableNames = Set(
             source.entities.filter { destination.entity(forName: $0.name) == nil }
                 .map { "Z\($0.name.uppercased())" })
+        let generatedModelTables = Set(source.entities.map { "Z\($0.name.uppercased())" })
         for row in try connection.rows("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'") {
-            guard row.count > 1, case let .text(name) = row[0], case let .text(table) = row[1],
-                removedTableNames.contains(table.uppercased()), !expectedIndexes.contains(name.uppercased())
-            else { continue }
+            guard row.count > 1, case let .text(name) = row[0], case let .text(table) = row[1] else { continue }
+            if name.lowercased().hasPrefix("sqlite_autoindex_"), generatedModelTables.contains(table.uppercased()) {
+                throw SwiftDataError.migrationUnsupported(
+                    "Entity removal is unsupported when unexpected SQLite autoindex \(name) exists.")
+            }
+            guard removedTableNames.contains(table.uppercased()), !expectedIndexes.contains(name.uppercased()) else {
+                continue
+            }
             throw SwiftDataError.migrationUnsupported(
                 "Entity removal is unsupported when untracked index \(name) exists on \(table).")
         }
@@ -957,6 +1052,27 @@ package enum LightweightMigration {
         }
         try source.validateRelationshipStorageMappings()
         try destination.validateRelationshipStorageMappings()
+        let sourceIndexStatements = sourceBuilt.statements.filter {
+            $0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")
+        }
+        let sourceDefinitions = try indexDefinitions(
+            from: Dictionary(
+                uniqueKeysWithValues: sourceIndexStatements.compactMap { statement -> (String, String)? in
+                    let tokens = statement.split(whereSeparator: \.isWhitespace)
+                    guard let indexPosition = tokens.firstIndex(of: "INDEX"),
+                        tokens.indices.contains(indexPosition + 1)
+                    else { return nil }
+                    return (String(tokens[indexPosition + 1]).uppercased(), statement)
+                }))
+        try validatePhysicalIndexStatements(
+            sourceIndexStatements,
+            definitionsByName: sourceDefinitions,
+            connection: connection,
+            allowsPartialIndexes: true)
+        let hierarchyIndexPlan = try planHierarchyIndexes(
+            sourceStatements: sourceBuilt.statements,
+            destinationStatements: destinationBuilt.statements,
+            connection: connection)
 
         let sourceByName = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
@@ -1392,9 +1508,7 @@ package enum LightweightMigration {
         for joinTable in joinTableAdditions.sorted(by: less) {
             try connection.execute("CREATE TABLE \(joinTable) (Z_A INTEGER, Z_B INTEGER);")
         }
-        try reconcileHierarchyIndexes(
-            sourceStatements: sourceBuilt.statements, destinationStatements: destinationBuilt.statements,
-            connection: connection)
+        try reconcileHierarchyIndexes(hierarchyIndexPlan, connection: connection)
         for entity in newEntities.sorted(by: {
             destination.entityIDsByName[$0.name, default: 0] < destination.entityIDsByName[$1.name, default: 0]
         }) {
@@ -3217,10 +3331,13 @@ package enum LightweightMigration {
     private struct IndexDefinition: Equatable {
         let name: String
         let statement: String
+        let table: String
+        let columns: [String]
     }
 
     private static func reconcileIndexes(
         _ transitions: [([IndexDefinition], [IndexDefinition])],
+        validatedSourceIndexSQL: [String: String],
         connection: SQLConnection
     ) throws {
         var oldByName: [String: IndexDefinition] = [:]
@@ -3229,11 +3346,303 @@ package enum LightweightMigration {
             for definition in old { oldByName[definition.name.uppercased()] = definition }
             for definition in new { newByName[definition.name.uppercased()] = definition }
         }
+        let changedNew = newByName.filter { oldByName[$0.key] != $0.value }
+        try validatePhysicalIndexes(
+            destination: Array(newByName.values),
+            changedNew: Array(changedNew.values),
+            validatedSourceIndexSQL: validatedSourceIndexSQL,
+            connection: connection)
         for (name, old) in oldByName where newByName[name] != old {
             try connection.execute("DROP INDEX IF EXISTS \(old.name)")
         }
         for (name, new) in newByName where oldByName[name] != new {
             try connection.execute(new.statement)
+        }
+    }
+
+    private static func validateSourceIndexLayout(
+        _ schema: Schema,
+        connection: SQLConnection
+    ) throws -> [String: String] {
+        let definitions = schema.entities.flatMap { indexDefinitions(for: $0, schema: schema) }
+        var validatedSQL: [String: String] = [:]
+        for definition in definitions {
+            let rows = try connection.rows(
+                "SELECT sql, tbl_name FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE",
+                [.text(definition.name)])
+            let expectedSQL = normalizedIndexSQL(definition.statement)
+            guard rows.count == 1,
+                case let .text(actualSQL)? = rows.first?.first,
+                expectedSQL != nil,
+                normalizedIndexSQL(actualSQL) == expectedSQL,
+                rows.first?.count ?? 0 > 1,
+                case let .text(table)? = rows.first?[1],
+                definition.table.caseInsensitiveCompare(table) == .orderedSame
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Generated index \(definition.name) is missing or has unexpected SQL.")
+            }
+            try validatePhysicalIndexMetadata(definition, connection: connection)
+            guard let normalizedSQL = normalizedIndexSQL(definition.statement) else {
+                throw SwiftDataError.migrationUnsupported("Unable to normalize generated index SQL.")
+            }
+            validatedSQL[definition.name.uppercased()] = normalizedSQL
+        }
+        return validatedSQL
+    }
+
+    private static func validatePhysicalIndexes(
+        destination: [IndexDefinition],
+        changedNew: [IndexDefinition],
+        validatedSourceIndexSQL: [String: String],
+        connection: SQLConnection
+    ) throws {
+        let changedNewNames = Set(changedNew.map { $0.name.uppercased() })
+        for definition in destination {
+            let rows = try connection.rows(
+                "SELECT type, sql FROM sqlite_master WHERE name = ? COLLATE NOCASE",
+                [.text(definition.name)])
+            guard let row = rows.first else { continue }
+            if let expectedSourceSQL = validatedSourceIndexSQL[definition.name.uppercased()] {
+                let sourceDefinitionChanged = changedNewNames.contains(definition.name.uppercased())
+                if !sourceDefinitionChanged {
+                    guard rows.count == 1, row.count > 1,
+                        case .text("index") = row[0],
+                        case let .text(actualSQL) = row[1],
+                        normalizedIndexSQL(actualSQL) == expectedSourceSQL
+                    else {
+                        throw SwiftDataError.migrationUnsupported(
+                            "Existing generated index \(definition.name) differs from the validated source schema.")
+                    }
+                    continue
+                }
+            }
+            guard changedNewNames.contains(definition.name.uppercased()) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Destination index \(definition.name) collides with an untracked physical object.")
+            }
+            let isScheduledGeneratedIndex: Bool
+            if rows.count == 1,
+                let expectedOldSQL = validatedSourceIndexSQL[definition.name.uppercased()],
+                row.count > 1,
+                case .text("index") = row[0],
+                case let .text(actualSQL) = row[1]
+            {
+                isScheduledGeneratedIndex = normalizedIndexSQL(actualSQL) == expectedOldSQL
+            } else {
+                isScheduledGeneratedIndex = false
+            }
+            guard isScheduledGeneratedIndex else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Destination index \(definition.name) collides with an existing physical object.")
+            }
+        }
+    }
+
+    private static func validatePhysicalIndexMetadata(
+        _ definition: IndexDefinition,
+        connection: SQLConnection,
+        expectedPartial: Bool = false
+    ) throws {
+        let table = definition.table
+        let quotedTable = "\"\(table.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let quotedIndex = "\"\(definition.name.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let metadata = try connection.rows("PRAGMA index_list(\(quotedTable))")
+        guard
+            let index = metadata.first(where: { row in
+                guard row.count > 4, case let .text(name) = row[1] else { return false }
+                return name.caseInsensitiveCompare(definition.name) == .orderedSame
+            }),
+            index[2] == .int(definition.statement.hasPrefix("CREATE UNIQUE INDEX") ? 1 : 0),
+            index[4] == .int(expectedPartial ? 1 : 0)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Generated index \(definition.name) has incompatible uniqueness or partial-index metadata.")
+        }
+        let actualColumns = try connection.rows("PRAGMA index_info(\(quotedIndex))")
+        guard actualColumns.count == definition.columns.count,
+            actualColumns.enumerated().allSatisfy({ offset, row in
+                row.count > 2 && row[0] == .int(Int64(offset))
+                    && row[2] == .text(definition.columns[offset].uppercased())
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Generated index \(definition.name) has unexpected keys.")
+        }
+    }
+
+    private static func validatePhysicalIndexStatements(
+        _ statements: [String],
+        definitionsByName: [String: IndexDefinition],
+        connection: SQLConnection,
+        allowsPartialIndexes: Bool = false
+    ) throws {
+        for statement in statements {
+            let tokens = statement.split(whereSeparator: \.isWhitespace)
+            guard let indexPosition = tokens.firstIndex(of: "INDEX"),
+                tokens.indices.contains(indexPosition + 1)
+            else {
+                throw SwiftDataError.migrationUnsupported("Unable to parse a generated index statement.")
+            }
+            let name = String(tokens[indexPosition + 1])
+            guard let definition = definitionsByName[name.uppercased()] else {
+                throw SwiftDataError.migrationUnsupported("Generated index \(name) has no schema definition.")
+            }
+            let rows = try connection.rows(
+                "SELECT sql, tbl_name FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE",
+                [.text(name)])
+            let expectedSQL = normalizedIndexSQL(statement)
+            guard rows.count == 1,
+                case let .text(actualSQL)? = rows.first?.first,
+                expectedSQL != nil,
+                normalizedIndexSQL(actualSQL) == expectedSQL,
+                rows.first?.count ?? 0 > 1,
+                case let .text(actualTable)? = rows.first?[1],
+                actualTable.caseInsensitiveCompare(definition.table) == .orderedSame
+            else {
+                throw SwiftDataError.migrationUnsupported("Generated index \(name) is missing or has unexpected SQL.")
+            }
+            try validatePhysicalIndexMetadata(
+                definition, connection: connection,
+                expectedPartial: allowsPartialIndexes && statement.range(of: " WHERE ") != nil)
+        }
+    }
+
+    private static func normalizedIndexSQL(_ sql: String) -> String? {
+        let scalars = Array(sql.unicodeScalars)
+        var tokens: [String] = []
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                index += 1
+                continue
+            }
+            if scalar == "'" {
+                var literal = "'"
+                index += 1
+                var closed = false
+                while index < scalars.count {
+                    let current = scalars[index]
+                    guard current != ";" else { return nil }
+                    literal.unicodeScalars.append(current)
+                    index += 1
+                    guard current == "'" else { continue }
+                    guard index < scalars.count, scalars[index] == "'" else {
+                        closed = true
+                        break
+                    }
+                    literal.unicodeScalars.append(scalars[index])
+                    index += 1
+                }
+                guard closed else { return nil }
+                tokens.append("LITERAL:\(literal)")
+                continue
+            }
+            if scalar == "\"" || scalar == "`" || scalar == "[" {
+                let closing: Unicode.Scalar = scalar == "[" ? "]" : scalar
+                var identifier = ""
+                index += 1
+                var closed = false
+                while index < scalars.count {
+                    let current = scalars[index]
+                    guard current != ";" else { return nil }
+                    if current == closing {
+                        if closing != "]", index + 1 < scalars.count, scalars[index + 1] == closing {
+                            identifier.unicodeScalars.append(current)
+                            index += 2
+                            continue
+                        }
+                        closed = true
+                        index += 1
+                        break
+                    }
+                    identifier.unicodeScalars.append(current)
+                    index += 1
+                }
+                guard closed else { return nil }
+                tokens.append("IDENTIFIER:\(identifier)")
+                continue
+            }
+            if scalar == ";" {
+                let trailing = scalars[(index + 1)...].allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.contains($0)
+                }
+                guard trailing else { return nil }
+                break
+            }
+            if scalar == "(" || scalar == ")" || scalar == "," {
+                tokens.append("PUNCTUATION:\(scalar)")
+                index += 1
+                continue
+            }
+            if CharacterSet.decimalDigits.contains(scalar) {
+                var number = String(scalar)
+                index += 1
+                while index < scalars.count, CharacterSet.decimalDigits.contains(scalars[index]) {
+                    number.unicodeScalars.append(scalars[index])
+                    index += 1
+                }
+                tokens.append("NUMBER:\(number)")
+                continue
+            }
+            if CharacterSet.letters.contains(scalar) || scalar == "_" {
+                var word = String(scalar)
+                index += 1
+                while index < scalars.count,
+                    CharacterSet.alphanumerics.contains(scalars[index]) || scalars[index] == "_"
+                        || scalars[index] == "$"
+                {
+                    word.unicodeScalars.append(scalars[index])
+                    index += 1
+                }
+                tokens.append("IDENTIFIER:\(word)")
+                continue
+            }
+            return nil
+        }
+        return tokens.joined(separator: "|")
+    }
+
+    private static func expectedIndexTable(in statement: String) -> String? {
+        guard let onRange = statement.range(of: " ON ") else { return nil }
+        let remainder = statement[onRange.upperBound...]
+        let tableToken = remainder.prefix { !$0.isWhitespace && $0 != "(" }
+        guard !tableToken.isEmpty else { return nil }
+        return String(tableToken).trimmingCharacters(in: CharacterSet(charactersIn: "\"`"))
+    }
+
+    private static func indexColumns(in statement: String) -> [String]? {
+        let scalars = Array(statement.unicodeScalars)
+        guard let openParen = scalars.firstIndex(of: "(") else { return nil }
+        var columns: [String] = []
+        var column = ""
+        var index = openParen + 1
+        var closed = false
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == "," || scalar == ")" {
+                let value = column.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isGeneratedIndexColumn(value) else { return nil }
+                columns.append(value.uppercased())
+                column = ""
+                if scalar == ")" {
+                    closed = true
+                    break
+                }
+            } else {
+                guard scalar.isASCII else { return nil }
+                column.unicodeScalars.append(scalar)
+            }
+            index += 1
+        }
+        guard closed else { return nil }
+        return columns
+    }
+
+    private static func isGeneratedIndexColumn(_ column: String) -> Bool {
+        guard column.first == "Z", column.utf8.count > 1 else { return false }
+        return column.utf8.dropFirst().allSatisfy { byte in
+            (byte >= 65 && byte <= 90) || (byte >= 48 && byte <= 57) || byte == 95
         }
     }
 
@@ -3262,7 +3671,9 @@ package enum LightweightMigration {
                 IndexDefinition(
                     name: name,
                     statement: "CREATE INDEX \(name) ON Z\(storageEntityName.uppercased()) "
-                        + "(Z\(columnName.uppercased()));"))
+                        + "(Z\(columnName.uppercased()));",
+                    table: "Z\(storageEntityName.uppercased())",
+                    columns: ["Z\(columnName.uppercased())"]))
         }
         for attribute in entity.attributes where attribute.options.contains(.unique) {
             let name = "Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX"
@@ -3270,7 +3681,9 @@ package enum LightweightMigration {
                 IndexDefinition(
                     name: name,
                     statement: "CREATE UNIQUE INDEX \(name) ON Z\(entity.name.uppercased()) "
-                        + "(Z\(attribute.name.uppercased()));"))
+                        + "(Z\(attribute.name.uppercased()));",
+                    table: "Z\(entity.name.uppercased())",
+                    columns: ["Z\(attribute.name.uppercased())"]))
         }
         for index in entity.indexes {
             if index.isUnique, index.properties.count == 1,
@@ -3286,7 +3699,9 @@ package enum LightweightMigration {
                 IndexDefinition(
                     name: name,
                     statement: "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(name) "
-                        + "ON Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));"))
+                        + "ON Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));",
+                    table: "Z\(entity.name.uppercased())",
+                    columns: columns))
         }
         return definitions
     }

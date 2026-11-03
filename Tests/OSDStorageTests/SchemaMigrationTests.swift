@@ -1950,6 +1950,104 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testEntityRemovalRejectsUntrackedIndexOnRetainedTable() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-retained-untracked-index"))
+        let source = Schema([
+            Schema.Entity(name: "Removed"),
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE INDEX USER_RETAINED_INDEX ON ZRETAINED (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected retained custom index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZREMOVED'").count == 1
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'USER_RETAINED_INDEX'")
+                    .count == 1
+            })
+        try driver.close()
+    }
+
+    func testEntityRemovalRejectsSQLiteAutoindexOnRetainedTable() throws {
+        let source = Schema([
+            Schema.Entity(name: "Removed"),
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-retained-autoindex"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP TABLE ZRETAINED")
+            try connection.execute(
+                "CREATE TABLE ZRETAINED (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZVALUE INTEGER UNIQUE)"
+            )
+            try connection.execute("INSERT INTO ZRETAINED (Z_PK, Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, 1, 7)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected retained SQLite autoindex to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZREMOVED'").count == 1
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZVALUE FROM ZRETAINED") }, [[.int(7)]])
+        try driver.close()
+    }
+
+    func testEntityRemovalRejectsSQLiteAutoindexOnRemovedTable() throws {
+        let source = Schema([
+            Schema.Entity(name: "Removed", attributes: [Schema.Attribute(name: "value", type: "Int")]),
+            Schema.Entity(name: "Retained"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Retained")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-removed-autoindex"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP TABLE ZREMOVED")
+            try connection.execute(
+                "CREATE TABLE ZREMOVED (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZVALUE INTEGER UNIQUE)")
+            try connection.execute("INSERT INTO ZREMOVED (Z_PK, Z_ENT, Z_OPT, ZVALUE) VALUES (1, 1, 1, 7)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected removed-table SQLite autoindex to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZREMOVED'").count == 1
+            })
+        try driver.close()
+    }
+
     func testEntityRemovalPreservesRetainedRelationshipJoinTables() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2717,6 +2815,152 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testHierarchyMigrationRejectsTamperedPartialIndexBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Cat",
+                attributes: [Schema.Attribute(name: "label", type: "String", isOptional: true)],
+                superentityName: "Child"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-tampered-partial-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZBASE_CHILD_ZAGE_INDEX")
+            try connection.execute("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (Z_PK) WHERE Z_ENT IN (2)")
+        }
+        let originalIDs = try driver.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered hierarchy index to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            originalIDs)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA table_info(ZBASE)").map { $0[1] } },
+            [.text("Z_PK"), .text("Z_ENT"), .text("Z_OPT"), .text("ZAGE")])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZBASE_CHILD_ZAGE_INDEX'")
+            },
+            [[.text("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (Z_PK) WHERE Z_ENT IN (2)")]])
+        try driver.close()
+    }
+
+    func testHierarchyMigrationRejectsQuotedLiteralPredicateChange() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+            Schema.Entity(name: "Cat", superentityName: "Child"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-index-quoted-literal"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZBASE_CHILD_ZAGE_INDEX")
+            try connection.execute("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (ZAGE) WHERE Z_ENT IN ('2;')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected quoted predicate change to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.text("Base")], [.text("Child")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZBASE_CHILD_ZAGE_INDEX'")
+            },
+            [[.text("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (ZAGE) WHERE Z_ENT IN ('2;')")]])
+        try driver.close()
+    }
+
+    func testHierarchyMigrationRejectsNonPartialReplacementForPartialIndex() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Cat",
+                attributes: [Schema.Attribute(name: "label", type: "String", isOptional: true)],
+                superentityName: "Child"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-nonpartial-index-replacement"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZBASE_CHILD_ZAGE_INDEX")
+            try connection.execute("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (ZAGE)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected non-partial replacement to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_NAME, Z_SUPER FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            [[.text("Base"), .int(0)], [.text("Child"), .int(1)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZBASE_CHILD_ZAGE_INDEX'")
+            },
+            [[.text("CREATE INDEX ZBASE_CHILD_ZAGE_INDEX ON ZBASE (ZAGE)")]])
+        try driver.close()
+    }
+
     func testAddingFirstLeafSubclassToFlatRootTable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -3456,6 +3700,45 @@ final class SchemaMigrationTests: XCTestCase {
 
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
         try reopened.close()
+    }
+
+    func testAddingFlatRootRejectsTamperedRetainedIndexBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Person",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                indexes: [Schema.Index(properties: ["name"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Address",
+                attributes: [Schema.Attribute(name: "street", type: "String")],
+                indexes: [Schema.Index(properties: ["street"])]),
+            source.entities[0],
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "add-root-tampered-source-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZPERSON_ZNAME_INDEX")
+            try connection.execute("CREATE INDEX ZPERSON_ZNAME_INDEX ON ZPERSON (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected retained source index tampering to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZADDRESS'").isEmpty
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA index_info(ZPERSON_ZNAME_INDEX)") }.first?[2],
+            .text("Z_PK"))
+        try driver.close()
     }
 
     func testAddingFlatRootWithRelationshipsFailsAtomically() throws {
@@ -4268,6 +4551,44 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyMigrationRejectsDestinationIndexNameCollisionBeforeDDL() throws {
+        let source = Schema([Schema.Entity(name: "Base")])
+        let destination = Schema([
+            Schema.Entity(name: "Base"),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "age", type: "Int")],
+                indexes: [Schema.Index(properties: ["age"])],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-index-object-collision"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE ZBASE_CHILD_ZAGE_INDEX (value INTEGER)")
+        }
+        let originalTables = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected hierarchy index name collision to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name") },
+            originalTables)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZBASE_CHILD_ZAGE_INDEX'")
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
     func testHierarchyAttributeAdditionRejectsRelationshipColumnCollision() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-fk-collision"))
         let source = Schema([
@@ -4372,6 +4693,265 @@ final class SchemaMigrationTests: XCTestCase {
         let removedIndexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
         XCTAssertFalse(removedIndexes.contains([.text("ZRECORD_ZTITLE_INDEX")]))
         XCTAssertEqual(try driver.read { try $0.rows("SELECT ZTITLE FROM ZRECORD") }, [[.text("kept")]])
+        try driver.close()
+    }
+
+    func testCombinedIndexConstraintChangesApplyAsOneMigration() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-index-constraint-changes"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "a", type: "Int"),
+                    Schema.Attribute(name: "b", type: "Int"),
+                    Schema.Attribute(name: "c", type: "Int"),
+                    Schema.Attribute(name: "d", type: "Int"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["a"]),
+                    Schema.Index(properties: ["b"], isUnique: true),
+                    Schema.Index(properties: ["c", "d"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "a", type: "Int", options: [.unique]),
+                    Schema.Attribute(name: "b", type: "Int"),
+                    Schema.Attribute(name: "c", type: "Int"),
+                    Schema.Attribute(name: "d", type: "Int"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["a"]),
+                    Schema.Index(properties: ["c", "d"], isUnique: true),
+                    Schema.Index(properties: ["d", "c"]),
+                ])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 2, 1, 5, 7, 9)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 3, 2, 6, 7, 10)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let definitions = try driver.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+        }
+        XCTAssertEqual(
+            definitions.compactMap { row -> String? in
+                guard row.count > 1, case let .text(sql) = row[1] else { return nil }
+                return sql
+            },
+            [
+                "CREATE INDEX ZRECORD_ZA_INDEX ON ZRECORD (ZA)",
+                "CREATE UNIQUE INDEX ZRECORD_ZA_UNIQUE_INDEX ON ZRECORD (ZA)",
+                "CREATE UNIQUE INDEX ZRECORD_ZC_ZD_UNIQUE_INDEX ON ZRECORD (ZC, ZD)",
+                "CREATE INDEX ZRECORD_ZD_ZC_INDEX ON ZRECORD (ZD, ZC)",
+            ])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZA, ZB, ZC, ZD FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .int(2), .int(1), .int(5), .int(7), .int(9)],
+                [.int(2), .int(3), .int(2), .int(6), .int(7), .int(10)],
+            ])
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 4, 3, 5, 8, 8)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 5, 1, 5, 8, 9)")
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        try driver.close()
+    }
+
+    func testIndexConstraintMigrationRollsBackAllChangesWhenLaterUniqueCreationFails() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "index-constraint-rollback"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "a", type: "Int"), Schema.Attribute(name: "b", type: "Int")],
+                indexes: [Schema.Index(properties: ["a"]), Schema.Index(properties: ["b"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "a", type: "Int"), Schema.Attribute(name: "b", type: "Int")],
+                indexes: [Schema.Index(properties: ["a"], isUnique: true), Schema.Index(properties: ["b"])])
+        ])
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB) VALUES (1, 1, 1, 7)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB) VALUES (1, 2, 1, 8)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("UNIQUE constraint failed"))
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZA_INDEX")], [.text("ZRECORD_ZB_INDEX")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZA, ZB FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .int(1), .int(1), .int(7)], [.int(2), .int(2), .int(1), .int(8)]])
+        try driver.close()
+    }
+
+    func testIndexConstraintMigrationRejectsTamperedAndCollidingPhysicalIndexes() throws {
+        let schema = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "a", type: "Int")])
+        ])
+        let indexed = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "a", type: "Int")],
+                indexes: [Schema.Index(properties: ["a"])])
+        ])
+
+        let tampered = try GRDBSQLiteDriver(location: .memory(name: "index-constraint-tampered"))
+        try bootstrap(indexed, driver: tampered)
+        try tampered.write { connection in
+            try connection.execute("DROP INDEX ZRECORD_ZA_INDEX")
+            try connection.execute("CREATE INDEX ZRECORD_ZA_INDEX ON ZRECORD (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try tampered.write {
+                try LightweightMigration.migrate(source: indexed, destination: schema, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered generated index to be rejected, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try tampered.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZA_INDEX'").count
+                    == 1
+            })
+        try tampered.close()
+
+        let collision = try GRDBSQLiteDriver(location: .memory(name: "index-constraint-collision"))
+        try bootstrap(schema, driver: collision)
+        try collision.write { connection in
+            try connection.execute("CREATE INDEX ZRECORD_ZA_INDEX ON ZRECORD (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try collision.write {
+                try LightweightMigration.migrate(source: schema, destination: indexed, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected physical name collision to be rejected, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try collision.read { try $0.rows("PRAGMA index_info(ZRECORD_ZA_INDEX)") }.first?[2],
+            .text("Z_PK"))
+        try collision.close()
+    }
+
+    func testIndexReconciliationRejectsUntrackedIndexUnderUnchangedGeneratedName() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "unchanged-generated-name-impostor"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE INDEX ZRECORD_ZVALUE_INDEX ON ZRECORD (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected untracked index under generated destination name to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA index_info(ZRECORD_ZVALUE_INDEX)") }.first?[2],
+            .text("Z_PK"))
+        try driver.close()
+    }
+
+    func testIndexReconciliationAllowsValidatedScheduledNameReuse() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "A", attributes: [Schema.Attribute(name: "old", type: "String")],
+                indexes: [Schema.Index(properties: ["old"])]),
+            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "A", attributes: [Schema.Attribute(name: "value", type: "String", originalName: "old")],
+                indexes: [Schema.Index(properties: ["value"])]),
+            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "validated-scheduled-index-reuse"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZA (Z_ENT, Z_OPT, ZOLD) VALUES (1, 1, 'a')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZA'")
+            },
+            [[.text("ZA_ZVALUE_INDEX"), .text("CREATE INDEX ZA_ZVALUE_INDEX ON ZA (ZVALUE)")]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZVALUE FROM ZA") }, [[.text("a")]])
+        try driver.close()
+    }
+
+    func testIndexReconciliationRejectsTamperedSourceBeforeAttributeRename() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "tampered-index-rename-preflight"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZEMAIL) VALUES (1, 2, 'kept')")
+            try connection.execute("DROP INDEX ZRECORD_ZEMAIL_UNIQUE_INDEX")
+            try connection.execute("CREATE INDEX ZRECORD_ZEMAIL_UNIQUE_INDEX ON ZRECORD (Z_PK)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered source index to fail before rename, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZEMAIL FROM ZRECORD") },
+            [[.text("kept")]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZEMAIL_UNIQUE_INDEX'"
+                )
+                .count == 1
+            })
         try driver.close()
     }
 

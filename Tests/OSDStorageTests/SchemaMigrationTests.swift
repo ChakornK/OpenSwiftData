@@ -7005,14 +7005,7 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try initial.close()
 
-        let migrationResult = Result { try LightweightMigration.openStore(location: location, schema: destination) }
-        guard case let .success(migrated) = migrationResult else {
-            if case let .failure(error) = migrationResult {
-                XCTFail("Unexpected migration error: \(String(reflecting: error))")
-                throw error
-            }
-            return
-        }
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZPRIORITY FROM ZBOWNER") },
             [[.int(1), .int(8), .text("retained"), .int(6)]])

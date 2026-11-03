@@ -2195,18 +2195,27 @@ package enum LightweightMigration {
             let mappedSourceNames = Set(mappings.compactMap { $0.source?.name })
             let addedNames = Set(mappings.filter { $0.source == nil }.map { $0.destination.name })
             guard mappedSourceNames.count == source.attributes.count,
-                mappings.count == destination.attributes.count,
+                mappings.count == destination.attributes.count
+            else { throw SwiftDataError.migrationUnsupported("Planned scalar additions changed retained fields.") }
+            guard
                 mappings.allSatisfy({ mapping in
                     if let old = mapping.source { return old == mapping.destination }
                     return plannedAdditions.contains(mapping.destination)
-                }),
-                addedNames == Set(plannedAdditions.map(\.name)),
-                existing.isSuperset(of: Set(plannedAdditions.map { "Z\($0.name.uppercased())" })),
-                source.indexes == destination.indexes,
+                }), addedNames == Set(plannedAdditions.map(\.name))
+            else { throw SwiftDataError.migrationUnsupported("Planned scalar additions do not match the destination.") }
+            let plannedColumns = Set(plannedAdditions.map { "Z\($0.name.uppercased())" })
+            let normalizedExistingColumns = Set(existing.map { $0.uppercased() })
+            guard normalizedExistingColumns.isSuperset(of: plannedColumns) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Planned scalar columns were not created on \(source.name): "
+                        + "\(plannedColumns.subtracting(normalizedExistingColumns).sorted())."
+                )
+            }
+            guard source.indexes == destination.indexes,
                 source.superentityName == destination.superentityName
             else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Batched to-many removal scalar additions do not match the preflighted plan.")
+                    "Planned scalar additions changed entity indexes or hierarchy.")
             }
             if !plannedToManyRemovals.isEmpty {
                 try migrateRelationships(
@@ -5446,8 +5455,7 @@ package enum LightweightMigration {
                 addedColumns.isDisjoint(with: normalizedExistingColumns)
             else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Added scalar columns collide with the physical source table for \(entity.name): "
-                        + "added=\(addedColumns.sorted()), existing=\(normalizedExistingColumns.sorted()).")
+                    "Added scalar columns collide with the physical source table for \(entity.name).")
             }
             let oldDefinitions = indexDefinitions(for: entity, schema: source)
             let newDefinitions = indexDefinitions(for: next, schema: destination)

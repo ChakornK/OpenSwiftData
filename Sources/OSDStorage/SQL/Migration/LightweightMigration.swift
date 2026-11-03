@@ -1824,11 +1824,6 @@ package enum LightweightMigration {
                 sourceSchema: Schema(sourceEntities),
                 destinationSchema: Schema(destinationEntities),
                 connection: connection)
-            indexTransitions.append(
-                (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
-                ))
             return
         }
         if let floatingTypeChange = try compatibleFloatTypeChange(
@@ -2036,9 +2031,15 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            source.indexes == destination.indexes,
-            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
-                == destinationEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(destinationEntities)) }),
+            source.indexes.filter(\.isUnique) == destination.indexes.filter(\.isUnique),
+            sourceEntities.allSatisfy({ entity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == entity.name }) else {
+                    return false
+                }
+                return entity.indexes.filter(\.isUnique) == destinationEntity.indexes.filter(\.isUnique)
+                    && entity.attributes.filter({ $0.options.contains(.unique) }).map(\.name)
+                        == destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name)
+            }),
             sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
             destinationEntities.allSatisfy({ $0.relationships.isEmpty })
         else {
@@ -2394,9 +2395,9 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            source.indexes == destination.indexes,
-            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
-                == destinationEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(destinationEntities)) }),
+            source.indexes.filter(\.isUnique) == destination.indexes.filter(\.isUnique),
+            source.attributes.filter({ $0.options.contains(.unique) }).map(\.name)
+                == destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name),
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.codable)
@@ -2422,7 +2423,7 @@ package enum LightweightMigration {
                         uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
                     return entity.superentityName == destinationEntity.superentityName
                         && entity.relationships == destinationEntity.relationships
-                        && entity.indexes == destinationEntity.indexes
+                        && entity.indexes.filter(\.isUnique) == destinationEntity.indexes.filter(\.isUnique)
                         && entity.attributes.allSatisfy({ sourceAttribute in
                             guard let destinationAttribute = destinationAttributes[sourceAttribute.name] else {
                                 return false
@@ -2465,9 +2466,11 @@ package enum LightweightMigration {
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
         let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
         let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
-        guard sourceIndexes == destinationIndexes else {
+        let sourceUniqueIndexes = sourceIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+        let destinationUniqueIndexes = destinationIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+        guard sourceUniqueIndexes == destinationUniqueIndexes else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild requires unchanged generated index definitions.")
+                "Integer-to-floating rebuild cannot change unique index definitions.")
         }
         _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
         let physicalIndexes = try connection.rows(
@@ -2487,6 +2490,11 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported(
                 "Integer-to-floating rebuild found untracked or missing physical indexes.")
         }
+        try validateRebuildDestinationIndexNames(
+            destinationIndexes,
+            sourceIndexNames: expectedIndexNames,
+            table: table,
+            connection: connection)
         try validateIntegerValuesForFloatingConversion(
             table: table,
             column: convertedColumn,
@@ -2570,6 +2578,30 @@ package enum LightweightMigration {
         for definition in destinationIndexes {
             try connection.execute(definition.statement)
             try validatePhysicalIndexMetadata(definition, connection: connection)
+        }
+    }
+
+    private static func validateRebuildDestinationIndexNames(
+        _ destinationIndexes: [IndexDefinition],
+        sourceIndexNames: Set<String>,
+        table: String,
+        connection: SQLConnection
+    ) throws {
+        for definition in destinationIndexes {
+            let objects = try connection.rows(
+                "SELECT type, tbl_name FROM sqlite_master WHERE name = ? COLLATE NOCASE",
+                [.text(definition.name)])
+            guard let object = objects.first else { continue }
+            guard objects.count == 1,
+                object.count > 1,
+                case .text("index") = object[0],
+                case let .text(indexTable) = object[1],
+                indexTable.caseInsensitiveCompare(table) == .orderedSame,
+                sourceIndexNames.contains(definition.name.uppercased())
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Destination rebuild index \(definition.name) collides with an unrelated physical object.")
+            }
         }
     }
 

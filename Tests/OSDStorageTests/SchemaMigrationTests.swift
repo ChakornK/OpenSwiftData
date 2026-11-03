@@ -1287,6 +1287,78 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testIntegerToDoubleRebuildCanChangeOrdinaryIndexSet() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["other"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-index-set-change"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 5, 29, 'kept')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZOTHER_INDEX"), .text("CREATE INDEX ZRECORD_ZOTHER_INDEX ON ZRECORD (ZOTHER)")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE, ZOTHER FROM ZRECORD") },
+            [[.int(1), .int(5), .double(29), .text("kept")]])
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildCanReplaceOrdinaryIndexSet() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["other"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-replace-index-set"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 6, 31, 'kept')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZOTHER_INDEX"), .text("CREATE INDEX ZRECORD_ZOTHER_INDEX ON ZRECORD (ZOTHER)")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, ZVALUE, ZOTHER FROM ZRECORD") },
+            [[.int(1), .double(31), .text("kept")]])
+        try driver.close()
+    }
+
     func testIntegerToDoubleRebuildPreservesUniqueSourceConstraint() throws {
         let source = Schema([
             Schema.Entity(
@@ -1359,6 +1431,48 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZTAG) VALUES (1, 4, 17.0, 'a')")
+            })
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsUnrelatedDestinationIndexNameCollision() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"), Schema.Attribute(name: "other", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"), Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["other"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-unrelated-index-collision"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 3, 17, 'a')")
+            try connection.execute("CREATE TABLE ZRECORD_ZOTHER_INDEX (value INTEGER)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected destination index collision to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("integer"), .int(17)]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD_ZOTHER_INDEX'")
+                    .count == 1
             })
         try driver.close()
     }

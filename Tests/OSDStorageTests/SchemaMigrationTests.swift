@@ -1383,6 +1383,186 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testScalarRemovalCanAddIndexOnRetainedAttribute() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "kept", type: "String")],
+                indexes: [Schema.Index(properties: ["kept"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-add-retained-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZOBSOLETE) VALUES (1, 3, 'kept', 5)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZKEPT FROM ZRECORD") },
+            [[.int(1), .int(3), .text("kept")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZKEPT_INDEX")]])
+        try driver.close()
+    }
+
+    func testScalarRemovalAndIndexNameCollisionRollBackColumnDrop() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "kept", type: "String")],
+                indexes: [Schema.Index(properties: ["kept"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-index-collision-rollback"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZOBSOLETE) VALUES (1, 3, 'kept', 5)")
+            try connection.execute("CREATE TABLE ZRECORD_ZKEPT_INDEX (value INTEGER)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected destination index collision to fail, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZOBSOLETE")
+                })
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZKEPT, ZOBSOLETE FROM ZRECORD") }, [[.text("kept"), .int(5)]])
+        try driver.close()
+    }
+
+    func testScalarRemovalRejectsDestinationIndexReferencingRemovedAttribute() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "kept", type: "String")],
+                indexes: [Schema.Index(properties: ["obsolete"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-index-removed-column"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected index on removed column to fail, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZOBSOLETE")
+                })
+            })
+        try driver.close()
+    }
+
+    func testScalarRemovalCanReplaceIndexOnRetainedAttributes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "String"),
+                    Schema.Attribute(name: "second", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "String"),
+                    Schema.Attribute(name: "second", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["second", "first"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-replace-retained-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND, ZOBSOLETE) VALUES (1, 8, 'a', 'b', 3)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [
+                [
+                    .text("ZRECORD_ZSECOND_ZFIRST_INDEX"),
+                    .text("CREATE INDEX ZRECORD_ZSECOND_ZFIRST_INDEX ON ZRECORD (ZSECOND, ZFIRST)"),
+                ]
+            ])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") },
+            [[.int(1), .int(8), .text("a"), .text("b")]])
+        try driver.close()
+    }
+
+    func testScalarRemovalCanRemoveIndexOnRetainedAttributes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "kept", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                ],
+                indexes: [Schema.Index(properties: ["kept"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-remove-retained-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZKEPT, ZOBSOLETE) VALUES (1, 6, 'kept', 4)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'").isEmpty
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZKEPT FROM ZRECORD") },
+            [[.int(1), .int(6), .text("kept")]])
+        try driver.close()
+    }
+
     func testMultipleScalarRemovalAllowsCompositeIndexWhollyOnRemovedColumns() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-composite-index"))
         let source = Schema([

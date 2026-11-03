@@ -2313,6 +2313,16 @@ package enum LightweightMigration {
         }
         guard !removed.isEmpty else { return nil }
         let removedNames = Set(removed.map(\.name))
+        let destinationIndexes = destination.indexes
+        guard
+            destinationIndexes.allSatisfy({ index in
+                !index.properties.contains(where: { removedNames.contains($0) })
+                    && !index.isUnique
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Attribute removal cannot be combined with unique constraints or indexes on removed columns.")
+        }
         guard
             !source.indexes.contains(where: { index in
                 guard index.isUnique,
@@ -2329,10 +2339,7 @@ package enum LightweightMigration {
                 "Removing attributes cannot alter schema-level unique indexes.")
         }
         guard
-            let remainingSourceEntity = destinationEntities.first(where: { $0.name == destination.name }),
-            source.indexes.filter({ index in
-                !index.properties.contains(where: { removedNames.contains($0) })
-            }) == remainingSourceEntity.indexes,
+            destinationEntities.contains(where: { $0.name == destination.name }),
             removed.allSatisfy({ attribute in
                 !attribute.options.contains(.codable)
                     && !attribute.options.contains(.flattened)
@@ -2359,12 +2366,12 @@ package enum LightweightMigration {
                     return false
                 }
                 if sourceEntity.name == source.name {
-                    let retainedIndexes = sourceEntity.indexes.filter {
-                        !$0.properties.contains(where: { removedNames.contains($0) })
-                    }
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && retainedIndexes == destinationEntity.indexes
+                        && destinationEntity.indexes.allSatisfy({ index in
+                            !index.properties.contains(where: { removedNames.contains($0) })
+                                && !index.isUnique
+                        })
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName
                     && sourceEntity.attributes.count == destinationEntity.attributes.count
@@ -3345,6 +3352,16 @@ package enum LightweightMigration {
         for (old, new) in transitions {
             for definition in old { oldByName[definition.name.uppercased()] = definition }
             for definition in new { newByName[definition.name.uppercased()] = definition }
+        }
+        for (name, new) in newByName {
+            guard let old = oldByName[name] else { continue }
+            guard old.table.caseInsensitiveCompare(new.table) == .orderedSame,
+                old.columns.map({ $0.uppercased() }) == new.columns.map({ $0.uppercased() }),
+                old.statement.hasPrefix("CREATE UNIQUE INDEX") == new.statement.hasPrefix("CREATE UNIQUE INDEX")
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Generated index name \(new.name) is reused for a different key definition.")
+            }
         }
         let changedNew = newByName.filter { oldByName[$0.key] != $0.value }
         try validatePhysicalIndexes(

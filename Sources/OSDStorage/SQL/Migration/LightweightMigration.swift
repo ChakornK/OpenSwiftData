@@ -90,6 +90,15 @@ package enum LightweightMigration {
         let joinTable: String
     }
 
+    private struct PairedInverseRelationshipRemoval {
+        let ownerEntityName: String
+        let ownerRelationshipName: String
+        let inverseEntityName: String
+        let inverseRelationshipName: String
+        let column: String
+        let indexName: String
+    }
+
     package static func openOrMigrate(
         to destination: Schema,
         connection: SQLConnection
@@ -612,6 +621,8 @@ package enum LightweightMigration {
             return
         }
         try validateDestinationIndexNames(destination)
+        let pairedInverseRemovals = try planPairedInverseRelationshipRemovals(
+            source: source, destination: destination, connection: connection)
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         var indexTransitions: [([IndexDefinition], [IndexDefinition])] = []
         for entity in destination.entities {
@@ -625,10 +636,164 @@ package enum LightweightMigration {
                 destinationEntities: destination.entities,
                 sourceEntityIDs: source.entityIDsByName,
                 destinationEntityIDs: destination.entityIDsByName,
+                pairedInverseRemovals: pairedInverseRemovals,
                 indexTransitions: &indexTransitions,
                 connection: connection)
         }
         try reconcileIndexes(indexTransitions, validatedSourceIndexSQL: validatedSourceIndexSQL, connection: connection)
+    }
+
+    private static func planPairedInverseRelationshipRemovals(
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws -> [PairedInverseRelationshipRemoval] {
+        guard source.entities.count == destination.entities.count,
+            Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)),
+            source.entityIDsByName == destination.entityIDsByName,
+            source.entities.allSatisfy({ $0.superentityName == nil }),
+            destination.entities.allSatisfy({ $0.superentityName == nil })
+        else { return [] }
+
+        let destinationEntities = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        let relationshipNamesClaimedByDestination = destination.entities.flatMap { entity in
+            entity.relationships.compactMap(\.originalName)
+        }
+        let removedRelationships = source.entities.flatMap { entity in
+            entity.relationships.compactMap { relationship -> (Schema.Entity, Schema.Relationship)? in
+                guard let destinationEntity = destinationEntities[entity.name],
+                    relationship.inverse != nil
+                        || source.entities.contains(where: { candidate in
+                            candidate.relationships.contains(where: { $0.inverse == relationship.name })
+                        }),
+                    !destinationEntity.relationships.contains(where: {
+                        $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    })
+                else { return nil }
+                return (entity, relationship)
+            }
+        }
+        guard !removedRelationships.isEmpty else { return [] }
+
+        var plans: [PairedInverseRelationshipRemoval] = []
+        var consumedEndpoints = Set<String>()
+        for (owner, relationship) in removedRelationships.sorted(by: {
+            ($0.0.name, $0.1.name) < ($1.0.name, $1.1.name)
+        }) {
+            let ownerKey = "\(owner.name).\(relationship.name)"
+            guard !consumedEndpoints.contains(ownerKey) else { continue }
+            guard let inverseName = relationship.inverse,
+                let inverseEntity = source.entity(forName: relationship.destination),
+                inverseEntity.name != owner.name,
+                let inverse = inverseEntity.relationships.first(where: { $0.name == inverseName }),
+                inverse.inverse == relationship.name,
+                inverse.destination == owner.name,
+                !relationship.isToMany,
+                inverse.isToMany,
+                relationship.isOptional,
+                relationship.originalName == nil,
+                inverse.originalName == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil || relationship.maximumModelCount == 1,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                relationshipNamesClaimedByDestination.allSatisfy({ claimedName in
+                    claimedName.caseInsensitiveCompare(relationship.name) != .orderedSame
+                        && claimedName.caseInsensitiveCompare(inverse.name) != .orderedSame
+                }),
+                let ownerDestination = destinationEntities[owner.name],
+                ownerDestination.relationships.allSatisfy({
+                    $0.name.caseInsensitiveCompare(relationship.name) != .orderedSame
+                }),
+                let inverseDestination = destinationEntities[inverseEntity.name],
+                inverseDestination.relationships.allSatisfy({
+                    $0.name.caseInsensitiveCompare(inverse.name) != .orderedSame
+                }),
+                destination.entities.allSatisfy({ entity in
+                    entity.relationships.allSatisfy({ candidate in
+                        candidate.name.caseInsensitiveCompare(relationship.name) != .orderedSame
+                            && candidate.name.caseInsensitiveCompare(inverse.name) != .orderedSame
+                    })
+                }),
+                !source.entities.contains(where: { entity in
+                    entity.relationships.contains(where: { candidate in
+                        candidate != relationship && candidate != inverse
+                            && (candidate.inverse == relationship.name || candidate.inverse == inverse.name)
+                    })
+                }),
+                !destination.entities.contains(where: { entity in
+                    entity.relationships.contains(where: { candidate in
+                        candidate.inverse == relationship.name || candidate.inverse == inverse.name
+                    })
+                }),
+                let mapping = source.relationshipStorageMapping(
+                    modelEntityName: owner.name, relationshipName: relationship.name),
+                !SchemaBuilder.isNonOwner(owner, relationship, schema: source),
+                SchemaBuilder.isNonOwner(inverseEntity, inverse, schema: source),
+                mapping.ownerRootEntityName == owner.name,
+                mapping.declaringEntityName == owner.name
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Inverse relationship removals require a reciprocal, owning optional to-one/to-many pair with unchanged endpoints."
+                )
+            }
+
+            for sourceEntity in source.entities {
+                guard let destinationEntity = destinationEntities[sourceEntity.name],
+                    sourceEntity.superentityName == destinationEntity.superentityName,
+                    sourceEntity.attributes == destinationEntity.attributes,
+                    sourceEntity.indexes == destinationEntity.indexes
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Inverse relationship removal cannot be combined with attribute, index, or hierarchy changes."
+                    )
+                }
+                let expectedRelationships = sourceEntity.relationships.filter { candidate in
+                    !(sourceEntity.name == owner.name
+                        && candidate.name.caseInsensitiveCompare(relationship.name) == .orderedSame)
+                        && !(sourceEntity.name == inverseEntity.name
+                            && candidate.name.caseInsensitiveCompare(inverse.name) == .orderedSame)
+                }
+                guard expectedRelationships == destinationEntity.relationships else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Inverse relationship removal must remove exactly the reciprocal relationship pair."
+                    )
+                }
+            }
+
+            let inverseKey = "\(inverseEntity.name).\(inverse.name)"
+            let ownerTable = "Z\(owner.name.uppercased())"
+            let sourceColumns = try tableColumns(ownerTable, connection: connection)
+            guard sourceColumns.contains("Z\(mapping.storageColumnName.uppercased())"),
+                Database.sqliteLibVersionNumber >= 3_035_000
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Paired inverse relationship removal requires an existing owner foreign-key column and supported SQLite version."
+                )
+            }
+            try validateOptionalRelationshipColumnRemoval(
+                table: ownerTable,
+                column: "Z\(mapping.storageColumnName.uppercased())",
+                relationship: relationship,
+                owner: owner,
+                schema: source,
+                connection: connection)
+            guard consumedEndpoints.insert(ownerKey).inserted,
+                consumedEndpoints.insert(inverseKey).inserted
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Inverse relationship removal plan contains overlapping pairs.")
+            }
+            plans.append(
+                PairedInverseRelationshipRemoval(
+                    ownerEntityName: owner.name,
+                    ownerRelationshipName: relationship.name,
+                    inverseEntityName: inverseEntity.name,
+                    inverseRelationshipName: inverse.name,
+                    column: "Z\(mapping.storageColumnName.uppercased())",
+                    indexName: "Z\(mapping.ownerRootEntityName.uppercased())_Z\(relationship.name.uppercased())_INDEX"
+                ))
+        }
+        return plans
     }
 
     private static func applyFlatIndependentRootAdditions(
@@ -1954,6 +2119,7 @@ package enum LightweightMigration {
         destinationEntities: [Schema.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
+        pairedInverseRemovals: [PairedInverseRelationshipRemoval],
         indexTransitions: inout [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
@@ -2529,6 +2695,7 @@ package enum LightweightMigration {
         try migrateRelationships(
             source: source, destination: destination,
             sourceSchema: Schema(sourceEntities), schema: Schema(destinationEntities),
+            pairedInverseRemovals: pairedInverseRemovals,
             connection: connection, existing: existing)
         indexTransitions.append(
             (
@@ -4551,6 +4718,7 @@ package enum LightweightMigration {
         destination: Schema.Entity,
         sourceSchema: Schema,
         schema: Schema,
+        pairedInverseRemovals: [PairedInverseRelationshipRemoval],
         connection: SQLConnection,
         existing: Set<String>
     ) throws {
@@ -4565,6 +4733,47 @@ package enum LightweightMigration {
             !source.relationships.contains(where: {
                 $0.name == relationship.name || $0.name == relationship.originalName
             })
+        }
+        let ownerPairRemovals = pairedInverseRemovals.filter { $0.ownerEntityName == source.name }
+        let inversePairRemovals = pairedInverseRemovals.filter { $0.inverseEntityName == source.name }
+        if !ownerPairRemovals.isEmpty || !inversePairRemovals.isEmpty {
+            let plannedNames = Set(
+                ownerPairRemovals.map(\.ownerRelationshipName)
+                    + inversePairRemovals.map(\.inverseRelationshipName))
+            guard ownerPairRemovals.count + inversePairRemovals.count == plannedNames.count,
+                removedRelationships.count == plannedNames.count,
+                Set(removedRelationships.map(\.name)) == plannedNames,
+                addedRelationships.isEmpty,
+                source.attributes == destination.attributes,
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Paired inverse relationship removal cannot be combined with other entity edits.")
+            }
+            for removal in ownerPairRemovals {
+                guard
+                    let relationship = source.relationships.first(where: {
+                        $0.name == removal.ownerRelationshipName
+                    }),
+                    removal.ownerEntityName != removal.inverseEntityName,
+                    let mapping = sourceSchema.relationshipStorageMapping(
+                        modelEntityName: source.name, relationshipName: relationship.name),
+                    "Z\(mapping.storageColumnName.uppercased())" == removal.column,
+                    existing.contains(removal.column),
+                    Database.sqliteLibVersionNumber >= 3_035_000
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Paired inverse relationship removal requires the planned owner foreign-key column.")
+                }
+            }
+            for removal in ownerPairRemovals.sorted(by: { $0.indexName < $1.indexName }) {
+                try connection.execute("DROP INDEX IF EXISTS \(removal.indexName)")
+            }
+            for removal in ownerPairRemovals.sorted(by: { $0.column < $1.column }) {
+                try connection.execute("ALTER TABLE Z\(source.name.uppercased()) DROP COLUMN \(removal.column)")
+            }
+            return
         }
         let changedMappedToMany = destination.relationships.contains { relationship in
             guard relationship.isToMany,

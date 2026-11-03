@@ -9482,6 +9482,357 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testOpeningStoreRemovesReciprocalToOneToManyRelationshipPair() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("inverse-pair-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target",
+                        destination: "ZTarget",
+                        isToMany: false,
+                        isOptional: true,
+                        inverse: "owners",
+                        deleteRule: .nullify)
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                attributes: [Schema.Attribute(name: "label", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners",
+                        destination: "AOwner",
+                        isToMany: true,
+                        isOptional: true,
+                        inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "ZTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT, ZLABEL) VALUES (2, 23, 'target retained')")
+            try connection.execute(
+                "INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 29, 'owner retained', 1)")
+        }
+        try initial.close()
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZAOWNER") },
+            [[.int(1), .int(29), .text("owner retained")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLABEL FROM ZZTARGET") },
+            [[.int(1), .int(23), .text("target retained")]])
+        XCTAssertFalse(
+            try migrated.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZAOWNER_ZTARGET_INDEX'")
+                    .isEmpty
+            })
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                        + "AND name = 'Z_AOWNER_TARGET_ZTARGET_OWNERS'"
+                ).isEmpty
+            })
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZAOWNER") },
+            [[.int(1), .int(29), .text("owner retained")]])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
+    func testInverseRelationshipPairRemovalRejectsSingleEndpointRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner"),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-single-endpoint-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected one-sided inverse removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        try driver.close()
+    }
+
+    func testInverseRelationshipPairRemovalRejectsChangedInverseAndManyToMany() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let changedInverse = Schema([
+            Schema.Entity(name: "AOwner"),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true)
+                ]),
+        ])
+        let manyToManySource = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "targets", destination: "ZTarget", isToMany: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "targets")
+                ]),
+        ])
+        let manyToManyDestination = Schema([Schema.Entity(name: "AOwner"), Schema.Entity(name: "ZTarget")])
+        for (name, source, destination) in [
+            ("changed-inverse", source, changedInverse),
+            ("many-to-many", manyToManySource, manyToManyDestination),
+        ] {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-reject-\(name)"))
+            try bootstrap(source, driver: driver)
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) pair removal to fail closed, got \(error)")
+                }
+            }
+            try driver.close()
+        }
+    }
+
+    func testInversePairRemovalRejectsWhenToOneDoesNotOwnStorage() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "ACollection",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "ZOwner", isToMany: true, inverse: "collection")
+                ]),
+            Schema.Entity(
+                name: "ZOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "collection", destination: "ACollection", isOptional: true, inverse: "owners")
+                ]),
+        ])
+        let destination = Schema([Schema.Entity(name: "ACollection"), Schema.Entity(name: "ZOwner")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-wrong-owner-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected an inverse pair with reversed ownership to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZZOWNER)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZCOLLECTION")
+                })
+            })
+        try driver.close()
+    }
+
+    func testInversePairRemovalRejectsDestinationOriginalNameClaim() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner"),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "renamedOwners",
+                        destination: "AOwner",
+                        isToMany: true,
+                        inverse: "target",
+                        originalName: "owners")
+                ]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-original-name-claim-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected destination originalName claim to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZTARGET")
+                })
+            })
+        try driver.close()
+    }
+
+    func testInversePairRemovalRejectsCaseVariantRetainedEndpoint() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "TARGET", destination: "ZTarget", isOptional: true)
+                ]),
+            Schema.Entity(name: "ZTarget"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-case-variant-endpoint-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-variant endpoint retention to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZTARGET")
+                })
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZAOWNER)") }.count, 1)
+        try driver.close()
+    }
+
+    func testInversePairRemovalRejectsCombinedAttributeEdit() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "retained", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                attributes: [Schema.Attribute(name: "label", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "added", type: "String", isOptional: true),
+                ]),
+            Schema.Entity(name: "ZTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-attribute-edit-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT, ZLABEL) VALUES (2, 4, 'target')")
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZRETAINED, ZTARGET) VALUES (1, 6, 'owner', 1)")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected paired removal with attribute addition to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZTARGET FROM ZAOWNER") },
+            [[.int(1), .int(6), .text("owner"), .int(1)]])
+        try driver.close()
+    }
+
     func testCombinedRemovalRejectsCustomCompositeIndexOnRelationshipColumn() throws {
         let source = Schema([
             Schema.Entity(

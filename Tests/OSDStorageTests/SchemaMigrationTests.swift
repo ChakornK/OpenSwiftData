@@ -1907,6 +1907,89 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testIntegerToFloatingRebuildAcceptsExactValuesBeyondContiguousPrecisionRange() throws {
+        let cases: [(String, String, [Int64], [Double])] = [
+            (
+                "float",
+                "Float",
+                [16_777_218, 33_554_436, Int64.min],
+                [16_777_218.0, 33_554_436.0, -9_223_372_036_854_775_808.0]
+            ),
+            (
+                "double",
+                "Double",
+                [9_007_199_254_740_994, 18_014_398_509_481_988, Int64.min],
+                [9_007_199_254_740_994.0, 18_014_398_509_481_988.0, -9_223_372_036_854_775_808.0]
+            ),
+        ]
+        for (name, destinationType, values, expectedValues) in cases {
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            let driver = try GRDBSQLiteDriver(
+                location: .memory(name: "integer-float-exact-outside-dense-range-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                for (offset, value) in values.enumerated() {
+                    try connection.execute(
+                        "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, ?)",
+                        [.int(Int64(offset + 1)), .int(value)])
+                }
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+                values.enumerated().map { [.int(Int64($0.offset + 1)), .double(expectedValues[$0.offset])] })
+            try driver.close()
+        }
+    }
+
+    func testIntegerToFloatingRebuildRejectsInexactValuesWithoutTrapping() throws {
+        let cases: [(String, String, Int64)] = [
+            ("float-adjacent", "Float", 16_777_217),
+            ("float-max", "Float", Int64.max),
+            ("double-adjacent", "Double", 9_007_199_254_740_993),
+            ("double-max", "Double", Int64.max),
+        ]
+        for (name, destinationType, value) in cases {
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-inexact-no-trap-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 9, ?)", [.int(value)])
+            }
+            let sourceRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") }
+            let sourceDDL = try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'")
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected inexact \(destinationType) conversion to reject, got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") }, sourceRows)
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'")
+                },
+                sourceDDL)
+            try driver.close()
+        }
+    }
+
     func testIntegerToDoubleRebuildPreservesOrdinaryIndexes() throws {
         let source = Schema([
             Schema.Entity(

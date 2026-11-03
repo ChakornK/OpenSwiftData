@@ -4026,11 +4026,7 @@ package enum LightweightMigration {
         connection: SQLConnection
     ) throws {
         let rows = try connection.rows("SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
-        let maximumExactInteger: Int64
-        switch destinationType {
-        case "Float": maximumExactInteger = 16_777_216
-        case "Double": maximumExactInteger = 9_007_199_254_740_992
-        default:
+        guard destinationType == "Float" || destinationType == "Double" else {
             throw SwiftDataError.migrationUnsupported("Unsupported floating-point destination type.")
         }
         for row in rows {
@@ -4042,11 +4038,18 @@ package enum LightweightMigration {
                 continue
             case ("null", .null):
                 throw SwiftDataError.migrationUnsupported("Required integer column \(column) contains NULL.")
-            case ("integer", .int(let value)) where value >= -maximumExactInteger && value <= maximumExactInteger:
-                continue
-            case ("integer", .int):
-                throw SwiftDataError.migrationUnsupported(
-                    "Integer column \(column) contains a value not exactly representable as \(destinationType).")
+            case ("integer", .int(let value)):
+                let isExactlyRepresentable: Bool
+                switch destinationType {
+                case "Float": isExactlyRepresentable = Float(exactly: value) != nil
+                case "Double": isExactlyRepresentable = Double(exactly: value) != nil
+                default: isExactlyRepresentable = false
+                }
+                guard isExactlyRepresentable else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Integer column \(column) contains a value not exactly representable as \(destinationType)."
+                    )
+                }
             default:
                 throw SwiftDataError.migrationUnsupported(
                     "Integer column \(column) contains unsupported SQLite storage type '\(storageType)'.")

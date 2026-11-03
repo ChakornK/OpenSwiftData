@@ -1688,6 +1688,15 @@ package enum LightweightMigration {
                     && !definition.statement.hasPrefix("CREATE UNIQUE INDEX")
             }.map { $0.name.uppercased() })
         let knownIndexNames = Set(sourceIndexes.map { $0.name.uppercased() })
+        let physicalIndexes = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE",
+            [.text("Z\(source.name.uppercased())")])
+        for row in physicalIndexes {
+            guard case let .text(name)? = row.first, knownIndexNames.contains(name.uppercased()) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Combined removal cannot preserve an untracked index on \(source.name).")
+            }
+        }
         for attribute in removedAttributes {
             try validateIndexesForAttributeRemoval(
                 table: "Z\(source.name.uppercased())",
@@ -4365,10 +4374,12 @@ package enum LightweightMigration {
         let expectedIndexes = try expectedIndexNames(schema)
         let tableIndexes = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
-        for row in tableIndexes {
-            guard case let .text(name)? = row.first, expectedIndexes.contains(name.uppercased()) else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Relationship removal cannot preserve an untracked index on \(table).")
+        if validatePhysicalLayout {
+            for row in tableIndexes {
+                guard case let .text(name)? = row.first, expectedIndexes.contains(name.uppercased()) else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Relationship removal cannot preserve an untracked index on \(table).")
+                }
             }
         }
         let mapping = try validatedRemovedRelationshipMapping(relationship, owner: owner, sourceSchema: schema)

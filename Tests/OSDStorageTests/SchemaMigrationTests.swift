@@ -6920,6 +6920,108 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testCombinedRemovalRejectsCustomCompositeIndexOnRelationshipColumn() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                indexes: [Schema.Index(properties: ["retained"])]), Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "retained", type: "String")],
+                indexes: [Schema.Index(properties: ["retained"])],
+            ),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-remove-custom-relationship-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 1)")
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) "
+                    + "VALUES (1, 4, 'remove', 'keep', 2)")
+            try connection.execute("CREATE INDEX USER_OWNER_TARGET_RETAINED ON ZOWNER (ZTARGET, ZRETAINED)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected custom relationship index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name = 'USER_OWNER_TARGET_RETAINED'").count == 1
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZOWNER") },
+            [[.int(1), .int(4), .text("keep")]])
+        try driver.close()
+    }
+
+    func testCombinedRemovalRejectsTamperedGeneratedIndexBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                indexes: [Schema.Index(properties: ["retained"])]), Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "retained", type: "String")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-tampered-generated-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 1)")
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) "
+                    + "VALUES (1, 2, 'drop', 'keep', 2)")
+            try connection.execute("DROP INDEX ZOWNER_ZRETAINED_INDEX")
+            try connection.execute("CREATE INDEX ZOWNER_ZRETAINED_INDEX ON ZOWNER (ZTARGET, ZRETAINED)")
+        }
+        let originalIndexSQL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZRETAINED_INDEX'")
+                .first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered generated index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZRETAINED_INDEX'")
+                    .first?.first
+            },
+            originalIndexSQL)
+        try driver.close()
+    }
+
     func testCombinedRemovalRejectsUniqueIndexOnRemovedScalarBeforeDDL() throws {
         let source = Schema([
             Schema.Entity(

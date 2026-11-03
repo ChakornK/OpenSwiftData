@@ -1234,34 +1234,83 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
-    func testIntegerToDoubleRebuildRejectsIndexedSource() throws {
+    func testIntegerToDoubleRebuildPreservesOrdinaryIndexes() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int64")],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["value"]),
+                    Schema.Index(properties: ["value", "other"]),
+                ])
         ])
         let destination = Schema([
             Schema.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double")],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "other", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["value"]),
+                    Schema.Index(properties: ["value", "other"]),
+                ])
         ])
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-indexed-source"))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-preserved-indexes"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
-            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 17)")
-            XCTAssertThrowsError(
-                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
-            ) { error in
-                guard case SwiftDataError.migrationUnsupported = error else {
-                    return XCTFail("Expected indexed conversion to fail closed, got \(error)")
-                }
-            }
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 3, 17, 'a')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 5, 23, 'b')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
         }
         XCTAssertEqual(
-            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
-            [[.text("integer"), .int(17)]])
+            try driver.read { try $0.rows("SELECT Z_PK, typeof(ZVALUE), ZVALUE, ZOTHER FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .text("real"), .double(17), .text("a")], [.int(2), .text("real"), .double(23), .text("b")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZVALUE_INDEX")], [.text("ZRECORD_ZVALUE_ZOTHER_INDEX")]])
+        let queryPlan = try driver.read {
+            try $0.rows("EXPLAIN QUERY PLAN SELECT Z_PK FROM ZRECORD WHERE ZVALUE = 17")
+        }
+        XCTAssertTrue(
+            queryPlan.contains(where: {
+                $0.contains(where: {
+                    if case let .text(text) = $0 { text.contains("ZRECORD_ZVALUE_INDEX") } else { false }
+                })
+            }))
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsUniqueSourceConstraint() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-unique-source"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZVALUE") })
+            })
         try driver.close()
     }
 

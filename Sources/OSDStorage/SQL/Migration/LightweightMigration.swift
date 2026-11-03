@@ -2395,8 +2395,9 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            source.indexes.isEmpty,
-            destination.indexes.isEmpty,
+            source.indexes == destination.indexes,
+            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
+                == destinationEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(destinationEntities)) }),
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.unique)
@@ -2413,6 +2414,8 @@ package enum LightweightMigration {
                     && !attribute.options.contains(.externalStorage)
                     && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
             }),
+            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
+                .allSatisfy({ !$0.statement.hasPrefix("CREATE UNIQUE INDEX") }),
             sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
             sourceEntities.allSatisfy({ entity in
@@ -2465,6 +2468,32 @@ package enum LightweightMigration {
         let convertedColumn = "Z\(sourceAttribute.name.uppercased())"
         let destinationType = mapping.destination.type
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
+        let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
+        let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
+        guard sourceIndexes == destinationIndexes,
+            sourceIndexes.allSatisfy({ !$0.statement.hasPrefix("CREATE UNIQUE INDEX") })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-floating rebuild requires unchanged ordinary index definitions.")
+        }
+        _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
+        let physicalIndexes = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
+        let expectedIndexNames = Set(sourceIndexes.map { $0.name.uppercased() })
+        guard
+            physicalIndexes.compactMap({ row -> String? in
+                guard case let .text(name)? = row.first else { return nil }
+                return name.uppercased()
+            }).count == physicalIndexes.count,
+            Set(
+                physicalIndexes.compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name.uppercased()
+                }) == expectedIndexNames
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-floating rebuild found untracked or missing physical indexes.")
+        }
         try validateIntegerValuesForFloatingConversion(
             table: table,
             column: convertedColumn,
@@ -2545,6 +2574,10 @@ package enum LightweightMigration {
         guard badConvertedRows.first?.first == .int(0) else {
             throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild produced invalid REAL storage.")
         }
+        for definition in destinationIndexes {
+            try connection.execute(definition.statement)
+            try validatePhysicalIndexMetadata(definition, connection: connection)
+        }
     }
 
     private static func destinationTableColumnNames(_ entity: Schema.Entity) -> [String] {
@@ -2562,11 +2595,6 @@ package enum LightweightMigration {
             "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')")
         guard sideObjects.isEmpty else {
             throw SwiftDataError.migrationUnsupported("Table rebuild is unsupported when triggers or views exist.")
-        }
-        let indexes = try connection.rows(
-            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
-        guard indexes.isEmpty else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild requires an unindexed source table.")
         }
         let sourceDDL = try SchemaBuilder.build(schema).statements
         guard let createTable = sourceDDL.first(where: { $0.hasPrefix("CREATE TABLE \(table) (") }),

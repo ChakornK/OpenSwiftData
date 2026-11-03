@@ -7477,6 +7477,216 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleOwnerOnlyToManyAdditionsCreateAllJoinTablesTogether() throws {
+        let source = Schema([
+            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "BOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
+            Schema.Entity(
+                name: "BOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let additionPlans: [String] = try destination.entities.flatMap { entity in
+            try entity.relationships.map { relationship in
+                try XCTUnwrap(
+                    SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: destination))
+            }
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multi-owner-to-many-add.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 3, 'first owner')")
+            try connection.execute("INSERT INTO ZBOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (2, 5, 'second owner')")
+            try connection.execute("INSERT INTO ZFIRST (Z_ENT, Z_OPT, ZNAME) VALUES (3, 7, 'first target')")
+            try connection.execute("INSERT INTO ZSECOND (Z_ENT, Z_OPT, ZNAME) VALUES (4, 9, 'second target')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        for table in additionPlans {
+            XCTAssertTrue(
+                try migrated.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .count == 1
+                })
+            let uniqueIndex = "\(table)_UNIQUE_INDEX"
+            let reverseIndex = "\(table)_Z_B_INDEX"
+            XCTAssertTrue(
+                try migrated.read {
+                    try $0.rows(
+                        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?)",
+                        [.text(uniqueIndex), .text(reverseIndex)]
+                    ).count == 2
+                })
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZAOWNER") },
+            [[.int(1), .int(3), .text("first owner")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZBOWNER") },
+            [[.int(1), .int(5), .text("second owner")]])
+        try migrated.close()
+    }
+
+    func testMultipleOwnerOnlyToManyAdditionCollisionFailsBeforeCreatingAnyJoin() throws {
+        let source = Schema([
+            Schema.Entity(name: "AOwner"), Schema.Entity(name: "BOwner"), Schema.Entity(name: "First"),
+            Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
+            Schema.Entity(
+                name: "BOwner",
+                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let plannedTables: [String] = try destination.entities.flatMap { entity in
+            try entity.relationships.map { relationship in
+                try XCTUnwrap(SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: destination))
+            }
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-owner-to-many-add-collision"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE TABLE \(plannedTables[1])_UNIQUE_INDEX (value INTEGER)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected a later join-name collision to reject the entire batch, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(plannedTables[0])]
+                )
+                .isEmpty
+            })
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    [.text(plannedTables[1] + "_UNIQUE_INDEX")]
+                )
+                .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testMultipleOwnerOnlyToManyAdditionRejectsMixedJoinRemovalBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "existing", destination: "First", isToMany: true)]),
+            Schema.Entity(name: "BOwner"), Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
+            Schema.Entity(
+                name: "BOwner",
+                relationships: [Schema.Relationship(name: "other", destination: "First", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let sourceOwner = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let sourceRelationship = try XCTUnwrap(sourceOwner.relationships.first)
+        let removedTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: sourceOwner, relationship: sourceRelationship, schema: source))
+        let destinationTables: [String] = try destination.entities.flatMap { entity in
+            try entity.relationships.map { relationship in
+                try XCTUnwrap(SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: destination))
+            }
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-join-add-remove"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed join additions and removals to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(removedTable)])
+            },
+            [[.text(removedTable)]])
+        for table in destinationTables {
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        try driver.close()
+    }
+
+    func testMultipleOwnerOnlyToManyAdditionsRejectNewRootBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "AOwner"), Schema.Entity(name: "BOwner"),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
+            Schema.Entity(
+                name: "BOwner",
+                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "NewRoot"),
+        ])
+        let destinationTables: [String] = try destination.entities.flatMap { entity in
+            try entity.relationships.map { relationship in
+                try XCTUnwrap(SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: destination))
+            }
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "join-addition-new-root"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected adding a root alongside join additions to fail closed, got \(error)")
+            }
+        }
+        for table in destinationTables {
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZNEWROOT'").isEmpty
+            })
+        try driver.close()
+    }
+
     func testEntityCaseRenameWithRootReplacementRejectsBeforeDDL() throws {
         let source = Schema([
             Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),

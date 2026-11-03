@@ -90,10 +90,22 @@ package enum LightweightMigration {
         let joinTable: String
     }
 
+    private struct OwnerOnlyToManyAdditionPlan {
+        let joinTable: String
+        let tableStatement: String
+        let uniqueIndexStatement: String
+        let reverseIndexStatement: String
+    }
+
     private struct OwnerOnlyToManyRemovalBatchPlan {
         let removedRelationshipNamesByOwner: [String: Set<String>]
         let joinTables: [String]
         let addedAttributesByOwner: [String: [Schema.Attribute]]
+    }
+
+    private struct OwnerOnlyToManyAdditionBatchPlan {
+        let addedRelationshipNamesByOwner: [String: Set<String>]
+        let additions: [OwnerOnlyToManyAdditionPlan]
     }
 
     private struct PairedInverseRelationshipRemoval {
@@ -638,6 +650,18 @@ package enum LightweightMigration {
         try validateDestinationIndexNames(destination)
         let pairedInverseRemovals = try planPairedInverseRelationshipRemovals(
             source: source, destination: destination, connection: connection)
+        let toManyAdditionPlan = try planMultipleFlatOwnerOnlyToManyAdditions(
+            source: source,
+            destination: destination,
+            validatedSourceIndexSQL: validatedSourceIndexSQL,
+            excludedEndpoints: Set(
+                pairedInverseRemovals.flatMap {
+                    [
+                        "\($0.ownerEntityName).\($0.ownerRelationshipName)",
+                        "\($0.inverseEntityName).\($0.inverseRelationshipName)",
+                    ]
+                }),
+            connection: connection)
         let toManyRemovalPlan = try planMultipleFlatOwnerOnlyToManyRemovals(
             source: source,
             destination: destination,
@@ -650,6 +674,17 @@ package enum LightweightMigration {
                     ]
                 }),
             connection: connection)
+        guard toManyAdditionPlan == nil || toManyRemovalPlan == nil else {
+            throw SwiftDataError.migrationUnsupported(
+                "Join-table additions cannot be combined with join-table removals in one migration.")
+        }
+        if let toManyAdditionPlan {
+            for addition in toManyAdditionPlan.additions {
+                try connection.execute(addition.tableStatement)
+                try connection.execute(addition.uniqueIndexStatement)
+                try connection.execute(addition.reverseIndexStatement)
+            }
+        }
         if let toManyRemovalPlan {
             for joinTable in toManyRemovalPlan.joinTables {
                 try connection.execute("DROP TABLE \(joinTable)")
@@ -680,6 +715,7 @@ package enum LightweightMigration {
                 destinationEntityIDs: destination.entityIDsByName,
                 pairedInverseRemovals: pairedInverseRemovals,
                 toManyRemovalPlan: toManyRemovalPlan,
+                toManyAdditionPlan: toManyAdditionPlan,
                 indexTransitions: &indexTransitions,
                 connection: connection)
         }
@@ -2183,6 +2219,7 @@ package enum LightweightMigration {
         destinationEntityIDs: [String: Int],
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
         toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?,
+        toManyAdditionPlan: OwnerOnlyToManyAdditionBatchPlan?,
         indexTransitions: inout [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
@@ -2225,6 +2262,7 @@ package enum LightweightMigration {
                     schema: Schema(destinationEntities),
                     pairedInverseRemovals: pairedInverseRemovals,
                     toManyRemovalPlan: toManyRemovalPlan,
+                    toManyAdditionPlan: toManyAdditionPlan,
                     connection: connection,
                     existing: existing)
             } else {
@@ -2816,6 +2854,7 @@ package enum LightweightMigration {
             sourceSchema: Schema(sourceEntities), schema: Schema(destinationEntities),
             pairedInverseRemovals: pairedInverseRemovals,
             toManyRemovalPlan: toManyRemovalPlan,
+            toManyAdditionPlan: toManyAdditionPlan,
             connection: connection, existing: existing)
         indexTransitions.append(
             (
@@ -4840,6 +4879,7 @@ package enum LightweightMigration {
         schema: Schema,
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
         toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?,
+        toManyAdditionPlan: OwnerOnlyToManyAdditionBatchPlan?,
         connection: SQLConnection,
         existing: Set<String>
     ) throws {
@@ -4863,6 +4903,22 @@ package enum LightweightMigration {
         }
         let ownerPairRemovals = pairedInverseRemovals.filter { $0.ownerEntityName == source.name }
         let inversePairRemovals = pairedInverseRemovals.filter { $0.inverseEntityName == source.name }
+        let plannedToManyAdditions = toManyAdditionPlan?.addedRelationshipNamesByOwner[source.name] ?? []
+        if !plannedToManyAdditions.isEmpty {
+            let addedNames = Set(addedRelationships.map(\.name))
+            guard removedRelationships.isEmpty,
+                addedNames == plannedToManyAdditions,
+                Set(mappedSources) == Set(source.relationships.map(\.name)),
+                destination.relationships.count == source.relationships.count + addedRelationships.count,
+                source.attributes == destination.attributes,
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many additions do not match the preflighted entity plan.")
+            }
+            return
+        }
         if !ownerPairRemovals.isEmpty || !inversePairRemovals.isEmpty {
             let plannedNames = Set(
                 ownerPairRemovals.map(\.ownerRelationshipName)
@@ -5625,6 +5681,190 @@ package enum LightweightMigration {
             removedRelationshipNamesByOwner: relationshipNamesByOwner,
             joinTables: plans.map(\.joinTable).sorted(),
             addedAttributesByOwner: addedAttributesByOwner)
+    }
+
+    private static func planMultipleFlatOwnerOnlyToManyAdditions(
+        source: Schema,
+        destination: Schema,
+        validatedSourceIndexSQL: [String: String],
+        excludedEndpoints: Set<String>,
+        connection: SQLConnection
+    ) throws -> OwnerOnlyToManyAdditionBatchPlan? {
+        guard Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name)) else {
+            return nil
+        }
+        let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        let additionsByOwnerEntries = source.entities.compactMap {
+            sourceEntity -> (String, [Schema.Relationship])? in
+            guard let destinationEntity = destinationByName[sourceEntity.name] else { return nil }
+            let sourceNames = Set(sourceEntity.relationships.map(\.name))
+            let additions = destinationEntity.relationships.filter { relationship in
+                !sourceNames.contains(where: {
+                    $0.caseInsensitiveCompare(relationship.name) == .orderedSame
+                        || $0.caseInsensitiveCompare(relationship.originalName ?? "") == .orderedSame
+                })
+            }
+            return (sourceEntity.name, additions)
+        }
+        guard additionsByOwnerEntries.count == source.entities.count else { return nil }
+        let additionsByOwner = Dictionary(uniqueKeysWithValues: additionsByOwnerEntries)
+        let additions = additionsByOwner.values.flatMap { $0 }
+        guard additions.count > 1 else { return nil }
+        if additions.allSatisfy({ !$0.isToMany }) { return nil }
+        guard additions.allSatisfy(\.isToMany) else {
+            throw SwiftDataError.migrationUnsupported("Mixed to-one and to-many additions cannot be batched.")
+        }
+        guard excludedEndpoints.isEmpty else {
+            throw SwiftDataError.migrationUnsupported(
+                "Batched owner-only join additions cannot be combined with inverse-pair removals.")
+        }
+
+        let allRemovedEndpoints = source.entities.flatMap { entity in
+            entity.relationships.compactMap { relationship -> String? in
+                guard let next = destinationByName[entity.name],
+                    !next.relationships.contains(where: {
+                        $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                            || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    })
+                else { return nil }
+                return "\(entity.name).\(relationship.name)"
+            }
+        }
+        guard allRemovedEndpoints.isEmpty else { return nil }
+        guard source.entityIDsByName == destination.entityIDsByName,
+            source.entities.allSatisfy({ $0.superentityName == nil }),
+            destination.entities.allSatisfy({ $0.superentityName == nil }),
+            source.entities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationByName[sourceEntity.name] else { return false }
+                return sourceEntity.attributes == destinationEntity.attributes
+                    && sourceEntity.indexes == destinationEntity.indexes
+                    && sourceEntity.superentityName == destinationEntity.superentityName
+                    && sourceEntity.relationships.allSatisfy({ sourceRelationship in
+                        destinationEntity.relationships.contains(sourceRelationship)
+                    })
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Batched to-many additions must be the only relationship edits on flat roots.")
+        }
+
+        let destinationSQL = try SchemaBuilder.build(destination).statements
+        let sourceJoinTables = Set(
+            source.entities.flatMap { entity in
+                entity.relationships.compactMap { relationship in
+                    SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: source)?.uppercased()
+                }
+            })
+        let generatedSourceIndexNames = Set(
+            source.entities.flatMap { indexDefinitions(for: $0, schema: source) }.map { $0.name.uppercased() })
+        guard Set(validatedSourceIndexSQL.keys) == generatedSourceIndexNames else {
+            throw SwiftDataError.migrationUnsupported("Source generated index layout is invalid.")
+        }
+        var plans: [OwnerOnlyToManyAdditionPlan] = []
+        for sourceEntity in source.entities.sorted(by: {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }) {
+            guard let destinationEntity = destinationByName[sourceEntity.name] else { continue }
+            let newRelationships = additionsByOwner[sourceEntity.name] ?? []
+            guard !newRelationships.isEmpty else {
+                guard sourceEntity.attributes == destinationEntity.attributes,
+                    equivalentEntityMetadata(sourceEntity, destinationEntity)
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Batched to-many additions cannot be combined with unrelated entity changes.")
+                }
+                continue
+            }
+            guard sourceEntity.attributes == destinationEntity.attributes,
+                sourceEntity.indexes == destinationEntity.indexes,
+                sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.relationships.allSatisfy(destinationEntity.relationships.contains),
+                destinationEntity.relationships.count == sourceEntity.relationships.count + newRelationships.count,
+                newRelationships.allSatisfy({ relationship in
+                    relationship.isToMany
+                        && relationship.inverse == nil
+                        && relationship.originalName == nil
+                        && (relationship.minimumModelCount == nil || relationship.minimumModelCount == 0)
+                        && relationship.maximumModelCount == nil
+                        && (relationship.deleteRule == .nullify || relationship.deleteRule == .noAction)
+                        && relationship.destination != sourceEntity.name
+                        && !hasReciprocalRelationship(
+                            named: relationship.name,
+                            from: sourceEntity.name,
+                            to: relationship.destination,
+                            schema: source)
+                        && !hasReciprocalRelationship(
+                            named: relationship.name,
+                            from: sourceEntity.name,
+                            to: relationship.destination,
+                            schema: destination)
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched additions require independent unconstrained owner-only to-many relationships.")
+            }
+            for relationship in newRelationships.sorted(by: {
+                $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+            }) {
+                guard let target = destination.entity(forName: relationship.destination),
+                    target.superentityName == nil,
+                    !destination.entities.contains(where: { $0.superentityName == target.name }),
+                    let joinTable = SchemaBuilder.joinTableName(
+                        for: destinationEntity, relationship: relationship, schema: destination)
+                else {
+                    throw SwiftDataError.migrationUnsupported("Added join targets must remain flat root entities.")
+                }
+                let tableStatement = destinationSQL.first(where: { $0.hasPrefix("CREATE TABLE \(joinTable) ") })
+                let uniqueIndexName = "\(joinTable)_UNIQUE_INDEX"
+                let reverseIndexName = "\(joinTable)_Z_B_INDEX"
+                let uniqueIndexStatement = destinationSQL.first(where: {
+                    $0.hasPrefix("CREATE UNIQUE INDEX \(uniqueIndexName) ")
+                })
+                let reverseIndexStatement = destinationSQL.first(where: {
+                    $0.hasPrefix("CREATE INDEX \(reverseIndexName) ")
+                })
+                guard let tableStatement, let uniqueIndexStatement, let reverseIndexStatement,
+                    !sourceJoinTables.contains(joinTable.uppercased())
+                else {
+                    throw SwiftDataError.migrationUnsupported("Added join table DDL is not canonical or collides.")
+                }
+                plans.append(
+                    OwnerOnlyToManyAdditionPlan(
+                        joinTable: joinTable,
+                        tableStatement: tableStatement,
+                        uniqueIndexStatement: uniqueIndexStatement,
+                        reverseIndexStatement: reverseIndexStatement))
+            }
+        }
+
+        let objectNames = plans.flatMap { plan in
+            [plan.joinTable, "\(plan.joinTable)_UNIQUE_INDEX", "\(plan.joinTable)_Z_B_INDEX"]
+        }.map { $0.uppercased() }
+        let destinationIndexNames = Set(
+            destination.entities.flatMap { indexDefinitions(for: $0, schema: destination) }.map { $0.name.uppercased() }
+        )
+        guard Set(objectNames).count == plans.count * 3,
+            Set(objectNames.filter { $0.hasSuffix("_INDEX") }).isDisjoint(with: destinationIndexNames)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Added join table and index names collide in the destination schema.")
+        }
+        let existingNames = Set(
+            try connection.rows("SELECT name FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger')")
+                .compactMap { row -> String? in
+                    guard case let .text(name)? = row.first else { return nil }
+                    return name.uppercased()
+                })
+        guard Set(objectNames).isDisjoint(with: existingNames) else {
+            throw SwiftDataError.migrationUnsupported("Added join table objects collide with physical source objects.")
+        }
+        return OwnerOnlyToManyAdditionBatchPlan(
+            addedRelationshipNamesByOwner: Dictionary(
+                uniqueKeysWithValues: additionsByOwner.compactMap { ownerName, relationships in
+                    let names = Set(relationships.map(\.name))
+                    return names.isEmpty ? nil : (ownerName, names)
+                }),
+            additions: plans.sorted { $0.joinTable < $1.joinTable })
     }
 
     private static func validateJoinTableNoPhysicalForeignKeys(

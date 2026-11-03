@@ -9784,6 +9784,53 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testInversePairRemovalRejectsTamperedOwnerForeignKeyIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([Schema.Entity(name: "AOwner"), Schema.Entity(name: "ZTarget")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-tampered-owner-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT) VALUES (2, 3)")
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZTARGET) VALUES (1, 5, 1)")
+            try connection.execute("DROP INDEX ZAOWNER_ZTARGET_INDEX")
+            try connection.execute("CREATE INDEX ZAOWNER_ZTARGET_INDEX ON ZAOWNER (Z_PK)")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered owner relationship index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTARGET FROM ZAOWNER") },
+            [[.int(1), .int(5), .int(1)]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA index_info(ZAOWNER_ZTARGET_INDEX)") }.compactMap { row -> String? in
+                guard row.count > 2, case let .text(column) = row[2] else { return nil }
+                return column
+            },
+            ["Z_PK"])
+        try driver.close()
+    }
+
     func testInversePairRemovalRejectsCombinedAttributeEdit() throws {
         let source = Schema([
             Schema.Entity(

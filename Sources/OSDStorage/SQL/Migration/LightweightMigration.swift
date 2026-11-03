@@ -763,7 +763,15 @@ package enum LightweightMigration {
             let inverseKey = "\(inverseEntity.name).\(inverse.name)"
             let ownerTable = "Z\(owner.name.uppercased())"
             let sourceColumns = try tableColumns(ownerTable, connection: connection)
+            let indexName =
+                "Z\(mapping.ownerRootEntityName.uppercased())_Z\(relationship.name.uppercased())_INDEX"
+            let sourceIndex = indexDefinitions(for: owner, schema: source).first(where: {
+                $0.name.caseInsensitiveCompare(indexName) == .orderedSame
+            })
             guard sourceColumns.contains("Z\(mapping.storageColumnName.uppercased())"),
+                sourceIndex?.table.caseInsensitiveCompare(ownerTable) == .orderedSame,
+                sourceIndex?.columns == ["Z\(mapping.storageColumnName.uppercased())"],
+                sourceIndex?.statement.hasPrefix("CREATE INDEX") == true,
                 Database.sqliteLibVersionNumber >= 3_035_000
             else {
                 throw SwiftDataError.migrationUnsupported(
@@ -790,7 +798,7 @@ package enum LightweightMigration {
                     inverseEntityName: inverseEntity.name,
                     inverseRelationshipName: inverse.name,
                     column: "Z\(mapping.storageColumnName.uppercased())",
-                    indexName: "Z\(mapping.ownerRootEntityName.uppercased())_Z\(relationship.name.uppercased())_INDEX"
+                    indexName: indexName
                 ))
         }
         return plans

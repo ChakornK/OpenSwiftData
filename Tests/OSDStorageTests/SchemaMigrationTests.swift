@@ -3065,6 +3065,49 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testFlattenedAttributeRemovalRejectsCaseVariantPhysicalLeafIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "address",
+                        type: "Address",
+                        options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "zip", columnName: "address_zip", type: "Int32"),
+                        ])
+                ])
+        ])
+        let destination = Schema([Schema.Entity(name: "Record")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-case-variant-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE INDEX USER_ADDRESS_CITY_CASE_VARIANT ON ZRECORD (zaddress_city)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-variant leaf index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZADDRESS_CITY")
+                })
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name = 'USER_ADDRESS_CITY_CASE_VARIANT'").count == 1
+            })
+        try driver.close()
+    }
+
     func testScalarOptionalAdditionComposesWithOptionalToOneRemoval() throws {
         let source = Schema([
             Schema.Entity(

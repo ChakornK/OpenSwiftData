@@ -1162,6 +1162,118 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleSignedIntegerNarrowingsCanReplaceOrdinaryIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int64"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int16"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["first"]),
+                    Schema.Index(properties: ["second"]),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-ordinary-index-replace"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND, ZRETAINED) VALUES (1, 4, 12, 34, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZFIRST_INDEX")], [.text("ZRECORD_ZSECOND_INDEX")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZFIRST, ZSECOND, ZRETAINED FROM ZRECORD") },
+            [[.int(12), .int(34), .text("keep")]])
+        try driver.close()
+    }
+
+    func testMultipleSignedIntegerNarrowingsRejectUniqueIndexTransitions() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int64"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int16"),
+                ],
+                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-unique-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, 12, 34)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique-index transition to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)").isEmpty })
+        try driver.close()
+    }
+
+    func testMultipleSignedIntegerNarrowingsRejectUniqueIndexRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int64"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ],
+                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int16"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-unique-remove-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique-index removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count, 1)
+        try driver.close()
+    }
+
     func testMultipleSignedIntegerNarrowingsValidateAllColumnsBeforeMetadataChanges() throws {
         let source = Schema([
             Schema.Entity(

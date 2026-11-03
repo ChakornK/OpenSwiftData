@@ -2850,7 +2850,7 @@ package enum LightweightMigration {
                 if sourceEntity.name == source.name {
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && sourceEntity.indexes == destinationEntity.indexes
+                        && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
                 }
                 return equivalentEntityMetadata(sourceEntity, destinationEntity)
             }),

@@ -960,7 +960,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testSignedIntegerNarrowingFailsWithoutChangingStore() throws {
+    func testSignedIntegerNarrowingRejectsOutOfRangeValuesWithoutChangingStore() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -974,6 +974,7 @@ final class SchemaMigrationTests: XCTestCase {
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, 2147483648)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 9, -2147483649)")
         }
         let sourceHash = try initial.read {
             try $0.rows(
@@ -990,7 +991,7 @@ final class SchemaMigrationTests: XCTestCase {
         let reopened = try LightweightMigration.openStore(location: location, schema: source)
         XCTAssertEqual(
             try reopened.read { try $0.rows("SELECT ZVALUE FROM ZRECORD") },
-            [[.int(2_147_483_648)]])
+            [[.int(2_147_483_648)], [.int(-2_147_483_649)]])
         XCTAssertEqual(
             try reopened.read {
                 try $0.rows(
@@ -1000,6 +1001,128 @@ final class SchemaMigrationTests: XCTestCase {
             },
             sourceHash)
         try reopened.close()
+    }
+
+    func testSignedIntegerNarrowingPreservesBoundaryValuesIndexesAndMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("integer-narrowing.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int32", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, -2147483648)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 7, 2147483647)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, NULL)")
+        }
+        let sourceHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .int(1), .int(2), .int(-2_147_483_648)],
+                [.int(2), .int(1), .int(7), .int(2_147_483_647)],
+                [.int(3), .int(1), .int(5), .null],
+            ])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZVALUE_INDEX")]])
+        let destinationHash = try migrated.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        XCTAssertNotEqual(destinationHash, sourceHash)
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
+    func testSignedIntegerNarrowingRejectsMalformedStorageTypeAtomically() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-narrowing-malformed"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 11, 'twelve')")
+        }
+        let originalSchemaHash = try driver.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected malformed integer storage to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.int(1), .int(11), .text("text"), .text("twelve")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            originalSchemaHash)
+        try driver.close()
+    }
+
+    func testNarrowIntegerWidthsAcceptExactSignedBoundaries() throws {
+        let cases: [(sourceType: String, destinationType: String, minimum: Int64, maximum: Int64)] = [
+            ("Int32", "Int16", -32_768, 32_767),
+            ("Int16", "Int8", -128, 127),
+        ]
+        for (sourceType, destinationType, minimum, maximum) in cases {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "narrow-\(sourceType)-\(destinationType)"))
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: sourceType)])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 1, ?)", [.int(minimum)])
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, ?)", [.int(maximum)])
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+                [[.int(minimum)], [.int(maximum)]])
+            try driver.close()
+        }
     }
 
     func testFloatToDoubleWideningValidatesStoredValuesAndPreservesRows() throws {

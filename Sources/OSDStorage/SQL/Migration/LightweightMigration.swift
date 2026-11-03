@@ -1773,6 +1773,28 @@ package enum LightweightMigration {
                 ))
             return
         }
+        if let narrowing = try compatibleIntegerNarrowing(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            try validateStoredIntegerRange(
+                table: table,
+                column: "Z\(narrowing.destination.name.uppercased())",
+                destinationType: narrowing.destination.type,
+                isOptional: narrowing.destination.isOptional,
+                connection: connection)
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         if let floatingTypeChange = try compatibleFloatTypeChange(
             mappings,
             source: source,
@@ -2095,7 +2117,15 @@ package enum LightweightMigration {
             guard let old = mapping.source else { return false }
             return signedIntegerWidth(old.type) != nil || signedIntegerWidth(mapping.destination.type) != nil
         }
-        guard hasSignedIntegerType else { return false }
+        guard hasSignedIntegerType,
+            changes.contains(where: { mapping in
+                guard let old = mapping.source,
+                    let sourceWidth = signedIntegerWidth(old.type),
+                    let destinationWidth = signedIntegerWidth(mapping.destination.type)
+                else { return false }
+                return destinationWidth > sourceWidth
+            })
+        else { return false }
         guard !changes.isEmpty,
             mappings.count == source.attributes.count,
             mappings.count == destination.attributes.count,
@@ -2153,6 +2183,113 @@ package enum LightweightMigration {
             )
         }
         return true
+    }
+
+    private static func compatibleIntegerNarrowing(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changes = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.type != mapping.destination.type
+        }
+        guard !changes.isEmpty else { return nil }
+        let hasSignedIntegerType = changes.contains { mapping in
+            guard let old = mapping.source else { return false }
+            return signedIntegerWidth(old.type) != nil || signedIntegerWidth(mapping.destination.type) != nil
+        }
+        guard hasSignedIntegerType else { return nil }
+        guard changes.count == 1,
+            let change = changes.first,
+            let oldAttribute = change.source,
+            let sourceWidth = signedIntegerWidth(oldAttribute.type),
+            let destinationWidth = signedIntegerWidth(change.destination.type),
+            destinationWidth < sourceWidth,
+            oldAttribute.name == change.destination.name,
+            oldAttribute.isOptional == change.destination.isOptional,
+            oldAttribute.defaultValue == change.destination.defaultValue,
+            oldAttribute.options == change.destination.options,
+            oldAttribute.originalName == change.destination.originalName,
+            oldAttribute.components.isEmpty,
+            change.destination.components.isEmpty,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return old == oldAttribute || old == mapping.destination
+            }),
+            source.name == destination.name,
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && sourceEntity.indexes == destinationEntity.indexes
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !oldAttribute.options.contains(.codable),
+            !oldAttribute.options.contains(.flattened),
+            !oldAttribute.options.contains(.externalStorage),
+            !oldAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            try SQLColumnType.resolve(
+                oldAttribute.type, property: "\(source.name).\(oldAttribute.name)", options: oldAttribute.options)
+                == .integer,
+            try SQLColumnType.resolve(
+                change.destination.type,
+                property: "\(destination.name).\(change.destination.name)",
+                options: change.destination.options) == .integer
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Numeric narrowing must be a single compatible signed-integer change with unchanged storage metadata."
+            )
+        }
+        return change
+    }
+
+    private static func validateStoredIntegerRange(
+        table: String,
+        column: String,
+        destinationType: String,
+        isOptional: Bool,
+        connection: SQLConnection
+    ) throws {
+        guard let width = signedIntegerWidth(destinationType) else {
+            throw SwiftDataError.migrationUnsupported("Unsupported signed-integer destination type.")
+        }
+        let minimum = width == 64 ? Int64.min : -(Int64(1) << (width - 1))
+        let maximum = width == 64 ? Int64.max : (Int64(1) << (width - 1)) - 1
+        let rows = try connection.rows("SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
+        for row in rows {
+            guard row.count > 1, case let .text(storageType) = row[0] else {
+                throw SwiftDataError.migrationUnsupported("Integer column \(column) has invalid storage metadata.")
+            }
+            switch (storageType, row[1]) {
+            case ("null", .null) where isOptional:
+                continue
+            case ("null", .null):
+                throw SwiftDataError.migrationUnsupported("Required integer column \(column) contains NULL.")
+            case ("integer", .int(let value)) where value >= minimum && value <= maximum:
+                continue
+            case ("integer", .int):
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer column \(column) contains a value outside the destination range.")
+            default:
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer column \(column) contains unsupported SQLite storage type '\(storageType)'.")
+            }
+        }
     }
 
     private static func validateFlatOptionalityDDLCompatibility(

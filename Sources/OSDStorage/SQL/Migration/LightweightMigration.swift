@@ -2400,6 +2400,26 @@ package enum LightweightMigration {
                 "Attribute removal requires an eligible unindexed scalar column.")
         }
         let renamePlan = try orderedRenames(mappings)
+        let addedAttributes = mappings.filter { $0.source == nil }.map(\.destination)
+        let addedColumnNames = Set(addedAttributes.map { "Z\($0.name.uppercased())" })
+        guard addedColumnNames.count == addedAttributes.count,
+            addedColumnNames.isDisjoint(with: existing)
+        else {
+            throw SwiftDataError.migrationUnsupported("Added scalar columns collide with the physical source table.")
+        }
+        for attribute in addedAttributes {
+            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+            guard attribute.isOptional || defaultLiteral != nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+            }
+            _ = try SQLColumnType.resolve(
+                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+        }
+        if !renamePlan.isEmpty {
+            try validateSourceTableLayout(source, schema: Schema(sourceEntities), connection: connection)
+            _ = try validateSourceIndexLayout(Schema(sourceEntities), connection: connection)
+        }
         for (sourceName, destinationName) in renamePlan {
             try connection.execute(
                 "ALTER TABLE \(table) RENAME COLUMN Z\(sourceName.uppercased()) TO Z\(destinationName.uppercased())")

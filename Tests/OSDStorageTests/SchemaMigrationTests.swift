@@ -2804,6 +2804,124 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarRenameComposesWithDefaultedScalarAddition() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "4"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-defaulted-add"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE, ZRETAINED) VALUES (1, 5, 'title', 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE, ZRETAINED, ZPRIORITY FROM ZRECORD") },
+            [[.int(1), .int(5), .text("title"), .text("keep"), .int(4)]])
+        try driver.close()
+    }
+
+    func testScalarRenameWithDynamicDefaultRejectsBeforeChangingRows() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "legacyTitle", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-dynamic-default-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE) VALUES (1, 3, 'keep')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected dynamic default to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLEGACYTITLE FROM ZRECORD") },
+            [[.int(1), .int(3), .text("keep")]])
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZTITLE") })
+            })
+        try driver.close()
+    }
+
+    func testScalarRenameAndAdditionRejectsExistingPhysicalColumnCollisionBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "legacyTitle", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-add-existing-column-collision"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE) VALUES (1, 6, 'keep')")
+            try connection.execute("ALTER TABLE ZRECORD ADD COLUMN ZNOTE VARCHAR")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected physical column collision to fail before rename, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLEGACYTITLE FROM ZRECORD") },
+            [[.int(1), .int(6), .text("keep")]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZLEGACYTITLE")
+                })
+            })
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZTITLE") })
+            })
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        try driver.close()
+    }
+
     func testScalarRenameComposesWithRemovalButRejectsDestinationNameReuse() throws {
         let source = Schema([
             Schema.Entity(

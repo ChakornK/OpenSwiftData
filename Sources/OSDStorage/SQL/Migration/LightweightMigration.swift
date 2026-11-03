@@ -3629,8 +3629,7 @@ package enum LightweightMigration {
         guard
             destinationEntities.contains(where: { $0.name == destination.name }),
             removed.allSatisfy({ attribute in
-                !attribute.options.contains(.codable)
-                    && !attribute.options.contains(.flattened)
+                !attribute.options.contains(.flattened)
                     && !attribute.options.contains(.externalStorage)
                     && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
             }),

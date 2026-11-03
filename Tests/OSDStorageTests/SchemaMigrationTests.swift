@@ -1996,7 +1996,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testMultipleExactNumericRebuildsRejectOptionalityChange() throws {
+    func testMultipleExactNumericRebuildsAllowOptionalityRelaxation() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Record",
@@ -2018,18 +2018,18 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.write { connection in
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, 4, 5)")
         }
-        XCTAssertThrowsError(
-            try driver.write {
-                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
-            }
-        ) { error in
-            guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected optionality change to fail closed, got \(error)")
-            }
+        try driver.write { connection in
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
         }
         XCTAssertEqual(
-            try driver.read { try $0.rows("SELECT typeof(ZFIRST), ZFIRST, typeof(ZSECOND), ZSECOND FROM ZRECORD") },
-            [[.text("integer"), .int(4), .text("integer"), .int(5)]])
+            try driver.read {
+                try $0.rows("SELECT typeof(ZFIRST), ZFIRST, typeof(ZSECOND), ZSECOND FROM ZRECORD")
+            },
+            [[.text("real"), .double(4), .text("real"), .double(5)]])
+        try driver.write { connection in
+            try connection.execute("UPDATE ZRECORD SET ZSECOND = NULL WHERE Z_PK = 1")
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZSECOND FROM ZRECORD") }, [[.null]])
         try driver.close()
     }
 
@@ -2082,6 +2082,83 @@ final class SchemaMigrationTests: XCTestCase {
             try driver.read {
                 try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
             })
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsAllowRequiredToOptionalRelaxation() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "singlePrecision", type: "Int32"),
+                    Schema.Attribute(name: "integer", type: "Double"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
+                    Schema.Attribute(name: "integer", type: "Int16", isOptional: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-required-to-optional"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSINGLEPRECISION, ZINTEGER) VALUES (1, 3, 16777216, 42.0)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, typeof(ZSINGLEPRECISION), ZSINGLEPRECISION, typeof(ZINTEGER), ZINTEGER FROM ZRECORD"
+                )
+            },
+            [[.int(1), .int(3), .text("real"), .double(16_777_216), .text("integer"), .int(42)]])
+        try driver.write { connection in
+            try connection.execute("UPDATE ZRECORD SET ZSINGLEPRECISION = NULL, ZINTEGER = NULL WHERE Z_PK = 1")
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZSINGLEPRECISION, ZINTEGER FROM ZRECORD") },
+            [[.null, .null]])
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsRejectOptionalToRequiredConversion() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Double"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-reject-optional-to-required"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 4, 5, 6)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected optional-to-required conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZFIRST, ZSECOND FROM ZRECORD") },
+            [[.int(5), .int(6)]])
         try driver.close()
     }
 

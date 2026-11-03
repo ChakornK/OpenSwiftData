@@ -2603,6 +2603,12 @@ package enum LightweightMigration {
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> AttributeMapping? {
+        guard
+            !mappings.contains(where: { mapping in
+                guard let old = mapping.source else { return false }
+                return old.type != mapping.destination.type
+            })
+        else { return nil }
         let changes = mappings.filter { mapping in
             guard let old = mapping.source else { return false }
             return old.isOptional != mapping.destination.isOptional
@@ -3010,7 +3016,7 @@ package enum LightweightMigration {
         for mapping in changed {
             guard let old = mapping.source,
                 old.name == mapping.destination.name,
-                old.isOptional == mapping.destination.isOptional,
+                (!old.isOptional || mapping.destination.isOptional),
                 old.originalName == mapping.destination.originalName,
                 old.components.isEmpty,
                 mapping.destination.components.isEmpty,
@@ -3096,13 +3102,19 @@ package enum LightweightMigration {
                         case .signedIntegerToFloating:
                             return old.type != new.type
                                 && old.name == new.name
-                                && old.isOptional == new.isOptional
+                                && (!old.isOptional || new.isOptional)
                                 && old.defaultValue == new.defaultValue
                                 && old.options == new.options
                                 && old.originalName == new.originalName
                                 && old.components == new.components
                         case .floatingToSignedInteger:
-                            return equivalentAttributeMetadataExceptTypeAndUnique(old, new)
+                            return old.type != new.type
+                                && old.name == new.name
+                                && (!old.isOptional || new.isOptional)
+                                && old.defaultValue == new.defaultValue
+                                && old.options.subtracting([.unique]) == new.options.subtracting([.unique])
+                                && old.originalName == new.originalName
+                                && old.components == new.components
                         }
                     })
                 else { return false }

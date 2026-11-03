@@ -2379,7 +2379,6 @@ package enum LightweightMigration {
             old.originalName == change.destination.originalName,
             old.components.isEmpty,
             change.destination.components.isEmpty,
-            !old.options.contains(.unique),
             !old.options.contains(.codable),
             !old.options.contains(.flattened),
             !old.options.contains(.externalStorage),
@@ -2400,7 +2399,6 @@ package enum LightweightMigration {
                 == destinationEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(destinationEntities)) }),
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
-                    && !attribute.options.contains(.unique)
                     && !attribute.options.contains(.codable)
                     && !attribute.options.contains(.flattened)
                     && !attribute.options.contains(.externalStorage)
@@ -2408,14 +2406,11 @@ package enum LightweightMigration {
             }),
             destination.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
-                    && !attribute.options.contains(.unique)
                     && !attribute.options.contains(.codable)
                     && !attribute.options.contains(.flattened)
                     && !attribute.options.contains(.externalStorage)
                     && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
             }),
-            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
-                .allSatisfy({ !$0.statement.hasPrefix("CREATE UNIQUE INDEX") }),
             sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
             sourceEntities.allSatisfy({ entity in
@@ -2470,11 +2465,9 @@ package enum LightweightMigration {
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
         let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
         let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
-        guard sourceIndexes == destinationIndexes,
-            sourceIndexes.allSatisfy({ !$0.statement.hasPrefix("CREATE UNIQUE INDEX") })
-        else {
+        guard sourceIndexes == destinationIndexes else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild requires unchanged ordinary index definitions.")
+                "Integer-to-floating rebuild requires unchanged generated index definitions.")
         }
         _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
         let physicalIndexes = try connection.rows(

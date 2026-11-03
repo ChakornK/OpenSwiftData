@@ -1287,7 +1287,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testIntegerToDoubleRebuildRejectsUniqueSourceConstraint() throws {
+    func testIntegerToDoubleRebuildPreservesUniqueSourceConstraint() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64", options: [.unique])])
@@ -1298,18 +1298,67 @@ final class SchemaMigrationTests: XCTestCase {
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-unique-source"))
         try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 17)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, 23)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [
+                [
+                    .text("ZRECORD_ZVALUE_UNIQUE_INDEX"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
+                ]
+            ])
         XCTAssertThrowsError(
             try driver.write {
-                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
-            }
-        ) { error in
-            guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected unique conversion to fail closed, got \(error)")
-            }
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 17.0)")
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildPreservesCompositeUniqueIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"),
+                    Schema.Attribute(name: "tag", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "tag"], isUnique: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "tag", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "tag"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-composite-unique"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZTAG) VALUES (1, 3, 17, 'a')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
         }
-        XCTAssertTrue(
+        XCTAssertEqual(
             try driver.read {
-                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZVALUE") })
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [
+                [
+                    .text("ZRECORD_ZVALUE_ZTAG_UNIQUE_INDEX"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_ZTAG_UNIQUE_INDEX ON ZRECORD (ZVALUE, ZTAG)"),
+                ]
+            ])
+        XCTAssertThrowsError(
+            try driver.write {
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZTAG) VALUES (1, 4, 17.0, 'a')")
             })
         try driver.close()
     }

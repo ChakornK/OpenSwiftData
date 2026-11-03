@@ -6790,33 +6790,198 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testMultipleToOneRelationshipRemovalRejectsCombinedScalarRemoval() throws {
+    func testMultipleToOneRelationshipAndScalarRemovalPreservesRows() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
+                ],
                 relationships: [
                     Schema.Relationship(name: "first", destination: "Target"),
                     Schema.Relationship(name: "second", destination: "Target"),
                 ]),
             Schema.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", attributes: [Schema.Attribute(name: "identity", type: "String", options: [.unique])]),
+            Schema.Entity(name: "Target"),
+        ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-combined-scalar"))
         try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 3)")
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZIDENTITY, ZFIRST, ZSECOND) "
+                    + "VALUES (1, 5, 'remove', 'id-1', 2, 2)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertEqual(
+            columns.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZIDENTITY"])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZIDENTITY FROM ZOWNER") },
+            [[.int(1), .int(1), .int(5), .text("id-1")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
+            },
+            [[.text("ZOWNER_ZIDENTITY_UNIQUE_INDEX")]])
+        XCTAssertThrowsError(
+            try driver.write {
+                try $0.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZIDENTITY) VALUES (1, 9, 'id-1')")
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET") }, [[.int(1), .int(2), .int(3)]])
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (1, 7)")
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZOWNER") }, [[.int(2)]])
+        try driver.close()
+    }
+
+    func testCombinedScalarRelationshipRemovalUpdatesRetainedOrdinaryIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                indexes: [Schema.Index(properties: ["retained", "obsolete"])]), Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "retained", type: "String")],
+                indexes: [Schema.Index(properties: ["retained"])],
+            ),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-index-update"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) VALUES (1, 3, 'old', 'kept', NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
+            },
+            [[.text("ZOWNER_ZRETAINED_INDEX"), .text("CREATE INDEX ZOWNER_ZRETAINED_INDEX ON ZOWNER (ZRETAINED)")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZOWNER") },
+            [[.int(1), .int(3), .text("kept")]])
+        try driver.close()
+    }
+
+    func testCombinedRemovalDropsSharedCompositeIndexAndAddsRetainedIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                indexes: [Schema.Index(properties: ["obsolete", "retained"])]), Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "retained", type: "String")],
+                indexes: [Schema.Index(properties: ["retained"])],
+            ),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-composite-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) VALUES (1, 5, 'drop', 'keep', NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
+            },
+            [[.text("ZOWNER_ZRETAINED_INDEX"), .text("CREATE INDEX ZOWNER_ZRETAINED_INDEX ON ZOWNER (ZRETAINED)")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZOWNER") },
+            [[.int(1), .int(5), .text("keep")]])
+        try driver.close()
+    }
+
+    func testCombinedRemovalRejectsUniqueIndexOnRemovedScalarBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String", options: [.unique])],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-unique-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZTARGET) VALUES (1, 3, 'keep', NULL)")
+        }
         XCTAssertThrowsError(
             try driver.write {
                 try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
-            }
-        ) { error in
-            guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected combined scalar/relationship removal to fail closed, got \(error)")
-            }
-        }
-        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
-        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }))
-        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZFIRST") }))
-        XCTAssertTrue(columns.contains(where: { $0.count > 1 && $0[1] == .text("ZSECOND") }))
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }
+                )
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        try driver.close()
+    }
+
+    func testCombinedScalarRelationshipRemovalRejectsHierarchyBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(
+                name: "OwnerSubtype",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                superentityName: "Owner"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner"),
+            Schema.Entity(
+                name: "OwnerSubtype",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                superentityName: "Owner"),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-hierarchy"))
+        try bootstrap(source, driver: driver)
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }, originalColumns)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
         try driver.close()
     }
 

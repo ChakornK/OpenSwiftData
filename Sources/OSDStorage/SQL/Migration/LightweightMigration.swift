@@ -1560,6 +1560,164 @@ package enum LightweightMigration {
         }
     }
 
+    private static func removeCombinedScalarAndRelationshipColumns(
+        mappings: [AttributeMapping],
+        removedRelationships: [Schema.Relationship],
+        addedRelationships: [Schema.Relationship],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int],
+        existingColumns: Set<String>,
+        connection: SQLConnection
+    ) throws -> Bool {
+        let mappedSourceNames = Set(mappings.compactMap { $0.source?.name })
+        let removedAttributes = source.attributes.filter { !mappedSourceNames.contains($0.name) }
+        guard !removedAttributes.isEmpty, !removedRelationships.isEmpty else { return false }
+
+        let removedRelationshipNames = Set(removedRelationships.map(\.name))
+        let retainedRelationships = source.relationships.filter { !removedRelationshipNames.contains($0.name) }
+        let sourceSchema = Schema(sourceEntities)
+        let destinationSchema = Schema(destinationEntities)
+        guard addedRelationships.isEmpty,
+            mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return old == mapping.destination
+            }),
+            mappings.count == destination.attributes.count,
+            destination.relationships.count == retainedRelationships.count,
+            retainedRelationships.allSatisfy({ destination.relationships.contains($0) }),
+            destination.relationships.allSatisfy({ retainedRelationships.contains($0) }),
+            removedRelationships.allSatisfy({ relationship in
+                !relationship.isToMany
+                    && relationship.isOptional
+                    && relationship.inverse == nil
+                    && relationship.originalName == nil
+                    && (relationship.minimumModelCount == nil || relationship.minimumModelCount == 0)
+                    && (relationship.maximumModelCount == nil || relationship.maximumModelCount == 1)
+                    && (relationship.deleteRule == .nullify || relationship.deleteRule == .noAction)
+                    && relationship.destination != source.name
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !sourceEntities.contains(where: { $0.superentityName == source.name }),
+            !destinationEntities.contains(where: { $0.superentityName == destination.name }),
+            sourceEntityIDs == destinationEntityIDs,
+            Set(sourceEntities.map(\.name)) == Set(destinationEntities.map(\.name)),
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    let retainedSourceAttributes = sourceEntity.attributes.filter { !removedAttributes.contains($0) }
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && retainedSourceAttributes.count == destinationEntity.attributes.count
+                        && retainedSourceAttributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                        && sourceEntity.relationships.filter({ !removedRelationshipNames.contains($0.name) })
+                            == destinationEntity.relationships
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            sourceEntities.allSatisfy({
+                $0.name == source.name || $0.relationships == destinationSchema.entity(forName: $0.name)?.relationships
+            }),
+            destinationEntities.allSatisfy({
+                $0.name == destination.name || $0.relationships == sourceSchema.entity(forName: $0.name)?.relationships
+            }),
+            removedAttributes.allSatisfy({ attribute in
+                attribute.components.isEmpty
+                    && !attribute.options.contains(.unique)
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            !destination.attributes.contains(where: { attribute in
+                attribute.originalName.map({ removedAttributes.map(\.name).contains($0) }) ?? false
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined removals require unchanged retained metadata and optional owning to-one relationships.")
+        }
+
+        let removedColumns = Set(
+            removedAttributes.map { "Z\($0.name.uppercased())" }
+                + removedRelationships.compactMap { relationship -> String? in
+                    guard
+                        let mapping = sourceSchema.relationshipStorageMapping(
+                            modelEntityName: source.name, relationshipName: relationship.name)
+                    else { return nil }
+                    return "Z\(mapping.storageColumnName.uppercased())"
+                })
+        guard removedColumns.count == removedAttributes.count + removedRelationships.count,
+            removedColumns.isSubset(of: existingColumns),
+            Database.sqliteLibVersionNumber >= 3_035_000
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined removals require existing columns and SQLite 3.35 or newer.")
+        }
+
+        let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
+        let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
+        let uniqueSource = sourceIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+        let uniqueDestination = destinationIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+        guard uniqueSource.count == uniqueDestination.count,
+            uniqueSource.allSatisfy({ uniqueDestination.contains($0) }),
+            destinationIndexes.allSatisfy({ !$0.columns.contains(where: { removedColumns.contains($0.uppercased()) }) })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Combined removals cannot change unique constraints or retain indexes on removed columns.")
+        }
+
+        try validateColumnRemovalSideEffects(
+            table: "Z\(source.name.uppercased())",
+            entity: source,
+            schema: sourceSchema,
+            removedColumns: removedColumns,
+            connection: connection)
+        try validateGeneratedIndexesForAttributeRemoval(
+            table: "Z\(source.name.uppercased())",
+            definitions: sourceIndexes,
+            connection: connection)
+        let removableIndexNames = Set(
+            sourceIndexes.filter { definition in
+                definition.columns.contains(where: { removedColumns.contains($0.uppercased()) })
+                    && !definition.statement.hasPrefix("CREATE UNIQUE INDEX")
+            }.map { $0.name.uppercased() })
+        let knownIndexNames = Set(sourceIndexes.map { $0.name.uppercased() })
+        for attribute in removedAttributes {
+            try validateIndexesForAttributeRemoval(
+                table: "Z\(source.name.uppercased())",
+                column: "Z\(attribute.name.uppercased())",
+                removableIndexNames: removableIndexNames,
+                knownIndexNames: knownIndexNames,
+                connection: connection)
+        }
+        for relationship in removedRelationships {
+            let mapping = try validatedRemovedRelationshipMapping(
+                relationship, owner: source, sourceSchema: sourceSchema)
+            try validateOptionalRelationshipColumnRemoval(
+                table: "Z\(source.name.uppercased())",
+                column: "Z\(mapping.storageColumnName.uppercased())",
+                relationship: relationship,
+                owner: source,
+                schema: sourceSchema,
+                connection: connection,
+                validatePhysicalLayout: false)
+        }
+
+        for indexName in removableIndexNames.sorted() {
+            try connection.execute("DROP INDEX IF EXISTS \(indexName)")
+        }
+        for column in removedColumns.sorted() {
+            try connection.execute("ALTER TABLE Z\(source.name.uppercased()) DROP COLUMN \(column)")
+        }
+        return true
+    }
+
     private static func validateAttributeColumns(
         _ mappings: [AttributeMapping],
         destination: Schema.Entity,
@@ -1634,6 +1792,26 @@ package enum LightweightMigration {
                 $0.name == relationship.name
                     || ($0.name == relationship.originalName && !removedRelationshipNames.contains($0.name))
             })
+        }
+        if try removeCombinedScalarAndRelationshipColumns(
+            mappings: mappings,
+            removedRelationships: removedRelationships,
+            addedRelationships: addedRelationships,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs,
+            existingColumns: existing,
+            connection: connection)
+        {
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
         }
         if removedRelationships.count > 1,
             addedRelationships.isEmpty,

@@ -4443,6 +4443,128 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleInlineCodableBlobsCanBeRemovedWithFlattenedAttributesAndReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-codable-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
+                    Schema.Attribute(
+                        name: "address", type: "Address", options: [.flattened],
+                        components: [
+                            .init(name: "city", columnName: "address_city", type: "String"),
+                            .init(name: "postalCode", columnName: "address_postalCode", type: "Int32"),
+                        ]),
+                    Schema.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let firstMarker = Array("OSD_EXTERNAL_DATA_V1\u{0}inline-first.blob".utf8)
+        let secondMarker = Array("OSD_EXTERNAL_DATA_V1\u{0}inline-second.blob".utf8)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRSTPAYLOAD, ZADDRESS_CITY, ZADDRESS_POSTALCODE, "
+                    + "ZSECONDPAYLOAD, ZRETAINED, ZRETAINEDCOUNT) VALUES (1, 11, ?, 'Oslo', 1234, ?, 'preserve', 9223372036854775807)",
+                [.blob(firstMarker), .blob(secondMarker)])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZRETAINEDCOUNT FROM ZRECORD")
+            },
+            [[.int(1), .int(11), .text("preserve"), .int(Int64.max)]])
+        let migratedHash = try migrated.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZRECORD)") }.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZRETAINED", "ZRETAINEDCOUNT"])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZRETAINEDCOUNT FROM ZRECORD")
+            },
+            [[.int(1), .int(11), .text("preserve"), .int(Int64.max)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            migratedHash)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
+    func testCodableRemovalRejectsPhysicalIndexDependencyBeforeAnyDrop() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
+                    Schema.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "codable-removal-index-dependency-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRSTPAYLOAD, ZSECONDPAYLOAD, ZRETAINED) VALUES (1, 5, ?, ?, 'keep')",
+                [.blob([0x01, 0x02]), .blob([0x03, 0x04])])
+            try connection.execute("CREATE INDEX ZCUSTOM_PAYLOAD_INDEX ON ZRECORD (ZSECONDPAYLOAD)")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        let originalRow = try driver.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZFIRSTPAYLOAD, ZSECONDPAYLOAD, ZRETAINED FROM ZRECORD")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected a physical dependency on a removed Codable BLOB to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZFIRSTPAYLOAD, ZSECONDPAYLOAD, ZRETAINED FROM ZRECORD")
+            },
+            originalRow)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZCUSTOM_PAYLOAD_INDEX'")
+            },
+            [[.text("ZCUSTOM_PAYLOAD_INDEX")]])
+        try driver.close()
+    }
+
     func testExternalCodableAttributeRemovalRemainsUnsupported() throws {
         let source = Schema([
             Schema.Entity(

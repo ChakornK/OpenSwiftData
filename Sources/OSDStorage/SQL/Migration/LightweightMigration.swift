@@ -2189,6 +2189,48 @@ package enum LightweightMigration {
         let table = "Z\(source.name.uppercased())"
         let existing = try tableColumns(table, connection: connection)
         let mappings = try attributeMappings(source: source, destination: destination)
+        let plannedToManyRemovals = toManyRemovalPlan?.removedRelationshipNamesByOwner[source.name] ?? []
+        let plannedAdditions = toManyRemovalPlan?.addedAttributesByOwner[source.name] ?? []
+        if !plannedAdditions.isEmpty {
+            let mappedSourceNames = Set(mappings.compactMap { $0.source?.name })
+            let addedNames = Set(mappings.filter { $0.source == nil }.map { $0.destination.name })
+            guard mappedSourceNames.count == source.attributes.count,
+                mappings.count == destination.attributes.count,
+                mappings.allSatisfy({ mapping in
+                    if let old = mapping.source { return old == mapping.destination }
+                    return plannedAdditions.contains(mapping.destination)
+                }),
+                addedNames == Set(plannedAdditions.map(\.name)),
+                existing.isSuperset(of: Set(plannedAdditions.map { "Z\($0.name.uppercased())" })),
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removal scalar additions do not match the preflighted plan.")
+            }
+            if !plannedToManyRemovals.isEmpty {
+                try migrateRelationships(
+                    source: source,
+                    destination: destination,
+                    sourceSchema: Schema(sourceEntities),
+                    schema: Schema(destinationEntities),
+                    pairedInverseRemovals: pairedInverseRemovals,
+                    toManyRemovalPlan: toManyRemovalPlan,
+                    connection: connection,
+                    existing: existing)
+            } else {
+                guard source.relationships == destination.relationships else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Scalar-only additions cannot change relationship metadata.")
+                }
+            }
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
         try validateAttributeColumns(mappings, destination: destination, existing: existing)
         let mappedRelationshipSources = Set(
             destination.relationships.compactMap { relationship in
@@ -2226,39 +2268,6 @@ package enum LightweightMigration {
                     indexDefinitions(for: source, schema: Schema(sourceEntities)),
                     indexDefinitions(for: destination, schema: Schema(destinationEntities))
                 ))
-            return
-        }
-        let plannedToManyRemovals = toManyRemovalPlan?.removedRelationshipNamesByOwner[source.name] ?? []
-        let plannedAdditions = toManyRemovalPlan?.addedAttributesByOwner[source.name] ?? []
-        if !plannedToManyRemovals.isEmpty, !plannedAdditions.isEmpty {
-            let removedNames = Set(removedRelationships.map(\.name))
-            let addedNames = Set(mappings.filter { $0.source == nil }.map { $0.destination.name })
-            guard removedNames == plannedToManyRemovals,
-                source.attributes.allSatisfy(destination.attributes.contains),
-                destination.attributes.count == source.attributes.count + plannedAdditions.count,
-                plannedAdditions.allSatisfy(destination.attributes.contains),
-                addedRelationships.isEmpty,
-                source.indexes == destination.indexes,
-                source.superentityName == destination.superentityName,
-                addedNames == Set(plannedAdditions.map(\.name))
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Batched to-many removal with scalar additions does not match the global plan.")
-            }
-            return
-        }
-        if !plannedToManyRemovals.isEmpty {
-            let removedNames = Set(removedRelationships.map(\.name))
-            guard removedNames == plannedToManyRemovals,
-                plannedAdditions.isEmpty,
-                addedRelationships.isEmpty,
-                source.attributes == destination.attributes,
-                source.indexes == destination.indexes,
-                source.superentityName == destination.superentityName
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Batched to-many removals cannot be combined with other entity edits.")
-            }
             return
         }
         if try removeCombinedScalarAndRelationshipColumns(
@@ -4886,10 +4895,13 @@ package enum LightweightMigration {
         }
         let plannedToManyRemovals = toManyRemovalPlan?.removedRelationshipNamesByOwner[source.name] ?? []
         if !plannedToManyRemovals.isEmpty {
+            let plannedAdditions = toManyRemovalPlan?.addedAttributesByOwner[source.name] ?? []
             let removedNames = Set(removedRelationships.map(\.name))
             guard removedNames == plannedToManyRemovals,
                 addedRelationships.isEmpty,
-                source.attributes == destination.attributes,
+                source.attributes.allSatisfy(destination.attributes.contains),
+                destination.attributes.count == source.attributes.count + plannedAdditions.count,
+                plannedAdditions.allSatisfy(destination.attributes.contains),
                 source.indexes == destination.indexes,
                 source.superentityName == destination.superentityName
             else {
@@ -5383,8 +5395,7 @@ package enum LightweightMigration {
                 }
                 return nil
             }
-            guard removedByOwner[entity.name]?.isEmpty == false,
-                mappings.count == next.attributes.count,
+            guard mappings.count == next.attributes.count,
                 mappings.compactMap({ $0.source }).count == entity.attributes.count,
                 try mappings.allSatisfy({ mapping in
                     guard let old = mapping.source else {
@@ -5430,9 +5441,13 @@ package enum LightweightMigration {
             }
             let existingColumns = try tableColumns("Z\(entity.name.uppercased())", connection: connection)
             let addedColumns = Set(added.map { "Z\($0.name.uppercased())" })
-            guard addedColumns.count == added.count, addedColumns.isDisjoint(with: existingColumns) else {
+            let normalizedExistingColumns = Set(existingColumns.map { $0.uppercased() })
+            guard addedColumns.count == added.count,
+                addedColumns.isDisjoint(with: normalizedExistingColumns)
+            else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Added scalar columns collide with the physical source table.")
+                    "Added scalar columns collide with the physical source table for \(entity.name): "
+                        + "added=\(addedColumns.sorted()), existing=\(normalizedExistingColumns.sorted()).")
             }
             let oldDefinitions = indexDefinitions(for: entity, schema: source)
             let newDefinitions = indexDefinitions(for: next, schema: destination)
@@ -5460,6 +5475,7 @@ package enum LightweightMigration {
         }
         let addedAttributesByOwner = Dictionary(uniqueKeysWithValues: addedAttributeEntries)
 
+        let changedMetadataOwners = changedOwnerNames.union(addedAttributesByOwner.keys)
         guard source.entityIDsByName == destination.entityIDsByName,
             source.entities.allSatisfy({ $0.superentityName == nil }),
             destination.entities.allSatisfy({ $0.superentityName == nil }),
@@ -5475,7 +5491,7 @@ package enum LightweightMigration {
                     : entity.attributes == next.attributes)
                     && entity.indexes == next.indexes
                     && entity.superentityName == next.superentityName
-                    && (changedOwnerNames.contains(entity.name)
+                    && (changedMetadataOwners.contains(entity.name)
                         ? next.relationships
                             == entity.relationships.filter {
                                 !(removedByOwner[entity.name]?.contains($0) ?? false)
@@ -5494,16 +5510,17 @@ package enum LightweightMigration {
             $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
         }) {
             let removed = removedByOwner[sourceEntity.name] ?? []
-            guard !removed.isEmpty else { continue }
+            let addedAttributes = addedAttributesByOwner[sourceEntity.name] ?? []
+            guard !removed.isEmpty || !addedAttributes.isEmpty else { continue }
             guard let destinationEntity = destinationByName[sourceEntity.name] else {
                 throw SwiftDataError.migrationUnsupported("Destination schema omits a retained owner entity.")
             }
             guard
-                (addedAttributesByOwner[sourceEntity.name] != nil
-                    ? sourceEntity.attributes.allSatisfy(destinationEntity.attributes.contains)
-                        && destinationEntity.attributes.count == sourceEntity.attributes.count
-                            + (addedAttributesByOwner[sourceEntity.name]?.count ?? 0)
-                    : sourceEntity.attributes == destinationEntity.attributes),
+                (addedAttributes.isEmpty
+                    ? sourceEntity.attributes == destinationEntity.attributes
+                    : sourceEntity.attributes.allSatisfy(destinationEntity.attributes.contains)
+                        && destinationEntity.attributes.count == sourceEntity.attributes.count + addedAttributes.count
+                        && addedAttributes.allSatisfy(destinationEntity.attributes.contains)),
                 sourceEntity.indexes == destinationEntity.indexes,
                 sourceEntity.superentityName == destinationEntity.superentityName
             else {
@@ -5518,7 +5535,7 @@ package enum LightweightMigration {
                             || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
                     }) ? nil : relationship.name
                 })
-            let plannedAttributes = addedAttributesByOwner[sourceEntity.name] ?? []
+            let plannedAttributes = addedAttributes
             let plannedScalarAdditionNames = Set(plannedAttributes.map(\.name))
             let retainedRelationships = sourceEntity.relationships.filter { !removedByEntity.contains($0.name) }
             guard actualRemovedNames == removedByEntity,

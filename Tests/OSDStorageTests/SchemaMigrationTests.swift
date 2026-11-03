@@ -6967,6 +6967,68 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMultipleOwnerToManyRemovalsComposeWithScalarAdditionOnAnotherOwner() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
+                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                ]),
+            Schema.Entity(
+                name: "BOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner"),
+            Schema.Entity(
+                name: "BOwner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "6"),
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let tables = try owner.relationships.map {
+            try XCTUnwrap(SchemaBuilder.joinTableName(for: owner, relationship: $0, schema: source))
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multi-owner-scalar-add.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZBOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (2, 8, 'retained')")
+            for table in tables { try connection.execute("INSERT INTO \(table) (Z_A, Z_B) VALUES (1, 1)") }
+        }
+        try initial.close()
+
+        let migrationResult = Result { try LightweightMigration.openStore(location: location, schema: destination) }
+        guard case let .success(migrated) = migrationResult else {
+            if case let .failure(error) = migrationResult {
+                XCTFail("Unexpected migration error: \(String(reflecting: error))")
+                throw error
+            }
+            return
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZPRIORITY FROM ZBOWNER") },
+            [[.int(1), .int(8), .text("retained"), .int(6)]])
+        for table in tables {
+            XCTAssertTrue(
+                try migrated.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testMultipleJoinScalarAdditionPreflightsEveryJoinBeforeDDL() throws {
         let source = Schema([
             Schema.Entity(

@@ -3753,6 +3753,84 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testFloatToDoubleMigrationPreservesExactSubnormalValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("float-double-bit-patterns.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let values: [Float] = [
+            .leastNonzeroMagnitude,
+            Float(bitPattern: Float.leastNonzeroMagnitude.bitPattern - 1),
+            Float.leastNormalMagnitude,
+            Float(bitPattern: Float.leastNormalMagnitude.bitPattern - 1),
+        ]
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            for (offset, value) in values.enumerated() {
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, ?)",
+                    [.int(Int64(offset + 1)), .double(Double(value))])
+            }
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let storedValues = try migrated.read { try $0.rows("SELECT ZVALUE FROM ZRECORD ORDER BY Z_PK") }
+        XCTAssertEqual(storedValues.count, values.count)
+        for (row, sourceValue) in zip(storedValues, values) {
+            guard case let .double(storedValue)? = row.first else {
+                return XCTFail("Expected a REAL value for each migrated Float.")
+            }
+            XCTAssertEqual(Float(storedValue).bitPattern, sourceValue.bitPattern)
+        }
+        try migrated.close()
+    }
+
+    func testDoubleToFloatMigrationPreservesExactSubnormalValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("double-float-bit-patterns.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        ])
+        let values: [Float] = [
+            .leastNonzeroMagnitude,
+            Float(bitPattern: Float.leastNonzeroMagnitude.bitPattern - 1),
+            Float.leastNormalMagnitude,
+            Float(bitPattern: Float.leastNormalMagnitude.bitPattern - 1),
+        ]
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            for (offset, value) in values.enumerated() {
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, ?)",
+                    [.int(Int64(offset + 1)), .double(Double(value))])
+            }
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let storedValues = try migrated.read { try $0.rows("SELECT ZVALUE FROM ZRECORD ORDER BY Z_PK") }
+        XCTAssertEqual(storedValues.count, values.count)
+        for (row, sourceValue) in zip(storedValues, values) {
+            guard case let .double(storedValue)? = row.first else {
+                return XCTFail("Expected a REAL value for each migrated Double.")
+            }
+            XCTAssertEqual(Float(storedValue).bitPattern, sourceValue.bitPattern)
+        }
+        try migrated.close()
+    }
+
     func testDoubleToFloatNarrowingRejectsLossyValuesAndRollsBack() throws {
         let cases: [(String, String)] = [
             ("precision", "0.1"),

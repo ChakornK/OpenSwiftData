@@ -886,6 +886,51 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMixedIntegerNarrowingAndWideningFailsWithoutChangingStore() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrow", type: "Int64"),
+                    Schema.Attribute(name: "wide", type: "Int8"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrow", type: "Int32"),
+                    Schema.Attribute(name: "wide", type: "Int16"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-integer-narrowing-widening"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNARROW, ZWIDE) VALUES (1, 6, 2147483648, 12)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed narrowing/widening to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNARROW, ZWIDE FROM ZRECORD") },
+            [[.int(1), .int(6), .int(2_147_483_648), .int(12)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        try driver.close()
+    }
+
     func testMixedIntegerWideningAndFloatConversionFailsWithoutChangingStore() throws {
         let source = Schema([
             Schema.Entity(
@@ -1056,6 +1101,228 @@ final class SchemaMigrationTests: XCTestCase {
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
         XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
+    }
+
+    func testMultipleSignedIntegerNarrowingsPreserveBoundariesAndNulls() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "medium", type: "Int64"),
+                    Schema.Attribute(name: "wide", type: "Int64", isOptional: true),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["small"]),
+                    Schema.Index(properties: ["wide"]),
+                    Schema.Index(properties: ["retained"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int8", isOptional: true),
+                    Schema.Attribute(name: "medium", type: "Int16"),
+                    Schema.Attribute(name: "wide", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["small"]),
+                    Schema.Index(properties: ["wide"]),
+                    Schema.Index(properties: ["retained"]),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-signed-narrowing-boundaries"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM, ZWIDE, ZRETAINED) "
+                    + "VALUES (1, 2, -128, -32768, -2147483648, 'low')")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM, ZWIDE, ZRETAINED) "
+                    + "VALUES (1, 5, 127, 32767, 2147483647, 'high')")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM, ZWIDE, ZRETAINED) "
+                    + "VALUES (1, 8, NULL, 0, NULL, 'null')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, typeof(ZSMALL), ZSMALL, ZMEDIUM, ZWIDE, ZRETAINED FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(2), .text("integer"), .int(-128), .int(-32768), .int(-2_147_483_648), .text("low")],
+                [.int(2), .int(5), .text("integer"), .int(127), .int(32767), .int(2_147_483_647), .text("high")],
+                [.int(3), .int(8), .text("null"), .null, .int(0), .null, .text("null")],
+            ])
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count, 3)
+        try driver.close()
+    }
+
+    func testMultipleSignedIntegerNarrowingsValidateAllColumnsBeforeMetadataChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int64"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ],
+                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int16"),
+                ],
+                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-signed-narrowing-overflow"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 7, 2147483647, 32768)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalHash = try driver.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected second narrowing overflow to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") },
+            [[.int(1), .int(7), .int(2_147_483_647), .int(32_768)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count, 2)
+        try driver.close()
+    }
+
+    func testInt64ToInt32BatchNarrowingRejectsBothExtremesAndAdjacentValues() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "narrowed", type: "Int64"),
+                ],
+                indexes: [Schema.Index(properties: ["narrowed"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "narrowed", type: "Int32"),
+                ],
+                indexes: [Schema.Index(properties: ["narrowed"])])
+        ])
+        for (caseIndex, value) in [Int64.min, Int64.max, Int64(Int32.min) - 1, Int64(Int32.max) + 1].enumerated() {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "int64-int32-edge-\(caseIndex)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRETAINED, ZNARROWED) VALUES (1, 4, 'unchanged', ?)",
+                    [.int(value)])
+            }
+            let originalDDL = try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            }
+            let originalHash = try driver.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            }
+            let originalIndexes = try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }, "Unexpectedly accepted narrowing source value \(value)."
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected Int64→Int32 narrowing to reject \(value), got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZNARROWED FROM ZRECORD") },
+                [[.int(1), .int(4), .text("unchanged"), .int(value)]])
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+                },
+                originalDDL)
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows(
+                        "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                    )
+                    .first?.first
+                },
+                originalHash)
+            XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }, originalIndexes)
+            try driver.close()
+        }
+    }
+
+    func testMultipleIntegerNarrowingsRejectFloatRebuildCombination() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrowed", type: "Int64"),
+                    Schema.Attribute(name: "converted", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrowed", type: "Int32"),
+                    Schema.Attribute(name: "converted", type: "Double"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "narrowing-float-rebuild-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNARROWED, ZCONVERTED) VALUES (1, 2, 4, 5)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed narrowing and floating conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT typeof(ZNARROWED), ZNARROWED, typeof(ZCONVERTED), ZCONVERTED FROM ZRECORD")
+            },
+            [[.text("integer"), .int(4), .text("integer"), .int(5)]])
+        try driver.close()
     }
 
     func testSignedIntegerNarrowingRejectsMalformedStorageTypeAtomically() throws {

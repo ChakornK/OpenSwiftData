@@ -9831,6 +9831,98 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testOpeningStoreRollsBackInversePairRemovalOnLaterEntityFailure() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("inverse-pair-later-failure.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "BTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "BTarget",
+                attributes: [Schema.Attribute(name: "label", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int64")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "BTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZBTARGET (Z_ENT, Z_OPT, ZLABEL) VALUES (2, 23, 'target retained')")
+            try connection.execute(
+                "INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 29, 'owner retained', 1)")
+            try connection.execute("INSERT INTO ZZNUMBER (Z_ENT, Z_OPT, ZVALUE) VALUES (3, 31, 2147483648)")
+        }
+        let sourceHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        let sourceVersion = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)])
+                .first?.first
+        }
+        let sourceOwnerColumns = try initial.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }
+        let sourceOwnerIndexes = try initial.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZAOWNER' ORDER BY name")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected later narrowing to fail after inverse-pair removal, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZTARGET FROM ZAOWNER") },
+            [[.int(1), .int(29), .text("owner retained"), .int(1)]])
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLABEL FROM ZBTARGET") },
+            [[.int(1), .int(23), .text("target retained")]])
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZZNUMBER") },
+            [[.int(1), .int(31), .int(2_147_483_648)]])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA table_info(ZAOWNER)") }, sourceOwnerColumns)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZAOWNER' ORDER BY name")
+            },
+            sourceOwnerIndexes)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            sourceHash)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)])
+                    .first?.first
+            },
+            sourceVersion)
+        XCTAssertTrue(
+            try reopened.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%' OR name LIKE '%_tmp%'")
+                    .isEmpty
+            })
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testInversePairRemovalRejectsCombinedAttributeEdit() throws {
         let source = Schema([
             Schema.Entity(

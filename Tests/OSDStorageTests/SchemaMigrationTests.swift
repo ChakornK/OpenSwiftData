@@ -3023,6 +3023,45 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarRenameRemovalCanReplaceUnrelatedOrdinaryIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["title"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-removal-replace-unrelated-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE, ZOBSOLETE, ZRETAINED) "
+                    + "VALUES (1, 5, 'title-data', 'drop', 'retained-data')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZTITLE_INDEX"), .text("CREATE INDEX ZRECORD_ZTITLE_INDEX ON ZRECORD (ZTITLE)")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZTITLE, ZRETAINED FROM ZRECORD") },
+            [[.text("title-data"), .text("retained-data")]])
+        try driver.close()
+    }
+
     func testScalarRemovalComposesWithOptionalAndDefaultedAdditions() throws {
         let source = Schema([
             Schema.Entity(

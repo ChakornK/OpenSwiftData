@@ -3679,16 +3679,6 @@ package enum LightweightMigration {
         let renamedDestinationNames = Set(renameMappings.map { $0.destination.name.uppercased() })
         let renameIndexPropertyNames = renamedSourceNames.union(renamedDestinationNames)
         let addedMappings = mappings.filter { $0.source == nil }
-        let sourceOrdinaryRenameIndexes = Set(
-            source.indexes.filter { index in
-                !index.isUnique && index.properties.count == 1
-                    && renamedSourceNames.contains(index.properties[0].uppercased())
-            })
-        let destinationOrdinaryRenameIndexes = Set(
-            destination.indexes.filter { index in
-                !index.isUnique && index.properties.count == 1
-                    && renamedDestinationNames.contains(index.properties[0].uppercased())
-            })
         let targetEntityMatches = sourceEntities.allSatisfy({ sourceEntity in
             guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
                 return false
@@ -3727,7 +3717,6 @@ package enum LightweightMigration {
                 && additions.allSatisfy({ destinationAttributes.contains($0) })
                 && sourceUniqueIndexes.count == destinationUniqueIndexes.count
                 && sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
-                && sourceOrdinaryRenameIndexes.count == destinationOrdinaryRenameIndexes.count
                 && (!additions.isEmpty
                     ? Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
                         == Set(destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
@@ -3755,7 +3744,10 @@ package enum LightweightMigration {
             let destinationOnNew = destinationIndexDefinitions.filter {
                 $0.columns == ["Z\(mapping.destination.name.uppercased())"]
             }
-            return sourceOnOld.allSatisfy({ $0.statement.hasPrefix("CREATE INDEX") })
+            return sourceOnOld.count <= destinationOnNew.count
+                && sourceOnOld.count <= 1
+                && destinationOnNew.count <= 1
+                && sourceOnOld.allSatisfy({ $0.statement.hasPrefix("CREATE INDEX") })
                 && destinationOnNew.allSatisfy({ $0.statement.hasPrefix("CREATE INDEX") })
         })
         let destinationIndexes = destination.indexes

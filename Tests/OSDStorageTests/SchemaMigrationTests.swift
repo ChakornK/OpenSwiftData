@@ -1619,6 +1619,472 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleExactNumericRebuildsPreserveMixedBoundariesAndNulls() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "singlePrecision", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "doublePrecision", type: "Int64", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["singlePrecision"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
+                    Schema.Attribute(name: "doublePrecision", type: "Double", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["singlePrecision"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-rebuilds"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSINGLEPRECISION, ZDOUBLEPRECISION) VALUES (1, 3, -16777216, 9007199254740992)"
+            )
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSINGLEPRECISION, ZDOUBLEPRECISION) VALUES (1, 8, 16777216, -9007199254740992)"
+            )
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSINGLEPRECISION, ZDOUBLEPRECISION) VALUES (1, 6, NULL, NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, typeof(ZSINGLEPRECISION), ZSINGLEPRECISION, "
+                        + "typeof(ZDOUBLEPRECISION), ZDOUBLEPRECISION FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(3), .text("real"), .double(-16_777_216), .text("real"), .double(9_007_199_254_740_992)],
+                [.int(2), .int(8), .text("real"), .double(16_777_216), .text("real"), .double(-9_007_199_254_740_992)],
+                [.int(3), .int(6), .text("null"), .null, .text("null"), .null],
+            ])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count,
+            1)
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsCanMixDirections() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integral", type: "Double", isOptional: true),
+                    Schema.Attribute(name: "exactInteger", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integral", type: "Int16", isOptional: true),
+                    Schema.Attribute(name: "exactInteger", type: "Double"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-mixed-directions"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZINTEGRAL, ZEXACTINTEGER) VALUES (1, 4, -0.0, 9007199254740992)")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZINTEGRAL, ZEXACTINTEGER) VALUES (1, 7, 32767.0, -9007199254740992)"
+            )
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, typeof(ZINTEGRAL), ZINTEGRAL, typeof(ZEXACTINTEGER), ZEXACTINTEGER "
+                        + "FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(4), .text("integer"), .int(0), .text("real"), .double(9_007_199_254_740_992)],
+                [.int(2), .int(7), .text("integer"), .int(32_767), .text("real"), .double(-9_007_199_254_740_992)],
+            ])
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsCanReplaceOrdinaryIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Double"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-index-replacement"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND, ZRETAINED) VALUES (1, 3, 5, 9, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZFIRST_INDEX")], [.text("ZRECORD_ZSECOND_INDEX")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZFIRST, ZSECOND, ZRETAINED FROM ZRECORD") },
+            [[.double(5), .double(9), .text("keep")]])
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsSupportEmptyTablesAndReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multiple-exact-empty.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Int16", isOptional: true),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.close()
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertTrue(try migrated.read { try $0.rows("SELECT Z_PK FROM ZRECORD").isEmpty })
+        let destinationHash = try migrated.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            destinationHash)
+        XCTAssertTrue(try reopened.read { try $0.rows("PRAGMA integrity_check") == [[.text("ok")]] })
+        try reopened.close()
+    }
+
+    func testMultipleExactNumericRebuildsValidateEveryColumnBeforeSwap() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "valid", type: "Int32"),
+                    Schema.Attribute(name: "fractional", type: "Double"),
+                ],
+                indexes: [Schema.Index(properties: ["valid"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "valid", type: "Float"),
+                    Schema.Attribute(name: "fractional", type: "Int64"),
+                ],
+                indexes: [Schema.Index(properties: ["valid"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-preflight"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALID, ZFRACTIONAL) VALUES (1, 9, 42, 1.5)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalHash = try driver.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact second conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALID), ZVALID, ZFRACTIONAL FROM ZRECORD") },
+            [[.int(1), .int(9), .text("integer"), .int(42), .double(1.5)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count, 1)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsPreflightCombinedUniqueIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integerValue", type: "Int64"),
+                    Schema.Attribute(name: "floatingValue", type: "Double"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integerValue", type: "Double"),
+                    Schema.Attribute(name: "floatingValue", type: "Int16"),
+                ],
+                indexes: [Schema.Index(properties: ["integerValue", "floatingValue"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-unique-preflight"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZINTEGERVALUE, ZFLOATINGVALUE) VALUES (1, 2, 7, 7.0)")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZINTEGERVALUE, ZFLOATINGVALUE) VALUES (1, 3, 7, 7.0)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined unique index to reject duplicates, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT Z_PK, typeof(ZINTEGERVALUE), ZINTEGERVALUE, ZFLOATINGVALUE FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .text("integer"), .int(7), .double(7)],
+                [.int(2), .text("integer"), .int(7), .double(7)],
+            ])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsRejectUniqueNegativeZeroCollision() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Double"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int16"),
+                    Schema.Attribute(name: "second", type: "Double"),
+                ],
+                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-negative-zero-unique"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, -0.0, 7)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 3, 0.0, 8)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique converted negative zero collision, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, typeof(ZFIRST), ZFIRST FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .text("real"), .double(-0.0)], [.int(2), .text("real"), .double(0.0)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsRejectCombinedNarrowing() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "converted", type: "Int64"),
+                    Schema.Attribute(name: "narrowed", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "converted", type: "Double"),
+                    Schema.Attribute(name: "narrowed", type: "Int32"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-narrowing"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCONVERTED, ZNARROWED) VALUES (1, 2, 4, 5)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed narrowing to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT typeof(ZCONVERTED), ZCONVERTED, typeof(ZNARROWED), ZNARROWED FROM ZRECORD")
+            },
+            [[.text("integer"), .int(4), .text("integer"), .int(5)]])
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsRejectOptionalityChange() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Int32"),
+                    Schema.Attribute(name: "second", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-optionality"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 2, 4, 5)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected optionality change to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZFIRST), ZFIRST, typeof(ZSECOND), ZSECOND FROM ZRECORD") },
+            [[.text("integer"), .int(4), .text("integer"), .int(5)]])
+        try driver.close()
+    }
+
+    func testMultipleExactNumericRebuildsRejectUniqueOptionChange() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integerValue", type: "Int64"),
+                    Schema.Attribute(name: "floatingValue", type: "Double"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "integerValue", type: "Double"),
+                    Schema.Attribute(name: "floatingValue", type: "Int16", options: [.unique]),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-unique-change"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZINTEGERVALUE, ZFLOATINGVALUE) VALUES (1, 2, 4, 5.0)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected attribute unique change to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, typeof(ZINTEGERVALUE), ZINTEGERVALUE, ZFLOATINGVALUE FROM ZRECORD")
+            },
+            [[.int(1), .text("integer"), .int(4), .double(5)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
     func testDoubleToSignedIntegerRebuildPreservesExactValuesAndUniqueIndex() throws {
         let source = Schema([
             Schema.Entity(

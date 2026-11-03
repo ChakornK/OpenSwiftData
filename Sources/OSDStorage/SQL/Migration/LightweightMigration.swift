@@ -2415,16 +2415,13 @@ package enum LightweightMigration {
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ mapping in
                 guard let sourceAttribute = mapping.source else { return false }
-                return sourceAttribute == old || sourceAttribute == mapping.destination
+                return sourceAttribute.name == old.name || sourceAttribute == mapping.destination
             }),
             source.name == destination.name,
             source.superentityName == nil,
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            equivalentUniqueIndexes(source.indexes, destination.indexes),
-            Set(source.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                == Set(destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name)),
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.codable)
@@ -2455,7 +2452,9 @@ package enum LightweightMigration {
                             guard let destinationAttribute = destinationAttributes[sourceAttribute.name] else {
                                 return false
                             }
-                            return sourceAttribute == old || sourceAttribute == destinationAttribute
+                            return sourceAttribute.name == old.name
+                                ? equivalentAttributeMetadataExceptTypeAndUnique(sourceAttribute, destinationAttribute)
+                                : sourceAttribute == destinationAttribute
                         })
                 }
                 return equivalentEntityMetadata(entity, destinationEntity)
@@ -2498,50 +2497,74 @@ package enum LightweightMigration {
             return old.type == "Float" || old.type == "Double"
         }
         guard hasFloatingToSignedInteger else { return nil }
-        guard changes.count == 1,
-            let change = changes.first,
-            let old = change.source,
-            old.type == "Float" || old.type == "Double",
-            signedIntegerWidth(change.destination.type) != nil,
-            old.name == change.destination.name,
-            old.isOptional == change.destination.isOptional,
-            old.defaultValue == nil,
-            change.destination.defaultValue == nil,
-            old.options == change.destination.options,
-            old.originalName == change.destination.originalName,
-            old.components.isEmpty,
-            change.destination.components.isEmpty,
-            mappings.count == source.attributes.count,
-            mappings.count == destination.attributes.count,
-            mappings.allSatisfy({ mapping in
-                guard let sourceAttribute = mapping.source else { return false }
-                return sourceAttribute == old || sourceAttribute == mapping.destination
-            }),
-            source.name == destination.name,
-            source.superentityName == nil,
-            destination.superentityName == nil,
-            source.relationships.isEmpty,
-            destination.relationships.isEmpty,
-            equivalentUniqueIndexes(source.indexes, destination.indexes),
-            Set(source.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                == Set(destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name)),
+        guard changes.count == 1, let change = changes.first, let old = change.source else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer conversion requires one type change.")
+        }
+        let sourceColumnType = try SQLColumnType.resolve(
+            old.type, property: "\(source.name).\(old.name)", options: old.options)
+        let destinationColumnType = try SQLColumnType.resolve(
+            change.destination.type,
+            property: "\(destination.name).\(change.destination.name)",
+            options: change.destination.options)
+        let changedAttributeIsCompatible =
+            (old.type == "Float" || old.type == "Double")
+            && signedIntegerWidth(change.destination.type) != nil
+            && old.name == change.destination.name
+            && old.isOptional == change.destination.isOptional
+            && old.defaultValue == nil
+            && change.destination.defaultValue == nil
+            && old.options.subtracting([.unique]) == change.destination.options.subtracting([.unique])
+            && old.originalName == change.destination.originalName
+            && old.components.isEmpty
+            && change.destination.components.isEmpty
+            && sourceColumnType == .float
+            && destinationColumnType == .integer
+        guard changedAttributeIsCompatible else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer conversion changed unsupported attribute metadata.")
+        }
+        let flatAttributes =
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.codable)
                     && !attribute.options.contains(.flattened)
                     && !attribute.options.contains(.externalStorage)
                     && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
-            }),
-            destination.attributes.allSatisfy({ attribute in
+            })
+            && destination.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.codable)
                     && !attribute.options.contains(.flattened)
                     && !attribute.options.contains(.externalStorage)
                     && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
-            }),
-            sourceEntityIDs == destinationEntityIDs,
-            sourceEntities.count == destinationEntities.count,
-            sourceEntities.allSatisfy({ sourceEntity in
+            })
+        guard flatAttributes else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer conversion requires ordinary scalar attributes.")
+        }
+        let mappedAttributesMatch =
+            mappings.count == source.attributes.count
+            && mappings.count == destination.attributes.count
+            && mappings.allSatisfy({ mapping in
+                guard let sourceAttribute = mapping.source else { return false }
+                return sourceAttribute.name == old.name
+                    ? equivalentAttributeMetadataExceptTypeAndUnique(sourceAttribute, mapping.destination)
+                    : sourceAttribute == mapping.destination
+            })
+        guard mappedAttributesMatch else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer conversion cannot be combined with other attribute changes.")
+        }
+        let entityMetadataMatches =
+            source.name == destination.name
+            && source.superentityName == nil
+            && destination.superentityName == nil
+            && source.relationships.isEmpty
+            && destination.relationships.isEmpty
+            && sourceEntityIDs == destinationEntityIDs
+            && sourceEntities.count == destinationEntities.count
+            && sourceEntities.allSatisfy({ sourceEntity in
                 guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
                     return false
                 }
@@ -2550,28 +2573,22 @@ package enum LightweightMigration {
                         uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
                         && sourceEntity.attributes.allSatisfy({ sourceAttribute in
                             guard let destinationAttribute = destinationAttributes[sourceAttribute.name] else {
                                 return false
                             }
-                            return sourceAttribute == old || sourceAttribute == destinationAttribute
+                            return sourceAttribute.name == old.name
+                                ? equivalentAttributeMetadataExceptTypeAndUnique(sourceAttribute, destinationAttribute)
+                                : sourceAttribute == destinationAttribute
                         })
                 }
                 return equivalentEntityMetadata(sourceEntity, destinationEntity)
-            }),
-            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
-            destinationEntities.allSatisfy({ $0.relationships.isEmpty }),
-            try SQLColumnType.resolve(old.type, property: "\(source.name).\(old.name)", options: old.options)
-                == .float,
-            try SQLColumnType.resolve(
-                change.destination.type,
-                property: "\(destination.name).\(change.destination.name)",
-                options: change.destination.options) == .integer
-        else {
+            })
+            && sourceEntities.allSatisfy({ $0.relationships.isEmpty })
+            && destinationEntities.allSatisfy({ $0.relationships.isEmpty })
+        guard entityMetadataMatches else {
             throw SwiftDataError.migrationUnsupported(
-                "Floating-to-integer conversion requires one flat scalar change with unchanged metadata and no defaults."
-            )
+                "Floating-to-integer conversion changes unsupported entity metadata or relationships.")
         }
         return change
     }
@@ -2709,16 +2726,22 @@ package enum LightweightMigration {
         destinationSchema: Schema,
         connection: SQLConnection
     ) throws {
+        let sourceHasHierarchy = sourceSchema.entities.contains { entity in
+            (entity.name == source.name && entity.superentityName != nil)
+                || entity.superentityName == source.name
+        }
+        let destinationHasHierarchy = destinationSchema.entities.contains { entity in
+            (entity.name == destination.name && entity.superentityName != nil)
+                || entity.superentityName == destination.name
+        }
+        guard !sourceHasHierarchy, !destinationHasHierarchy else {
+            throw SwiftDataError.migrationUnsupported("Numeric rebuild does not support entity hierarchies.")
+        }
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
         let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
         let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
-        let sourceUniqueIndexes = sourceIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
-        let destinationUniqueIndexes = destinationIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
-        guard sourceUniqueIndexes.count == destinationUniqueIndexes.count,
-            sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
-        else {
-            throw SwiftDataError.migrationUnsupported(
-                "Numeric rebuild cannot change unique index definitions.")
+        guard (sourceIndexes + destinationIndexes).allSatisfy({ !$0.statement.contains(" WHERE ") }) else {
+            throw SwiftDataError.migrationUnsupported("Numeric rebuild does not support partial indexes.")
         }
         _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
         let physicalIndexes = try connection.rows(
@@ -2812,12 +2835,34 @@ package enum LightweightMigration {
         guard mismatchedRows.first?.first == .int(0) else {
             throw SwiftDataError.migrationUnsupported("\(conversion.diagnosticName) rebuild changed stored row values.")
         }
+        try validateRebuildUniqueIndexes(destinationIndexes, table: temporaryTable, connection: connection)
 
         try connection.execute("DROP TABLE \(table)")
         try connection.execute("ALTER TABLE \(temporaryTable) RENAME TO \(table)")
         for definition in destinationIndexes {
             try connection.execute(definition.statement)
             try validatePhysicalIndexMetadata(definition, connection: connection)
+        }
+    }
+
+    private static func validateRebuildUniqueIndexes(
+        _ indexes: [IndexDefinition],
+        table: String,
+        connection: SQLConnection
+    ) throws {
+        for index in indexes where index.statement.hasPrefix("CREATE UNIQUE INDEX") {
+            guard !index.columns.isEmpty else {
+                throw SwiftDataError.migrationUnsupported("Unique rebuild index has no columns.")
+            }
+            let nonNullPredicate = index.columns.map { "\($0) IS NOT NULL" }.joined(separator: " AND ")
+            let columns = index.columns.joined(separator: ", ")
+            let duplicateGroups = try connection.rows(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM \(table) WHERE \(nonNullPredicate) "
+                    + "GROUP BY \(columns) HAVING COUNT(*) > 1)")
+            guard duplicateGroups.first?.first == .int(0) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Unique index \(index.name) would reject duplicate converted values.")
+            }
         }
     }
 
@@ -3024,6 +3069,18 @@ package enum LightweightMigration {
         let left = lhs.filter(\.isUnique)
         let right = rhs.filter(\.isUnique)
         return left.count == right.count && left.allSatisfy { right.contains($0) }
+    }
+
+    private static func equivalentAttributeMetadataExceptTypeAndUnique(
+        _ lhs: Schema.Attribute,
+        _ rhs: Schema.Attribute
+    ) -> Bool {
+        lhs.name == rhs.name
+            && lhs.isOptional == rhs.isOptional
+            && lhs.defaultValue == rhs.defaultValue
+            && lhs.options.subtracting([.unique]) == rhs.options.subtracting([.unique])
+            && lhs.originalName == rhs.originalName
+            && lhs.components == rhs.components
     }
 
     private static func compatibleFloatTypeChange(

@@ -1844,6 +1844,263 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testFloatingToIntegerUniqueAdditionRejectsDuplicatesBeforeSwap() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int16"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-add-duplicate"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 2, 7.0, 'same')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 3, 7.0, 'same')")
+        }
+        let sourceDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique preflight to reject duplicates, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, ZVALUE, ZLABEL FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(1), .double(7), .text("same")], [.int(2), .double(7), .text("same")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            sourceDDL)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testFloatingToIntegerUniqueAdditionAndNullSemantics() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double", isOptional: true),
+                    Schema.Attribute(name: "label", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int16", isOptional: true),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-add-null"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 2, 7.0, 'a')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 3, 7.0, 'b')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 4, NULL, 'same')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 5, NULL, 'same')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [
+                [
+                    .text("ZRECORD_ZVALUE_ZLABEL_UNIQUE_INDEX"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_ZLABEL_UNIQUE_INDEX ON ZRECORD (ZVALUE, ZLABEL)"),
+                ]
+            ])
+        try driver.close()
+    }
+
+    func testFloatingToIntegerUniqueRemovalAllowsDuplicatesAfterRebuild() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 8.0)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, 8)")
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testIntegerToFloatUniqueAdditionRejectsInexactValuesAtomically() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float", options: [.unique])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "int-to-float-unique-add-inexact"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 1, 16777217)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact unique conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("integer"), .int(16_777_217)]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testIntegerToDoubleUniqueAdditionRejectsDuplicatesBeforeSwap() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int64"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "int-to-double-unique-add-duplicate"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 2, 12, 'same')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 3, 12, 'same')")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique preflight to reject duplicates, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE, ZLABEL FROM ZRECORD ORDER BY Z_PK") },
+            [[.text("integer"), .int(12), .text("same")], [.text("integer"), .int(12), .text("same")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        try driver.close()
+    }
+
+    func testNumericRebuildRejectsHierarchyPartialUniqueIndexesBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")]),
+            Schema.Entity(
+                name: "SpecialRecord",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "specialValue", type: "String", options: [.unique]),
+                ],
+                superentityName: "Record",
+            ),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")]),
+            Schema.Entity(
+                name: "SpecialRecord",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "specialValue", type: "String", options: [.unique]),
+                ],
+                superentityName: "Record",
+            ),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "numeric-rebuild-hierarchy-partial-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 5.0)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalIndexes = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected hierarchy rebuild to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(5)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            originalIndexes)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
     func testFloatingToRequiredIntegerRejectsNull() throws {
         let source = Schema([
             Schema.Entity(
@@ -1964,7 +2221,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testFloatingToIntegerRejectsUniqueIndexSetChanges() throws {
+    func testFloatingToIntegerAddsUniqueIndexWhenDataIsDistinct() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
@@ -1979,13 +2236,18 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.write { connection in
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, 5.0)")
         }
+        try driver.write { connection in
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZVALUE_UNIQUE_INDEX")]])
         XCTAssertThrowsError(
             try driver.write {
-                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 5)")
             })
-        XCTAssertEqual(
-            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
-            [[.text("real"), .double(5)]])
         try driver.close()
     }
 

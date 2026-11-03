@@ -93,6 +93,7 @@ package enum LightweightMigration {
     private struct OwnerOnlyToManyRemovalBatchPlan {
         let removedRelationshipNamesByOwner: [String: Set<String>]
         let joinTables: [String]
+        let addedAttributesByOwner: [String: [Schema.Attribute]]
     }
 
     private struct PairedInverseRelationshipRemoval {
@@ -640,6 +641,7 @@ package enum LightweightMigration {
         let toManyRemovalPlan = try planMultipleFlatOwnerOnlyToManyRemovals(
             source: source,
             destination: destination,
+            sourceIndexSQL: validatedSourceIndexSQL,
             excludedEndpoints: Set(
                 pairedInverseRemovals.flatMap {
                     [
@@ -651,6 +653,16 @@ package enum LightweightMigration {
         if let toManyRemovalPlan {
             for joinTable in toManyRemovalPlan.joinTables {
                 try connection.execute("DROP TABLE \(joinTable)")
+            }
+        }
+        if let toManyRemovalPlan, !toManyRemovalPlan.addedAttributesByOwner.isEmpty {
+            let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
+            for entity in destination.entities {
+                guard let additions = toManyRemovalPlan.addedAttributesByOwner[entity.name],
+                    let sourceEntity = sourceEntities[entity.name]
+                else { continue }
+                try addPlannedScalarColumns(
+                    additions, source: sourceEntity, destination: entity, connection: connection)
             }
         }
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
@@ -672,6 +684,31 @@ package enum LightweightMigration {
                 connection: connection)
         }
         try reconcileIndexes(indexTransitions, validatedSourceIndexSQL: validatedSourceIndexSQL, connection: connection)
+    }
+
+    private static func addPlannedScalarColumns(
+        _ attributes: [Schema.Attribute],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        connection: SQLConnection
+    ) throws {
+        let table = "Z\(source.name.uppercased())"
+        for attribute in attributes.sorted(by: {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }) {
+            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+            guard attribute.isOptional || defaultLiteral != nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+            }
+            let type = try SQLColumnType.resolve(
+                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+            let required = attribute.isOptional ? "" : " NOT NULL"
+            let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
+            try connection.execute(
+                "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
+                    + "\(required)\(defaultSQL)")
+        }
     }
 
     private static func planPairedInverseRelationshipRemovals(
@@ -2086,22 +2123,7 @@ package enum LightweightMigration {
         try validateDestinationIndexNames(Schema(destinationEntities))
 
         try applyOwnerOnlyToManyRemoval(plan, connection: connection)
-        for attribute in addedAttributes.sorted(by: {
-            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
-        }) {
-            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
-            guard attribute.isOptional || defaultLiteral != nil else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
-            }
-            let type = try SQLColumnType.resolve(
-                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
-            let required = attribute.isOptional ? "" : " NOT NULL"
-            let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
-            try connection.execute(
-                "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
-                    + "\(required)\(defaultSQL)")
-        }
+        try addPlannedScalarColumns(addedAttributes, source: source, destination: destination, connection: connection)
         return true
     }
 
@@ -2204,6 +2226,39 @@ package enum LightweightMigration {
                     indexDefinitions(for: source, schema: Schema(sourceEntities)),
                     indexDefinitions(for: destination, schema: Schema(destinationEntities))
                 ))
+            return
+        }
+        let plannedToManyRemovals = toManyRemovalPlan?.removedRelationshipNamesByOwner[source.name] ?? []
+        let plannedAdditions = toManyRemovalPlan?.addedAttributesByOwner[source.name] ?? []
+        if !plannedToManyRemovals.isEmpty, !plannedAdditions.isEmpty {
+            let removedNames = Set(removedRelationships.map(\.name))
+            let addedNames = Set(mappings.filter { $0.source == nil }.map { $0.destination.name })
+            guard removedNames == plannedToManyRemovals,
+                source.attributes.allSatisfy(destination.attributes.contains),
+                destination.attributes.count == source.attributes.count + plannedAdditions.count,
+                plannedAdditions.allSatisfy(destination.attributes.contains),
+                addedRelationships.isEmpty,
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName,
+                addedNames == Set(plannedAdditions.map(\.name))
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removal with scalar additions does not match the global plan.")
+            }
+            return
+        }
+        if !plannedToManyRemovals.isEmpty {
+            let removedNames = Set(removedRelationships.map(\.name))
+            guard removedNames == plannedToManyRemovals,
+                plannedAdditions.isEmpty,
+                addedRelationships.isEmpty,
+                source.attributes == destination.attributes,
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removals cannot be combined with other entity edits.")
+            }
             return
         }
         if try removeCombinedScalarAndRelationshipColumns(
@@ -5246,6 +5301,7 @@ package enum LightweightMigration {
     private static func planMultipleFlatOwnerOnlyToManyRemovals(
         source: Schema,
         destination: Schema,
+        sourceIndexSQL: [String: String],
         excludedEndpoints: Set<String>,
         connection: SQLConnection
     ) throws -> OwnerOnlyToManyRemovalBatchPlan? {
@@ -5314,12 +5370,109 @@ package enum LightweightMigration {
                 "Paired inverse removals cannot be combined with owner-only join removals.")
         }
         let changedOwnerNames = Set(removedByOwner.filter { !$0.value.isEmpty }.map(\.key))
+        let addedAttributeEntries: [(String, [Schema.Attribute])] = try source.entities.compactMap { entity in
+            guard let next = destinationByName[entity.name] else { return nil }
+            let mappings = try attributeMappings(source: entity, destination: next)
+            let added = mappings.filter { $0.source == nil }.map(\.destination)
+            guard !added.isEmpty else {
+                guard mappings.count == entity.attributes.count,
+                    mappings.allSatisfy({ $0.source == $0.destination })
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Join-removal batches cannot rename or remove scalar attributes.")
+                }
+                return nil
+            }
+            guard removedByOwner[entity.name]?.isEmpty == false,
+                mappings.count == next.attributes.count,
+                mappings.compactMap({ $0.source }).count == entity.attributes.count,
+                try mappings.allSatisfy({ mapping in
+                    guard let old = mapping.source else {
+                        let attribute = mapping.destination
+                        let literal = try migrationDefaultLiteral(for: attribute)
+                        return (attribute.isOptional || literal != nil)
+                            && attribute.originalName == nil
+                            && attribute.components.isEmpty
+                            && !attribute.options.contains(.unique)
+                            && !attribute.options.contains(.codable)
+                            && !attribute.options.contains(.flattened)
+                            && !attribute.options.contains(.externalStorage)
+                            && !attribute.options.contains(where: {
+                                if case .transformable = $0 { true } else { false }
+                            })
+                    }
+                    return old == mapping.destination
+                }),
+                added.allSatisfy({ attribute in
+                    attribute.originalName == nil
+                        && attribute.components.isEmpty
+                        && !attribute.options.contains(.unique)
+                        && !attribute.options.contains(.codable)
+                        && !attribute.options.contains(.flattened)
+                        && !attribute.options.contains(.externalStorage)
+                        && !attribute.options.contains(where: {
+                            if case .transformable = $0 { true } else { false }
+                        })
+                }),
+                entity.attributes.allSatisfy({ old in next.attributes.contains(old) }),
+                entity.indexes.filter(\.isUnique).count == next.indexes.filter(\.isUnique).count,
+                entity.indexes.filter(\.isUnique).allSatisfy({ next.indexes.contains($0) }),
+                Set(entity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                    == Set(next.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Join-removal scalar additions require optional or literal-defaulted flat attributes.")
+            }
+            for attribute in added {
+                _ = try SQLColumnType.resolve(
+                    attribute.type, property: "\(next.name).\(attribute.name)", options: attribute.options)
+                _ = try migrationDefaultLiteral(for: attribute)
+            }
+            let existingColumns = try tableColumns("Z\(entity.name.uppercased())", connection: connection)
+            let addedColumns = Set(added.map { "Z\($0.name.uppercased())" })
+            guard addedColumns.count == added.count, addedColumns.isDisjoint(with: existingColumns) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Added scalar columns collide with the physical source table.")
+            }
+            let oldDefinitions = indexDefinitions(for: entity, schema: source)
+            let newDefinitions = indexDefinitions(for: next, schema: destination)
+            let oldNames = Set(oldDefinitions.map { $0.name.uppercased() })
+            let newNames = Set(newDefinitions.map { $0.name.uppercased() })
+            guard
+                newNames.subtracting(oldNames).allSatisfy({ newName in
+                    oldDefinitions.allSatisfy({ $0.name.uppercased() != newName })
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported("Destination index names collide during to-many removal.")
+            }
+            let oldUniqueDefinitions = oldDefinitions.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+            let newUniqueDefinitions = newDefinitions.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+            guard oldUniqueDefinitions.count == newUniqueDefinitions.count,
+                oldUniqueDefinitions.allSatisfy({ newUniqueDefinitions.contains($0) }),
+                newDefinitions.allSatisfy({ definition in
+                    !definition.columns.contains(where: { addedColumns.contains($0.uppercased()) })
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Join-removal scalar additions cannot change unique or retained index definitions.")
+            }
+            return (entity.name, added)
+        }
+        let addedAttributesByOwner = Dictionary(uniqueKeysWithValues: addedAttributeEntries)
+
         guard source.entityIDsByName == destination.entityIDsByName,
             source.entities.allSatisfy({ $0.superentityName == nil }),
             destination.entities.allSatisfy({ $0.superentityName == nil }),
             source.entities.allSatisfy({ entity in
                 guard let next = destinationByName[entity.name] else { return false }
-                return entity.attributes == next.attributes
+                let hasScalarAdditions = addedAttributesByOwner[entity.name] != nil
+                return
+                    (hasScalarAdditions
+                    ? (entity.attributes.allSatisfy(next.attributes.contains)
+                        && next.attributes.count == entity.attributes.count
+                            + (addedAttributesByOwner[entity.name]?.count ?? 0)
+                        && addedAttributesByOwner[entity.name]?.allSatisfy(next.attributes.contains) == true)
+                    : entity.attributes == next.attributes)
                     && entity.indexes == next.indexes
                     && entity.superentityName == next.superentityName
                     && (changedOwnerNames.contains(entity.name)
@@ -5345,7 +5498,12 @@ package enum LightweightMigration {
             guard let destinationEntity = destinationByName[sourceEntity.name] else {
                 throw SwiftDataError.migrationUnsupported("Destination schema omits a retained owner entity.")
             }
-            guard sourceEntity.attributes == destinationEntity.attributes,
+            guard
+                (addedAttributesByOwner[sourceEntity.name] != nil
+                    ? sourceEntity.attributes.allSatisfy(destinationEntity.attributes.contains)
+                        && destinationEntity.attributes.count == sourceEntity.attributes.count
+                            + (addedAttributesByOwner[sourceEntity.name]?.count ?? 0)
+                    : sourceEntity.attributes == destinationEntity.attributes),
                 sourceEntity.indexes == destinationEntity.indexes,
                 sourceEntity.superentityName == destinationEntity.superentityName
             else {
@@ -5360,7 +5518,21 @@ package enum LightweightMigration {
                             || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
                     }) ? nil : relationship.name
                 })
-            guard actualRemovedNames == removedByEntity else {
+            let plannedAttributes = addedAttributesByOwner[sourceEntity.name] ?? []
+            let plannedScalarAdditionNames = Set(plannedAttributes.map(\.name))
+            let retainedRelationships = sourceEntity.relationships.filter { !removedByEntity.contains($0.name) }
+            guard actualRemovedNames == removedByEntity,
+                retainedRelationships == destinationEntity.relationships,
+                destinationEntity.attributes.count == sourceEntity.attributes.count + plannedAttributes.count,
+                sourceEntity.attributes.allSatisfy(destinationEntity.attributes.contains),
+                plannedAttributes.allSatisfy(destinationEntity.attributes.contains),
+                Set(
+                    destinationEntity.attributes.filter({ attribute in
+                        !sourceEntity.attributes.contains(where: { $0.name == attribute.name })
+                    }).map(\.name)) == plannedScalarAdditionNames,
+                sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.indexes == destinationEntity.indexes
+            else {
                 throw SwiftDataError.migrationUnsupported(
                     "Batched relationship removals do not match all detected owner endpoints.")
             }
@@ -5376,15 +5548,6 @@ package enum LightweightMigration {
             else {
                 throw SwiftDataError.migrationUnsupported(
                     "Batched to-many removal cannot rename a removed relationship endpoint.")
-            }
-            guard
-                destinationEntity.relationships
-                    == sourceEntity.relationships.filter({
-                        !removed.contains($0)
-                    })
-            else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Batched to-many removals must preserve all retained relationship metadata.")
             }
             for relationship in removed.sorted(by: {
                 $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
@@ -5410,9 +5573,33 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("Batched join-table object names collide.")
         }
 
+        let expectedSourceIndexNames = Set(
+            source.entities.flatMap { indexDefinitions(for: $0, schema: source) }.map { $0.name.uppercased() })
+        guard Set(sourceIndexSQL.keys) == expectedSourceIndexNames,
+            source.entities.allSatisfy({ entity in
+                let old = indexDefinitions(for: entity, schema: source)
+                guard let next = destinationByName[entity.name] else { return false }
+                let new = indexDefinitions(for: next, schema: destination)
+                if let additions = addedAttributesByOwner[entity.name] {
+                    let oldUnique = old.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+                    let newUnique = new.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
+                    return oldUnique.count == newUnique.count
+                        && oldUnique.allSatisfy(newUnique.contains)
+                        && new.allSatisfy({ definition in
+                            !definition.columns.contains(where: { column in
+                                additions.contains(where: { "Z\($0.name.uppercased())" == column.uppercased() })
+                            })
+                        })
+                }
+                return old == new
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Join-removal index plan contains unsupported metadata changes.")
+        }
         return OwnerOnlyToManyRemovalBatchPlan(
             removedRelationshipNamesByOwner: relationshipNamesByOwner,
-            joinTables: plans.map(\.joinTable).sorted())
+            joinTables: plans.map(\.joinTable).sorted(),
+            addedAttributesByOwner: addedAttributesByOwner)
     }
 
     private static func validateJoinTableNoPhysicalForeignKeys(

@@ -6906,6 +6906,208 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMultipleOwnerOnlyToManyRemovalsComposeWithScalarAddition() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("multi-join-scalar-add.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    Schema.Relationship(name: "groups", destination: "Group", isToMany: true),
+                ]),
+            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
+                ]),
+            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let joinTables = try owner.relationships.map { relationship in
+            try XCTUnwrap(SchemaBuilder.joinTableName(for: owner, relationship: relationship, schema: source))
+        }
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (2, 5, 'owner')")
+            try connection.execute("INSERT INTO ZGROUP (Z_ENT, Z_OPT, ZNAME) VALUES (1, 7, 'group')")
+            try connection.execute("INSERT INTO ZTAG (Z_ENT, Z_OPT, ZNAME) VALUES (3, 9, 'tag')")
+            for table in joinTables { try connection.execute("INSERT INTO \(table) (Z_A, Z_B) VALUES (2, 1)") }
+        }
+        try initial.close()
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        for table in joinTables {
+            XCTAssertTrue(
+                try migrated.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZPRIORITY FROM ZOWNER") },
+            [[.int(1), .int(5), .text("owner"), .int(12)]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZGROUP") },
+            [[.int(1), .int(7), .text("group")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTAG") },
+            [[.int(1), .int(9), .text("tag")]])
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
+    func testMultipleJoinScalarAdditionPreflightsEveryJoinBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
+                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "priority", type: "Int16", isOptional: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let tables = try owner.relationships.map {
+            try XCTUnwrap(SchemaBuilder.joinTableName(for: owner, relationship: $0, schema: source))
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-join-scalar-preflight"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP INDEX \(tables[1])_Z_B_INDEX")
+        }
+        let originalOwnerColumns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered second join to fail preflight, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }, originalOwnerColumns)
+        for table in tables {
+            XCTAssertFalse(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        try driver.close()
+    }
+
+    func testMultipleJoinScalarUniqueAdditionRejectsBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
+                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "token", type: "Int16", isOptional: true, options: [.unique])]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let tables = try owner.relationships.map {
+            try XCTUnwrap(SchemaBuilder.joinTableName(for: owner, relationship: $0, schema: source))
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-join-scalar-unique-preflight"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique scalar addition to fail preflight, got \(error)")
+            }
+        }
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTOKEN") })
+            })
+        for table in tables {
+            XCTAssertFalse(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        try driver.close()
+    }
+
+    func testMultipleJoinScalarAdditionRejectsDynamicDefaultBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
+                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(
+                        name: "createdAt", type: "Date", isOptional: false, defaultValue: "CURRENT_TIMESTAMP")
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let tables = try owner.relationships.map {
+            try XCTUnwrap(SchemaBuilder.joinTableName(for: owner, relationship: $0, schema: source))
+        }
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-join-dynamic-default-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unsupported dynamic default to fail preflight, got \(error)")
+            }
+        }
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZCREATEDAT")
+                })
+            })
+        for table in tables {
+            XCTAssertFalse(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
+                        .isEmpty
+                })
+        }
+        try driver.close()
+    }
+
     func testMultipleFlatToManyRemovalPreflightsEveryJoinBeforeDroppingAny() throws {
         let source = Schema([
             Schema.Entity(

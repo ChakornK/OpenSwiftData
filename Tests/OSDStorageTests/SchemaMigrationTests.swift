@@ -9307,6 +9307,85 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testOpeningStoreMigratesCombinedScalarAndRelationshipRemoval() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("combined-removal-open.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target",
+                        destination: "Target",
+                        isToMany: false,
+                        isOptional: true,
+                        inverse: nil,
+                        deleteRule: .nullify)
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZLABEL) VALUES (1, 13, 'target stays')")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) VALUES (2, 17, 42, 'owner stays', 1)"
+            )
+        }
+        let sourceHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLABEL FROM ZTARGET") },
+            [[.int(1), .int(13), .text("target stays")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD") },
+            [[.int(1), .int(17), .text("owner stays")]])
+        let destinationHash = try migrated.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertNotEqual(destinationHash, sourceHash)
+        XCTAssertFalse(
+            try migrated.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && ($0[1] == .text("ZOBSOLETE") || $0[1] == .text("ZTARGET"))
+                })
+            })
+        XCTAssertTrue(
+            try migrated.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZRECORD_ZTARGET_INDEX'")
+                    .isEmpty
+            })
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD") },
+            [[.int(1), .int(17), .text("owner stays")]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            destinationHash)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testCombinedRemovalRejectsCustomCompositeIndexOnRelationshipColumn() throws {
         let source = Schema([
             Schema.Entity(

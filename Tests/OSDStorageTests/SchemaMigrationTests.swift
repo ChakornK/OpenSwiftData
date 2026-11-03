@@ -2885,6 +2885,126 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarOptionalAdditionComposesWithOptionalToOneRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-optional-add-to-one-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 6)")
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZTARGET) VALUES (1, 8, 'drop', 1)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNOTE FROM ZOWNER") },
+            [[.int(1), .int(1), .int(8), .null]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET") },
+            [[.int(1), .int(2), .int(6)]])
+        try driver.close()
+    }
+
+    func testScalarDefaultedAdditionComposesWithOptionalToOneRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner", attributes: [Schema.Attribute(name: "rank", type: "Int16", defaultValue: "11")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-default-add-to-one-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZTARGET) VALUES (1, 9, 'drop', NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK FROM ZOWNER") },
+            [[.int(1), .int(9), .int(11)]])
+        try driver.close()
+    }
+
+    func testScalarAdditionIndexComposesWithOptionalToOneRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)],
+                indexes: [Schema.Index(properties: ["note"])]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-index-add-to-one-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (2, 4)")
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZTARGET) VALUES (1, 6, 'drop', 1)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
+            },
+            [[.text("ZOWNER_ZNOTE_INDEX"), .text("CREATE INDEX ZOWNER_ZNOTE_INDEX ON ZOWNER (ZNOTE)")]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT Z_PK, ZNOTE FROM ZOWNER") }, [[.int(1), .null]])
+        try driver.close()
+    }
+
+    func testUniqueScalarAdditionWithRelationshipRemovalFailsAtomically() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "identity", type: "String", isOptional: true, options: [.unique])]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "unique-add-to-one-remove-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZOBSOLETE, ZTARGET) VALUES (1, 2, 'keep', NULL)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZOBSOLETE") }
+                )
+            })
+        try driver.close()
+    }
+
     func testScalarRemovalCanAddIndexOnRetainedAttribute() throws {
         let source = Schema([
             Schema.Entity(

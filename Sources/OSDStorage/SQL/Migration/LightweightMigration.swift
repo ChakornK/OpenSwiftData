@@ -1575,15 +1575,29 @@ package enum LightweightMigration {
     ) throws -> Bool {
         let mappedSourceNames = Set(mappings.compactMap { $0.source?.name })
         let removedAttributes = source.attributes.filter { !mappedSourceNames.contains($0.name) }
-        guard !removedAttributes.isEmpty, !removedRelationships.isEmpty else { return false }
+        let addedMappings = mappings.filter { $0.source == nil }
+        guard (!removedAttributes.isEmpty || !addedMappings.isEmpty), !removedRelationships.isEmpty else {
+            return false
+        }
 
         let removedRelationshipNames = Set(removedRelationships.map(\.name))
         let retainedRelationships = source.relationships.filter { !removedRelationshipNames.contains($0.name) }
         let sourceSchema = Schema(sourceEntities)
         let destinationSchema = Schema(destinationEntities)
         guard addedRelationships.isEmpty,
-            mappings.allSatisfy({ mapping in
-                guard let old = mapping.source else { return false }
+            try mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else {
+                    let attribute = mapping.destination
+                    let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+                    return (attribute.isOptional || defaultLiteral != nil)
+                        && attribute.originalName == nil
+                        && attribute.components.isEmpty
+                        && !attribute.options.contains(.unique)
+                        && !attribute.options.contains(.codable)
+                        && !attribute.options.contains(.flattened)
+                        && !attribute.options.contains(.externalStorage)
+                        && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                }
                 return old == mapping.destination
             }),
             mappings.count == destination.attributes.count,
@@ -1613,9 +1627,11 @@ package enum LightweightMigration {
                 }
                 if sourceEntity.name == source.name {
                     let retainedSourceAttributes = sourceEntity.attributes.filter { !removedAttributes.contains($0) }
+                    let addedAttributes = addedMappings.map(\.destination)
                     return sourceEntity.superentityName == destinationEntity.superentityName
-                        && retainedSourceAttributes.count == destinationEntity.attributes.count
+                        && retainedSourceAttributes.count + addedAttributes.count == destinationEntity.attributes.count
                         && retainedSourceAttributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                        && addedAttributes.allSatisfy({ destinationEntity.attributes.contains($0) })
                         && sourceEntity.relationships.filter({ !removedRelationshipNames.contains($0.name) })
                             == destinationEntity.relationships
                 }
@@ -1723,6 +1739,22 @@ package enum LightweightMigration {
         }
         for column in removedColumns.sorted() {
             try connection.execute("ALTER TABLE Z\(source.name.uppercased()) DROP COLUMN \(column)")
+        }
+        for attribute in addedMappings.map(\.destination).sorted(by: {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }) {
+            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+            guard attribute.isOptional || defaultLiteral != nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+            }
+            let type = try SQLColumnType.resolve(
+                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+            let required = attribute.isOptional ? "" : " NOT NULL"
+            let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
+            try connection.execute(
+                "ALTER TABLE Z\(source.name.uppercased()) ADD COLUMN Z\(attribute.name.uppercased()) "
+                    + "\(type.rawValue)\(required)\(defaultSQL)")
         }
         return true
     }

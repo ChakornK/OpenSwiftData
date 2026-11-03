@@ -9386,6 +9386,102 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testOpeningStoreRollsBackCombinedRemovalWhenLaterEntityNarrowingFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("combined-removal-later-failure.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "ARecord",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "Int32", isOptional: true),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target",
+                        destination: "Target",
+                        isToMany: false,
+                        isOptional: true,
+                        inverse: nil,
+                        deleteRule: .nullify)
+                ]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int64")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "ARecord", attributes: [Schema.Attribute(name: "retained", type: "String")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZLABEL) VALUES (2, 13, 'target stays')")
+            try connection.execute(
+                "INSERT INTO ZARECORD (Z_ENT, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET) VALUES (1, 17, 42, 'owner stays', 2)"
+            )
+            try connection.execute("INSERT INTO ZZNUMBER (Z_ENT, Z_OPT, ZVALUE) VALUES (3, 19, 2147483648)")
+        }
+        let originalHash = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        let originalVersion = try initial.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)])
+                .first?.first
+        }
+        let originalRecordColumns = try initial.read { try $0.rows("PRAGMA table_info(ZARECORD)") }
+        let originalRecordIndexes = try initial.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZARECORD' ORDER BY name")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected later entity narrowing to fail, got \(error)")
+            }
+        }
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZOBSOLETE, ZRETAINED, ZTARGET FROM ZARECORD") },
+            [[.int(1), .int(17), .int(42), .text("owner stays"), .int(2)]])
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZLABEL FROM ZTARGET") },
+            [[.int(1), .int(13), .text("target stays")]])
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZZNUMBER") },
+            [[.int(1), .int(19), .int(2_147_483_648)]])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA table_info(ZARECORD)") }, originalRecordColumns)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZARECORD' ORDER BY name")
+            },
+            originalRecordIndexes)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            originalHash)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaVersionKey)])
+                    .first?.first
+            },
+            originalVersion)
+        XCTAssertTrue(
+            try reopened.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%' OR name LIKE '%_tmp%'")
+                    .isEmpty
+            })
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testCombinedRemovalRejectsCustomCompositeIndexOnRelationshipColumn() throws {
         let source = Schema([
             Schema.Entity(

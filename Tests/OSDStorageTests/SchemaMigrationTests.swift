@@ -3880,6 +3880,168 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testFloatToDoubleMigrationReconcilesOrdinaryIndexChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Float"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value"]), Schema.Index(properties: ["label"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "label"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-double-index-reconcile"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 3, 0.125, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE, ZLABEL FROM ZRECORD") },
+            [[.int(1), .int(3), .double(0.125), .text("keep")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZVALUE_ZLABEL_INDEX")]])
+        try driver.close()
+    }
+
+    func testFloatTypeMigrationRejectsUniqueIndexTransitions() throws {
+        let indexTransitions: [(String, [Schema.Index], [Schema.Index])] = [
+            ("add", [], [Schema.Index(properties: ["value"], isUnique: true)]),
+            ("remove", [Schema.Index(properties: ["value"], isUnique: true)], []),
+        ]
+        for (name, sourceIndexes, destinationIndexes) in indexTransitions {
+            let source = Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: "value", type: "Float")],
+                    indexes: sourceIndexes)
+            ])
+            let destination = Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: "value", type: "Double")],
+                    indexes: destinationIndexes)
+            ])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "float-unique-index-\(name)"))
+            try bootstrap(source, driver: driver)
+            let sourceIndexesBefore = try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unique index \(name) to be rejected, got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+                },
+                sourceIndexesBefore)
+            try driver.close()
+        }
+    }
+
+    func testDoubleToFloatMigrationReconcilesOrdinaryIndexChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value"]), Schema.Index(properties: ["label"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Float"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value", "label"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "double-float-index-reconcile"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 5, 0.125, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE, ZLABEL FROM ZRECORD") },
+            [[.int(1), .int(5), .double(0.125), .text("keep")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [[.text("ZRECORD_ZVALUE_ZLABEL_INDEX")]])
+        try driver.close()
+    }
+
+    func testDoubleToFloatIndexChangeRejectsInexactValueWithoutIndexChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Float"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["label"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "double-float-inexact-index"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 7, 0.1, 'keep')")
+        }
+        let sourceIndexes = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact Double-to-Float conversion to reject index changes, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE, ZLABEL FROM ZRECORD") },
+            [[.int(1), .int(7), .double(0.1), .text("keep")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        try driver.close()
+    }
+
     func testUnindexedScalarAttributeRemovalPreservesRowsAndReopens() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

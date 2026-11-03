@@ -4144,7 +4144,7 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            source.indexes == destination.indexes,
+            equivalentUniqueIndexes(source.indexes, destination.indexes),
             sourceEntityIDs == destinationEntityIDs,
             sourceEntities.count == destinationEntities.count,
             sourceEntities.allSatisfy({ sourceEntity in
@@ -4154,7 +4154,7 @@ package enum LightweightMigration {
                 if sourceEntity.name == source.name {
                     return sourceEntity.relationships == destinationEntity.relationships
                         && sourceEntity.superentityName == destinationEntity.superentityName
-                        && sourceEntity.indexes == destinationEntity.indexes
+                        && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
                 }
                 return equivalentEntityMetadata(sourceEntity, destinationEntity)
             }),

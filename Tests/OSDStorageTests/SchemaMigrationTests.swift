@@ -1125,6 +1125,282 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testIntegerToDoubleRebuildPreservesExactValuesAndSystemColumns() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("integer-double-rebuild.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZVALUE) VALUES (7, 1, 2, -9007199254740992)")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZVALUE) VALUES (11, 1, 8, 9007199254740992)")
+            try connection.execute("INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZVALUE) VALUES (19, 1, 4, NULL)")
+        }
+        let sourceEntityHighWatermark = try initial.read {
+            try $0.rows("SELECT Z_MAX FROM Z_PRIMARYKEY WHERE Z_NAME = 'Record'").first?.first
+        }
+        let sourceHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(7), .int(1), .int(2), .text("real"), .double(-9_007_199_254_740_992)],
+                [.int(11), .int(1), .int(8), .text("real"), .double(9_007_199_254_740_992)],
+                [.int(19), .int(1), .int(4), .text("null"), .null],
+            ])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_MAX FROM Z_PRIMARYKEY WHERE Z_NAME = 'Record'") },
+            [sourceEntityHighWatermark].compactMap { $0 }.map { [$0] })
+        let destinationHash = try migrated.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        XCTAssertNotEqual(destinationHash, sourceHash)
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        try reopened.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsInexactValuesAndRollsBack() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("integer-double-rollback.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 9, 9007199254740993)")
+        }
+        let originalTableSQL = try initial.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact integer conversion to fail closed, got \(error)")
+            }
+        }
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.int(1), .int(9), .text("integer"), .int(9_007_199_254_740_993)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalTableSQL)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            originalHash)
+        try reopened.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsIndexedSource() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int64")],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double")],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-indexed-source"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 17)")
+            XCTAssertThrowsError(
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected indexed conversion to fail closed, got \(error)")
+                }
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("integer"), .int(17)]])
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsPhysicalDependenciesBeforeChanges() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let cases: [(String, String)] = [
+            ("trigger", "CREATE TRIGGER USER_RECORD_TRIGGER AFTER INSERT ON ZRECORD BEGIN SELECT 1; END"),
+            ("foreign-key", "CREATE TABLE USER_REFERENCE (value INTEGER REFERENCES ZRECORD(Z_PK))"),
+        ]
+        for (name, statement) in cases {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-dependency-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, 12)")
+                try connection.execute(statement)
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected \(name) dependency to fail closed, got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+                [[.text("integer"), .int(12)]])
+            XCTAssertTrue(
+                try driver.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD_OSD_REBUILD'")
+                        .isEmpty
+                })
+            try driver.close()
+        }
+    }
+
+    func testIntegerToDoubleRebuildRejectsGeneratedSourceColumns() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-generated-column"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("DROP TABLE ZRECORD")
+            try connection.execute(
+                "CREATE TABLE ZRECORD (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, "
+                    + "ZVALUE INTEGER, ZDERIVED INTEGER GENERATED ALWAYS AS (ZVALUE + 1) VIRTUAL)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 13, 4)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected generated source column to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_xinfo(ZRECORD)").contains(where: {
+                    $0.count > 6 && $0[1] == .text("ZDERIVED") && $0[6] != .int(0)
+                })
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZVALUE, ZDERIVED FROM ZRECORD") }, [[.int(4), .int(5)]])
+        try driver.close()
+    }
+
+    func testIntegerToDoubleRebuildRejectsCombinedNumericChangesAtomically() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrow", type: "Int64"),
+                    Schema.Attribute(name: "real", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "narrow", type: "Int32"),
+                    Schema.Attribute(name: "real", type: "Double"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-combined-types"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNARROW, ZREAL) VALUES (1, 12, 2147483647, 9007199254740992)")
+        }
+        let originalTableSQL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalHash = try driver.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined numeric changes to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNARROW, ZREAL FROM ZRECORD") },
+            [[.int(1), .int(12), .int(2_147_483_647), .int(9_007_199_254_740_992)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalTableSQL)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            originalHash)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
     func testFloatToDoubleWideningValidatesStoredValuesAndPreservesRows() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

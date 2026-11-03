@@ -1773,6 +1773,18 @@ package enum LightweightMigration {
                 ))
             return
         }
+        let changedTypeMappings = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.type != mapping.destination.type
+        }
+        let hasIntegerToDoubleMapping = changedTypeMappings.contains { mapping in
+            guard let old = mapping.source else { return false }
+            return signedIntegerWidth(old.type) != nil && mapping.destination.type == "Double"
+        }
+        guard !hasIntegerToDoubleMapping || changedTypeMappings.count == 1 else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-Double rebuild cannot be combined with another type change.")
+        }
         if let narrowing = try compatibleIntegerNarrowing(
             mappings,
             source: source,
@@ -1787,6 +1799,29 @@ package enum LightweightMigration {
                 column: "Z\(narrowing.destination.name.uppercased())",
                 destinationType: narrowing.destination.type,
                 isOptional: narrowing.destination.isOptional,
+                connection: connection)
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
+        if let integerToDouble = try compatibleIntegerToDouble(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            try rebuildIntegerColumnAsDouble(
+                attribute: integerToDouble,
+                source: source,
+                destination: destination,
+                sourceSchema: Schema(sourceEntities),
+                destinationSchema: Schema(destinationEntities),
                 connection: connection)
             indexTransitions.append(
                 (
@@ -2000,6 +2035,9 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
+            source.indexes == destination.indexes,
+            sourceEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(sourceEntities)) })
+                == destinationEntities.flatMap({ indexDefinitions(for: $0, schema: Schema(destinationEntities)) }),
             sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
             destinationEntities.allSatisfy({ $0.relationships.isEmpty })
         else {
@@ -2203,7 +2241,14 @@ package enum LightweightMigration {
             guard let old = mapping.source else { return false }
             return signedIntegerWidth(old.type) != nil || signedIntegerWidth(mapping.destination.type) != nil
         }
-        guard hasSignedIntegerType else { return nil }
+        let hasSignedNarrowing = changes.contains { mapping in
+            guard let old = mapping.source,
+                let sourceWidth = signedIntegerWidth(old.type),
+                let destinationWidth = signedIntegerWidth(mapping.destination.type)
+            else { return false }
+            return destinationWidth < sourceWidth
+        }
+        guard hasSignedIntegerType, hasSignedNarrowing else { return nil }
         guard changes.count == 1,
             let change = changes.first,
             let oldAttribute = change.source,
@@ -2285,6 +2330,311 @@ package enum LightweightMigration {
             case ("integer", .int):
                 throw SwiftDataError.migrationUnsupported(
                     "Integer column \(column) contains a value outside the destination range.")
+            default:
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer column \(column) contains unsupported SQLite storage type '\(storageType)'.")
+            }
+        }
+    }
+
+    private static func compatibleIntegerToDouble(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changes = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.type != mapping.destination.type
+        }
+        guard !changes.isEmpty else { return nil }
+        let hasIntegerToDouble = changes.contains { mapping in
+            guard let old = mapping.source,
+                signedIntegerWidth(old.type) != nil,
+                mapping.destination.type == "Double",
+                old.name == mapping.destination.name,
+                old.isOptional == mapping.destination.isOptional,
+                old.defaultValue == mapping.destination.defaultValue,
+                old.options == mapping.destination.options,
+                old.originalName == mapping.destination.originalName,
+                old.components.isEmpty,
+                mapping.destination.components.isEmpty
+            else { return false }
+            return true
+        }
+        guard hasIntegerToDouble else { return nil }
+        guard changes.count == 1,
+            let change = changes.first,
+            let old = change.source,
+            signedIntegerWidth(old.type) != nil,
+            change.destination.type == "Double",
+            old.name == change.destination.name,
+            old.isOptional == change.destination.isOptional,
+            old.defaultValue == change.destination.defaultValue,
+            old.options == change.destination.options,
+            old.originalName == change.destination.originalName,
+            old.components.isEmpty,
+            change.destination.components.isEmpty,
+            !old.options.contains(.unique),
+            !old.options.contains(.codable),
+            !old.options.contains(.flattened),
+            !old.options.contains(.externalStorage),
+            !old.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let sourceAttribute = mapping.source else { return false }
+                return sourceAttribute == old || sourceAttribute == mapping.destination
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            source.indexes.isEmpty,
+            destination.indexes.isEmpty,
+            source.attributes.allSatisfy({ attribute in
+                attribute.components.isEmpty
+                    && !attribute.options.contains(.unique)
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            destination.attributes.allSatisfy({ attribute in
+                attribute.components.isEmpty
+                    && !attribute.options.contains(.unique)
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ entity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == entity.name }) else {
+                    return false
+                }
+                if entity.name == source.name {
+                    let destinationAttributes = Dictionary(
+                        uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
+                    return entity.superentityName == destinationEntity.superentityName
+                        && entity.relationships == destinationEntity.relationships
+                        && entity.indexes == destinationEntity.indexes
+                        && entity.attributes.allSatisfy({ sourceAttribute in
+                            guard let destinationAttribute = destinationAttributes[sourceAttribute.name] else {
+                                return false
+                            }
+                            return sourceAttribute == old || sourceAttribute == destinationAttribute
+                        })
+                }
+                return equivalentEntityMetadata(entity, destinationEntity)
+            }),
+            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
+            destinationEntities.allSatisfy({ $0.relationships.isEmpty }),
+            try SQLColumnType.resolve(old.type, property: "\(source.name).\(old.name)", options: old.options)
+                == .integer,
+            try SQLColumnType.resolve(
+                change.destination.type,
+                property: "\(destination.name).\(change.destination.name)",
+                options: change.destination.options) == .float
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-Double conversion requires one flat scalar change with unchanged metadata and no indexes."
+            )
+        }
+        return change
+    }
+
+    private static func rebuildIntegerColumnAsDouble(
+        attribute mapping: AttributeMapping,
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema,
+        connection: SQLConnection
+    ) throws {
+        guard let sourceAttribute = mapping.source else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double migration has no source attribute.")
+        }
+        let table = "Z\(source.name.uppercased())"
+        let convertedColumn = "Z\(sourceAttribute.name.uppercased())"
+        try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
+        try validateIntegerValuesForDoubleConversion(
+            table: table,
+            column: convertedColumn,
+            isOptional: sourceAttribute.isOptional,
+            connection: connection)
+
+        let destinationBuilt = try SchemaBuilder.build(destinationSchema)
+        guard
+            let destinationTableStatement = destinationBuilt.statements.first(where: {
+                $0.hasPrefix("CREATE TABLE \(table) (")
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Destination table DDL is missing for \(table).")
+        }
+        let temporaryTable = "\(table)_OSD_REBUILD"
+        let existingObjects = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE name = ? COLLATE NOCASE LIMIT 1", [.text(temporaryTable)])
+        guard existingObjects.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Temporary rebuild table name collides with an existing object.")
+        }
+        let temporaryTableStatement = destinationTableStatement.replacingOccurrences(
+            of: "CREATE TABLE \(table) ", with: "CREATE TABLE \(temporaryTable) ")
+        let destinationColumns = destinationTableColumnNames(destination)
+        let sourceColumnInfo = try connection.rows("PRAGMA table_xinfo(\(table))")
+        let sourceColumns = sourceColumnInfo.compactMap { row -> String? in
+            guard row.count > 6, case let .text(name) = row[1], row[6] == .int(0) else { return nil }
+            return name
+        }
+        guard sourceColumnInfo.count == destinationColumns.count,
+            sourceColumns == destinationColumns,
+            destinationBuilt.statements.contains(where: { $0 == destinationTableStatement })
+        else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changes the table column layout.")
+        }
+        let insertColumns = destinationColumns.map { "\($0)" }.joined(separator: ", ")
+        let selectExpressions = destinationColumns.map { column in
+            if column.caseInsensitiveCompare(convertedColumn) == .orderedSame {
+                return "CAST(\(column) AS REAL)"
+            }
+            return column
+        }.joined(separator: ", ")
+        let originalPrimaryKeys = try connection.rows("SELECT Z_PK FROM \(table) ORDER BY Z_PK")
+        let originalCount = originalPrimaryKeys.count
+
+        try connection.execute(temporaryTableStatement)
+        try connection.execute(
+            "INSERT INTO \(temporaryTable) (\(insertColumns)) SELECT \(selectExpressions) FROM \(table)")
+        let rebuiltCount = try connection.rows("SELECT COUNT(*) FROM \(temporaryTable)")
+        guard rebuiltCount.first?.first == .int(Int64(originalCount)) else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed the row count.")
+        }
+        let rebuiltPrimaryKeys = try connection.rows("SELECT Z_PK FROM \(temporaryTable) ORDER BY Z_PK")
+        guard rebuiltPrimaryKeys == originalPrimaryKeys else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed primary keys.")
+        }
+        let invalidTemporaryValues = try connection.rows(
+            "SELECT COUNT(*) FROM \(temporaryTable) "
+                + "WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'")
+        guard invalidTemporaryValues.first?.first == .int(0) else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double copy produced invalid REAL storage.")
+        }
+        let mismatchedColumns = destinationColumns.map { column -> String in
+            return "source.\(column) IS NOT rebuilt.\(column)"
+        }
+        let mismatchPredicate = mismatchedColumns.joined(separator: " OR ")
+        let mismatchedRows = try connection.rows(
+            "SELECT COUNT(*) FROM \(table) AS source JOIN \(temporaryTable) AS rebuilt USING (Z_PK) "
+                + "WHERE \(mismatchPredicate)")
+        guard mismatchedRows.first?.first == .int(0) else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed stored row values.")
+        }
+        try connection.execute("DROP TABLE \(table)")
+        try connection.execute("ALTER TABLE \(temporaryTable) RENAME TO \(table)")
+        let badConvertedRows = try connection.rows(
+            "SELECT COUNT(*) FROM \(table) WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'"
+        )
+        guard badConvertedRows.first?.first == .int(0) else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild produced invalid REAL storage.")
+        }
+    }
+
+    private static func destinationTableColumnNames(_ entity: Schema.Entity) -> [String] {
+        ["Z_PK", "Z_ENT", "Z_OPT"]
+            + entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+            .map { "Z\($0.name.uppercased())" }
+    }
+
+    private static func validateTableRebuildSideEffects(
+        table: String,
+        schema: Schema,
+        connection: SQLConnection
+    ) throws {
+        let sideObjects = try connection.rows(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')")
+        guard sideObjects.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Table rebuild is unsupported when triggers or views exist.")
+        }
+        let indexes = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
+        guard indexes.isEmpty else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild requires an unindexed source table.")
+        }
+        let sourceDDL = try SchemaBuilder.build(schema).statements
+        guard let createTable = sourceDDL.first(where: { $0.hasPrefix("CREATE TABLE \(table) (") }),
+            !createTable.uppercased().contains("AUTOINCREMENT")
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-Double rebuild requires canonical non-AUTOINCREMENT DDL.")
+        }
+        let actualDDL = try connection.rows(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
+        guard actualDDL.count == 1,
+            case let .text(actualCreateTable)? = actualDDL.first?.first,
+            normalizedCreateTableSQL(actualCreateTable) == normalizedCreateTableSQL(createTable)
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer-to-Double rebuild requires canonical source table DDL.")
+        }
+        let tableNames = try connection.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+        .compactMap { row -> String? in
+            guard case let .text(name)? = row.first else { return nil }
+            return name
+        }
+        for name in tableNames {
+            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+            let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
+            guard foreignKeys.isEmpty else {
+                throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild is unsupported with foreign keys.")
+            }
+        }
+        let hasSequence = try connection.rows(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence' LIMIT 1")
+        if !hasSequence.isEmpty {
+            let tableSequence = try connection.rows(
+                "SELECT 1 FROM sqlite_sequence WHERE name = ? COLLATE NOCASE LIMIT 1", [.text(table)])
+            guard tableSequence.isEmpty else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer-to-Double rebuild does not migrate the source table's sqlite_sequence entry.")
+            }
+        }
+    }
+
+    private static func normalizedCreateTableSQL(_ sql: String) -> String {
+        var normalized = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasSuffix(";") { normalized.removeLast() }
+        return normalized.lowercased().filter { !$0.isWhitespace }
+    }
+
+    private static func validateIntegerValuesForDoubleConversion(
+        table: String,
+        column: String,
+        isOptional: Bool,
+        connection: SQLConnection
+    ) throws {
+        let rows = try connection.rows("SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
+        let maximumExactInteger: Int64 = 9_007_199_254_740_992
+        for row in rows {
+            guard row.count > 1, case let .text(storageType) = row[0] else {
+                throw SwiftDataError.migrationUnsupported("Integer column \(column) has invalid SQLite metadata.")
+            }
+            switch (storageType, row[1]) {
+            case ("null", .null) where isOptional:
+                continue
+            case ("null", .null):
+                throw SwiftDataError.migrationUnsupported("Required integer column \(column) contains NULL.")
+            case ("integer", .int(let value)) where value >= -maximumExactInteger && value <= maximumExactInteger:
+                continue
+            case ("integer", .int):
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer column \(column) contains a value not exactly representable as Double.")
             default:
                 throw SwiftDataError.migrationUnsupported(
                     "Integer column \(column) contains unsupported SQLite storage type '\(storageType)'.")

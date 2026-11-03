@@ -801,6 +801,82 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMultipleSignedIntegerWideningsCanReplaceOrdinaryIndexes() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int8"),
+                    Schema.Attribute(name: "medium", type: "Int16"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int32"),
+                    Schema.Attribute(name: "medium", type: "Int64"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["small"]), Schema.Index(properties: ["medium"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-widening-index-replace"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM, ZRETAINED) VALUES (1, 4, -128, 32767, 'keep')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZMEDIUM_INDEX")], [.text("ZRECORD_ZSMALL_INDEX")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZSMALL, ZMEDIUM, ZRETAINED FROM ZRECORD") },
+            [[.int(-128), .int(32767), .text("keep")]])
+        try driver.close()
+    }
+
+    func testMultipleSignedIntegerWideningsRejectUniqueIndexTransitions() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int8"),
+                    Schema.Attribute(name: "medium", type: "Int16"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "small", type: "Int32"),
+                    Schema.Attribute(name: "medium", type: "Int64"),
+                ],
+                indexes: [Schema.Index(properties: ["small"], isUnique: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-widening-unique-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZSMALL, ZMEDIUM) VALUES (1, 3, 7, 9)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique-index addition to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)").isEmpty })
+        try driver.close()
+    }
+
     func testOptionalSuffixIntegerTypesWidenTogether() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

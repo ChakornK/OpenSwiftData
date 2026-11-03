@@ -2761,6 +2761,130 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testScalarRemovalComposesWithOptionalAndDefaultedAdditions() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["obsolete", "identity"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "optionalNote", type: "String", isOptional: true),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["identity"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-scalar-columns"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE, ZIDENTITY) VALUES (1, 6, 'drop', 'kept')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZIDENTITY", "ZOPTIONALNOTE", "ZPRIORITY"])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZIDENTITY, ZOPTIONALNOTE, ZPRIORITY FROM ZRECORD")
+            },
+            [[.int(1), .int(6), .text("kept"), .null, .int(7)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZIDENTITY_INDEX")], [.text("ZRECORD_ZIDENTITY_UNIQUE_INDEX")]])
+        try driver.close()
+    }
+
+    func testScalarRemovalAndAdditionRejectsNewUniqueAttributeAtomically() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "obsolete", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "added", type: "String", isOptional: true, options: [.unique])
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-unique-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE) VALUES (1, 2, 'kept')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZOBSOLETE")
+                })
+            })
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZADDED") })
+            })
+        try driver.close()
+    }
+
+    func testScalarRemovalAndAdditionRejectsNonliteralRequiredDefaultBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "obsolete", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP")
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-dynamic-default"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE) VALUES (1, 3, 'retained-before-failure')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected dynamic default to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZOBSOLETE")
+                })
+            })
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZCREATEDAT")
+                })
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZOBSOLETE FROM ZRECORD") },
+            [[.text("retained-before-failure")]])
+        try driver.close()
+    }
+
     func testScalarRemovalCanAddIndexOnRetainedAttribute() throws {
         let source = Schema([
             Schema.Entity(

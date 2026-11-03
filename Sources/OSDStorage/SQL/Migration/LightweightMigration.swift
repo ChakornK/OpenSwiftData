@@ -2118,6 +2118,21 @@ package enum LightweightMigration {
             for attribute in removedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
                 try connection.execute("ALTER TABLE \(table) DROP COLUMN Z\(attribute.name.uppercased())")
             }
+            let addedAttributes = mappings.filter { $0.source == nil }.map(\.destination)
+            for attribute in addedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
+                let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+                guard attribute.isOptional || defaultLiteral != nil else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+                }
+                let type = try SQLColumnType.resolve(
+                    attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+                let required = attribute.isOptional ? "" : " NOT NULL"
+                let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
+                try connection.execute(
+                    "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
+                        + "\(required)\(defaultSQL)")
+            }
             indexTransitions.append(
                 (
                     indexDefinitions(for: source, schema: Schema(sourceEntities)),
@@ -3391,11 +3406,14 @@ package enum LightweightMigration {
         }
         guard !removed.isEmpty else { return nil }
         let removedNames = Set(removed.map(\.name))
+        let addedMappings = mappings.filter { $0.source == nil }
         let destinationIndexes = destination.indexes
         guard
             destinationIndexes.allSatisfy({ index in
                 !index.properties.contains(where: { removedNames.contains($0) })
-                    && !index.isUnique
+                    && (addedMappings.isEmpty
+                        ? !index.isUnique
+                        : equivalentUniqueIndexes(source.indexes, destination.indexes))
             })
         else {
             throw SwiftDataError.migrationUnsupported(
@@ -3428,8 +3446,19 @@ package enum LightweightMigration {
                 attribute.originalName.map { removedNames.contains($0) } ?? false
             }),
             mappings.count == destination.attributes.count,
-            mappings.allSatisfy({ mapping in
-                guard let old = mapping.source else { return false }
+            try mappings.allSatisfy({ mapping in
+                guard let old = mapping.source else {
+                    let attribute = mapping.destination
+                    let literal = try migrationDefaultLiteral(for: attribute)
+                    return (attribute.isOptional || literal != nil)
+                        && attribute.originalName == nil
+                        && attribute.components.isEmpty
+                        && !attribute.options.contains(.unique)
+                        && !attribute.options.contains(.codable)
+                        && !attribute.options.contains(.flattened)
+                        && !attribute.options.contains(.externalStorage)
+                        && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                }
                 return old == mapping.destination
             }),
             source.name == destination.name,
@@ -3444,12 +3473,23 @@ package enum LightweightMigration {
                     return false
                 }
                 if sourceEntity.name == source.name {
+                    let retainedSourceAttributes = sourceEntity.attributes.filter { !removedNames.contains($0.name) }
+                    let destinationAttributes = destinationEntity.attributes
+                    let additions = addedMappings.map(\.destination)
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
-                        && destinationEntity.indexes.allSatisfy({ index in
-                            !index.properties.contains(where: { removedNames.contains($0) })
-                                && !index.isUnique
-                        })
+                        && retainedSourceAttributes.count + additions.count == destinationAttributes.count
+                        && retainedSourceAttributes.allSatisfy({ destinationAttributes.contains($0) })
+                        && additions.allSatisfy({ destinationAttributes.contains($0) })
+                        && (!additions.isEmpty
+                            ? equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
+                                && Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                                    == Set(
+                                        destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(
+                                            \.name))
+                            : destinationEntity.indexes.allSatisfy({ index in
+                                !index.properties.contains(where: { removedNames.contains($0) }) && !index.isUnique
+                            }))
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName
                     && sourceEntity.attributes.count == destinationEntity.attributes.count

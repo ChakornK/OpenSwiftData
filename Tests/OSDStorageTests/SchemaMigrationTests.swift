@@ -2761,6 +2761,114 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testScalarRenameComposesWithIndependentScalarRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-independent-removal"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE, ZOBSOLETE, ZRETAINED) "
+                    + "VALUES (1, 8, 'title-data', 'drop', 'retained-data')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE, ZRETAINED FROM ZRECORD") },
+            [[.int(1), .int(8), .text("title-data"), .text("retained-data")]])
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZOBSOLETE")
+                })
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA index_list(ZRECORD)") }.count,
+            1)
+        try driver.close()
+    }
+
+    func testScalarRenameComposesWithRemovalButRejectsDestinationNameReuse() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "obsolete", type: "String", originalName: "legacyTitle")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-removal-column-reuse"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZLEGACYTITLE, ZOBSOLETE) VALUES (1, 3, 'keep', 'drop')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected rename/removal name reuse to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZLEGACYTITLE, ZOBSOLETE FROM ZRECORD") },
+            [[.text("keep"), .text("drop")]])
+        try driver.close()
+    }
+
+    func testScalarRenameWithIndexAndRemovalRemainsUnsupported() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "legacyTitle", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["legacyTitle"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-index-removal-reject"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: {
+                    $0.count > 1 && $0[1] == .text("ZLEGACYTITLE")
+                })
+            })
+        try driver.close()
+    }
+
     func testScalarRemovalComposesWithOptionalAndDefaultedAdditions() throws {
         let source = Schema([
             Schema.Entity(

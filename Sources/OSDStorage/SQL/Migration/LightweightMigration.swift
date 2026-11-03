@@ -2321,8 +2321,21 @@ package enum LightweightMigration {
                     knownIndexNames: knownIndexNames,
                     connection: connection)
             }
+            let renamePlan = try orderedRenames(mappings)
+            if !renamePlan.isEmpty {
+                let renameNames = Set(renamePlan.flatMap { [$0.0.uppercased(), $0.1.uppercased()] })
+                guard renameNames.isDisjoint(with: removedPhysicalColumns) else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "A scalar rename cannot target or free a column removed in the same migration.")
+                }
+            }
             for definition in removedIndexDefinitions {
                 try connection.execute("DROP INDEX IF EXISTS \(definition.name)")
+            }
+            for (sourceName, destinationName) in renamePlan {
+                try connection.execute(
+                    "ALTER TABLE \(table) RENAME COLUMN Z\(sourceName.uppercased()) TO Z\(destinationName.uppercased())"
+                )
             }
             for attribute in removedAttributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }) {
                 let columns =
@@ -3627,6 +3640,13 @@ package enum LightweightMigration {
                 .flatMap { attribute in [attribute.name] + attribute.components.map(\.columnName) }
                 .map { $0.uppercased() })
         let removedIndexPropertyNames = normalizedRemovedNames.union(removedFlattenedColumnNames)
+        let renameMappings = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.name.caseInsensitiveCompare(mapping.destination.name) != .orderedSame
+        }
+        let renamedSourceNames = Set(renameMappings.compactMap { $0.source?.name.uppercased() })
+        let renamedDestinationNames = Set(renameMappings.map { $0.destination.name.uppercased() })
+        let renameIndexPropertyNames = renamedSourceNames.union(renamedDestinationNames)
         let addedMappings = mappings.filter { $0.source == nil }
         let destinationIndexes = destination.indexes
         guard
@@ -3679,7 +3699,25 @@ package enum LightweightMigration {
                         && !attribute.options.contains(.externalStorage)
                         && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
                 }
-                return old == mapping.destination
+                return old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
+                    ? old == mapping.destination
+                    : old.type == mapping.destination.type
+                        && old.isOptional == mapping.destination.isOptional
+                        && old.defaultValue == mapping.destination.defaultValue
+                        && old.options == mapping.destination.options
+                        && old.components == mapping.destination.components
+                        && mapping.destination.originalName == old.name
+            }),
+            renameMappings.count <= 1,
+            (renameMappings.isEmpty || (removed.count == 1 && addedMappings.isEmpty)),
+            renameMappings.allSatisfy({ mapping in
+                guard let old = mapping.source else { return false }
+                return !removedNames.contains(mapping.destination.name)
+                    && !removedNames.contains(old.name)
+                    && !source.attributes.contains(where: {
+                        $0.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
+                            && $0.name.caseInsensitiveCompare(old.name) != .orderedSame
+                    })
             }),
             source.name == destination.name,
             source.superentityName == nil,
@@ -3689,6 +3727,12 @@ package enum LightweightMigration {
             !destination.indexes.contains(where: { index in
                 index.properties.contains(where: {
                     removedIndexPropertyNames.contains($0.uppercased())
+                        || renameIndexPropertyNames.contains($0.uppercased())
+                })
+            }),
+            !source.indexes.contains(where: { index in
+                index.properties.contains(where: {
+                    renameIndexPropertyNames.contains($0.uppercased())
                 })
             }),
             sourceEntityIDs == destinationEntityIDs,
@@ -3704,7 +3748,17 @@ package enum LightweightMigration {
                     return sourceEntity.superentityName == destinationEntity.superentityName
                         && sourceEntity.relationships == destinationEntity.relationships
                         && retainedSourceAttributes.count + additions.count == destinationAttributes.count
-                        && retainedSourceAttributes.allSatisfy({ destinationAttributes.contains($0) })
+                        && retainedSourceAttributes.allSatisfy({ old in
+                            guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else {
+                                return false
+                            }
+                            return destinationAttributes.contains(mapping.destination)
+                                && (old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
+                                    ? old == mapping.destination
+                                    : renameMappings.contains(where: {
+                                        $0.source?.name == old.name && $0.destination == mapping.destination
+                                    }))
+                        })
                         && additions.allSatisfy({ destinationAttributes.contains($0) })
                         && (!additions.isEmpty
                             ? equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
@@ -3713,7 +3767,11 @@ package enum LightweightMigration {
                                         destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(
                                             \.name))
                             : destinationEntity.indexes.allSatisfy({ index in
-                                !index.properties.contains(where: { removedNames.contains($0) }) && !index.isUnique
+                                !index.properties.contains(where: { property in
+                                    removedIndexPropertyNames.contains(property.uppercased())
+                                        || renameIndexPropertyNames.contains(property.uppercased())
+                                })
+                                    && (renameMappings.isEmpty ? !index.isUnique : true)
                             }))
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName

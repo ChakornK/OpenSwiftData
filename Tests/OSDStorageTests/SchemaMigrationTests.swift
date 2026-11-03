@@ -4098,6 +4098,153 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testMultipleFloatDoubleTypeChangesMigrateTogether() throws {
+        let cases: [(String, [String], [String])] = [
+            ("widen", ["Float", "Float"], ["Double", "Double"]),
+            ("narrow", ["Double", "Double"], ["Float", "Float"]),
+            ("mixed", ["Float", "Double"], ["Double", "Float"]),
+        ]
+        for (caseName, sourceTypes, destinationTypes) in cases {
+            let sourceAttributes = ["first", "second"].enumerated().map { offset, name in
+                Schema.Attribute(name: name, type: sourceTypes[offset])
+            }
+            let destinationAttributes = ["first", "second"].enumerated().map { offset, name in
+                Schema.Attribute(name: name, type: destinationTypes[offset])
+            }
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: sourceAttributes)
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: destinationAttributes)
+            ])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-float-double-\(caseName)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 13, 0.125, 0.375)")
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") },
+                [[.int(1), .int(13), .double(0.125), .double(0.375)]],
+                "Unexpected row after \(caseName) migration")
+            try driver.close()
+        }
+    }
+
+    func testMultipleFloatDoubleChangesRejectOtherMetadataEdits() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Float"),
+                ])
+        ])
+        let invalidDestinations = [
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "first", type: "Double"),
+                        Schema.Attribute(name: "second", type: "Double"),
+                        Schema.Attribute(name: "extra", type: "Int16", isOptional: true),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "first", type: "Double"),
+                        Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "first", type: "Double", defaultValue: "1"),
+                        Schema.Attribute(name: "second", type: "Double"),
+                    ])
+            ]),
+        ]
+        for (offset, destination) in invalidDestinations.enumerated() {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-float-double-invalid-\(offset)"))
+            try bootstrap(source, driver: driver)
+            let sourceRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") }
+            let sourceIndexes = try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unrelated metadata change to reject the batch, got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") }, sourceRows)
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+                },
+                sourceIndexes)
+            try driver.close()
+        }
+    }
+
+    func testMultipleFloatDoubleChangesValidateEveryColumnBeforeIndexReconciliation() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Float"),
+                    Schema.Attribute(name: "second", type: "Float"),
+                ],
+                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "first", type: "Double"),
+                    Schema.Attribute(name: "second", type: "Double"),
+                ],
+                indexes: [Schema.Index(properties: ["first", "second"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-float-double-index-failure"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRST, ZSECOND) VALUES (1, 17, 0.125, 0.1)")
+        }
+        let originalRows = try driver.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD")
+        }
+        let originalIndexes = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact later Float column to reject the batch, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZFIRST, ZSECOND FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        try driver.close()
+    }
+
     func testUnindexedScalarAttributeRemovalPreservesRowsAndReopens() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

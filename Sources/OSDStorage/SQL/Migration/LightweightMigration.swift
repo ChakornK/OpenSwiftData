@@ -2630,7 +2630,7 @@ package enum LightweightMigration {
                 connection: connection)
             return
         }
-        if let floatingTypeChange = try compatibleFloatTypeChange(
+        if let floatingTypeChanges = try compatibleFloatTypeChanges(
             mappings,
             source: source,
             destination: destination,
@@ -2639,13 +2639,15 @@ package enum LightweightMigration {
             sourceEntityIDs: sourceEntityIDs,
             destinationEntityIDs: destinationEntityIDs)
         {
-            let column = "Z\(floatingTypeChange.destination.name.uppercased())"
-            try validateFloatValuesForWidening(
-                table: table,
-                column: column,
-                isOptional: floatingTypeChange.source?.isOptional ?? false,
-                requiresExactFloatRoundTrip: true,
-                connection: connection)
+            for mapping in floatingTypeChanges {
+                let column = "Z\(mapping.destination.name.uppercased())"
+                try validateFloatValuesForWidening(
+                    table: table,
+                    column: column,
+                    isOptional: mapping.source?.isOptional ?? false,
+                    requiresExactFloatRoundTrip: true,
+                    connection: connection)
+            }
             indexTransitions.append(
                 (
                     indexDefinitions(for: source, schema: Schema(sourceEntities)),
@@ -4107,7 +4109,7 @@ package enum LightweightMigration {
             && lhs.components == rhs.components
     }
 
-    private static func compatibleFloatTypeChange(
+    private static func compatibleFloatTypeChanges(
         _ mappings: [AttributeMapping],
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -4115,29 +4117,23 @@ package enum LightweightMigration {
         destinationEntities: [Schema.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
-    ) throws -> AttributeMapping? {
+    ) throws -> [AttributeMapping]? {
         let changed = mappings.filter { mapping in
             guard let source = mapping.source else { return false }
             return source.type != mapping.destination.type
         }
         guard !changed.isEmpty else { return nil }
-        guard changed.count == 1,
-            let mapping = changed.first,
-            let sourceAttribute = mapping.source,
-            (sourceAttribute.type == "Float" && mapping.destination.type == "Double")
-                || (sourceAttribute.type == "Double" && mapping.destination.type == "Float"),
-            sourceAttribute.name == mapping.destination.name,
-            sourceAttribute.isOptional == mapping.destination.isOptional,
-            sourceAttribute.defaultValue == mapping.destination.defaultValue,
-            sourceAttribute.options == mapping.destination.options,
-            sourceAttribute.originalName == mapping.destination.originalName,
-            sourceAttribute.components.isEmpty,
-            mapping.destination.components.isEmpty,
+        guard
+            changed.allSatisfy({ mapping in
+                guard let sourceAttribute = mapping.source else { return false }
+                return (sourceAttribute.type == "Float" && mapping.destination.type == "Double")
+                    || (sourceAttribute.type == "Double" && mapping.destination.type == "Float")
+            }),
             mappings.count == source.attributes.count,
             mappings.count == destination.attributes.count,
             mappings.allSatisfy({ candidate in
                 guard let old = candidate.source else { return false }
-                return old == sourceAttribute || old == candidate.destination
+                return changed.contains(where: { $0.source?.name == old.name }) || old == candidate.destination
             }),
             source.name == destination.name,
             source.superentityName == nil,
@@ -4157,24 +4153,37 @@ package enum LightweightMigration {
                         && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
                 }
                 return equivalentEntityMetadata(sourceEntity, destinationEntity)
-            }),
-            !sourceAttribute.options.contains(.codable),
-            !sourceAttribute.options.contains(.flattened),
-            !sourceAttribute.options.contains(.externalStorage),
-            !sourceAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
-            try SQLColumnType.resolve(
-                sourceAttribute.type, property: "\(source.name).\(sourceAttribute.name)",
-                options: sourceAttribute.options)
-                == .float,
-            try SQLColumnType.resolve(
-                mapping.destination.type,
-                property: "\(destination.name).\(mapping.destination.name)",
-                options: mapping.destination.options) == .float
+            })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Float/Double type changes must be a single flat scalar change with unchanged storage metadata.")
+                "Float/Double type changes must preserve flat entity and scalar metadata.")
         }
-        return mapping
+        for mapping in changed {
+            guard let sourceAttribute = mapping.source,
+                sourceAttribute.name == mapping.destination.name,
+                sourceAttribute.isOptional == mapping.destination.isOptional,
+                sourceAttribute.defaultValue == mapping.destination.defaultValue,
+                sourceAttribute.options == mapping.destination.options,
+                sourceAttribute.originalName == mapping.destination.originalName,
+                sourceAttribute.components.isEmpty,
+                mapping.destination.components.isEmpty,
+                !sourceAttribute.options.contains(.codable),
+                !sourceAttribute.options.contains(.flattened),
+                !sourceAttribute.options.contains(.externalStorage),
+                !sourceAttribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+                try SQLColumnType.resolve(
+                    sourceAttribute.type, property: "\(source.name).\(sourceAttribute.name)",
+                    options: sourceAttribute.options) == .float,
+                try SQLColumnType.resolve(
+                    mapping.destination.type,
+                    property: "\(destination.name).\(mapping.destination.name)",
+                    options: mapping.destination.options) == .float
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Float/Double changes must preserve each attribute's storage metadata.")
+            }
+        }
+        return changed
     }
 
     private static func validateFloatValuesForWidening(

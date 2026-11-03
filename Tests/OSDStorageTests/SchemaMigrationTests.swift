@@ -1619,6 +1619,443 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testDoubleToSignedIntegerRebuildPreservesExactValuesAndUniqueIndex() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double", isOptional: true),
+                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int16", isOptional: true),
+                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int16-rebuild"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 2, -0.0, 'zero')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 5, -32768.0, 'min')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 9, 32767.0, 'max')")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 3, NULL, 'nil')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE, ZLABEL FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(2), .text("integer"), .int(0), .text("zero")],
+                [.int(2), .int(5), .text("integer"), .int(-32768), .text("min")],
+                [.int(3), .int(9), .text("integer"), .int(32767), .text("max")],
+                [.int(4), .int(3), .text("null"), .null, .text("nil")],
+            ])
+        let indexes = try driver.read {
+            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+        }
+        XCTAssertEqual(indexes, [[.text("ZRECORD_ZLABEL_UNIQUE_INDEX")], [.text("ZRECORD_ZVALUE_INDEX")]])
+        XCTAssertThrowsError(
+            try driver.write {
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 10, 1, 'zero')")
+            })
+        try driver.close()
+    }
+
+    func testDoubleToSignedIntegerRebuildRejectsFractionAndRollsBack() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int8")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int8-fraction"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 7, 1.5)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected fractional conversion to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.int(1), .int(7), .text("real"), .double(1.5)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testFloatToSignedIntegerRebuildAndInt64UpperBoundary() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int64-boundary"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, -9223372036854775808.0)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 9223372036854774784.0)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, -0.0)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, typeof(ZVALUE), ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .text("integer"), .int(Int64.min)],
+                [.int(2), .text("integer"), .int(9_223_372_036_854_774_784)],
+                [.int(3), .text("integer"), .int(0)],
+                [.int(4), .text("null"), .null],
+            ])
+        try driver.close()
+    }
+
+    func testFloatingToSignedIntegerRejectsUnsafeStorageAndRangeCasesAtomically() throws {
+        let failures: [(name: String, value: String, destinationType: String)] = [
+            ("fraction-positive", "1.5", "Int64"),
+            ("fraction-negative", "-0.5", "Int64"),
+            ("int8-overflow", "128.0", "Int8"),
+            ("positive-overflow", "9223372036854775808.0", "Int64"),
+            ("negative-overflow", "-9223372036854777856.0", "Int64"),
+            ("infinity", "1.0e999", "Int64"),
+            ("text", "'12x'", "Int64"),
+            ("blob", "X'0102'", "Int64"),
+        ]
+        for (name, value, destinationType) in failures {
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            ])
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-invalid-\(name)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 8, \(value))")
+            }
+            let original = try driver.read {
+                try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD").first
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }, "Expected \(name) to fail closed"
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unsupported migration for \(name), got \(error)")
+                }
+            }
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+                [try XCTUnwrap(original)])
+            try driver.close()
+        }
+    }
+
+    func testFloatingToInt64RejectsPositiveTwoToThe63() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int64-positive-two63"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, 9223372036854775808.0)")
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(9_223_372_036_854_775_808)]])
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected +2^63 to fail signed Int64 conversion, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(9_223_372_036_854_775_808)]])
+        try driver.close()
+    }
+
+    func testFloatingToIntegerPreservesAttributeUniqueConstraint() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int16", options: [.unique])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-attribute"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, 8.0)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            [
+                [
+                    .text("ZRECORD_ZVALUE_UNIQUE_INDEX"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
+                ]
+            ])
+        XCTAssertThrowsError(
+            try driver.write {
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 8)")
+            })
+        try driver.close()
+    }
+
+    func testFloatingToRequiredIntegerRejectsNull() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16", isOptional: false)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-required-int-null"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, NULL)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("null"), .null]])
+        try driver.close()
+    }
+
+    func testFloatingToSignedIntegerRejectsCombinedTypeChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "other", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Int16"),
+                    Schema.Attribute(name: "other", type: "Int32"),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-combined-types"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZOTHER) VALUES (1, 3, 12.0, 4)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined type changes to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE, ZOTHER FROM ZRECORD") },
+            [[.text("real"), .double(12), .int(4)]])
+        try driver.close()
+    }
+
+    func testFloatingToSignedIntegerRejectsDefaultChangesAtomically() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", defaultValue: "1.0")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16", defaultValue: "1")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-integer-default"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, 5.0)")
+        }
+        let originalDDL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected default-changing conversion to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(5)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalDDL)
+        try driver.close()
+    }
+
+    func testFloatingToUnsignedIntegerRemainsUnsupported() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "UInt16")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-uint-unsupported"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, 5.0)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(5)]])
+        try driver.close()
+    }
+
+    func testFloatingToIntegerRejectsUniqueIndexSetChanges() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int16", options: [.unique])])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-change"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, 5.0)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("real"), .double(5)]])
+        try driver.close()
+    }
+
+    func testFloatingToIntegerAllowsUniqueIndexDeclarationReordering() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "value", type: "Double"),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["value", "label"], isUnique: true),
+                    Schema.Index(properties: ["label"]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "label", type: "String"),
+                    Schema.Attribute(name: "value", type: "Int16"),
+                ],
+                indexes: [
+                    Schema.Index(properties: ["label"]),
+                    Schema.Index(properties: ["value", "label"], isUnique: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-index-declaration-order"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 8, 7.0, 'x')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT ZVALUE, ZLABEL FROM ZRECORD") },
+            [[.int(7), .text("x")]])
+        try driver.close()
+    }
+
+    func testFloatingToIntegerWithRelationshipsRemainsUnsupported() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", isToMany: false, isOptional: true)
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int16")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "target", destination: "Target", isToMany: false, isOptional: true)
+                ]),
+            Schema.Entity(name: "Target"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-relationship"))
+        try bootstrap(source, driver: driver)
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            })
+        try driver.close()
+    }
+
     func testIntegerToDoubleRebuildRejectsCombinedNumericChangesAtomically() throws {
         let source = Schema([
             Schema.Entity(

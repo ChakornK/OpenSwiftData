@@ -1777,6 +1777,15 @@ package enum LightweightMigration {
             guard let old = mapping.source else { return false }
             return old.type != mapping.destination.type
         }
+        let hasFloatingToIntegerMapping = changedTypeMappings.contains { mapping in
+            guard let old = mapping.source else { return false }
+            return (old.type == "Float" || old.type == "Double")
+                && signedIntegerWidth(mapping.destination.type) != nil
+        }
+        guard !hasFloatingToIntegerMapping || changedTypeMappings.count == 1 else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer rebuild cannot be combined with another type change.")
+        }
         let hasIntegerToFloatingMapping = changedTypeMappings.contains { mapping in
             guard let old = mapping.source else { return false }
             return signedIntegerWidth(old.type) != nil
@@ -1819,6 +1828,24 @@ package enum LightweightMigration {
         {
             try rebuildIntegerColumnAsFloating(
                 attribute: integerToFloating,
+                source: source,
+                destination: destination,
+                sourceSchema: Schema(sourceEntities),
+                destinationSchema: Schema(destinationEntities),
+                connection: connection)
+            return
+        }
+        if let floatingToInteger = try compatibleFloatingToInteger(
+            mappings,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs)
+        {
+            try rebuildFloatingColumnAsInteger(
+                attribute: floatingToInteger,
                 source: source,
                 destination: destination,
                 sourceSchema: Schema(sourceEntities),
@@ -2395,9 +2422,9 @@ package enum LightweightMigration {
             destination.superentityName == nil,
             source.relationships.isEmpty,
             destination.relationships.isEmpty,
-            source.indexes.filter(\.isUnique) == destination.indexes.filter(\.isUnique),
-            source.attributes.filter({ $0.options.contains(.unique) }).map(\.name)
-                == destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name),
+            equivalentUniqueIndexes(source.indexes, destination.indexes),
+            Set(source.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                == Set(destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name)),
             source.attributes.allSatisfy({ attribute in
                 attribute.components.isEmpty
                     && !attribute.options.contains(.codable)
@@ -2449,7 +2476,107 @@ package enum LightweightMigration {
         return change
     }
 
-    private static func rebuildIntegerColumnAsFloating(
+    private static func compatibleFloatingToInteger(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int]
+    ) throws -> AttributeMapping? {
+        let changes = mappings.filter { mapping in
+            guard let old = mapping.source else { return false }
+            return old.type != mapping.destination.type
+        }
+        guard !changes.isEmpty else { return nil }
+        let hasFloatingToSignedInteger = changes.contains { mapping in
+            guard let old = mapping.source,
+                mapping.destination.defaultValue == nil,
+                signedIntegerWidth(mapping.destination.type) != nil
+            else { return false }
+            return old.type == "Float" || old.type == "Double"
+        }
+        guard hasFloatingToSignedInteger else { return nil }
+        guard changes.count == 1,
+            let change = changes.first,
+            let old = change.source,
+            old.type == "Float" || old.type == "Double",
+            signedIntegerWidth(change.destination.type) != nil,
+            old.name == change.destination.name,
+            old.isOptional == change.destination.isOptional,
+            old.defaultValue == nil,
+            change.destination.defaultValue == nil,
+            old.options == change.destination.options,
+            old.originalName == change.destination.originalName,
+            old.components.isEmpty,
+            change.destination.components.isEmpty,
+            mappings.count == source.attributes.count,
+            mappings.count == destination.attributes.count,
+            mappings.allSatisfy({ mapping in
+                guard let sourceAttribute = mapping.source else { return false }
+                return sourceAttribute == old || sourceAttribute == mapping.destination
+            }),
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            source.relationships.isEmpty,
+            destination.relationships.isEmpty,
+            equivalentUniqueIndexes(source.indexes, destination.indexes),
+            Set(source.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                == Set(destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name)),
+            source.attributes.allSatisfy({ attribute in
+                attribute.components.isEmpty
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            destination.attributes.allSatisfy({ attribute in
+                attribute.components.isEmpty
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            sourceEntityIDs == destinationEntityIDs,
+            sourceEntities.count == destinationEntities.count,
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    let destinationAttributes = Dictionary(
+                        uniqueKeysWithValues: destinationEntity.attributes.map { ($0.name, $0) })
+                    return sourceEntity.superentityName == destinationEntity.superentityName
+                        && sourceEntity.relationships == destinationEntity.relationships
+                        && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
+                        && sourceEntity.attributes.allSatisfy({ sourceAttribute in
+                            guard let destinationAttribute = destinationAttributes[sourceAttribute.name] else {
+                                return false
+                            }
+                            return sourceAttribute == old || sourceAttribute == destinationAttribute
+                        })
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            sourceEntities.allSatisfy({ $0.relationships.isEmpty }),
+            destinationEntities.allSatisfy({ $0.relationships.isEmpty }),
+            try SQLColumnType.resolve(old.type, property: "\(source.name).\(old.name)", options: old.options)
+                == .float,
+            try SQLColumnType.resolve(
+                change.destination.type,
+                property: "\(destination.name).\(change.destination.name)",
+                options: change.destination.options) == .integer
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Floating-to-integer conversion requires one flat scalar change with unchanged metadata and no defaults."
+            )
+        }
+        return change
+    }
+
+    private static func rebuildFloatingColumnAsInteger(
         attribute mapping: AttributeMapping,
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2457,51 +2584,170 @@ package enum LightweightMigration {
         destinationSchema: Schema,
         connection: SQLConnection
     ) throws {
-        guard let sourceAttribute = mapping.source else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating migration has no source attribute.")
+        guard let sourceAttribute = mapping.source,
+            signedIntegerWidth(mapping.destination.type) != nil
+        else {
+            throw SwiftDataError.migrationUnsupported("Floating-to-integer migration has invalid attribute metadata.")
         }
         let table = "Z\(source.name.uppercased())"
         let convertedColumn = "Z\(sourceAttribute.name.uppercased())"
-        let destinationType = mapping.destination.type
+        try validateRebuildIndexPlan(
+            table: table,
+            source: source,
+            destination: destination,
+            sourceSchema: sourceSchema,
+            destinationSchema: destinationSchema,
+            connection: connection)
+        try validateFloatingValuesForIntegerConversion(
+            table: table,
+            column: convertedColumn,
+            destinationType: mapping.destination.type,
+            isOptional: sourceAttribute.isOptional,
+            connection: connection)
+        try rebuildTable(
+            source: source,
+            destination: destination,
+            destinationSchema: destinationSchema,
+            convertedColumn: convertedColumn,
+            conversion: .floatingToSignedInteger,
+            connection: connection)
+    }
+
+    private static func validateFloatingValuesForIntegerConversion(
+        table: String,
+        column: String,
+        destinationType: String,
+        isOptional: Bool,
+        connection: SQLConnection
+    ) throws {
+        guard let width = signedIntegerWidth(destinationType) else {
+            throw SwiftDataError.migrationUnsupported("Unsupported signed-integer destination type.")
+        }
+        let rows = try connection.rows("SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
+        for row in rows {
+            guard row.count > 1, case let .text(storageType) = row[0] else {
+                throw SwiftDataError.migrationUnsupported("Floating column \(column) has invalid SQLite metadata.")
+            }
+            switch (storageType, row[1]) {
+            case ("null", .null) where isOptional:
+                continue
+            case ("null", .null):
+                throw SwiftDataError.migrationUnsupported(
+                    "Required floating column \(column) contains NULL; NaN may be stored as NULL.")
+            case ("integer", .int(let value)):
+                let minimum = width == 64 ? Int64.min : -(Int64(1) << (width - 1))
+                let maximum = width == 64 ? Int64.max : (Int64(1) << (width - 1)) - 1
+                guard value >= minimum, value <= maximum else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Integer value in \(column) is outside the destination range.")
+                }
+            case ("real", .double(let value)):
+                guard value.isFinite,
+                    isWithinSignedIntegerRange(value, width: width),
+                    let converted = exactSignedInteger(value, width: width),
+                    Double(converted) == value
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Floating column \(column) contains a non-integral or out-of-range value.")
+                }
+            default:
+                throw SwiftDataError.migrationUnsupported(
+                    "Floating column \(column) contains unsupported SQLite storage type '\(storageType)'.")
+            }
+        }
+    }
+
+    private static func isWithinSignedIntegerRange(_ value: Double, width: Int) -> Bool {
+        guard (1...64).contains(width) else { return false }
+        let exclusiveUpperBound = Double(sign: .plus, exponent: width - 1, significand: 1)
+        let inclusiveLowerBound = -exclusiveUpperBound
+        return value >= inclusiveLowerBound && value < exclusiveUpperBound
+    }
+
+    private static func exactSignedInteger(_ value: Double, width: Int) -> Int64? {
+        guard width > 0 else { return nil }
+        return switch width {
+        case 8: Int8(exactly: value).map(Int64.init)
+        case 16: Int16(exactly: value).map(Int64.init)
+        case 32: Int32(exactly: value).map(Int64.init)
+        case 64: Int64(exactly: value)
+        default: nil
+        }
+    }
+
+    private enum RebuildConversion {
+        case signedIntegerToFloating
+        case floatingToSignedInteger
+
+        var castType: String {
+            switch self {
+            case .signedIntegerToFloating: "REAL"
+            case .floatingToSignedInteger: "INTEGER"
+            }
+        }
+
+        var storageType: String {
+            switch self {
+            case .signedIntegerToFloating: "real"
+            case .floatingToSignedInteger: "integer"
+            }
+        }
+
+        var diagnosticName: String {
+            switch self {
+            case .signedIntegerToFloating: "Integer-to-floating"
+            case .floatingToSignedInteger: "Floating-to-integer"
+            }
+        }
+    }
+
+    private static func validateRebuildIndexPlan(
+        table: String,
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema,
+        connection: SQLConnection
+    ) throws {
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
         let sourceIndexes = indexDefinitions(for: source, schema: sourceSchema)
         let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
         let sourceUniqueIndexes = sourceIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
         let destinationUniqueIndexes = destinationIndexes.filter { $0.statement.hasPrefix("CREATE UNIQUE INDEX") }
-        guard sourceUniqueIndexes == destinationUniqueIndexes else {
+        guard sourceUniqueIndexes.count == destinationUniqueIndexes.count,
+            sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
+        else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild cannot change unique index definitions.")
+                "Numeric rebuild cannot change unique index definitions.")
         }
         _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
         let physicalIndexes = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
         let expectedIndexNames = Set(sourceIndexes.map { $0.name.uppercased() })
-        guard
-            physicalIndexes.compactMap({ row -> String? in
-                guard case let .text(name)? = row.first else { return nil }
-                return name.uppercased()
-            }).count == physicalIndexes.count,
-            Set(
-                physicalIndexes.compactMap { row -> String? in
-                    guard case let .text(name)? = row.first else { return nil }
-                    return name.uppercased()
-                }) == expectedIndexNames
-        else {
-            throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild found untracked or missing physical indexes.")
+        let actualIndexNames = physicalIndexes.compactMap { row -> String? in
+            guard case let .text(name)? = row.first else { return nil }
+            return name.uppercased()
+        }
+        guard actualIndexNames.count == physicalIndexes.count, Set(actualIndexNames) == expectedIndexNames else {
+            throw SwiftDataError.migrationUnsupported("Numeric rebuild found untracked or missing physical indexes.")
         }
         try validateRebuildDestinationIndexNames(
             destinationIndexes,
             sourceIndexNames: expectedIndexNames,
             table: table,
             connection: connection)
-        try validateIntegerValuesForFloatingConversion(
-            table: table,
-            column: convertedColumn,
-            destinationType: destinationType,
-            isOptional: sourceAttribute.isOptional,
-            connection: connection)
+    }
 
+    private static func rebuildTable(
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        destinationSchema: Schema,
+        convertedColumn: String,
+        conversion: RebuildConversion,
+        connection: SQLConnection
+    ) throws {
+        let table = "Z\(source.name.uppercased())"
+        let destinationIndexes = indexDefinitions(for: destination, schema: destinationSchema)
         let destinationBuilt = try SchemaBuilder.build(destinationSchema)
         guard
             let destinationTableStatement = destinationBuilt.statements.first(where: {
@@ -2528,57 +2774,88 @@ package enum LightweightMigration {
             sourceColumns == destinationColumns,
             destinationBuilt.statements.contains(where: { $0 == destinationTableStatement })
         else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changes the table column layout.")
+            throw SwiftDataError.migrationUnsupported("Numeric rebuild changes the table column layout.")
         }
-        let insertColumns = destinationColumns.map { "\($0)" }.joined(separator: ", ")
+        let insertColumns = destinationColumns.joined(separator: ", ")
         let selectExpressions = destinationColumns.map { column in
-            if column.caseInsensitiveCompare(convertedColumn) == .orderedSame {
-                return "CAST(\(column) AS REAL)"
-            }
-            return column
+            column.caseInsensitiveCompare(convertedColumn) == .orderedSame
+                ? "CAST(\(column) AS \(conversion.castType))"
+                : column
         }.joined(separator: ", ")
         let originalPrimaryKeys = try connection.rows("SELECT Z_PK FROM \(table) ORDER BY Z_PK")
-        let originalCount = originalPrimaryKeys.count
-
         try connection.execute(temporaryTableStatement)
         try connection.execute(
             "INSERT INTO \(temporaryTable) (\(insertColumns)) SELECT \(selectExpressions) FROM \(table)")
+
         let rebuiltCount = try connection.rows("SELECT COUNT(*) FROM \(temporaryTable)")
-        guard rebuiltCount.first?.first == .int(Int64(originalCount)) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed the row count.")
+        guard rebuiltCount.first?.first == .int(Int64(originalPrimaryKeys.count)) else {
+            throw SwiftDataError.migrationUnsupported("\(conversion.diagnosticName) rebuild changed the row count.")
         }
         let rebuiltPrimaryKeys = try connection.rows("SELECT Z_PK FROM \(temporaryTable) ORDER BY Z_PK")
         guard rebuiltPrimaryKeys == originalPrimaryKeys else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed primary keys.")
+            throw SwiftDataError.migrationUnsupported("\(conversion.diagnosticName) rebuild changed primary keys.")
         }
-        let invalidTemporaryValues = try connection.rows(
+        let invalidConvertedRows = try connection.rows(
             "SELECT COUNT(*) FROM \(temporaryTable) "
-                + "WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'")
-        guard invalidTemporaryValues.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating copy produced invalid REAL storage.")
+                + "WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != '\(conversion.storageType)'"
+        )
+        guard invalidConvertedRows.first?.first == .int(0) else {
+            throw SwiftDataError.migrationUnsupported(
+                "\(conversion.diagnosticName) copy produced invalid storage class.")
         }
-        let mismatchedColumns = destinationColumns.map { column -> String in
-            return "source.\(column) IS NOT rebuilt.\(column)"
-        }
-        let mismatchPredicate = mismatchedColumns.joined(separator: " OR ")
+        let mismatchPredicate = destinationColumns.map { column in
+            "source.\(column) IS NOT rebuilt.\(column)"
+        }.joined(separator: " OR ")
         let mismatchedRows = try connection.rows(
             "SELECT COUNT(*) FROM \(table) AS source JOIN \(temporaryTable) AS rebuilt USING (Z_PK) "
                 + "WHERE \(mismatchPredicate)")
         guard mismatchedRows.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed stored row values.")
+            throw SwiftDataError.migrationUnsupported("\(conversion.diagnosticName) rebuild changed stored row values.")
         }
+
         try connection.execute("DROP TABLE \(table)")
         try connection.execute("ALTER TABLE \(temporaryTable) RENAME TO \(table)")
-        let badConvertedRows = try connection.rows(
-            "SELECT COUNT(*) FROM \(table) WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'"
-        )
-        guard badConvertedRows.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild produced invalid REAL storage.")
-        }
         for definition in destinationIndexes {
             try connection.execute(definition.statement)
             try validatePhysicalIndexMetadata(definition, connection: connection)
         }
+    }
+
+    private static func rebuildIntegerColumnAsFloating(
+        attribute mapping: AttributeMapping,
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema,
+        connection: SQLConnection
+    ) throws {
+        guard let sourceAttribute = mapping.source else {
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating migration has no source attribute.")
+        }
+        let table = "Z\(source.name.uppercased())"
+        let convertedColumn = "Z\(sourceAttribute.name.uppercased())"
+        let destinationType = mapping.destination.type
+        try validateRebuildIndexPlan(
+            table: table,
+            source: source,
+            destination: destination,
+            sourceSchema: sourceSchema,
+            destinationSchema: destinationSchema,
+            connection: connection)
+        try validateIntegerValuesForFloatingConversion(
+            table: table,
+            column: convertedColumn,
+            destinationType: destinationType,
+            isOptional: sourceAttribute.isOptional,
+            connection: connection)
+
+        try rebuildTable(
+            source: source,
+            destination: destination,
+            destinationSchema: destinationSchema,
+            convertedColumn: convertedColumn,
+            conversion: .signedIntegerToFloating,
+            connection: connection)
     }
 
     private static func validateRebuildDestinationIndexNames(
@@ -2626,7 +2903,7 @@ package enum LightweightMigration {
             !createTable.uppercased().contains("AUTOINCREMENT")
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild requires canonical non-AUTOINCREMENT DDL.")
+                "Numeric rebuild requires canonical non-AUTOINCREMENT DDL.")
         }
         let actualDDL = try connection.rows(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
@@ -2635,7 +2912,7 @@ package enum LightweightMigration {
             normalizedCreateTableSQL(actualCreateTable) == normalizedCreateTableSQL(createTable)
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-floating rebuild requires canonical source table DDL.")
+                "Numeric rebuild requires canonical source table DDL.")
         }
         let tableNames = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -2649,7 +2926,7 @@ package enum LightweightMigration {
             let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
             guard foreignKeys.isEmpty else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Integer-to-floating rebuild is unsupported with foreign keys.")
+                    "Numeric rebuild is unsupported with foreign keys.")
             }
         }
         let hasSequence = try connection.rows(
@@ -2659,7 +2936,7 @@ package enum LightweightMigration {
                 "SELECT 1 FROM sqlite_sequence WHERE name = ? COLLATE NOCASE LIMIT 1", [.text(table)])
             guard tableSequence.isEmpty else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Integer-to-floating rebuild does not migrate the source table's sqlite_sequence entry.")
+                    "Numeric rebuild does not migrate the source table's sqlite_sequence entry.")
             }
         }
     }
@@ -2741,6 +3018,12 @@ package enum LightweightMigration {
         case "Int": Int.bitWidth
         default: nil
         }
+    }
+
+    private static func equivalentUniqueIndexes(_ lhs: [Schema.Index], _ rhs: [Schema.Index]) -> Bool {
+        let left = lhs.filter(\.isUnique)
+        let right = rhs.filter(\.isUnique)
+        return left.count == right.count && left.allSatisfy { right.contains($0) }
     }
 
     private static func compatibleFloatTypeChange(

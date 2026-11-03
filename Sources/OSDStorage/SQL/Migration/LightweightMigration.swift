@@ -90,6 +90,11 @@ package enum LightweightMigration {
         let joinTable: String
     }
 
+    private struct OwnerOnlyToManyRemovalBatchPlan {
+        let removedRelationshipNamesByOwner: [String: Set<String>]
+        let joinTables: [String]
+    }
+
     private struct PairedInverseRelationshipRemoval {
         let ownerEntityName: String
         let ownerRelationshipName: String
@@ -602,6 +607,15 @@ package enum LightweightMigration {
         let validatedSourceIndexSQL = try validateSourceIndexLayout(source, connection: connection)
         let sourceNames = Set(source.entities.map(\.name))
         let destinationNames = Set(destination.entities.map(\.name))
+        let sourceNamesByFoldedName = Dictionary(
+            uniqueKeysWithValues: source.entities.map { ($0.name.uppercased(), $0.name) })
+        let destinationNamesByFoldedName = Dictionary(
+            uniqueKeysWithValues: destination.entities.map { ($0.name.uppercased(), $0.name) })
+        for (foldedName, sourceName) in sourceNamesByFoldedName {
+            if let destinationName = destinationNamesByFoldedName[foldedName], destinationName != sourceName {
+                throw SwiftDataError.migrationUnsupported("Entity names cannot change case during migration.")
+            }
+        }
         if sourceNames != destinationNames {
             if sourceNames.isSubset(of: destinationNames) {
                 try applyFlatIndependentRootAdditions(
@@ -623,6 +637,22 @@ package enum LightweightMigration {
         try validateDestinationIndexNames(destination)
         let pairedInverseRemovals = try planPairedInverseRelationshipRemovals(
             source: source, destination: destination, connection: connection)
+        let toManyRemovalPlan = try planMultipleFlatOwnerOnlyToManyRemovals(
+            source: source,
+            destination: destination,
+            excludedEndpoints: Set(
+                pairedInverseRemovals.flatMap {
+                    [
+                        "\($0.ownerEntityName).\($0.ownerRelationshipName)",
+                        "\($0.inverseEntityName).\($0.inverseRelationshipName)",
+                    ]
+                }),
+            connection: connection)
+        if let toManyRemovalPlan {
+            for joinTable in toManyRemovalPlan.joinTables {
+                try connection.execute("DROP TABLE \(joinTable)")
+            }
+        }
         let sourceEntities = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         var indexTransitions: [([IndexDefinition], [IndexDefinition])] = []
         for entity in destination.entities {
@@ -637,6 +667,7 @@ package enum LightweightMigration {
                 sourceEntityIDs: source.entityIDsByName,
                 destinationEntityIDs: destination.entityIDsByName,
                 pairedInverseRemovals: pairedInverseRemovals,
+                toManyRemovalPlan: toManyRemovalPlan,
                 indexTransitions: &indexTransitions,
                 connection: connection)
         }
@@ -726,6 +757,7 @@ package enum LightweightMigration {
                 )
             }
 
+            let inverseKey = "\(inverseEntity.name).\(inverse.name)"
             for sourceEntity in source.entities {
                 guard let destinationEntity = destinationEntities[sourceEntity.name],
                     sourceEntity.superentityName == destinationEntity.superentityName,
@@ -736,20 +768,31 @@ package enum LightweightMigration {
                         "Inverse relationship removal cannot be combined with attribute, index, or hierarchy changes."
                     )
                 }
-                let expectedRelationships = sourceEntity.relationships.filter { candidate in
-                    !(sourceEntity.name == owner.name
-                        && candidate.name.caseInsensitiveCompare(relationship.name) == .orderedSame)
-                        && !(sourceEntity.name == inverseEntity.name
-                            && candidate.name.caseInsensitiveCompare(inverse.name) == .orderedSame)
+                let retainedSourceRelationships = sourceEntity.relationships.filter { candidate in
+                    let endpointKey = "\(sourceEntity.name).\(candidate.name)"
+                    return endpointKey != "\(owner.name).\(relationship.name)" && endpointKey != inverseKey
                 }
-                guard expectedRelationships == destinationEntity.relationships else {
+                let removedEndpointNames = Set(
+                    retainedSourceRelationships.compactMap { candidate -> String? in
+                        guard
+                            !destinationEntity.relationships.contains(where: {
+                                $0.name.caseInsensitiveCompare(candidate.name) == .orderedSame
+                                    || $0.originalName?.caseInsensitiveCompare(candidate.name) == .orderedSame
+                            })
+                        else { return nil }
+                        return "\(sourceEntity.name).\(candidate.name)"
+                    })
+                let hasOwnerOnlyToManyRemovals =
+                    sourceEntity.name == owner.name
+                    && retainedSourceRelationships.contains(where: { $0.isToMany })
+                    && !removedEndpointNames.isEmpty
+                guard removedEndpointNames.isEmpty || hasOwnerOnlyToManyRemovals else {
                     throw SwiftDataError.migrationUnsupported(
-                        "Inverse relationship removal must remove exactly the reciprocal relationship pair."
+                        "Inverse relationship removal cannot be combined with other relationship removals."
                     )
                 }
             }
 
-            let inverseKey = "\(inverseEntity.name).\(inverse.name)"
             let ownerTable = "Z\(owner.name.uppercased())"
             let sourceColumns = try tableColumns(ownerTable, connection: connection)
             let indexName =
@@ -2117,6 +2160,7 @@ package enum LightweightMigration {
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
+        toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?,
         indexTransitions: inout [([IndexDefinition], [IndexDefinition])],
         connection: SQLConnection
     ) throws {
@@ -2126,16 +2170,21 @@ package enum LightweightMigration {
         try validateAttributeColumns(mappings, destination: destination, existing: existing)
         let mappedRelationshipSources = Set(
             destination.relationships.compactMap { relationship in
-                source.relationships.first(where: {
-                    $0.name == relationship.name || $0.name == relationship.originalName
+                source.relationships.first(where: { sourceRelationship in
+                    sourceRelationship.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                        || relationship.originalName.map { originalName in
+                            sourceRelationship.name.caseInsensitiveCompare(originalName) == .orderedSame
+                        } == true
                 })?.name
             })
         let removedRelationships = source.relationships.filter { !mappedRelationshipSources.contains($0.name) }
         let removedRelationshipNames = Set(removedRelationships.map(\.name))
         let addedRelationships = destination.relationships.filter { relationship in
-            !source.relationships.contains(where: {
-                $0.name == relationship.name
-                    || ($0.name == relationship.originalName && !removedRelationshipNames.contains($0.name))
+            !source.relationships.contains(where: { sourceRelationship in
+                sourceRelationship.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    || (relationship.originalName.map {
+                        sourceRelationship.name.caseInsensitiveCompare($0) == .orderedSame
+                    } == true && !removedRelationshipNames.contains(sourceRelationship.name))
             })
         }
         if try addScalarsWithOwnerOnlyToManyRemoval(
@@ -2231,27 +2280,6 @@ package enum LightweightMigration {
                 (
                     indexDefinitions(for: source, schema: sourceSchema),
                     indexDefinitions(for: destination, schema: destinationSchema)
-                ))
-            return
-        }
-        if removedRelationships.count > 1,
-            addedRelationships.isEmpty,
-            removedRelationships.allSatisfy(\.isToMany)
-        {
-            try removeMultipleFlatOwnerOnlyToManyRelationships(
-                removedRelationships,
-                mappings: mappings,
-                source: source,
-                destination: destination,
-                sourceEntities: sourceEntities,
-                destinationEntities: destinationEntities,
-                sourceEntityIDs: sourceEntityIDs,
-                destinationEntityIDs: destinationEntityIDs,
-                connection: connection)
-            indexTransitions.append(
-                (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
                 ))
             return
         }
@@ -2714,6 +2742,7 @@ package enum LightweightMigration {
             source: source, destination: destination,
             sourceSchema: Schema(sourceEntities), schema: Schema(destinationEntities),
             pairedInverseRemovals: pairedInverseRemovals,
+            toManyRemovalPlan: toManyRemovalPlan,
             connection: connection, existing: existing)
         indexTransitions.append(
             (
@@ -4737,19 +4766,26 @@ package enum LightweightMigration {
         sourceSchema: Schema,
         schema: Schema,
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
+        toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?,
         connection: SQLConnection,
         existing: Set<String>
     ) throws {
         let mappedSources = Set(
             destination.relationships.compactMap { relationship in
-                source.relationships.first(where: {
-                    $0.name == relationship.name || $0.name == relationship.originalName
+                source.relationships.first(where: { sourceRelationship in
+                    sourceRelationship.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                        || relationship.originalName.map { originalName in
+                            sourceRelationship.name.caseInsensitiveCompare(originalName) == .orderedSame
+                        } == true
                 })?.name
             })
         let removedRelationships = source.relationships.filter { !mappedSources.contains($0.name) }
         let addedRelationships = destination.relationships.filter { relationship in
-            !source.relationships.contains(where: {
-                $0.name == relationship.name || $0.name == relationship.originalName
+            !source.relationships.contains(where: { sourceRelationship in
+                sourceRelationship.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    || relationship.originalName.map { originalName in
+                        sourceRelationship.name.caseInsensitiveCompare(originalName) == .orderedSame
+                    } == true
             })
         }
         let ownerPairRemovals = pairedInverseRemovals.filter { $0.ownerEntityName == source.name }
@@ -4790,6 +4826,20 @@ package enum LightweightMigration {
             }
             for removal in ownerPairRemovals.sorted(by: { $0.column < $1.column }) {
                 try connection.execute("ALTER TABLE Z\(source.name.uppercased()) DROP COLUMN \(removal.column)")
+            }
+            return
+        }
+        let plannedToManyRemovals = toManyRemovalPlan?.removedRelationshipNamesByOwner[source.name] ?? []
+        if !plannedToManyRemovals.isEmpty {
+            let removedNames = Set(removedRelationships.map(\.name))
+            guard removedNames == plannedToManyRemovals,
+                addedRelationships.isEmpty,
+                source.attributes == destination.attributes,
+                source.indexes == destination.indexes,
+                source.superentityName == destination.superentityName
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removals cannot be combined with other entity edits.")
             }
             return
         }
@@ -5193,108 +5243,176 @@ package enum LightweightMigration {
         try connection.execute("DROP TABLE \(plan.joinTable)")
     }
 
-    private static func removeMultipleFlatOwnerOnlyToManyRelationships(
-        _ removedRelationships: [Schema.Relationship],
-        mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
-        sourceEntityIDs: [String: Int],
-        destinationEntityIDs: [String: Int],
+    private static func planMultipleFlatOwnerOnlyToManyRemovals(
+        source: Schema,
+        destination: Schema,
+        excludedEndpoints: Set<String>,
         connection: SQLConnection
-    ) throws {
-        let removedNames = Set(removedRelationships.map(\.name))
-        let normalizedRemovedNames = Set(removedRelationships.map { $0.name.uppercased() })
-        let destinationByName = Dictionary(uniqueKeysWithValues: destinationEntities.map { ($0.name, $0) })
-        let sourceSchema = Schema(sourceEntities)
-        let destinationSchema = Schema(destinationEntities)
-        guard removedRelationships.count > 1,
-            removedNames.count == removedRelationships.count,
-            destinationEntities.allSatisfy({ entity in
-                entity.relationships.allSatisfy { relationship in
-                    guard !normalizedRemovedNames.contains(relationship.name.uppercased()) else { return false }
-                    guard let originalName = relationship.originalName else { return true }
-                    return !normalizedRemovedNames.contains(originalName.uppercased())
-                }
-            }),
-            removedRelationships.allSatisfy({ relationship in
-                source.relationships.contains(relationship)
-                    && relationship.isToMany
-                    && relationship.inverse == nil
-                    && relationship.originalName == nil
-                    && (relationship.minimumModelCount == nil || relationship.minimumModelCount == 0)
-                    && relationship.maximumModelCount == nil
-                    && (relationship.deleteRule == .nullify || relationship.deleteRule == .noAction)
-                    && relationship.destination != source.name
-            }),
-            mappings.count == source.attributes.count,
-            mappings.count == destination.attributes.count,
-            mappings.allSatisfy({ mapping in
-                guard let old = mapping.source else { return false }
-                return old == mapping.destination
-            }),
-            source.name == destination.name,
-            source.superentityName == nil,
-            destination.superentityName == nil,
-            !sourceEntities.contains(where: { $0.superentityName == source.name }),
-            !destinationEntities.contains(where: { $0.superentityName == destination.name }),
-            sourceEntityIDs == destinationEntityIDs,
-            Set(sourceEntities.map(\.name)) == Set(destinationEntities.map(\.name)),
-            sourceEntities.allSatisfy({ sourceEntity in
-                guard let destinationEntity = destinationByName[sourceEntity.name] else { return false }
-                if sourceEntity.name == source.name {
-                    return sourceEntity.attributes == destinationEntity.attributes
-                        && sourceEntity.indexes == destinationEntity.indexes
-                        && destinationEntity.relationships
-                            == sourceEntity.relationships.filter({ !removedNames.contains($0.name) })
-                        && sourceEntity.relationships.count - destinationEntity.relationships.count
-                            == removedRelationships.count
-                }
-                return equivalentEntityMetadata(sourceEntity, destinationEntity)
-                    && sourceEntity.relationships == destinationEntity.relationships
+    ) throws -> OwnerOnlyToManyRemovalBatchPlan? {
+        let destinationNamesByFoldedName = Dictionary(
+            uniqueKeysWithValues: destination.entities.map { ($0.name.uppercased(), $0.name) })
+        let sourceNamesByFoldedName = Dictionary(
+            uniqueKeysWithValues: source.entities.map { ($0.name.uppercased(), $0.name) })
+        guard Set(sourceNamesByFoldedName.keys) == Set(destinationNamesByFoldedName.keys) else { return nil }
+        guard
+            source.entities.allSatisfy({ entity in
+                destinationNamesByFoldedName[entity.name.uppercased()] == entity.name
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Entity names cannot change case during relationship removal.")
+        }
+        let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
+        let removedByOwnerEntries = source.entities.compactMap { sourceEntity -> (String, [Schema.Relationship])? in
+            guard let destinationEntity = destinationByName[sourceEntity.name] else { return nil }
+            let removed = sourceEntity.relationships.filter { relationship in
+                guard !excludedEndpoints.contains("\(sourceEntity.name).\(relationship.name)") else { return false }
+                return !destinationEntity.relationships.contains(where: {
+                    $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                        || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                })
+            }
+            return (sourceEntity.name, removed)
+        }
+        guard removedByOwnerEntries.count == source.entities.count else { return nil }
+        let removedByOwner = Dictionary(uniqueKeysWithValues: removedByOwnerEntries)
+        let allRemovedEndpoints = source.entities.flatMap { entity in
+            entity.relationships.compactMap { relationship -> String? in
+                guard let next = destinationByName[entity.name],
+                    !next.relationships.contains(where: {
+                        $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                            || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    })
+                else { return nil }
+                return "\(entity.name).\(relationship.name)"
+            }
+        }
+        let excludedRemovalEndpoints = allRemovedEndpoints.filter(excludedEndpoints.contains)
+        if !excludedRemovalEndpoints.isEmpty {
+            guard excludedRemovalEndpoints.count == allRemovedEndpoints.count else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Paired inverse removals cannot be combined with owner-only join removals.")
+            }
+            return nil
+        }
+        let removedRelationships = removedByOwner.values.flatMap { $0 }
+        let allRemovedRelationships = source.entities.flatMap { entity in
+            entity.relationships.filter { relationship in
+                !destinationByName[entity.name, default: entity].relationships.contains(where: {
+                    $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                        || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                })
+            }
+        }
+        guard allRemovedRelationships.count > 1 else { return nil }
+        if allRemovedRelationships.allSatisfy({ !$0.isToMany }) { return nil }
+        guard allRemovedRelationships.allSatisfy(\.isToMany) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Mixed to-one and to-many relationship removals cannot be batched.")
+        }
+        guard removedRelationships.count == allRemovedRelationships.count else {
+            throw SwiftDataError.migrationUnsupported(
+                "Paired inverse removals cannot be combined with owner-only join removals.")
+        }
+        let changedOwnerNames = Set(removedByOwner.filter { !$0.value.isEmpty }.map(\.key))
+        guard source.entityIDsByName == destination.entityIDsByName,
+            source.entities.allSatisfy({ $0.superentityName == nil }),
+            destination.entities.allSatisfy({ $0.superentityName == nil }),
+            source.entities.allSatisfy({ entity in
+                guard let next = destinationByName[entity.name] else { return false }
+                return entity.attributes == next.attributes
+                    && entity.indexes == next.indexes
+                    && entity.superentityName == next.superentityName
+                    && (changedOwnerNames.contains(entity.name)
+                        ? next.relationships
+                            == entity.relationships.filter {
+                                !(removedByOwner[entity.name]?.contains($0) ?? false)
+                            }
+                        : entity.relationships == next.relationships)
             })
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Multiple to-many removals require unchanged flat metadata and independent owner-only relationships."
-            )
+                "Batched to-many removals must be the only schema edits on flat root entities.")
         }
 
-        let targetNames = Set(removedRelationships.map(\.destination))
-        guard
-            targetNames.allSatisfy({ targetName in
-                guard let sourceTarget = sourceSchema.entity(forName: targetName),
-                    let destinationTarget = destinationSchema.entity(forName: targetName)
-                else { return false }
-                return sourceTarget.superentityName == nil
-                    && destinationTarget.superentityName == nil
-                    && !sourceEntities.contains(where: { $0.superentityName == targetName })
-                    && !destinationEntities.contains(where: { $0.superentityName == targetName })
-            })
-        else {
-            throw SwiftDataError.migrationUnsupported("To-many removal targets must remain flat root entities.")
-        }
-
+        let sourceSchema = source
+        var relationshipNamesByOwner: [String: Set<String>] = [:]
         var plans: [OwnerOnlyToManyRemovalPlan] = []
-        for relationship in removedRelationships.sorted(by: {
+        for sourceEntity in source.entities.sorted(by: {
             $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
         }) {
-            guard
-                let plan = try planOwnerOnlyToManyJoinTableRemoval(
-                    relationship, owner: source, schema: sourceSchema, connection: connection)
+            let removed = removedByOwner[sourceEntity.name] ?? []
+            guard !removed.isEmpty else { continue }
+            guard let destinationEntity = destinationByName[sourceEntity.name] else {
+                throw SwiftDataError.migrationUnsupported("Destination schema omits a retained owner entity.")
+            }
+            guard sourceEntity.attributes == destinationEntity.attributes,
+                sourceEntity.indexes == destinationEntity.indexes,
+                sourceEntity.superentityName == destinationEntity.superentityName
             else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Multiple to-many removals must use independent owner-only join tables.")
+                    "Batched to-many removal cannot be combined with entity metadata changes.")
             }
-            plans.append(plan)
+            let removedByEntity = Set(removed.map(\.name))
+            let actualRemovedNames = Set(
+                sourceEntity.relationships.compactMap { relationship -> String? in
+                    destinationEntity.relationships.contains(where: {
+                        $0.name.caseInsensitiveCompare(relationship.name) == .orderedSame
+                            || $0.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                    }) ? nil : relationship.name
+                })
+            guard actualRemovedNames == removedByEntity else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched relationship removals do not match all detected owner endpoints.")
+            }
+            guard
+                removed.allSatisfy({ relationship in
+                    relationship.originalName == nil
+                        && !destination.entities.contains(where: { entity in
+                            entity.relationships.contains(where: { candidate in
+                                candidate.originalName?.caseInsensitiveCompare(relationship.name) == .orderedSame
+                            })
+                        })
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removal cannot rename a removed relationship endpoint.")
+            }
+            guard
+                destinationEntity.relationships
+                    == sourceEntity.relationships.filter({
+                        !removed.contains($0)
+                    })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Batched to-many removals must preserve all retained relationship metadata.")
+            }
+            for relationship in removed.sorted(by: {
+                $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+            }) {
+                guard
+                    let plan = try planOwnerOnlyToManyJoinTableRemoval(
+                        relationship, owner: sourceEntity, schema: sourceSchema, connection: connection)
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Batched to-many removals require independent owner-only join tables.")
+                }
+                relationshipNamesByOwner[sourceEntity.name, default: []].insert(relationship.name)
+                plans.append(plan)
+            }
         }
-        let normalizedJoinTableNames = plans.map { $0.joinTable.uppercased() }
-        guard Set(normalizedJoinTableNames).count == plans.count else {
-            throw SwiftDataError.migrationUnsupported("Multiple to-many relationships share a join table name.")
+
+        let plannedNames = Set(
+            plans.flatMap { plan in
+                [plan.joinTable, "\(plan.joinTable)_UNIQUE_INDEX", "\(plan.joinTable)_Z_B_INDEX"]
+                    .map { $0.uppercased() }
+            })
+        guard plannedNames.count == plans.count * 3 else {
+            throw SwiftDataError.migrationUnsupported("Batched join-table object names collide.")
         }
-        for plan in plans.sorted(by: { $0.joinTable < $1.joinTable }) {
-            try applyOwnerOnlyToManyRemoval(plan, connection: connection)
-        }
+
+        return OwnerOnlyToManyRemovalBatchPlan(
+            removedRelationshipNamesByOwner: relationshipNamesByOwner,
+            joinTables: plans.map(\.joinTable).sorted())
     }
 
     private static func validateJoinTableNoPhysicalForeignKeys(

@@ -7026,6 +7026,240 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testMultipleFlatToManyRemovalRejectsCaseOnlyRenameBeforeDrops() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    Schema.Relationship(name: "target", destination: "Target", isOptional: true),
+                ]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Target"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(
+                        name: "TARGET", destination: "Target", isOptional: true, originalName: "target")
+                ]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "Target"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: owner,
+                relationship: try XCTUnwrap(owner.relationships.first(where: { $0.name == "tags" })),
+                schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-to-many-case-rename-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZTARGET) VALUES (1, 3, 1)")
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-only rename and join removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }, originalColumns)
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZTARGET FROM ZOWNER") }, [[.int(1), .int(3), .int(1)]])
+        try driver.close()
+    }
+
+    func testPairedInverseRemovalStillUsesPairPlanner() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                ]),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "ZTarget"),
+        ])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("paired-inverse-removal.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 5, 'owner', 1)")
+            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT) VALUES (3, 7)")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertFalse(
+            try migrated.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") }
+                )
+            })
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZAOWNER") },
+            [[.int(1), .int(5), .text("owner")]])
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT FROM ZZTARGET") }, [[.int(1), .int(7)]])
+        try migrated.close()
+    }
+
+    func testMixedPairedInverseAndOwnerJoinRemovalRejectsBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners"),
+                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                ]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(
+                name: "ZTarget",
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                ]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Tag"),
+            Schema.Entity(name: "ZTarget"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let tagsRelationship = try XCTUnwrap(owner.relationships.first(where: { $0.name == "tags" }))
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: tagsRelationship, schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-pair-and-join-removal"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 5, 'owner', 1)")
+            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT) VALUES (3, 7)")
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        let originalIndexes = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed inverse/join removals to fail closed, got \(error)")
+            }
+        }
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name") },
+            originalIndexes)
+        try driver.close()
+    }
+
+    func testMultipleToManyRemovalRejectsEntityCaseRenameBeforeDrops() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                relationships: [
+                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
+                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                ]),
+            Schema.Entity(name: "First"),
+            Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "OWNER"), Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let firstRelationship = try XCTUnwrap(owner.relationships.first(where: { $0.name == "first" }))
+        let firstJoinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: firstRelationship, schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "join-removal-entity-case-rename"))
+        try bootstrap(source, driver: driver)
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-only entity rename to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }, originalColumns)
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(firstJoinTable)])
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testEntityCaseRenameWithRootReplacementRejectsBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Obsolete", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "obsolete", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-case-rename-root-replacement"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOBSOLETE (Z_ENT, Z_OPT, ZNAME) VALUES (1, 4, 'keep')")
+        }
+        let sourceTables = try driver.read {
+            try $0.rows(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected case-only entity replacement to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZOBSOLETE") },
+            [[.int(1), .int(4), .text("keep")]])
+        try driver.close()
+    }
+
     func testScalarOptionalAdditionComposesWithOwnerOnlyToManyRemoval() throws {
         let source = Schema([
             Schema.Entity(

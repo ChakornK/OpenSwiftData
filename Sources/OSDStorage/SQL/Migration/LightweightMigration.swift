@@ -86,6 +86,10 @@ package enum LightweightMigration {
         let destination: Schema.Attribute
     }
 
+    private struct OwnerOnlyToManyRemovalPlan {
+        let joinTable: String
+    }
+
     package static func openOrMigrate(
         to destination: Schema,
         connection: SQLConnection
@@ -1759,6 +1763,143 @@ package enum LightweightMigration {
         return true
     }
 
+    private static func addScalarsWithOwnerOnlyToManyRemoval(
+        mappings: [AttributeMapping],
+        removedRelationships: [Schema.Relationship],
+        addedRelationships: [Schema.Relationship],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int],
+        connection: SQLConnection
+    ) throws -> Bool {
+        let addedAttributes = mappings.filter { $0.source == nil }.map(\.destination)
+        guard !addedAttributes.isEmpty,
+            removedRelationships.count == 1,
+            removedRelationships[0].isToMany
+        else { return false }
+        guard
+            addedRelationships.isEmpty,
+            let relationship = removedRelationships.first,
+            source.relationships.filter({ $0.name != relationship.name }) == destination.relationships,
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !sourceEntities.contains(where: { $0.superentityName == source.name }),
+            !destinationEntities.contains(where: { $0.superentityName == destination.name }),
+            sourceEntityIDs == destinationEntityIDs,
+            Set(sourceEntities.map(\.name)) == Set(destinationEntities.map(\.name)),
+            sourceEntities.allSatisfy({ sourceEntity in
+                guard let destinationEntity = destinationEntities.first(where: { $0.name == sourceEntity.name }) else {
+                    return false
+                }
+                if sourceEntity.name == source.name {
+                    return sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                        && addedAttributes.allSatisfy({ destinationEntity.attributes.contains($0) })
+                        && destinationEntity.attributes.count == sourceEntity.attributes.count + addedAttributes.count
+                        && sourceEntity.relationships.filter({ $0.name != relationship.name })
+                            == destinationEntity.relationships
+                }
+                return equivalentEntityMetadata(sourceEntity, destinationEntity)
+            }),
+            source.attributes.count == mappings.compactMap({ $0.source }).count,
+            try mappings.allSatisfy({ mapping in
+                if let old = mapping.source { return old == mapping.destination }
+                let attribute = mapping.destination
+                let literal = try migrationDefaultLiteral(for: attribute)
+                return (attribute.isOptional || literal != nil)
+                    && attribute.originalName == nil
+                    && !attribute.options.contains(.unique)
+                    && attribute.components.isEmpty
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            addedAttributes.allSatisfy({ attribute in
+                attribute.originalName == nil
+                    && attribute.components.isEmpty
+                    && !attribute.options.contains(.unique)
+                    && !attribute.options.contains(.codable)
+                    && !attribute.options.contains(.flattened)
+                    && !attribute.options.contains(.externalStorage)
+                    && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+            }),
+            source.attributes.allSatisfy({ old in destination.attributes.contains(old) }),
+            source.indexes.filter(\.isUnique).count == destination.indexes.filter(\.isUnique).count,
+            source.indexes.filter(\.isUnique).allSatisfy({ destination.indexes.contains($0) }),
+            Set(source.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+                == Set(destination.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "To-many removal with scalar additions requires unchanged flat metadata and literal defaults.")
+        }
+
+        for attribute in addedAttributes {
+            _ = try SQLColumnType.resolve(
+                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+            _ = try migrationDefaultLiteral(for: attribute)
+        }
+        let sourceSchema = Schema(sourceEntities)
+        let destinationSchema = Schema(destinationEntities)
+        let table = "Z\(source.name.uppercased())"
+        let existingColumns = try tableColumns(table, connection: connection)
+        let addedColumnNames = Set(addedAttributes.map { "Z\($0.name.uppercased())" })
+        guard addedColumnNames.count == addedAttributes.count,
+            addedColumnNames.isDisjoint(with: existingColumns)
+        else {
+            throw SwiftDataError.migrationUnsupported("Added scalar columns collide with the physical source table.")
+        }
+        try validateSourceTableLayout(source, schema: sourceSchema, connection: connection)
+        _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
+        let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
+        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: Schema(destinationEntities))
+        let destinationIndexNames = Set(destinationIndexDefinitions.map { $0.name.uppercased() })
+        let sourceIndexNames = Set(sourceIndexDefinitions.map { $0.name.uppercased() })
+        guard
+            destinationIndexNames.subtracting(sourceIndexNames).allSatisfy({ newName in
+                sourceIndexDefinitions.allSatisfy({ $0.name.uppercased() != newName })
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported("Destination index names collide during to-many removal.")
+        }
+        guard
+            let plan = try planOwnerOnlyToManyRemoval(
+                source: source,
+                destination: destination,
+                sourceSchema: sourceSchema,
+                destinationSchema: destinationSchema,
+                relationship: relationship,
+                addedAttributes: addedAttributes,
+                connection: connection)
+        else {
+            throw SwiftDataError.migrationUnsupported("To-many relationship removal could not be planned.")
+        }
+
+        try validateDestinationIndexNames(Schema(destinationEntities))
+
+        try applyOwnerOnlyToManyRemoval(plan, connection: connection)
+        for attribute in addedAttributes.sorted(by: {
+            $0.name.utf8.lexicographicallyPrecedes($1.name.utf8)
+        }) {
+            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+            guard attribute.isOptional || defaultLiteral != nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+            }
+            let type = try SQLColumnType.resolve(
+                attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+            let required = attribute.isOptional ? "" : " NOT NULL"
+            let defaultSQL = defaultLiteral.map { " DEFAULT \($0)" } ?? ""
+            try connection.execute(
+                "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
+                    + "\(required)\(defaultSQL)")
+        }
+        return true
+    }
+
     private static func validateAttributeColumns(
         _ mappings: [AttributeMapping],
         destination: Schema.Entity,
@@ -1833,6 +1974,25 @@ package enum LightweightMigration {
                 $0.name == relationship.name
                     || ($0.name == relationship.originalName && !removedRelationshipNames.contains($0.name))
             })
+        }
+        if try addScalarsWithOwnerOnlyToManyRemoval(
+            mappings: mappings,
+            removedRelationships: removedRelationships,
+            addedRelationships: addedRelationships,
+            source: source,
+            destination: destination,
+            sourceEntities: sourceEntities,
+            destinationEntities: destinationEntities,
+            sourceEntityIDs: sourceEntityIDs,
+            destinationEntityIDs: destinationEntityIDs,
+            connection: connection)
+        {
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
         }
         if try removeCombinedScalarAndRelationshipColumns(
             mappings: mappings,
@@ -3641,6 +3801,55 @@ package enum LightweightMigration {
         }
     }
 
+    private static func validateSourceTableLayout(
+        _ entity: Schema.Entity,
+        schema: Schema,
+        connection: SQLConnection
+    ) throws {
+        let table = "Z\(entity.name.uppercased())"
+        let tableInfo = try connection.rows("PRAGMA table_info(\(table))")
+        let expectedColumns: [(name: String, type: String, notNull: Int64, primaryKey: Int64)] =
+            [
+                ("Z_PK", "INTEGER", 0, 1),
+                ("Z_ENT", "INTEGER", 0, 0),
+                ("Z_OPT", "INTEGER", 0, 0),
+            ]
+            + (try entity.attributes.sorted(by: { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }).map {
+                attribute in
+                let type = try SQLColumnType.resolve(
+                    attribute.type, property: "\(entity.name).\(attribute.name)", options: attribute.options)
+                return ("Z\(attribute.name.uppercased())", type.rawValue, 0, 0)
+            })
+            + entity.relationships.compactMap { relationship in
+                guard !relationship.isToMany,
+                    !SchemaBuilder.isNonOwner(entity, relationship, schema: schema),
+                    let mapping = schema.relationshipStorageMapping(
+                        modelEntityName: entity.name, relationshipName: relationship.name)
+                else { return nil }
+                return ("Z\(mapping.storageColumnName.uppercased())", "INTEGER", 0, 0)
+            }
+        let expectedByName = Dictionary(uniqueKeysWithValues: expectedColumns.map { ($0.name, $0) })
+        guard tableInfo.count == expectedColumns.count,
+            tableInfo.allSatisfy({ row in
+                guard row.count > 5, case let .text(columnName) = row[1],
+                    let expected = expectedByName[columnName.uppercased()]
+                else { return false }
+                return row[2] == .text(expected.type)
+                    && row[3] == .int(expected.notNull)
+                    && row[4] == .null
+                    && row[5] == .int(expected.primaryKey)
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Scalar addition requires a physical table matching the flat source schema layout.")
+        }
+        let extendedTableInfo = try connection.rows("PRAGMA table_xinfo(\(table))")
+        guard !extendedTableInfo.contains(where: { $0.count > 6 && $0[6] != .int(0) }) else {
+            throw SwiftDataError.migrationUnsupported(
+                "Scalar addition is unsupported for tables with generated or hidden columns.")
+        }
+    }
+
     private static func validateGeneratedIndexesForAttributeRemoval(
         table: String,
         definitions: [IndexDefinition],
@@ -4117,6 +4326,22 @@ package enum LightweightMigration {
         added: Schema.Relationship?,
         connection: SQLConnection
     ) throws {
+        if let removed, added == nil {
+            guard
+                let plan = try planOwnerOnlyToManyRemoval(
+                    source: source,
+                    destination: destination,
+                    sourceSchema: sourceSchema,
+                    destinationSchema: destinationSchema,
+                    relationship: removed,
+                    addedAttributes: [],
+                    connection: connection)
+            else {
+                throw SwiftDataError.migrationUnsupported("To-many relationship removal could not be planned.")
+            }
+            try applyOwnerOnlyToManyRemoval(plan, connection: connection)
+            return
+        }
         let expectedDestinationRelationshipCount = source.relationships.count + (added == nil ? -1 : 1)
         guard (removed == nil) != (added == nil),
             let relationship = removed ?? added,
@@ -4222,6 +4447,80 @@ package enum LightweightMigration {
             reverseIndexName: reverseIndexName,
             connection: connection)
         try connection.execute("DROP TABLE \(joinTable)")
+    }
+
+    private static func planOwnerOnlyToManyRemoval(
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceSchema: Schema,
+        destinationSchema: Schema,
+        relationship: Schema.Relationship,
+        addedAttributes: [Schema.Attribute],
+        connection: SQLConnection
+    ) throws -> OwnerOnlyToManyRemovalPlan? {
+        guard relationship.isToMany,
+            relationship.inverse == nil,
+            relationship.originalName == nil,
+            relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+            relationship.maximumModelCount == nil,
+            relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+            relationship.destination != source.name,
+            source.name == destination.name,
+            source.superentityName == nil,
+            destination.superentityName == nil,
+            !sourceSchema.entities.contains(where: { $0.superentityName == source.name }),
+            !destinationSchema.entities.contains(where: { $0.superentityName == destination.name }),
+            sourceSchema.entityIDsByName == destinationSchema.entityIDsByName,
+            Set(sourceSchema.entities.map(\.name)) == Set(destinationSchema.entities.map(\.name)),
+            source.relationships.contains(relationship),
+            !destination.relationships.contains(where: { $0.name == relationship.name }),
+            source.attributes.allSatisfy({ destination.attributes.contains($0) }),
+            addedAttributes.allSatisfy({ destination.attributes.contains($0) }),
+            destination.attributes.count == source.attributes.count + addedAttributes.count,
+            source.indexes == destination.indexes,
+            destination.relationships == source.relationships.filter({ $0.name != relationship.name }),
+            sourceSchema.entities.filter({ $0.name != source.name }).allSatisfy({ entity in
+                guard let destinationEntity = destinationSchema.entity(forName: entity.name) else { return false }
+                return equivalentEntityMetadata(entity, destinationEntity)
+            }),
+            let targetSource = sourceSchema.entity(forName: relationship.destination),
+            let targetDestination = destinationSchema.entity(forName: relationship.destination),
+            targetSource.superentityName == nil,
+            targetDestination.superentityName == nil,
+            !sourceSchema.entities.contains(where: { $0.superentityName == targetSource.name }),
+            !destinationSchema.entities.contains(where: { $0.superentityName == targetDestination.name }),
+            !hasReciprocalRelationship(
+                named: relationship.name, from: source.name, to: relationship.destination, schema: sourceSchema),
+            !hasReciprocalRelationship(
+                named: relationship.name, from: source.name, to: relationship.destination, schema: destinationSchema),
+            let joinTable = SchemaBuilder.joinTableName(
+                for: source, relationship: relationship, schema: sourceSchema)
+        else { return nil }
+
+        let built = try SchemaBuilder.build(sourceSchema)
+        let tableStatement = built.statements.first(where: { $0.hasPrefix("CREATE TABLE \(joinTable) ") })
+        let uniqueIndexName = "\(joinTable)_UNIQUE_INDEX"
+        let reverseIndexName = "\(joinTable)_Z_B_INDEX"
+        guard tableStatement != nil,
+            built.statements.contains(where: { $0.hasPrefix("CREATE UNIQUE INDEX \(uniqueIndexName) ") }),
+            built.statements.contains(where: { $0.hasPrefix("CREATE INDEX \(reverseIndexName) ") })
+        else {
+            throw SwiftDataError.migrationUnsupported("SchemaBuilder did not generate the expected join-table objects.")
+        }
+        try validateJoinTableNoPhysicalForeignKeys(table: joinTable, checkReferences: true, connection: connection)
+        try validateExistingOwnerOnlyJoinTable(
+            table: joinTable,
+            uniqueIndexName: uniqueIndexName,
+            reverseIndexName: reverseIndexName,
+            connection: connection)
+        return OwnerOnlyToManyRemovalPlan(joinTable: joinTable)
+    }
+
+    private static func applyOwnerOnlyToManyRemoval(
+        _ plan: OwnerOnlyToManyRemovalPlan,
+        connection: SQLConnection
+    ) throws {
+        try connection.execute("DROP TABLE \(plan.joinTable)")
     }
 
     private static func validateJoinTableNoPhysicalForeignKeys(

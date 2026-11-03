@@ -4925,6 +4925,234 @@ final class SchemaMigrationTests: XCTestCase {
         try removed.close()
     }
 
+    func testScalarOptionalAdditionComposesWithOwnerOnlyToManyRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ]),
+            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: try XCTUnwrap(source.entity(forName: "Owner")),
+                relationship: try XCTUnwrap(source.entity(forName: "Owner")?.relationships.first),
+                schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-add-to-many-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 4, 'owner')")
+            try connection.execute("INSERT INTO ZTAG (Z_ENT, Z_OPT, ZNAME) VALUES (2, 6, 'tag')")
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZNOTE FROM ZOWNER") },
+            [[.int(1), .int(4), .text("owner"), .null]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTAG") },
+            [[.int(1), .int(6), .text("tag")]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testScalarDefaultedAdditionComposesWithOwnerOnlyToManyRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
+                ]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-default-add-to-many-remove"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 5, 'owner')")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZPRIORITY FROM ZOWNER") },
+            [[.int(1), .int(5), .text("owner"), .int(12)]])
+        try driver.close()
+    }
+
+    func testScalarUniqueAdditionWithOwnerOnlyToManyRemovalFailsAtomically() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "token", type: "String", isOptional: true, options: [.unique]),
+                ]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: try XCTUnwrap(source.entity(forName: "Owner")),
+                relationship: try XCTUnwrap(source.entity(forName: "Owner")?.relationships.first),
+                schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-unique-add-to-many-remove-reject"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 3, 'owner')")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unique addition to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+                    .count == 1
+            })
+        XCTAssertFalse(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTOKEN") })
+            })
+        try driver.close()
+    }
+
+    func testScalarAdditionWithOwnerOnlyToManyRemovalRejectsTamperedJoinBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let relationship = try XCTUnwrap(owner.relationships.first)
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: relationship, schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-add-to-many-remove-tampered-join"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 3, 'owner')")
+            try connection.execute("DROP INDEX \(joinTable)_Z_B_INDEX")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered join table to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZOWNER") },
+            [[.int(1), .int(3), .text("owner")]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
+            },
+            [[.text(joinTable)]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").allSatisfy({ row in
+                    guard row.count > 1, case let .text(name) = row[1] else { return true }
+                    return name != "ZNOTE"
+                })
+            })
+        try driver.close()
+    }
+
+    func testScalarAdditionFailureRollsBackOwnerOnlyToManyRemoval() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
+                ]),
+            Schema.Entity(name: "Tag"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "Owner"))
+        let relationship = try XCTUnwrap(owner.relationships.first)
+        let joinTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: relationship, schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-add-failure-to-many-rollback"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 7, 'owner')")
+            try connection.execute("INSERT INTO ZTAG (Z_ENT, Z_OPT) VALUES (2, 5)")
+            try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected dynamic default to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZOWNER") },
+            [[.int(1), .int(7), .text("owner")]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("PRAGMA table_info(ZOWNER)").allSatisfy({ row in
+                    guard row.count > 1, case let .text(name) = row[1] else { return true }
+                    return name != "ZCREATEDAT"
+                })
+            })
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable)") }, [[.int(1), .int(1)]])
+        try driver.close()
+    }
+
     func testFlatToManyMigrationRejectsInverseConstraintsAndCombinedEdits() throws {
         let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
             (

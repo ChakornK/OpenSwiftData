@@ -1777,13 +1777,14 @@ package enum LightweightMigration {
             guard let old = mapping.source else { return false }
             return old.type != mapping.destination.type
         }
-        let hasIntegerToDoubleMapping = changedTypeMappings.contains { mapping in
+        let hasIntegerToFloatingMapping = changedTypeMappings.contains { mapping in
             guard let old = mapping.source else { return false }
-            return signedIntegerWidth(old.type) != nil && mapping.destination.type == "Double"
+            return signedIntegerWidth(old.type) != nil
+                && (mapping.destination.type == "Float" || mapping.destination.type == "Double")
         }
-        guard !hasIntegerToDoubleMapping || changedTypeMappings.count == 1 else {
+        guard !hasIntegerToFloatingMapping || changedTypeMappings.count == 1 else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-Double rebuild cannot be combined with another type change.")
+                "Integer-to-floating rebuild cannot be combined with another type change.")
         }
         if let narrowing = try compatibleIntegerNarrowing(
             mappings,
@@ -1807,7 +1808,7 @@ package enum LightweightMigration {
                 ))
             return
         }
-        if let integerToDouble = try compatibleIntegerToDouble(
+        if let integerToFloating = try compatibleIntegerToFloating(
             mappings,
             source: source,
             destination: destination,
@@ -1816,8 +1817,8 @@ package enum LightweightMigration {
             sourceEntityIDs: sourceEntityIDs,
             destinationEntityIDs: destinationEntityIDs)
         {
-            try rebuildIntegerColumnAsDouble(
-                attribute: integerToDouble,
+            try rebuildIntegerColumnAsFloating(
+                attribute: integerToFloating,
                 source: source,
                 destination: destination,
                 sourceSchema: Schema(sourceEntities),
@@ -2337,7 +2338,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func compatibleIntegerToDouble(
+    private static func compatibleIntegerToFloating(
         _ mappings: [AttributeMapping],
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2351,10 +2352,10 @@ package enum LightweightMigration {
             return old.type != mapping.destination.type
         }
         guard !changes.isEmpty else { return nil }
-        let hasIntegerToDouble = changes.contains { mapping in
+        let hasIntegerToFloating = changes.contains { mapping in
             guard let old = mapping.source,
                 signedIntegerWidth(old.type) != nil,
-                mapping.destination.type == "Double",
+                mapping.destination.type == "Float" || mapping.destination.type == "Double",
                 old.name == mapping.destination.name,
                 old.isOptional == mapping.destination.isOptional,
                 old.defaultValue == mapping.destination.defaultValue,
@@ -2365,12 +2366,12 @@ package enum LightweightMigration {
             else { return false }
             return true
         }
-        guard hasIntegerToDouble else { return nil }
+        guard hasIntegerToFloating else { return nil }
         guard changes.count == 1,
             let change = changes.first,
             let old = change.source,
             signedIntegerWidth(old.type) != nil,
-            change.destination.type == "Double",
+            (change.destination.type == "Float" || change.destination.type == "Double"),
             old.name == change.destination.name,
             old.isOptional == change.destination.isOptional,
             old.defaultValue == change.destination.defaultValue,
@@ -2443,13 +2444,13 @@ package enum LightweightMigration {
                 options: change.destination.options) == .float
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-Double conversion requires one flat scalar change with unchanged metadata and no indexes."
+                "Integer-to-floating conversion requires one flat scalar change with unchanged metadata and no indexes."
             )
         }
         return change
     }
 
-    private static func rebuildIntegerColumnAsDouble(
+    private static func rebuildIntegerColumnAsFloating(
         attribute mapping: AttributeMapping,
         source: Schema.Entity,
         destination: Schema.Entity,
@@ -2458,14 +2459,16 @@ package enum LightweightMigration {
         connection: SQLConnection
     ) throws {
         guard let sourceAttribute = mapping.source else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double migration has no source attribute.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating migration has no source attribute.")
         }
         let table = "Z\(source.name.uppercased())"
         let convertedColumn = "Z\(sourceAttribute.name.uppercased())"
+        let destinationType = mapping.destination.type
         try validateTableRebuildSideEffects(table: table, schema: sourceSchema, connection: connection)
-        try validateIntegerValuesForDoubleConversion(
+        try validateIntegerValuesForFloatingConversion(
             table: table,
             column: convertedColumn,
+            destinationType: destinationType,
             isOptional: sourceAttribute.isOptional,
             connection: connection)
 
@@ -2495,7 +2498,7 @@ package enum LightweightMigration {
             sourceColumns == destinationColumns,
             destinationBuilt.statements.contains(where: { $0 == destinationTableStatement })
         else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changes the table column layout.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changes the table column layout.")
         }
         let insertColumns = destinationColumns.map { "\($0)" }.joined(separator: ", ")
         let selectExpressions = destinationColumns.map { column in
@@ -2512,17 +2515,17 @@ package enum LightweightMigration {
             "INSERT INTO \(temporaryTable) (\(insertColumns)) SELECT \(selectExpressions) FROM \(table)")
         let rebuiltCount = try connection.rows("SELECT COUNT(*) FROM \(temporaryTable)")
         guard rebuiltCount.first?.first == .int(Int64(originalCount)) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed the row count.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed the row count.")
         }
         let rebuiltPrimaryKeys = try connection.rows("SELECT Z_PK FROM \(temporaryTable) ORDER BY Z_PK")
         guard rebuiltPrimaryKeys == originalPrimaryKeys else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed primary keys.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed primary keys.")
         }
         let invalidTemporaryValues = try connection.rows(
             "SELECT COUNT(*) FROM \(temporaryTable) "
                 + "WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'")
         guard invalidTemporaryValues.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double copy produced invalid REAL storage.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating copy produced invalid REAL storage.")
         }
         let mismatchedColumns = destinationColumns.map { column -> String in
             return "source.\(column) IS NOT rebuilt.\(column)"
@@ -2532,7 +2535,7 @@ package enum LightweightMigration {
             "SELECT COUNT(*) FROM \(table) AS source JOIN \(temporaryTable) AS rebuilt USING (Z_PK) "
                 + "WHERE \(mismatchPredicate)")
         guard mismatchedRows.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild changed stored row values.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild changed stored row values.")
         }
         try connection.execute("DROP TABLE \(table)")
         try connection.execute("ALTER TABLE \(temporaryTable) RENAME TO \(table)")
@@ -2540,7 +2543,7 @@ package enum LightweightMigration {
             "SELECT COUNT(*) FROM \(table) WHERE \(convertedColumn) IS NOT NULL AND typeof(\(convertedColumn)) != 'real'"
         )
         guard badConvertedRows.first?.first == .int(0) else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild produced invalid REAL storage.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild produced invalid REAL storage.")
         }
     }
 
@@ -2563,14 +2566,14 @@ package enum LightweightMigration {
         let indexes = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? COLLATE NOCASE", [.text(table)])
         guard indexes.isEmpty else {
-            throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild requires an unindexed source table.")
+            throw SwiftDataError.migrationUnsupported("Integer-to-floating rebuild requires an unindexed source table.")
         }
         let sourceDDL = try SchemaBuilder.build(schema).statements
         guard let createTable = sourceDDL.first(where: { $0.hasPrefix("CREATE TABLE \(table) (") }),
             !createTable.uppercased().contains("AUTOINCREMENT")
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-Double rebuild requires canonical non-AUTOINCREMENT DDL.")
+                "Integer-to-floating rebuild requires canonical non-AUTOINCREMENT DDL.")
         }
         let actualDDL = try connection.rows(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
@@ -2579,7 +2582,7 @@ package enum LightweightMigration {
             normalizedCreateTableSQL(actualCreateTable) == normalizedCreateTableSQL(createTable)
         else {
             throw SwiftDataError.migrationUnsupported(
-                "Integer-to-Double rebuild requires canonical source table DDL.")
+                "Integer-to-floating rebuild requires canonical source table DDL.")
         }
         let tableNames = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -2592,7 +2595,8 @@ package enum LightweightMigration {
             let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
             let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
             guard foreignKeys.isEmpty else {
-                throw SwiftDataError.migrationUnsupported("Integer-to-Double rebuild is unsupported with foreign keys.")
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer-to-floating rebuild is unsupported with foreign keys.")
             }
         }
         let hasSequence = try connection.rows(
@@ -2602,7 +2606,7 @@ package enum LightweightMigration {
                 "SELECT 1 FROM sqlite_sequence WHERE name = ? COLLATE NOCASE LIMIT 1", [.text(table)])
             guard tableSequence.isEmpty else {
                 throw SwiftDataError.migrationUnsupported(
-                    "Integer-to-Double rebuild does not migrate the source table's sqlite_sequence entry.")
+                    "Integer-to-floating rebuild does not migrate the source table's sqlite_sequence entry.")
             }
         }
     }
@@ -2613,14 +2617,21 @@ package enum LightweightMigration {
         return normalized.lowercased().filter { !$0.isWhitespace }
     }
 
-    private static func validateIntegerValuesForDoubleConversion(
+    private static func validateIntegerValuesForFloatingConversion(
         table: String,
         column: String,
+        destinationType: String,
         isOptional: Bool,
         connection: SQLConnection
     ) throws {
         let rows = try connection.rows("SELECT typeof(\(column)), \(column) FROM \(table) ORDER BY Z_PK")
-        let maximumExactInteger: Int64 = 9_007_199_254_740_992
+        let maximumExactInteger: Int64
+        switch destinationType {
+        case "Float": maximumExactInteger = 16_777_216
+        case "Double": maximumExactInteger = 9_007_199_254_740_992
+        default:
+            throw SwiftDataError.migrationUnsupported("Unsupported floating-point destination type.")
+        }
         for row in rows {
             guard row.count > 1, case let .text(storageType) = row[0] else {
                 throw SwiftDataError.migrationUnsupported("Integer column \(column) has invalid SQLite metadata.")
@@ -2634,7 +2645,7 @@ package enum LightweightMigration {
                 continue
             case ("integer", .int):
                 throw SwiftDataError.migrationUnsupported(
-                    "Integer column \(column) contains a value not exactly representable as Double.")
+                    "Integer column \(column) contains a value not exactly representable as \(destinationType).")
             default:
                 throw SwiftDataError.migrationUnsupported(
                     "Integer column \(column) contains unsupported SQLite storage type '\(storageType)'.")

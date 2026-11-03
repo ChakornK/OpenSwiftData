@@ -1339,6 +1339,74 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testIntegerToFloatRebuildPreservesExactBoundariesAndNull() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int32", isOptional: true)])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-rebuild-boundaries"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, -16777216)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 7, 16777216)")
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, NULL)")
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZVALUE), ZVALUE FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(2), .text("real"), .double(-16_777_216)],
+                [.int(2), .int(7), .text("real"), .double(16_777_216)],
+                [.int(3), .int(4), .text("null"), .null],
+            ])
+        try driver.close()
+    }
+
+    func testIntegerToFloatRebuildRejectsInexactValueAndRollsBack() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-rebuild-inexact"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 10, 16777217)")
+        }
+        let originalTableSQL = try driver.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inexact Int-to-Float conversion to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD") },
+            [[.text("integer"), .int(16_777_217)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+            },
+            originalTableSQL)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE name LIKE '%OSD_REBUILD%'").isEmpty
+            })
+        try driver.close()
+    }
+
     func testIntegerToDoubleRebuildRejectsCombinedNumericChangesAtomically() throws {
         let source = Schema([
             Schema.Entity(

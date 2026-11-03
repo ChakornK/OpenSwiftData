@@ -1990,6 +1990,69 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testIntegerToFloatingRebuildPersistsSparseExactValuesAndReopens() throws {
+        let cases: [(String, [Int64], [Double])] = [
+            (
+                "Float",
+                [16_777_218, 33_554_436, Int64.min],
+                [16_777_218.0, 33_554_436.0, -9_223_372_036_854_775_808.0]
+            ),
+            (
+                "Double",
+                [9_007_199_254_740_994, 18_014_398_509_481_988, Int64.min],
+                [9_007_199_254_740_994.0, 18_014_398_509_481_988.0, -9_223_372_036_854_775_808.0]
+            ),
+        ]
+        for (destinationType, values, expectedValues) in cases {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let location = StoreLocation.file(directory.appendingPathComponent("integer-\(destinationType).sqlite"))
+            let source = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+            ])
+            let destination = Schema([
+                Schema.Entity(
+                    name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            try initial.write { connection in
+                for (offset, value) in values.enumerated() {
+                    try connection.execute(
+                        "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, ?, ?)",
+                        [.int(Int64(offset + 4)), .int(value)])
+                }
+            }
+            let originalHash = try initial.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            }
+            try initial.close()
+
+            let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+            XCTAssertEqual(
+                try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+                values.enumerated().map {
+                    [.int(Int64($0.offset + 1)), .int(Int64($0.offset + 4)), .double(expectedValues[$0.offset])]
+                })
+            let destinationHash = try migrated.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            }
+            XCTAssertNotEqual(destinationHash, originalHash)
+            XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+            try migrated.close()
+
+            let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(Int64(values.count))]])
+            XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+            try reopened.close()
+        }
+    }
+
     func testIntegerToDoubleRebuildPreservesOrdinaryIndexes() throws {
         let source = Schema([
             Schema.Entity(

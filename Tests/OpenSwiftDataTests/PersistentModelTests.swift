@@ -5762,6 +5762,41 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingHierarchyChangesAreMergedBeforePagination() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-pending-pagination"))
+        let writer = container.mainContext
+        let child = InheritanceMacroChildFixture(name: "a-child", age: 1)
+        let grandchild = InheritanceMacroGrandchildFixture(name: "b-grandchild", age: 2, rank: 3)
+        let base = InheritanceMacroBaseFixture(name: "c-base")
+        writer.insert(child)
+        writer.insert(grandchild)
+        writer.insert(base)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedChild = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroChildFixture>()).first)
+        reader.delete(fetchedChild)
+        let pendingChild = InheritanceMacroChildFixture(name: "d-child", age: 4)
+        reader.insert(pendingChild)
+
+        let descriptor = FetchDescriptor<InheritanceMacroBaseFixture>(
+            sortBy: [SortDescriptor(\.name)],
+            fetchLimit: 2,
+            fetchOffset: 1)
+        let page = try reader.fetch(descriptor)
+        XCTAssertEqual(page.map(\.name), ["c-base", "d-child"])
+        XCTAssertFalse(page[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(page[1] is InheritanceMacroChildFixture)
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), page.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(descriptor), 2)
+    }
+
+    @MainActor
     func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() throws {
         let container = try ModelContainer(
             for: InheritanceIdentifierOwnerFixture.self,

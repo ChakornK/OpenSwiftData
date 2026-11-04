@@ -6703,6 +6703,10 @@ final class SchemaMigrationTests: XCTestCase {
         let marker = try initial.writeWithExternalData { connection, session in
             let value = try session.externalizedValue(payload)
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 3, ?)", [value])
+            try connection.execute(
+                "CREATE TRIGGER fail_schema_description BEFORE UPDATE ON _osd_meta "
+                    + "WHEN NEW.key = '\(LightweightMigration.schemaDescriptionKey)' "
+                    + "BEGIN SELECT RAISE(ABORT, 'schema metadata write failed'); END")
             return value
         }
         guard case let .blob(markerBytes) = marker,
@@ -6712,6 +6716,27 @@ final class SchemaMigrationTests: XCTestCase {
             .appendingPathComponent(fileName)
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
         try initial.close()
+
+        XCTAssertThrowsError(
+            try LightweightMigration.openStore(
+                location: location, schema: destination, externalColumns: destinationColumns)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("schema metadata write failed"), "\(error)")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
+        let inspection = try GRDBSQLiteDriver(location: location, externalColumns: sourceColumns)
+        let sourceColumnNames = try inspection.read {
+            try $0.rows("PRAGMA table_info(ZRECORD)").compactMap { row in
+                row.count > 1 ? row[1] : nil
+            }
+        }
+        XCTAssertEqual(
+            sourceColumnNames, [.text("Z_PK"), .text("Z_ENT"), .text("Z_OPT"), .text("ZPAYLOAD")])
+        XCTAssertEqual(try inspection.read { try $0.resolved(.blob(markerBytes)) }, .blob(payload))
+        try inspection.write { connection in
+            try connection.execute("DROP TRIGGER fail_schema_description")
+        }
+        try inspection.close()
 
         let migrated = try LightweightMigration.openStore(
             location: location, schema: destination, externalColumns: destinationColumns)

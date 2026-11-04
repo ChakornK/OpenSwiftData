@@ -10159,6 +10159,121 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testHierarchyLeafInverseAttachesToExistingOptionalOwnerWithoutStorageChanges() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-inverse-attachment.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
+            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            source.entities[0],
+            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "TargetLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(
+                        name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                ],
+                superentityName: "TargetBase"),
+        ])
+        let targetTable = "Z" + "TargetBase".uppercased()
+        let sourceMapping = try XCTUnwrap(
+            source.relationshipStorageMapping(modelEntityName: "Owner", relationshipName: "target"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (?, 3, 'owner', NULL)",
+                [.int(Int64(sourceIDs["Owner"] ?? 0))])
+            try connection.execute(
+                "INSERT INTO \(targetTable) (Z_ENT, Z_OPT, ZNAME) VALUES (?, 5, 'target')",
+                [.int(Int64(sourceIDs["TargetBase"] ?? 0))])
+            try connection.execute("UPDATE ZOWNER SET ZTARGET = 1 WHERE Z_PK = 1")
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceOwnerRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZTARGET FROM ZOWNER")
+        }
+        let sourceTargetRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM \(targetTable)")
+        }
+        let sourceHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationMapping = try XCTUnwrap(
+            destination.relationshipStorageMapping(modelEntityName: "Owner", relationshipName: "target"))
+        XCTAssertEqual(destinationMapping, sourceMapping)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZTARGET FROM ZOWNER") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM \(targetTable)") },
+            sourceTargetRows)
+        XCTAssertEqual(
+            destination.entity(forName: "Owner")?.relationships.first?.inverse,
+            nil)
+        XCTAssertEqual(
+            destination.entity(forName: "TargetLeaf")?.relationships.first?.inverse,
+            "target")
+        XCTAssertEqual(
+            destination.relationshipStorageMapping(modelEntityName: "TargetLeaf", relationshipName: "owners")
+                .map(\.storageColumnName),
+            "TargetLeaf_owners")
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        XCTAssertNotEqual(sourceHash, .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT owner.Z_PK, owner.Z_OPT, owner.ZNAME, target.Z_PK, target.Z_ENT, target.ZNAME "
+                        + "FROM ZOWNER AS owner JOIN \(targetTable) AS target ON target.Z_PK = owner.ZTARGET")
+            },
+            [[.int(1), .int(3), .text("owner"), .int(1), .int(2), .text("target")]])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZTARGET FROM ZOWNER") },
+            sourceOwnerRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testHierarchyLeafRelationshipMigrationRejectsRequiredToOneRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

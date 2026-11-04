@@ -5662,6 +5662,39 @@ final class PersistentModelTests: XCTestCase {
         let grandchildModels = try reader.fetch(FetchDescriptor(predicate: grandchildPredicate))
         XCTAssertEqual(grandchildModels.map(\.name), ["grandchild"])
 
+        let pendingBase = InheritanceMacroBaseFixture(name: "pending-base")
+        let pendingChild = InheritanceMacroGrandchildFixture(name: "pending-grandchild", age: 5, rank: 6)
+        reader.insert(pendingBase)
+        reader.insert(pendingChild)
+        let pendingHierarchyDescriptor = FetchDescriptor<InheritanceMacroBaseFixture>(
+            predicate: #Predicate { $0.name != "base" },
+            sortBy: [SortDescriptor(\.name)],
+            includePendingChanges: true)
+        let pendingHierarchy = try reader.fetch(pendingHierarchyDescriptor)
+        XCTAssertEqual(pendingHierarchy.map(\.name), ["child", "grandchild", "pending-base", "pending-grandchild"])
+        XCTAssertTrue(pendingHierarchy[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(pendingHierarchy[1] is InheritanceMacroGrandchildFixture)
+        XCTAssertFalse(pendingHierarchy[2] is InheritanceMacroChildFixture)
+        XCTAssertTrue(pendingHierarchy[3] is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(pendingHierarchyDescriptor), pendingHierarchy.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(pendingHierarchyDescriptor), pendingHierarchy.count)
+
+        try reader.save()
+        let persistedHierarchyDescriptor = FetchDescriptor<InheritanceMacroBaseFixture>(
+            predicate: #Predicate { $0.name != "base" },
+            sortBy: [SortDescriptor(\.name)],
+            includePendingChanges: false)
+        let persistedHierarchy = try reader.fetch(persistedHierarchyDescriptor)
+        XCTAssertEqual(persistedHierarchy.map(\.name), pendingHierarchy.map(\.name))
+        XCTAssertTrue(persistedHierarchy[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(persistedHierarchy[1] is InheritanceMacroGrandchildFixture)
+        XCTAssertFalse(persistedHierarchy[2] is InheritanceMacroChildFixture)
+        XCTAssertTrue(persistedHierarchy[3] is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(persistedHierarchyDescriptor), persistedHierarchy.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(persistedHierarchyDescriptor), persistedHierarchy.count)
+
         let reverseReader = container.makeContext()
         let reverseChildren: [InheritanceMacroChildFixture]
         do { reverseChildren = try reverseReader.fetch(FetchDescriptor<InheritanceMacroChildFixture>()) } catch {

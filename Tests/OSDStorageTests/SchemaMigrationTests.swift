@@ -1990,6 +1990,49 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testIntegerToFloatingExactnessUsesDestinationPrecision() throws {
+        let value: Int64 = 16_777_217
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        ])
+        for destinationType in ["Float", "Double"] {
+            let destination = Schema([
+                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            ])
+            let driver = try GRDBSQLiteDriver(
+                location: .memory(name: "integer-float-cross-precision-\(destinationType)"))
+            try bootstrap(source, driver: driver)
+            try driver.write { connection in
+                try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, ?)", [.int(value)])
+            }
+            if destinationType == "Double" {
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+                XCTAssertEqual(
+                    try driver.read {
+                        try $0.rows("SELECT typeof(ZVALUE), ZVALUE FROM ZRECORD")
+                    },
+                    [[.text("real"), .double(Double(value))]])
+                XCTAssertEqual(Int64(exactly: Double(value)), value)
+            } else {
+                let sourceRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") }
+                XCTAssertThrowsError(
+                    try driver.write {
+                        try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                    }
+                ) { error in
+                    guard case SwiftDataError.migrationUnsupported = error else {
+                        return XCTFail("Expected Float precision loss to reject, got \(error)")
+                    }
+                }
+                XCTAssertEqual(
+                    try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD") }, sourceRows)
+            }
+            try driver.close()
+        }
+    }
+
     func testIntegerToFloatingRebuildPersistsSparseExactValuesAndReopens() throws {
         let cases: [(String, [Int64], [Double])] = [
             (
@@ -2009,11 +2052,14 @@ final class SchemaMigrationTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: directory) }
             let location = StoreLocation.file(directory.appendingPathComponent("integer-\(destinationType).sqlite"))
             let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: "value", type: "Int64", options: [.unique])])
             ])
             let destination = Schema([
                 Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+                    name: "Record",
+                    attributes: [Schema.Attribute(name: "value", type: destinationType, options: [.unique])])
             ])
             let initial = try LightweightMigration.openStore(location: location, schema: source)
             try initial.write { connection in
@@ -2035,6 +2081,17 @@ final class SchemaMigrationTests: XCTestCase {
                 try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK") },
                 values.enumerated().map {
                     [.int(Int64($0.offset + 1)), .int(Int64($0.offset + 4)), .double(expectedValues[$0.offset])]
+                })
+            XCTAssertEqual(
+                try migrated.read {
+                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+                },
+                [[.text("ZRECORD_ZVALUE_UNIQUE_INDEX")]])
+            XCTAssertThrowsError(
+                try migrated.write {
+                    try $0.execute(
+                        "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 20, ?)",
+                        [.double(expectedValues[0])])
                 })
             let destinationHash = try migrated.read {
                 try $0.rows(

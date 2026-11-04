@@ -9556,6 +9556,129 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyMigrationAddsIndexedRootWithOptionalToOneRelationship() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(
+            directory.appendingPathComponent("hierarchy-root-indexed-relationship.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Animal"),
+            Schema.Entity(name: "Dog", superentityName: "Animal"),
+            Schema.Entity(
+                name: "Aardvark",
+                attributes: [
+                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "label", type: "String"),
+                ],
+                relationships: [
+                    Schema.Relationship(name: "target", destination: "Target", isOptional: true)
+                ],
+                indexes: [Schema.Index(properties: ["label"])]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 2)", [.int(Int64(sourceIDs["Dog"] ?? 0))])
+            try connection.execute(
+                "INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (?, 5, 'existing target')",
+                [.int(Int64(sourceIDs["Target"] ?? 0))])
+        }
+        let sourceRows = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_PK, Z_OPT FROM ZANIMAL ORDER BY Z_PK")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let destinationIDs = try XCTUnwrap(
+            migrated.read { try LightweightMigration.storedEntityIDs(schema: destination, connection: $0) })
+        XCTAssertEqual(destinationIDs["Animal"], sourceIDs["Animal"])
+        XCTAssertEqual(destinationIDs["Dog"], sourceIDs["Dog"])
+        XCTAssertEqual(destinationIDs["Target"], sourceIDs["Target"])
+        let rootID = try XCTUnwrap(destinationIDs["Aardvark"])
+        XCTAssertGreaterThan(rootID, try XCTUnwrap(sourceIDs.values.max()))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT Z_SUPER, Z_MAX FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(rootID))])
+            },
+            [[.int(0), .int(0)]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_ENT, Z_PK, Z_OPT FROM ZANIMAL ORDER BY Z_PK") },
+            sourceRows)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZAARDVARK)") }
+                .compactMap { row -> String? in
+                    guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                    return name
+                },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZCODE", "ZLABEL", "ZTARGET"])
+        let expectedRootTable = try XCTUnwrap(
+            SchemaBuilder.build(destination).statements.first { $0.hasPrefix("CREATE TABLE ZAARDVARK ") })
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZAARDVARK'")
+            },
+            [[.text(String(expectedRootTable.dropLast()))]])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA foreign_key_list(ZAARDVARK)") }, [])
+        let expectedRootIndexes = try SchemaBuilder.build(destination).statements.filter {
+            ($0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")) && $0.contains(" ON ZAARDVARK ")
+        }.compactMap { statement -> String? in
+            let tokens = statement.split(whereSeparator: \.isWhitespace)
+            guard let indexPosition = tokens.firstIndex(of: "INDEX"), tokens.indices.contains(indexPosition + 1) else {
+                return nil
+            }
+            return String(tokens[indexPosition + 1])
+        }.sorted()
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZAARDVARK' ORDER BY name")
+            },
+            expectedRootIndexes.map { [.text($0)] })
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT ZCODE, ZLABEL, ZTARGET FROM ZAARDVARK") }, [])
+        XCTAssertThrowsError(
+            try migrated.write {
+                try $0.execute(
+                    "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZCODE, ZLABEL) VALUES (?, 1, 'duplicate', 'a')",
+                    [.int(Int64(rootID))])
+                try $0.execute(
+                    "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZCODE, ZLABEL) VALUES (?, 1, 'duplicate', 'b')",
+                    [.int(Int64(rootID))])
+            })
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT COUNT(*) FROM ZAARDVARK") }, [[.int(0)]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZAARDVARK' ORDER BY name")
+            },
+            expectedRootIndexes.map { [.text($0)] })
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testHierarchyMigrationAddsIndependentRootWithToManyJoinTable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

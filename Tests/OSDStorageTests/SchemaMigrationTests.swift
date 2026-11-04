@@ -11793,6 +11793,147 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testHierarchyTopologyAndAttributeMovesFailClosedOnPopulatedFileStores() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)],
+                superentityName: "Root"),
+            Schema.Entity(name: "Second"),
+            Schema.Entity(name: "Grandchild", superentityName: "Second"),
+        ])
+        let destinations = [
+            Schema([
+                Schema.Entity(
+                    name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
+                Schema.Entity(name: "Child", superentityName: "Root"),
+                Schema.Entity(name: "Second"),
+                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            ]),
+            Schema([
+                Schema.Entity(name: "Root"),
+                Schema.Entity(
+                    name: "Child",
+                    attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
+                Schema.Entity(name: "Second"),
+                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
+                Schema.Entity(name: "First", superentityName: "Root"),
+                Schema.Entity(name: "Second"),
+                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            ]),
+        ]
+        let expectedRejectionReasons = [
+            "cannot remove persisted attributes from Child",
+            "cannot change topology, relationships, or constraints",
+            "cannot remove entities or change existing entity identifiers",
+        ]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for (index, destination) in destinations.enumerated() {
+            let location = StoreLocation.file(directory.appendingPathComponent("store-\(index).sqlite"))
+            let initial = try LightweightMigration.openStore(location: location, schema: source)
+            let sourceIDs = try initial.read {
+                try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
+            }
+            let rootID = try XCTUnwrap(sourceIDs["Root"])
+            let childID = try XCTUnwrap(sourceIDs["Child"])
+            let secondID = try XCTUnwrap(sourceIDs["Second"])
+            let grandchildID = try XCTUnwrap(sourceIDs["Grandchild"])
+            try initial.write { connection in
+                try connection.execute(
+                    "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME) VALUES (?, 3, 'root row')", [.int(Int64(rootID))])
+                try connection.execute(
+                    "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME) VALUES (?, 5, 'child row')", [.int(Int64(childID))])
+                try connection.execute(
+                    "INSERT INTO ZSECOND (Z_ENT, Z_OPT) VALUES (?, 7)", [.int(Int64(secondID))])
+                try connection.execute(
+                    "INSERT INTO ZSECOND (Z_ENT, Z_OPT) VALUES (?, 9)", [.int(Int64(grandchildID))])
+                for entityID in [rootID, childID, secondID, grandchildID] {
+                    try connection.execute(
+                        "UPDATE Z_PRIMARYKEY SET Z_MAX = 2 WHERE Z_ENT = ?", [.int(Int64(entityID))])
+                }
+            }
+            let sourceTables = try initial.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            }
+            let sourceIndexes = try initial.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            }
+            let sourceMetadata = try initial.read {
+                try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+            }
+            let sourcePrimaryKeys = try initial.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            }
+            let sourceRootRows = try initial.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZROOT ORDER BY Z_PK")
+            }
+            let sourceSecondRows = try initial.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZSECOND ORDER BY Z_PK")
+            }
+            try initial.close()
+
+            XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+                guard case let SwiftDataError.migrationUnsupported(reason) = error else {
+                    return XCTFail("Expected migrationUnsupported for variant \(index), got \(error)")
+                }
+                XCTAssertTrue(
+                    reason.contains(expectedRejectionReasons[index]),
+                    "Expected rejection reason to contain '\(expectedRejectionReasons[index])', got '\(reason)'")
+            }
+
+            let inspection = try GRDBSQLiteDriver(location: location)
+            XCTAssertEqual(
+                try inspection.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+                },
+                sourceTables)
+            XCTAssertEqual(
+                try inspection.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+                },
+                sourceIndexes)
+            XCTAssertEqual(
+                try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+                sourceMetadata)
+            XCTAssertEqual(
+                try inspection.read {
+                    try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+                },
+                sourcePrimaryKeys)
+            XCTAssertEqual(
+                try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZROOT ORDER BY Z_PK") },
+                sourceRootRows)
+            XCTAssertEqual(
+                try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZSECOND ORDER BY Z_PK") },
+                sourceSecondRows)
+            XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+            XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+            try inspection.close()
+
+            let reopened = try LightweightMigration.openStore(location: location, schema: source)
+            XCTAssertEqual(
+                try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+                sourceIDs)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZROOT ORDER BY Z_PK") },
+                sourceRootRows)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZSECOND ORDER BY Z_PK") },
+                sourceSecondRows)
+            XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+            try reopened.close()
+        }
+    }
+
     func testIndexAddAndRemovalMigrateOnExistingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-index-change"))
         let source = Schema([

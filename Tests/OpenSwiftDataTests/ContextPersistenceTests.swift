@@ -351,11 +351,34 @@ final class ContextPersistenceTests: XCTestCase {
         let wholeValue = FlattenedDimensions(width: 8, label: "initial")
         let wholeCompositeDescriptor = FetchDescriptor<FlattenedCompositeFixture>(
             predicate: #Predicate { $0.dimensions == wholeValue })
+        let pending = FlattenedCompositeFixture(dimensions: FlattenedDimensions(width: 21, label: "pending"))
+        reader.insert(pending)
+        let pendingIdentifier = pending.persistentModelID
+        let storedRowsBeforeRejectedFetch = try container.store?.read {
+            try $0.rows(
+                "SELECT Z_PK, Z_OPT, ZDIMENSIONS_WIDTH, ZDIMENSIONS_LABEL FROM ZFLATTENEDCOMPOSITEFIXTURE",
+                arguments: [])
+        }
         XCTAssertThrowsError(try reader.fetch(wholeCompositeDescriptor)) { error in
             guard case SwiftDataError.unsupportedPredicate = error else {
                 return XCTFail("Expected unsupportedPredicate, got \(error)")
             }
         }
+        XCTAssertTrue(reader.hasChanges)
+        XCTAssertEqual(reader.insertedModelsArray.count, 1)
+        XCTAssertTrue(reader.insertedModelsArray.first === pending)
+        XCTAssertTrue(pending.modelContext === reader)
+        XCTAssertEqual(pending.persistentModelID, pendingIdentifier)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, ZDIMENSIONS_WIDTH, ZDIMENSIONS_LABEL FROM ZFLATTENEDCOMPOSITEFIXTURE",
+                    arguments: [])
+            },
+            storedRowsBeforeRejectedFetch)
+        reader.rollback()
+        XCTAssertFalse(reader.hasChanges)
+        XCTAssertNil(pending.modelContext)
 
         fixture.dimensions = FlattenedDimensions(width: 12, label: "updated")
         try context.save()

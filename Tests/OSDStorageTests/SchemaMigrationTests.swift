@@ -15208,6 +15208,18 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try driver.read { try LightweightMigration.storedEntityIDs(schema: schema, connection: $0) },
             incompatibleIDs)
+        let corruptedMetadata = try driver.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let corruptedPrimaryKeys = try driver.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let corruptedTables = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let corruptedIndexes = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
         try driver.close()
 
         XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: schema)) { error in
@@ -15215,6 +15227,83 @@ final class SchemaMigrationTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            corruptedMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            corruptedPrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            corruptedTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            corruptedIndexes)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let repair = try GRDBSQLiteDriver(location: location)
+        try repair.write {
+            try LightweightMigration.writeEntityIDs(schema.entityIDsByName, schema: schema, connection: $0)
+        }
+        let repairedMetadata = try repair.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        XCTAssertEqual(repairedMetadata.map(\.first), corruptedMetadata.map(\.first))
+        let originalMetadataWithoutIDMap = corruptedMetadata.filter {
+            $0.first != .text(LightweightMigration.entityIDsKey)
+        }
+        let repairedMetadataWithoutIDMap = repairedMetadata.filter {
+            $0.first != .text(LightweightMigration.entityIDsKey)
+        }
+        XCTAssertEqual(repairedMetadataWithoutIDMap, originalMetadataWithoutIDMap)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            corruptedPrimaryKeys)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            corruptedTables)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            corruptedIndexes)
+        try repair.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: schema)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: schema, connection: $0) },
+            schema.entityIDsByName)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            repairedMetadata)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            corruptedPrimaryKeys)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            corruptedTables)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            corruptedIndexes)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
     }
 
     func testOpeningStoreFailsClosedWhenAddingNewRootWithRequiredRelationship() throws {

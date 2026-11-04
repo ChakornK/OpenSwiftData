@@ -78,8 +78,10 @@ private enum FailingMigrationPlan: SchemaMigrationPlan {
             .custom(
                 fromVersion: MigrationV1.self,
                 toVersion: MigrationV2.self,
-                willMigrate: { _ in
+                willMigrate: { context in
                     if failureSwitch.shouldFail {
+                        context.insert(MigrationPlanRecord(name: "rolled-back"))
+                        try context.save()
                         throw SwiftDataError.migrationUnsupported("expected migration failure")
                     }
                 })
@@ -101,15 +103,16 @@ private enum FailingDestinationPlan: SchemaMigrationPlan {
                     try context.save()
                 },
                 didMigrate: { context in
-                    let record = try XCTUnwrap(context.fetch(FetchDescriptor<MigrationPlanRecord>()).first)
+                    let record = try XCTUnwrap(
+                        context.fetch(FetchDescriptor<MigrationPlanRecord>()).first(where: { $0.name == "saved" }))
                     record.name = "destination-mutated"
                     try context.save()
                     if failureSwitch.shouldFail {
                         throw SwiftDataError.migrationUnsupported("expected destination failure")
                     }
                     XCTAssertEqual(
-                        try context.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name),
-                        ["destination-mutated"])
+                        try context.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+                        ["destination-mutated", "retry", "second"])
                     MigrationStageRecorder.shared.append("destination-retry-did")
                 })
         ]
@@ -337,6 +340,7 @@ final class CustomMigrationPlanTests: XCTestCase {
 
     @MainActor
     func testFailedWillMigrateLeavesSourceVersionAvailableForRetry() throws {
+        FailingMigrationPlan.failureSwitch.shouldFail = true
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataMigrationRetry-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -345,20 +349,56 @@ final class CustomMigrationPlanTests: XCTestCase {
         let source = try ModelContainer(
             for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
             configurations: [.sqliteFile("migration-retry", url: url)])
-        source.mainContext.insert(MigrationPlanRecord(name: "saved"))
+        source.mainContext.insert(MigrationPlanRecord(name: "saved-a"))
+        source.mainContext.insert(MigrationPlanRecord(name: "saved-b"))
         try source.mainContext.save()
+        let sourceRows = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            } ?? nil)
+        let sourceMetadata = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            } ?? nil)
+        try source.store?.close()
 
         XCTAssertThrowsError(
             try ModelContainer(
                 for: MigrationPlanRecord.self, migrationPlan: FailingMigrationPlan.self,
-                configurations: .sqliteFile("migration-retry", url: url)))
+                configurations: .sqliteFile("migration-retry", url: url))
+        ) { error in
+            XCTAssertEqual(error as? SwiftDataError, .migrationUnsupported("expected migration failure"))
+        }
+        let inspection = try OpenSwiftDataSQLite.sqliteFactory(.file(url), MigrationV1.schema)
+        XCTAssertEqual(
+            try inspection.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            },
+            sourceRows)
+        let failedMetadata = try inspection.read { connection in
+            try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+        }
+        XCTAssertEqual(failedMetadata, sourceMetadata)
+        XCTAssertTrue(
+            failedMetadata.allSatisfy { row in
+                guard row.count > 0, case let .text(key) = row[0] else { return true }
+                return key != "schema.migration.pending.v1"
+            })
+        let sourceVersion = try MigrationV1.versionIdentifier.encoded()
+        XCTAssertTrue(
+            failedMetadata.contains { row in
+                row.count > 1 && row[0] == .text("schema.version.v1") && row[1] == .blob(sourceVersion)
+            })
+        try inspection.close()
+
         FailingMigrationPlan.failureSwitch.shouldFail = false
         let retried = try ModelContainer(
             for: MigrationPlanRecord.self, migrationPlan: FailingMigrationPlan.self,
             configurations: .sqliteFile("migration-retry", url: url))
         XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
         XCTAssertEqual(
-            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name), ["saved"])
+            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["saved-a", "saved-b"])
     }
 
     @MainActor
@@ -368,14 +408,49 @@ final class CustomMigrationPlanTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("store.sqlite")
+        let source = try ModelContainer(
+            for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
+            configurations: [.sqliteFile("migration-did-retry-source", url: url)])
+        source.mainContext.insert(MigrationPlanRecord(name: "saved"))
+        source.mainContext.insert(MigrationPlanRecord(name: "second"))
+        try source.mainContext.save()
+        try source.store?.close()
         MigrationStageRecorder.shared.reset()
         FailingDestinationPlan.failureSwitch.shouldFail = true
 
         XCTAssertThrowsError(
             try ModelContainer(
                 for: MigrationPlanRecord.self, migrationPlan: FailingDestinationPlan.self,
-                configurations: .sqliteFile("migration-did-retry", url: url)))
+                configurations: .sqliteFile("migration-did-retry", url: url))
+        ) { error in
+            XCTAssertEqual(error as? SwiftDataError, .migrationUnsupported("expected destination failure"))
+        }
         XCTAssertEqual(MigrationStageRecorder.shared.values, ["destination-retry-will"])
+        let pendingStore = try OpenSwiftDataSQLite.sqliteFactory(.file(url), MigrationV2.schema)
+        let pendingRows = try pendingStore.read { connection in
+            try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+        }
+        XCTAssertEqual(
+            pendingRows.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            }.sorted(),
+            ["retry", "saved", "second"])
+        let pendingMetadata = try pendingStore.read { connection in
+            try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+        }
+        let destinationVersion = try MigrationV2.versionIdentifier.encoded()
+        XCTAssertTrue(
+            pendingMetadata.contains { row in
+                row.count > 1 && row[0] == .text("schema.version.v1")
+                    && row[1] == .blob(destinationVersion)
+            })
+        XCTAssertTrue(
+            pendingMetadata.contains { row in
+                row.count > 1 && row[0] == .text("schema.migration.pending.v1")
+                    && row[1] == .blob(Array(MigrationV2.versionIdentifier.identifier.utf8))
+            })
+        try pendingStore.close()
 
         FailingDestinationPlan.failureSwitch.shouldFail = false
         let retried = try ModelContainer(
@@ -384,8 +459,8 @@ final class CustomMigrationPlanTests: XCTestCase {
         XCTAssertEqual(MigrationStageRecorder.shared.values, ["destination-retry-will", "destination-retry-did"])
         XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
         XCTAssertEqual(
-            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name),
-            ["destination-mutated"])
+            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["destination-mutated", "retry", "second"])
     }
 
     @MainActor

@@ -6694,7 +6694,10 @@ final class SchemaMigrationTests: XCTestCase {
         let destination = Schema([
             Schema.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage])])
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
         ])
         let sourceColumns: Set<String> = [
             "ZRECORD.ZFIRSTDISCARDED", "ZRECORD.ZSECONDDISCARDED", "ZRECORD.ZRETAINED",
@@ -6756,6 +6759,21 @@ final class SchemaMigrationTests: XCTestCase {
                 [.int(1), .int(4), .blob(firstBytes), .null, .blob(retainedBytes)],
                 [.int(2), .int(4), .null, .blob(secondBytes), .blob(retainedBytes)],
             ])
+        XCTAssertEqual(
+            try initial.read {
+                try $0.rows("PRAGMA table_info(ZRECORD)").compactMap { row in
+                    row.count > 1 ? row[1] : nil
+                }
+            },
+            [
+                .text("Z_PK"), .text("Z_ENT"), .text("Z_OPT"), .text("ZFIRSTDISCARDED"),
+                .text("ZRETAINED"), .text("ZSECONDDISCARDED"),
+            ])
+        let sourceHashAfterRollback = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+        }
+        XCTAssertEqual(sourceHashAfterRollback, [[.blob(Array(SchemaHash.hexDigest(source).utf8))]])
         try initial.close()
         let migrated = try LightweightMigration.openStore(
             location: location, schema: destination, externalColumns: destinationColumns)
@@ -6763,10 +6781,10 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: secondURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: retainedURL.path))
         XCTAssertEqual(
-            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD ORDER BY Z_PK") },
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZNOTE FROM ZRECORD ORDER BY Z_PK") },
             [
-                [.int(1), .int(4), .blob(retainedBytes)],
-                [.int(2), .int(4), .blob(retainedBytes)],
+                [.int(1), .int(4), .blob(retainedBytes), .null],
+                [.int(2), .int(4), .blob(retainedBytes), .null],
             ])
         XCTAssertEqual(try migrated.read { try $0.resolved(.blob(retainedBytes)) }, .blob(retainedPayload))
         XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))

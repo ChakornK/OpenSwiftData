@@ -35,10 +35,34 @@ private enum MigrationV2: VersionedSchema {
         ], version: versionIdentifier)
 }
 
+private enum MigrationV3: VersionedSchema {
+    static let versionIdentifier = Schema.Version(version: [3, 0, 0], identifier: "migration-v3")
+    static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
+    static let schema = Schema(
+        [
+            Schema.Entity(
+                name: "MigrationPlanRecord",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ], version: versionIdentifier)
+}
+
 private enum LightweightMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
     static var stages: [MigrationStage] {
         [.lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self)]
+    }
+}
+
+private enum VersionThreePlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self, MigrationV3.self] }
+    static var stages: [MigrationStage] {
+        [
+            .lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self),
+            .lightweight(fromVersion: MigrationV2.self, toVersion: MigrationV3.self),
+        ]
     }
 }
 
@@ -369,6 +393,89 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+    }
+
+    @MainActor
+    func testMigrationPlanRejectsFutureStoredVersionWithoutMutation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationFutureVersion-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let initial = try ModelContainer(
+            for: MigrationPlanRecord.self,
+            migrationPlan: VersionThreePlan.self,
+            configurations: .sqliteFile("migration-future-version", url: url))
+        initial.mainContext.insert(MigrationPlanRecord(name: "future-a"))
+        initial.mainContext.insert(MigrationPlanRecord(name: "future-b"))
+        try initial.mainContext.save()
+        var seededConfiguration = Configuration()
+        seededConfiguration.readonly = true
+        let seeded = try DatabaseQueue(path: url.path, configuration: seededConfiguration)
+        let metadataSQL = "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key"
+        let rowsSQL =
+            "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME || ':' || COALESCE(ZNOTE, 'NULL') FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
+        let primaryKeysSQL =
+            "SELECT CAST(Z_ENT AS TEXT) || ':' || Z_NAME || ':' || CAST(Z_SUPER AS TEXT) || ':' || CAST(Z_MAX AS TEXT) FROM Z_PRIMARYKEY ORDER BY Z_ENT"
+        let tablesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        let indexesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY name"
+        let originalMetadata = try seeded.read { try String.fetchAll($0, sql: metadataSQL) }
+        let originalRows = try seeded.read { try String.fetchAll($0, sql: rowsSQL) }
+        let originalPrimaryKeys = try seeded.read { try String.fetchAll($0, sql: primaryKeysSQL) }
+        let originalTables = try seeded.read { try String.fetchAll($0, sql: tablesSQL) }
+        let originalIndexes = try seeded.read { try String.fetchAll($0, sql: indexesSQL) }
+        try seeded.close()
+        try initial.store?.close()
+
+        MigrationStageRecorder.shared.reset()
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: MigrationPlanRecord.self,
+                migrationPlan: TestMigrationPlan.self,
+                configurations: .sqliteFile("migration-future-version", url: url))
+        ) { error in
+            guard case let SwiftDataError.migrationUnsupported(message) = error else {
+                return XCTFail("Expected an unknown stored schema version to fail closed, got \(error)")
+            }
+            XCTAssertTrue(message.contains("migration-v3' is not present in the migration plan."), message)
+        }
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+
+        var readOnly = Configuration()
+        readOnly.readonly = true
+        let inspection = try DatabaseQueue(path: url.path, configuration: readOnly)
+        XCTAssertEqual(try inspection.read { try String.fetchAll($0, sql: metadataSQL) }, originalMetadata)
+        XCTAssertEqual(try inspection.read { try String.fetchAll($0, sql: rowsSQL) }, originalRows)
+        XCTAssertEqual(try inspection.read { try String.fetchAll($0, sql: primaryKeysSQL) }, originalPrimaryKeys)
+        XCTAssertEqual(try inspection.read { try String.fetchAll($0, sql: tablesSQL) }, originalTables)
+        XCTAssertEqual(try inspection.read { try String.fetchAll($0, sql: indexesSQL) }, originalIndexes)
+        XCTAssertEqual(try inspection.read { try String.fetchOne($0, sql: "PRAGMA integrity_check") }, "ok")
+        try inspection.close()
+
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self,
+            migrationPlan: VersionThreePlan.self,
+            configurations: .sqliteFile("migration-future-version-reopen", url: url))
+        XCTAssertEqual(reopened.schema.version, MigrationV3.versionIdentifier)
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["future-a", "future-b"])
+        let reopenedIdentifierRows: [[RuntimeValue]] = try XCTUnwrap(
+            reopened.store?.read { connection in
+                try connection.rows("SELECT Z_PK FROM ZMIGRATIONPLANRECORD", arguments: [])
+            })
+        let reopenedPrimaryKeys: Set<Int64> = Set(
+            reopenedIdentifierRows.compactMap { row in
+                guard case let .int(primaryKey)? = row.first else { return nil }
+                return primaryKey
+            })
+        let originalPrimaryKeyValues: Set<Int64> = Set(
+            originalRows.compactMap { row in
+                let components = row.split(separator: ":", maxSplits: 1)
+                guard let primaryKey = components.first else { return nil }
+                return Int64(String(primaryKey))
+            })
+        XCTAssertEqual(reopenedPrimaryKeys, originalPrimaryKeyValues)
     }
 
     @MainActor

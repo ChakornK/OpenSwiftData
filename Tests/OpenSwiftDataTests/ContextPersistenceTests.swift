@@ -2209,21 +2209,27 @@ final class ContextPersistenceTests: XCTestCase {
         let context = container.mainContext
         let first = ReverseOrderPersistenceFixture(zebra: "item 10", alpha: 1, middle: "m", optionalValue: nil)
         let second = ReverseOrderPersistenceFixture(zebra: "item 2", alpha: 2, middle: "m", optionalValue: "x")
+        let third = ReverseOrderPersistenceFixture(zebra: "item 3", alpha: 4, middle: "m", optionalValue: nil)
         context.insert(first)
         context.insert(second)
+        context.insert(third)
         try context.save()
         let pending = ReverseOrderPersistenceFixture(zebra: "Álpha 1", alpha: 3, middle: "m", optionalValue: nil)
         context.insert(pending)
+        let pendingValue = ReverseOrderPersistenceFixture(zebra: "item 4", alpha: 5, middle: "m", optionalValue: "y")
+        context.insert(pendingValue)
 
         let ascending = FetchDescriptor<ReverseOrderPersistenceFixture>(
             sortBy: [SortDescriptor(\.optionalValue), SortDescriptor(\.zebra)])
         let descending = FetchDescriptor<ReverseOrderPersistenceFixture>(
             sortBy: [SortDescriptor(\.optionalValue, order: .reverse)])
+        let persistedDescending = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            sortBy: [SortDescriptor(\.optionalValue, order: .reverse)], includePendingChanges: false)
         let persistedStringOrder = FetchDescriptor<ReverseOrderPersistenceFixture>(
             sortBy: [SortDescriptor(\.zebra)], includePendingChanges: false)
 
         let ascendingRows = try context.fetch(ascending)
-        let expectedAscending = [first, second, pending].sorted { lhs, rhs in
+        let expectedAscending = [first, second, third, pending, pendingValue].sorted { lhs, rhs in
             let nilOrder: ComparisonResult
             switch (lhs.optionalValue, rhs.optionalValue) {
             case (nil, nil): nilOrder = .orderedSame
@@ -2237,9 +2243,10 @@ final class ContextPersistenceTests: XCTestCase {
             return (lhs.persistentModelID.primaryKey ?? Int64.max) < (rhs.persistentModelID.primaryKey ?? Int64.max)
         }
         XCTAssertEqual(ascendingRows.map(\.persistentModelID), expectedAscending.map(\.persistentModelID))
-        XCTAssertEqual(try context.fetch(descending).map(\.alpha), [2, 1, 3])
+        XCTAssertEqual(try context.fetch(descending).map(\.alpha), [5, 2, 1, 4, 3])
+        XCTAssertEqual(try context.fetch(persistedDescending).map(\.alpha), [2, 1, 4])
         XCTAssertEqual(try context.fetchIdentifiers(ascending), ascendingRows.map(\.persistentModelID))
-        XCTAssertEqual(try context.fetch(persistedStringOrder).map(\.alpha), [2, 1])
+        XCTAssertEqual(try context.fetch(persistedStringOrder).map(\.alpha), [2, 4, 1])
     }
 
     @MainActor

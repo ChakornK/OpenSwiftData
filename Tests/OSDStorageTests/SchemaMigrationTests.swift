@@ -15470,6 +15470,133 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testOpeningStorePreservesMalformedSchemaDescriptionUntilRepaired() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
+        let schema = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: schema)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNAME) VALUES (1, 6, 'preserved')")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        guard
+            case let .blob(originalDescription)? = originalMetadata.first(where: {
+                $0.first == .text(LightweightMigration.schemaDescriptionKey)
+            })?.last
+        else {
+            return XCTFail("Expected the canonical schema description to be stored as a blob")
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZRECORD ORDER BY Z_PK")
+        }
+        let originalPrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let malformedDescription = Array(
+            "{\"format\":\"OpenSwiftData.SchemaDescription.v1\",\"entities\":[".utf8)
+        try initial.write { connection in
+            try connection.execute(
+                "UPDATE _osd_meta SET value = ? WHERE key = ?",
+                [.blob(malformedDescription), .text(LightweightMigration.schemaDescriptionKey)])
+            XCTAssertEqual(connection.changesCount(), 1)
+        }
+        let corruptedMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        XCTAssertNotEqual(corruptedMetadata, originalMetadata)
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: schema)) { error in
+            guard case SwiftDataError.migrationUnsupported = error,
+                String(describing: error).contains("Invalid stored schema description")
+            else {
+                return XCTFail("Expected malformed schema description to fail closed, got \(error)")
+            }
+        }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            corruptedMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            originalPrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZRECORD ORDER BY Z_PK") },
+            originalRows)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let repair = try GRDBSQLiteDriver(location: location)
+        try repair.write { connection in
+            try connection.execute(
+                "UPDATE _osd_meta SET value = ? WHERE key = ?",
+                [.blob(originalDescription), .text(LightweightMigration.schemaDescriptionKey)])
+            XCTAssertEqual(connection.changesCount(), 1)
+        }
+        XCTAssertEqual(
+            try repair.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata)
+        XCTAssertEqual(
+            try repair.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZRECORD ORDER BY Z_PK") },
+            originalRows)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            originalPrimaryKeys)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try repair.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(try repair.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try repair.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: schema)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZRECORD ORDER BY Z_PK") },
+            originalRows)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            originalPrimaryKeys)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testOpeningStoreFailsClosedWhenAddingNewRootWithRequiredRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

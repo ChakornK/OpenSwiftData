@@ -153,6 +153,29 @@ package enum PredicateRuntimeTreeBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Expression values are only supported inside ExpressionEvaluate")
             }
+            if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "UnaryMinus" {
+                let children = Array(mirror.children)
+                let childLabels = children.compactMap(\.label)
+                guard childLabels.count == children.count, Set(childLabels) == entry.requiredChildren,
+                    children.count == 1, children[0].label == "wrapped",
+                    let literal = try unaryMinusLiteral(children[0].value)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Unary minus requires a supported constant numeric value")
+                }
+                let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
+                captures[RuntimePredicatePath(labels: rewrittenPath)] = literal
+                return .expression(
+                    name: "Value",
+                    children: [
+                        (
+                            "value",
+                            .capture(
+                                typeName: String(reflecting: type(of: literal)),
+                                description: String(describing: literal))
+                        )
+                    ])
+            }
             if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "ExpressionEvaluate" {
                 return try visitExpressionEvaluate(
                     mirror: mirror, path: path, bindings: bindings,
@@ -816,6 +839,68 @@ package enum PredicateRuntimeTreeBuilder {
         if let value = value as? UInt64 { return value }
         if let value = value as? UInt { return UInt64(value) }
         return nil
+    }
+
+    private static func unaryMinusLiteral(_ value: Any) throws -> StoredValue? {
+        var current = value
+        var negationCount = 1
+        while true {
+            let typeName = String(reflecting: type(of: current))
+            guard let entry = PredicateNodeMetadata.entry(for: typeName) else { return nil }
+            let children = Array(Mirror(reflecting: current).children)
+            if entry.name == "UnaryMinus" {
+                let childLabels = children.compactMap(\.label)
+                guard childLabels.count == children.count,
+                    Set(childLabels) == entry.requiredChildren,
+                    children.count == 1,
+                    children[0].label == "wrapped"
+                else {
+                    throw SwiftDataError.unsupportedPredicate("Malformed unary-minus expression")
+                }
+                negationCount += 1
+                guard negationCount <= 64 else {
+                    throw SwiftDataError.unsupportedPredicate("Unary-minus nesting exceeds the supported depth")
+                }
+                current = children[0].value
+                continue
+            }
+            guard entry.name == "Value" else { return nil }
+            guard children.count == 1, children[0].label == "value" else {
+                throw SwiftDataError.unsupportedPredicate("Malformed unary-minus literal")
+            }
+            current = children[0].value
+            break
+        }
+        guard negationCount > 0 else { return nil }
+        let literal = current
+        let negated: Any
+        switch literal {
+        case let number as Int: negated = try checkedNegation(number, count: negationCount)
+        case let number as Int8: negated = try checkedNegation(number, count: negationCount)
+        case let number as Int16: negated = try checkedNegation(number, count: negationCount)
+        case let number as Int32: negated = try checkedNegation(number, count: negationCount)
+        case let number as Int64: negated = try checkedNegation(number, count: negationCount)
+        case let number as Float: negated = negationCount.isMultiple(of: 2) ? number : -number
+        case let number as Double: negated = negationCount.isMultiple(of: 2) ? number : -number
+        default: return nil
+        }
+        do {
+            return try StoredValue(predicateScalar: negated, type: type(of: negated))
+        } catch {
+            throw SwiftDataError.unsupportedPredicate("Unsupported unary-minus numeric value")
+        }
+    }
+
+    private static func checkedNegation<Value: FixedWidthInteger>(_ value: Value, count: Int) throws -> Value {
+        var result = value
+        for _ in 0..<count {
+            let (negated, overflow) = Value.zero.subtractingReportingOverflow(result)
+            guard !overflow else {
+                throw SwiftDataError.unsupportedPredicate("Unary minus overflows its signed integer operand")
+            }
+            result = negated
+        }
+        return result
     }
 
     private static func isArrayOrSetType(_ type: Any.Type) -> Bool {

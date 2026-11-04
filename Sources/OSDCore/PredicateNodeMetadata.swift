@@ -27,6 +27,7 @@ public enum PredicateNodeMetadata {
             Entry(name: "FloatDivision", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "IntDivision", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "IntRemainder", requiredChildren: ["lhs", "rhs"]),
+            Entry(name: "UnaryMinus", requiredChildren: ["wrapped"]),
             Entry(name: "Equal", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "NotEqual", requiredChildren: ["lhs", "rhs"]),
             Entry(name: "NilLiteral", requiredChildren: []),

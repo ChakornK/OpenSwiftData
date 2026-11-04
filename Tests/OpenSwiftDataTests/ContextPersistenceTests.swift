@@ -16,6 +16,17 @@ final class PredicateDoubleFixture {
 }
 
 @Model
+final class PredicateDoubleAgreementFixture {
+    var id: Int
+    var score: Double
+
+    init(id: Int, score: Double) {
+        self.id = id
+        self.score = score
+    }
+}
+
+@Model
 final class ReverseOrderPersistenceFixture {
     var zebra: String
     var alpha: Int
@@ -49,6 +60,19 @@ final class OptionalComparisonFixture {
         self.optionalValue = optionalValue
         self.optionalCount = optionalCount
         self.optionalOther = optionalOther
+    }
+}
+
+@Model
+final class PredicateAgreementFixture {
+    var id: Int
+    var value: Int
+    var optionalValue: Int?
+
+    init(id: Int, value: Int, optionalValue: Int?) {
+        self.id = id
+        self.value = value
+        self.optionalValue = optionalValue
     }
 }
 
@@ -1278,6 +1302,115 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(descriptor).map(\.title), ["count-7"])
         XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 1)
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
+    }
+
+    @MainActor
+    func testStoredPredicateResultsAgreeWithFoundationEvaluatorForIntegerSemantics() throws {
+        let seeds: [(id: Int, value: Int, optionalValue: Int?)] = [
+            (1, -2, nil),
+            (2, 0, 0),
+            (3, 3, 3),
+            (4, 7, nil),
+        ]
+        let detachedRows = seeds.map {
+            PredicateAgreementFixture(id: $0.id, value: $0.value, optionalValue: $0.optionalValue)
+        }
+        for (row, seed) in zip(detachedRows, seeds) {
+            XCTAssertEqual(row.id, seed.id)
+            XCTAssertEqual(row.value, seed.value)
+            XCTAssertEqual(row.optionalValue, seed.optionalValue)
+        }
+
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("foundation-predicate-agreement"))
+        for seed in seeds {
+            container.mainContext.insert(
+                PredicateAgreementFixture(id: seed.id, value: seed.value, optionalValue: seed.optionalValue))
+        }
+        try container.mainContext.save()
+
+        let predicates: [(String, Predicate<PredicateAgreementFixture>)] = [
+            ("less-than", #Predicate { $0.value < 3 }),
+            ("equality-and-conjunction", #Predicate { $0.value >= 0 && $0.value <= 7 }),
+            ("negation-and-nil", #Predicate { !($0.optionalValue == nil) }),
+            ("optional-equality", #Predicate { $0.optionalValue == 3 }),
+            ("optional-inequality", #Predicate { $0.optionalValue != 3 }),
+            ("disjunction", #Predicate { $0.value == -2 || $0.optionalValue == 3 }),
+            ("nested-unary-minus", #Predicate { $0.value == -(-2) }),
+        ]
+
+        for (name, predicate) in predicates {
+            let foundationIDs: Set<Int>
+            do {
+                foundationIDs = try Set(
+                    zip(detachedRows, seeds).compactMap { row, seed in
+                        try predicate.evaluate(row) ? seed.id : nil
+                    })
+            } catch {
+                XCTFail("Foundation evaluation failed for \(name): \(error)")
+                continue
+            }
+            let descriptor = FetchDescriptor<PredicateAgreementFixture>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.id)],
+                includePendingChanges: false)
+            do {
+                let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+                XCTAssertEqual(sqliteIDs, foundationIDs, "Predicate results differ for \(name)")
+            } catch {
+                XCTFail("SQLite evaluation failed for \(name): \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
+        let container = try ModelContainer(
+            for: PredicateDoubleAgreementFixture.self,
+            configurations: .sqliteMemory("foundation-negative-double-predicate"))
+        let scores = [-2.0, -0.0, 0.0, 1.5]
+        let rows = scores.enumerated().map { index, score in
+            PredicateDoubleAgreementFixture(id: index + 1, score: score)
+        }
+        for row in rows {
+            container.mainContext.insert(row)
+        }
+        try container.mainContext.save()
+        let predicates: [(String, Predicate<PredicateDoubleAgreementFixture>)] = [
+            ("negative-comparison", #Predicate { $0.score < -1.5 }),
+            ("negative-zero-equality", #Predicate { $0.score == -0.0 }),
+        ]
+
+        for (name, predicate) in predicates {
+            let foundationIDs = try Set(
+                rows.compactMap { row in try predicate.evaluate(row) ? row.id : nil })
+            let descriptor = FetchDescriptor<PredicateDoubleAgreementFixture>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.id)],
+                includePendingChanges: false)
+            let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+            XCTAssertEqual(sqliteIDs, foundationIDs, "Predicate results differ for \(name)")
+        }
+    }
+
+    @MainActor
+    func testUnaryMinusRejectsSignedIntegerOverflow() throws {
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("unary-minus-overflow"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "PredicateAgreementFixture"))
+        let negativeMinimum = PredicateExpressions.build_UnaryMinus(PredicateExpressions.Value(Int.min))
+
+        XCTAssertThrowsError(
+            try PredicateRuntimeTreeBuilder.build(
+                negativeMinimum, modelType: PredicateAgreementFixture.self, entity: entity)
+        ) { error in
+            guard case let SwiftDataError.unsupportedPredicate(message) = error else {
+                return XCTFail("Expected overflowing unary minus to fail safely, got \(error)")
+            }
+            XCTAssertTrue(message.contains("overflows"), "Unexpected unary-minus error: \(message)")
+        }
     }
 
     @MainActor

@@ -19,6 +19,14 @@ struct OpenSwiftDataMacrosPlugin: CompilerPlugin {
 }
 
 struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
+    private static func protocolConformancesOnly(in node: AttributeSyntax) -> Bool? {
+        guard case let .argumentList(arguments)? = node.arguments,
+            let argument = arguments.first(where: { $0.label?.text == "protocolConformancesOnly" })
+        else { return false }
+        guard let literal = argument.expression.as(BooleanLiteralExprSyntax.self) else { return nil }
+        return literal.literal.tokenKind == .keyword(.true)
+    }
+
     static func expansion(
         of node: AttributeSyntax,
         providingMembersOf declaration: some DeclGroupSyntax,
@@ -26,7 +34,18 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
-        let superclassName = classDeclaration.inheritanceClause?.inheritedTypes.first?.type.trimmedDescription
+        let protocolOnlyMode = protocolConformancesOnly(in: node)
+        if protocolOnlyMode == nil {
+            context.diagnose(
+                Diagnostic(
+                    node: Syntax(node),
+                    message: ModelArgumentDiagnostic(message: "protocolConformancesOnly must be a Boolean literal.")))
+            return []
+        }
+        let superclassName =
+            protocolOnlyMode == true
+            ? nil
+            : classDeclaration.inheritanceClause?.inheritedTypes.first?.type.trimmedDescription
         diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)
         let schemaIndexes = try CodeGen.schemaIndexSourcesValidating(in: classDeclaration)
         for member in classDeclaration.memberBlock.members {
@@ -80,7 +99,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             && CodeGen.propertyType(propertyName, in: classDeclaration).map(CodeGen.isInferredRelationshipCandidate)
                 == true
         let isRelationship = hasExplicitRelationship || isInferredRelationship
-        let isInheritedModel = classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
+        let isInheritedModel =
+            protocolConformancesOnly(in: node) == false
+            && classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
         let modelName = classDeclaration.name.text
         return [
             AttributeSyntax(
@@ -98,7 +119,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [ExtensionDeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
-        if classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false {
+        if protocolConformancesOnly(in: node) == false,
+            classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
+        {
             return CodeGen.extensionSources(classDeclaration)
                 .filter { $0.contains("extension PersistentModel where Self:") || $0.contains("@unchecked Sendable") }
                 .compactMap { DeclSyntax(stringLiteral: $0).as(ExtensionDeclSyntax.self) }
@@ -126,6 +149,12 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             context.diagnose(diagnostic)
         }
     }
+}
+
+private struct ModelArgumentDiagnostic: DiagnosticMessage {
+    let message: String
+    let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "invalid-model-argument")
+    let severity = DiagnosticSeverity.error
 }
 
 private struct UnsupportedModelInheritanceDiagnostic: DiagnosticMessage {

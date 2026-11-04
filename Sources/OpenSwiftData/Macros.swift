@@ -9,6 +9,9 @@ public macro _PersistedProperty(
     #externalMacro(module: "OpenSwiftDataMacros", type: "PersistedPropertyMacro")
 
 /// Marks a class as a persistent model.
+/// Set `protocolConformancesOnly` to true when inherited types are protocols; leave it false for model subclasses.
+/// The macro cannot distinguish protocols from a model superclass from syntax alone.
+/// The argument must be the `true` or `false` Boolean literal.
 @attached(
     member,
     names: arbitrary, named(createBackingData), named(persistentBackingData), named(schemaMetadata),
@@ -18,7 +21,8 @@ public macro _PersistedProperty(
 )
 @attached(memberAttribute)
 @attached(extension, conformances: PersistentModel, RelationshipModel, Observation.Observable, Sendable)
-public macro Model() = #externalMacro(module: "OpenSwiftDataMacros", type: "ModelMacro")
+public macro Model(protocolConformancesOnly: Bool = false) =
+    #externalMacro(module: "OpenSwiftDataMacros", type: "ModelMacro")
 
 /// Describes options for a persisted attribute.
 public enum Attribute {

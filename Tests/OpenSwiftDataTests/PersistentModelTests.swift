@@ -4,6 +4,27 @@ import XCTest
 @testable import OpenSwiftData
 import OSDTestSupport
 
+private protocol MacroProtocolOnlyFixture: AnyObject {}
+private protocol SecondMacroProtocolFixture: AnyObject {}
+
+@Model(protocolConformancesOnly: true)
+final class SingleMacroProtocolConformanceFixture: MacroProtocolOnlyFixture {
+    var value: Int
+
+    init(value: Int) {
+        self.value = value
+    }
+}
+
+@Model(protocolConformancesOnly: true)
+final class MacroProtocolConformanceFixture: MacroProtocolOnlyFixture, SecondMacroProtocolFixture {
+    var value: Int
+
+    init(value: Int) {
+        self.value = value
+    }
+}
+
 @Model
 final class MacroBackedFixture {
     var title: String
@@ -1772,6 +1793,27 @@ final class InheritanceChildFixture: InheritanceBaseFixture {
 }
 
 final class PersistentModelTests: XCTestCase {
+    @MainActor
+    func testModelProtocolConformancesUseRootModelGeneration() throws {
+        let container = try ModelContainer(
+            for: SingleMacroProtocolConformanceFixture.self,
+            MacroProtocolConformanceFixture.self,
+            configurations: .sqliteMemory("model-protocol-conformances"))
+        let context = container.mainContext
+        let singleModel = SingleMacroProtocolConformanceFixture(value: 24)
+        let model = MacroProtocolConformanceFixture(value: 42)
+        context.insert(singleModel)
+        context.insert(model)
+        try context.save()
+
+        let fetched = try XCTUnwrap(
+            container.makeContext().fetch(FetchDescriptor<MacroProtocolConformanceFixture>()).first)
+        XCTAssertEqual(fetched.value, 42)
+        let fetchedSingle = try XCTUnwrap(
+            container.makeContext().fetch(FetchDescriptor<SingleMacroProtocolConformanceFixture>()).first)
+        XCTAssertEqual(fetchedSingle.value, 24)
+    }
+
     func testNonfinalModelBaseStoresOwnProperties() {
         let base = InheritanceMacroBaseFixture(name: "base only")
         XCTAssertEqual(base.name, "base only")

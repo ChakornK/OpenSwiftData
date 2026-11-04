@@ -6384,6 +6384,74 @@ final class SchemaMigrationTests: XCTestCase {
         try orphanReopened.close()
     }
 
+    func testExternalStorageAttributeRenamePreservesSidecarAcrossReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("external-rename.sqlite")
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload")
+                ])
+        ])
+        let sourceColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
+        let destinationColumns: Set<String> = ["ZRECORD.ZRENAMEDPAYLOAD"]
+        let payload = Array(repeating: UInt8(0x5A), count: ExternalStorage.threshold + 1)
+        let initial = try LightweightMigration.openStore(
+            location: .file(databaseURL), schema: source, externalColumns: sourceColumns)
+        let originalHash = try initial.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+            ).first?.first
+        }
+        try initial.writeWithExternalData { connection, session in
+            let storedPayload = try session.externalizedValue(payload)
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 6, ?)", [storedPayload])
+        }
+        let originalMarkerRows = try initial.read { try $0.rows("SELECT ZPAYLOAD FROM ZRECORD") }
+        guard case let .blob(marker)? = originalMarkerRows.first?.first,
+            let fileName = ExternalStorage.fileName(in: marker)
+        else { return XCTFail("Expected oversized external Data to be stored as a sidecar reference.") }
+        try initial.close()
+
+        let sidecarURL = directory.appendingPathComponent("external-rename.sqlite.external", isDirectory: true)
+            .appendingPathComponent(fileName)
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        let migrated = try LightweightMigration.openStore(
+            location: .file(databaseURL), schema: destination, externalColumns: destinationColumns)
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRENAMEDPAYLOAD FROM ZRECORD") },
+            [[.int(1), .int(6), .blob(marker)]])
+        XCTAssertEqual(try migrated.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        XCTAssertNotEqual(originalHash, .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(
+            location: .file(databaseURL), schema: destination, externalColumns: destinationColumns)
+        XCTAssertEqual(try reopened.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testEntityRemovalRejectsUntrackedIndexes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-untracked-index"))
         let source = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])

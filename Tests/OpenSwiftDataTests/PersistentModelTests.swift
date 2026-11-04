@@ -4157,6 +4157,11 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(descriptor).map(\.persistentModelID), fetched.map(\.persistentModelID))
         XCTAssertEqual(try context.fetchCount(descriptor), 4)
         XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+        try context.save()
+        let savedMatches = try context.fetch(descriptor)
+        XCTAssertEqual(Set(savedMatches.map(\.name)), Set(["empty-child", "empty-group", "existential"]))
+        XCTAssertEqual(try context.fetchCount(descriptor), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), savedMatches.map(\.persistentModelID))
     }
 
     @MainActor

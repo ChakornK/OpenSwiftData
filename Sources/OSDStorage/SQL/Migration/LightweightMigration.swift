@@ -216,20 +216,18 @@ package enum LightweightMigration {
                 do {
                     try openOrMigrate(to: schema, connection: connection)
                     try createHistoryTables(connection)
+                    connection.afterCommit { connection in
+                        do {
+                            try connection.reconcileExternalFiles()
+                        } catch {
+                            OSDLog.debug("External Data orphan cleanup failed: \(error)")
+                        }
+                    }
                     try connection.execute("RELEASE SAVEPOINT osd_schema_open")
                 } catch {
                     try? connection.execute("ROLLBACK TO SAVEPOINT osd_schema_open")
                     try? connection.execute("RELEASE SAVEPOINT osd_schema_open")
                     throw error
-                }
-            }
-            try driver.write { connection in
-                connection.afterCommit { connection in
-                    do {
-                        try connection.reconcileExternalFiles()
-                    } catch {
-                        OSDLog.debug("External Data orphan cleanup failed: \(error)")
-                    }
                 }
             }
             return driver

@@ -6465,6 +6465,99 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testExternalStorageAttributeRenameRollsBackWhenSchemaMetadataWriteFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("external-rename-rollback.sqlite")
+        let location = StoreLocation.file(databaseURL)
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                indexes: [Schema.Index(properties: ["payload"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload")
+                ],
+                indexes: [Schema.Index(properties: ["renamedPayload"])])
+        ])
+        let externalColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
+        let payload = Array(repeating: UInt8(0xA5), count: ExternalStorage.threshold + 1)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: externalColumns)
+        try initial.writeWithExternalData { connection, session in
+            let storedPayload = try session.externalizedValue(payload)
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 4, ?)", [storedPayload])
+            try connection.execute(
+                "CREATE TRIGGER fail_schema_description BEFORE UPDATE ON _osd_meta "
+                    + "WHEN NEW.key = '\(LightweightMigration.schemaDescriptionKey)' "
+                    + "BEGIN SELECT RAISE(ABORT, 'schema metadata write failed'); END")
+        }
+        let originalRows = try initial.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        guard case let .blob(marker)? = originalRows.first?.last,
+            let fileName = ExternalStorage.fileName(in: marker)
+        else { return XCTFail("Expected the stored value to be an external Data marker.") }
+        let sidecarURL = directory.appendingPathComponent("external-rename-rollback.sqlite.external", isDirectory: true)
+            .appendingPathComponent(fileName)
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try initial.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        try initial.close()
+
+        XCTAssertThrowsError(
+            try LightweightMigration.openStore(
+                location: location, schema: destination, externalColumns: ["ZRECORD.ZRENAMEPAYLOAD"])
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("schema metadata write failed"), "\(error)")
+        }
+
+        let inspection = try GRDBSQLiteDriver(location: location, externalColumns: externalColumns)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, originalMetadata)
+        XCTAssertEqual(try inspection.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.write { connection in
+            try connection.execute("DROP TRIGGER fail_schema_description")
+        }
+        try inspection.close()
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+
+        let reopened = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: externalColumns)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(try reopened.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testEntityRemovalRejectsUntrackedIndexes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-untracked-index"))
         let source = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])

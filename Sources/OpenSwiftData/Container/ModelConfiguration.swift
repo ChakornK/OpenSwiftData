@@ -16,6 +16,7 @@ public struct ModelConfiguration: Sendable {
     public let cloudKitDatabase: CloudKitDatabase
     package let storeFactory: RuntimeStoreFactory?
     package let schemaVersionReader: RuntimeSchemaVersionReader?
+    package let schemaCompatibilityReader: RuntimeSchemaCompatibilityReader?
     package let dataStoreConfiguration: (any DataStoreConfiguration)?
 
     /// Creates a store configuration.
@@ -35,6 +36,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
         schemaVersionReader = nil
+        schemaCompatibilityReader = nil
         dataStoreConfiguration = nil
         _ = schema
     }
@@ -48,6 +50,7 @@ public struct ModelConfiguration: Sendable {
         cloudKitDatabase: CloudKitDatabase = .none,
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
+        schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
         dataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.name = name
@@ -58,6 +61,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
         self.schemaVersionReader = schemaVersionReader
+        self.schemaCompatibilityReader = schemaCompatibilityReader
         self.dataStoreConfiguration = dataStoreConfiguration
         _ = schema
     }
@@ -79,6 +83,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         storeFactory = nil
         schemaVersionReader = nil
+        schemaCompatibilityReader = nil
         dataStoreConfiguration = nil
         _ = schema
     }
@@ -92,6 +97,7 @@ public struct ModelConfiguration: Sendable {
         cloudKitDatabase: CloudKitDatabase = .none,
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
+        schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
         dataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.name = name
@@ -102,6 +108,7 @@ public struct ModelConfiguration: Sendable {
         self.cloudKitDatabase = cloudKitDatabase
         self.storeFactory = storeFactory
         self.schemaVersionReader = schemaVersionReader
+        self.schemaCompatibilityReader = schemaCompatibilityReader
         self.dataStoreConfiguration = dataStoreConfiguration
         _ = schema
     }
@@ -121,6 +128,7 @@ public struct ModelConfiguration: Sendable {
         cloudKitDatabase = .none
         storeFactory = nil
         schemaVersionReader = nil
+        schemaCompatibilityReader = nil
         self.dataStoreConfiguration = dataStoreConfiguration
         _ = schema
     }

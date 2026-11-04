@@ -257,3 +257,5 @@ public typealias RuntimeStoreFactory = @Sendable (RuntimeStoreLocation, Schema) 
 
 /// Reads schema version metadata at a runtime store location without migrating it.
 public typealias RuntimeSchemaVersionReader = @Sendable (RuntimeStoreLocation) throws -> RuntimeSchemaVersionState
+
+package typealias RuntimeSchemaCompatibilityReader = @Sendable (RuntimeStoreLocation, Schema) throws -> Bool

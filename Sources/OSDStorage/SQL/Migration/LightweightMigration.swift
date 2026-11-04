@@ -71,6 +71,16 @@ package enum LightweightMigration {
         return .version(try Schema.Version.decode(identifier))
     }
 
+    package static func storedSchemaMatches(_ expected: Schema, connection: SQLConnection) throws -> Bool {
+        guard let stored = try storedHash(connection),
+            let storedSchema = try storedSchemaDescription(connection)
+        else { return false }
+        guard SchemaHash.hexDigest(storedSchema) == stored else {
+            throw SwiftDataError.migrationUnsupported("The stored schema hash and description disagree.")
+        }
+        return stored == SchemaHash.hexDigest(expected)
+    }
+
     package static func setPendingMigration(_ identifier: String?, connection: SQLConnection) throws {
         guard let identifier else {
             try connection.execute("DELETE FROM _osd_meta WHERE key = ?", [.text(pendingMigrationKey)])

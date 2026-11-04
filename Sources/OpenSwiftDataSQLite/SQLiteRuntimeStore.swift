@@ -330,6 +330,17 @@ public enum OpenSwiftDataSQLite {
         return try driver.read { try LightweightMigration.storedSchemaVersion(connection: $0) }
     }
 
+    static let sqliteSchemaCompatibilityReader: RuntimeSchemaCompatibilityReader = { location, schema in
+        let driverLocation: StoreLocation =
+            switch location {
+            case let .memory(name): .memory(name: name)
+            case let .file(url): .file(url)
+            }
+        let driver = try GRDBSQLiteDriver(location: driverLocation)
+        defer { try? driver.close() }
+        return try driver.read { try LightweightMigration.storedSchemaMatches(schema, connection: $0) }
+    }
+
     static let sqliteFactory: RuntimeStoreFactory = { location, schema in
         let driverLocation: StoreLocation =
             switch location {
@@ -369,7 +380,8 @@ extension ModelConfiguration {
         Self(
             name, isStoredInMemoryOnly: true, allowsSave: allowsSave,
             storeFactory: OpenSwiftDataSQLite.sqliteFactory,
-            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader)
+            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader,
+            schemaCompatibilityReader: OpenSwiftDataSQLite.sqliteSchemaCompatibilityReader)
     }
 
     /// Creates a SQLite-backed configuration at an explicit URL.
@@ -381,6 +393,7 @@ extension ModelConfiguration {
         Self(
             name, url: url, allowsSave: allowsSave,
             storeFactory: OpenSwiftDataSQLite.sqliteFactory,
-            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader)
+            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader,
+            schemaCompatibilityReader: OpenSwiftDataSQLite.sqliteSchemaCompatibilityReader)
     }
 }

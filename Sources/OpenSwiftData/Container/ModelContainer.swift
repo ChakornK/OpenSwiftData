@@ -517,6 +517,12 @@ public final class ModelContainer: Sendable {
                 throw SwiftDataError.migrationUnsupported("Pending migration stage is not present in the plan.")
             }
             let destination = plan.schemas[destinationIndex]
+            if let verifyStoredSchema = configuration.schemaCompatibilityReader,
+                try !verifyStoredSchema(Self.storeLocation(for: configuration), destination.schema)
+            {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored schema does not match pending destination version '\(destinationIdentifier)'.")
+            }
             let stage = plan.stages[destinationIndex - 1]
             let destinationContainer = try ModelContainer(
                 for: destination.models, schema: destination.schema, configurations: configurations)
@@ -533,6 +539,15 @@ public final class ModelContainer: Sendable {
                 try setPendingMigration(nil, store: destinationContainer.store)
             }
         default:
+            if case let .version(version) = versionState,
+                let storedIndex = plan.schemas.firstIndex(where: { $0.version == version }),
+                let verifyStoredSchema = configuration.schemaCompatibilityReader,
+                try !verifyStoredSchema(
+                    Self.storeLocation(for: configuration), plan.schemas[storedIndex].schema)
+            {
+                throw SwiftDataError.migrationUnsupported(
+                    "Stored schema does not match recorded version '\(version.identifier)'.")
+            }
             startIndex = try migrationStartIndex(for: versionState, in: plan)
         }
 

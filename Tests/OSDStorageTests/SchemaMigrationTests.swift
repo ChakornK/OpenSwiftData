@@ -11595,6 +11595,33 @@ final class SchemaMigrationTests: XCTestCase {
                 superentityName: "A_ZB"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZA (Z_ENT, Z_OPT) VALUES (?, 2)", [.int(Int64(sourceIDs["A"]!))])
+            try connection.execute(
+                "INSERT INTO ZA_ZB (Z_ENT, Z_OPT) VALUES (?, 3)", [.int(Int64(sourceIDs["A_ZB"]!))])
+            try connection.execute(
+                "INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (?, 4)", [.int(Int64(sourceIDs["Target"]!))])
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourcePrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let sourceRows: [(String, [[StoredValue]])] = try initial.read { connection in
+            try ["ZA", "ZA_ZB", "ZTARGET"].map { table in
+                (table, try connection.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM \(table) ORDER BY Z_PK"))
+            }
+        }
         try initial.close()
 
         XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
@@ -11602,13 +11629,47 @@ final class SchemaMigrationTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
-        let reopened = try LightweightMigration.openStore(location: location, schema: source)
-        let primaryKeys = try reopened.read { try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT") }
-        XCTAssertEqual(primaryKeys, [[.text("A")], [.text("A_ZB")], [.text("Target")]])
-        let indexes = try reopened.read {
-            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            sourcePrimaryKeys)
+        for (table, rows) in sourceRows {
+            XCTAssertEqual(
+                try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM \(table) ORDER BY Z_PK") },
+                rows)
         }
-        XCTAssertFalse(indexes.contains([.text("ZA_ZB_ZLEAF1_REL_INDEX")]))
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            sourcePrimaryKeys)
+        for (table, rows) in sourceRows {
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM \(table) ORDER BY Z_PK") },
+                rows)
+        }
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
     }
 

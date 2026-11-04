@@ -34,16 +34,17 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
         guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
-        let protocolOnlyMode = protocolConformancesOnly(in: node)
-        if protocolOnlyMode == nil {
+        let parsedProtocolOnlyMode = protocolConformancesOnly(in: node)
+        if parsedProtocolOnlyMode == nil {
             context.diagnose(
                 Diagnostic(
                     node: Syntax(node),
                     message: ModelArgumentDiagnostic(message: "protocolConformancesOnly must be a Boolean literal.")))
-            return []
         }
+        // Invalid options use root generation so this diagnostic does not cascade into superclass errors.
+        let protocolOnlyMode = parsedProtocolOnlyMode ?? true
         let superclassName =
-            protocolOnlyMode == true
+            protocolOnlyMode
             ? nil
             : classDeclaration.inheritanceClause?.inheritedTypes.first?.type.trimmedDescription
         diagnoseGroupedBindingsForTesting(in: classDeclaration, context: context)

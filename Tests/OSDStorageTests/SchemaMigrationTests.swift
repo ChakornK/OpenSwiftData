@@ -6792,6 +6792,85 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testExternalStorageRemovalPreservesSidecarReferencedByAnotherEntity() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("external-cross-entity.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "DiscardedRecord",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+            Schema.Entity(
+                name: "RetainedRecord",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "DiscardedRecord", attributes: []),
+            Schema.Entity(
+                name: "RetainedRecord",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+        ])
+        let sourceColumns: Set<String> = ["ZDISCARDEDRECORD.ZPAYLOAD", "ZRETAINEDRECORD.ZPAYLOAD"]
+        let destinationColumns: Set<String> = ["ZRETAINEDRECORD.ZPAYLOAD"]
+        let sharedPayload = Array(repeating: UInt8(0x47), count: ExternalStorage.threshold + 1)
+        let discardedPayload = Array(repeating: UInt8(0x58), count: ExternalStorage.threshold + 2)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: sourceColumns)
+        let markers = try initial.writeWithExternalData { connection, session -> (StoredValue, StoredValue) in
+            let sharedMarker = try session.externalizedValue(sharedPayload)
+            let discardedMarker = try session.externalizedValue(discardedPayload)
+            try connection.execute(
+                "INSERT INTO ZDISCARDEDRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 2, ?)", [discardedMarker])
+            try connection.execute(
+                "INSERT INTO ZRETAINEDRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (2, 3, ?)", [sharedMarker])
+            return (sharedMarker, discardedMarker)
+        }
+        guard case let .blob(sharedBytes) = markers.0, case let .blob(discardedBytes) = markers.1,
+            let sharedName = ExternalStorage.fileName(in: sharedBytes),
+            let discardedName = ExternalStorage.fileName(in: discardedBytes)
+        else { return XCTFail("Expected external Data markers.") }
+        let sidecarDirectory = directory.appendingPathComponent(
+            "external-cross-entity.sqlite.external", isDirectory: true)
+        let sharedURL = sidecarDirectory.appendingPathComponent(sharedName)
+        let discardedURL = sidecarDirectory.appendingPathComponent(discardedName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: discardedURL.path))
+
+        XCTAssertThrowsError(
+            try initial.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+                throw ExternalStorageMigrationFailure.expected
+            }
+        ) { error in
+            XCTAssertTrue(error is ExternalStorageMigrationFailure)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: discardedURL.path))
+        XCTAssertEqual(
+            try initial.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZDISCARDEDRECORD") },
+            [[.int(1), .int(2), .blob(discardedBytes)]])
+        XCTAssertEqual(
+            try initial.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRETAINEDRECORD") },
+            [[.int(1), .int(3), .blob(sharedBytes)]])
+        XCTAssertEqual(
+            try initial.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+            },
+            [[.blob(Array(SchemaHash.hexDigest(source).utf8))]])
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(
+            location: location, schema: destination, externalColumns: destinationColumns)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: discardedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRETAINEDRECORD") },
+            [[.int(1), .int(3), .blob(sharedBytes)]])
+        XCTAssertEqual(try migrated.read { try $0.resolved(.blob(sharedBytes)) }, .blob(sharedPayload))
+        try migrated.close()
+    }
+
     func testOptionalExternalStorageAttributeAdditionPreservesExistingSidecars() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

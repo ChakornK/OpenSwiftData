@@ -708,12 +708,16 @@ public final class ModelContext {
     /// Deletes models matching a predicate, which requires a persistent store.
     public func delete<Model: PersistentModel>(
         model: Model.Type,
-        where predicate: Predicate<Model>,
+        where predicate: Predicate<Model>? = nil,
         includeSubclasses: Bool = true
     ) throws {
         assertAffinity()
-        _ = (model, predicate, includeSubclasses)
-        throw unsupportedStore("Predicate-based delete")
+        let descriptor = FetchDescriptor<Model>(predicate: predicate)
+        let matches = try fetch(descriptor)
+        for match in matches where includeSubclasses || ObjectIdentifier(type(of: match)) == ObjectIdentifier(model) {
+            delete(match)
+        }
+        try save()
     }
 
     /// Fetches models matching a descriptor, which requires a persistent store.

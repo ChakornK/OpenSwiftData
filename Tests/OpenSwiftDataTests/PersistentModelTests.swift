@@ -5968,6 +5968,191 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPredicateDeleteIncludesSubclassesAndSavesMatches() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        try context.delete(model: InheritanceMacroBaseFixture.self, where: #Predicate { $0.name != "missing" })
+
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertTrue(try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+    }
+
+    @MainActor
+    func testPredicateDeleteWithoutPredicateDeletesAllRequestedModels() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-delete-without-predicate"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        try context.delete(model: InheritanceMacroBaseFixture.self)
+
+        XCTAssertTrue(try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testPredicateDeleteWithoutPredicateCanExcludeSubclasses() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-delete-all-exact-type"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        try context.delete(model: InheritanceMacroBaseFixture.self, includeSubclasses: false)
+
+        let remaining = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
+        XCTAssertEqual(remaining.map(\.name), ["child", "grandchild"])
+        XCTAssertTrue(remaining[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(remaining[1] is InheritanceMacroGrandchildFixture)
+    }
+
+    @MainActor
+    func testPredicateDeleteInsideTransactionDefersSaveToOuterBoundary() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete-transaction"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        try context.save()
+
+        try context.transaction {
+            try context.delete(model: InheritanceMacroBaseFixture.self, where: #Predicate { $0.name == "base" })
+            XCTAssertTrue(context.hasChanges)
+            let inTransaction = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
+            XCTAssertEqual(inTransaction.map(\.name), ["base", "child"])
+        }
+
+        let afterCommit = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
+        XCTAssertEqual(afterCommit.map(\.name), ["child"])
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testPredicateDeleteRollsBackWithFailedOuterTransaction() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete-rollback"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        try context.save()
+        let model = try XCTUnwrap(context.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
+        let identifier = model.persistentModelID
+
+        XCTAssertThrowsError(
+            try context.transaction {
+                try context.delete(model: InheritanceMacroBaseFixture.self)
+                throw SwiftDataError.unsupportedStore("rollback predicate delete")
+            })
+
+        XCTAssertTrue(model.modelContext === context)
+        XCTAssertEqual(model.persistentModelID, identifier)
+        XCTAssertFalse(model.isDeleted)
+        XCTAssertFalse(model.hasChanges)
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(
+            try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name), ["base"])
+    }
+
+    @MainActor
+    func testPredicateDeleteCanExcludeSubclasses() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete-exact-type"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        try context.delete(
+            model: InheritanceMacroBaseFixture.self,
+            where: #Predicate { $0.name != "missing" },
+            includeSubclasses: false)
+
+        let remaining = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
+        XCTAssertEqual(remaining.map(\.name), ["child", "grandchild"])
+        XCTAssertTrue(remaining[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(remaining[1] is InheritanceMacroGrandchildFixture)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testPredicateDeleteCanTargetHierarchyMidpointOnly() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete-midpoint"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        try context.delete(
+            model: InheritanceMacroChildFixture.self,
+            where: #Predicate { $0.name != "missing" },
+            includeSubclasses: false)
+
+        let remaining = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
+        XCTAssertEqual(remaining.map(\.name), ["base", "grandchild"])
+        XCTAssertFalse(remaining[0] is InheritanceMacroChildFixture)
+        XCTAssertTrue(remaining[1] is InheritanceMacroGrandchildFixture)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testPredicateDeleteCancelsMatchingPendingInsertions() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-predicate-delete-pending"))
+        let context = container.mainContext
+        let pendingBase = InheritanceMacroBaseFixture(name: "pending-base")
+        let pendingChild = InheritanceMacroChildFixture(name: "pending-child", age: 2)
+        context.insert(pendingBase)
+        context.insert(pendingChild)
+
+        try context.delete(
+            model: InheritanceMacroBaseFixture.self, where: #Predicate { $0.name.starts(with: "pending-") })
+
+        XCTAssertNil(pendingBase.modelContext)
+        XCTAssertNil(pendingChild.modelContext)
+        XCTAssertFalse(pendingBase.isDeleted)
+        XCTAssertFalse(pendingChild.isDeleted)
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertTrue(try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+    }
+
+    @MainActor
     func testEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,

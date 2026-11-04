@@ -5665,10 +5665,14 @@ final class PersistentModelTests: XCTestCase {
             FetchDescriptor<InheritanceMacroChildFixture>(
                 sortBy: [SortDescriptor(\InheritanceMacroChildFixture.name)]))
         XCTAssertEqual(sortedChildren.map(\.name), ["child", "grandchild"])
-        let projectedChildren = try reader.fetch(
+        let projectionReader = container.makeContext()
+        let projectedChildren = try projectionReader.fetch(
             FetchDescriptor<InheritanceMacroChildFixture>(
                 propertiesToFetch: [\InheritanceMacroChildFixture.name]))
         XCTAssertEqual(projectedChildren.map(\.name), ["child", "grandchild"])
+        XCTAssertEqual(projectedChildren.compactMap(\.age), [2, 3])
+        XCTAssertEqual(
+            try XCTUnwrap(projectedChildren.last as? InheritanceMacroGrandchildFixture).rank, 4)
 
         let grandchildPredicate = #Predicate<InheritanceMacroGrandchildFixture> {
             $0.name == "grandchild" || $0.rank == 4

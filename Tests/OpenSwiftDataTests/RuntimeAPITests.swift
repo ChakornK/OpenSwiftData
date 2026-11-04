@@ -373,6 +373,15 @@ final class RuntimeAPITests: XCTestCase {
         let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<OptionalScalarCollectionFixture>()).first)
         XCTAssertEqual(fetched.strings, [nil, "present"])
         XCTAssertEqual(fetched.integers, Set([nil, 7]))
+
+        fetched.strings[1] = "updated"
+        fetched.integers.insert(11)
+        try reader.save()
+
+        let verifier = container.makeContext()
+        let updated = try XCTUnwrap(verifier.fetch(FetchDescriptor<OptionalScalarCollectionFixture>()).first)
+        XCTAssertEqual(updated.strings, [nil, "updated"])
+        XCTAssertEqual(updated.integers, Set([nil, 7, 11]))
     }
 
     @MainActor

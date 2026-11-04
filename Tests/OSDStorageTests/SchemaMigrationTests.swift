@@ -10942,6 +10942,17 @@ final class SchemaMigrationTests: XCTestCase {
         let sourceIDs = try initial.read {
             try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
         }
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT) VALUES (?, 3)",
+                [.int(Int64(sourceIDs["Base"]!))])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT) VALUES (?, 5)",
+                [.int(Int64(sourceIDs["Child"]!))])
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBASE ORDER BY Z_PK")
+        }
         try initial.close()
 
         let migrated = try LightweightMigration.openStore(location: location, schema: destination)
@@ -10954,6 +10965,14 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertGreaterThan(siblingID, try XCTUnwrap(sourceIDs.values.max()))
         let columns = try migrated.read { try $0.rows("PRAGMA table_info(ZBASE)") }
         XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZSIBLING_MENTOR") })
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZSIBLING_MENTOR FROM ZBASE ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(Int64(destinationIDs["Base"]!)), .int(3), .null],
+                [.int(2), .int(Int64(destinationIDs["Child"]!)), .int(5), .null],
+            ])
         let indexes = try migrated.read {
             try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'Z%'")
         }
@@ -10964,7 +10983,28 @@ final class SchemaMigrationTests: XCTestCase {
             ).first?.first
         }
         XCTAssertEqual(metadata, .int(Int64(try XCTUnwrap(destinationIDs["Base"]))))
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZSIBLING_MENTOR) VALUES (?, 2, 1)",
+                [.int(Int64(siblingID))])
+        }
+        let migratedRows = try migrated.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZSIBLING_MENTOR FROM ZBASE ORDER BY Z_PK")
+        }
+        XCTAssertEqual(Array(migratedRows.prefix(2)).map { Array($0.prefix(3)) }, originalRows)
+        XCTAssertEqual(migratedRows[0], [.int(1), .int(Int64(destinationIDs["Base"]!)), .int(3), .null])
+        XCTAssertEqual(migratedRows[1], [.int(2), .int(Int64(destinationIDs["Child"]!)), .int(5), .null])
+        XCTAssertEqual(migratedRows[2], [.int(3), .int(Int64(siblingID)), .int(2), .int(1)])
         try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZSIBLING_MENTOR FROM ZBASE ORDER BY Z_PK")
+            },
+            migratedRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
     }
 
     func testHierarchyLeafInverseAttachesToExistingOptionalOwnerWithoutStorageChanges() throws {

@@ -355,6 +355,30 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
+    func testOptionalScalarCollectionPredicatesFailClosed() throws {
+        let container = try ModelContainer(
+            for: OptionalScalarCollectionFixture.self,
+            configurations: .sqliteMemory("optional-scalar-collection-predicates"))
+        let stringValue = "value"
+        let stringDescriptor = FetchDescriptor<OptionalScalarCollectionFixture>(
+            predicate: #Predicate { $0.strings.allSatisfy { $0 == stringValue } })
+        XCTAssertThrowsError(try container.mainContext.fetch(stringDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate for optional String elements, got \\(error)")
+            }
+        }
+
+        let integerValue = 1
+        let integerDescriptor = FetchDescriptor<OptionalScalarCollectionFixture>(
+            predicate: #Predicate { $0.integers.contains(integerValue) })
+        XCTAssertThrowsError(try container.mainContext.fetch(integerDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate for optional Int elements, got \\(error)")
+            }
+        }
+    }
+
+    @MainActor
     func testDestructiveContainerOperationsFailWithoutAStore() throws {
         let configurations = [
             ModelConfiguration("memory", isStoredInMemoryOnly: true),

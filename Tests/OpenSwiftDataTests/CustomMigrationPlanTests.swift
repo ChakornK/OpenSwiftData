@@ -67,6 +67,36 @@ private enum VersionThreePlan: SchemaMigrationPlan {
     }
 }
 
+private enum MidChainRecordingPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self, MigrationV3.self] }
+    static var stages: [MigrationStage] {
+        [
+            .custom(
+                fromVersion: MigrationV1.self,
+                toVersion: MigrationV2.self,
+                willMigrate: { _ in MigrationStageRecorder.shared.append("mid-chain-stage1-will") },
+                didMigrate: { context in
+                    MigrationStageRecorder.shared.append("mid-chain-stage1-did")
+                    for record in try context.fetch(FetchDescriptor<MigrationPlanRecord>()) {
+                        record.name = "v2-\(record.name)"
+                    }
+                    try context.save()
+                }),
+            .custom(
+                fromVersion: MigrationV2.self,
+                toVersion: MigrationV3.self,
+                willMigrate: { _ in MigrationStageRecorder.shared.append("mid-chain-stage2-will") },
+                didMigrate: { context in
+                    MigrationStageRecorder.shared.append("mid-chain-stage2-did")
+                    for record in try context.fetch(FetchDescriptor<MigrationPlanRecord>()) {
+                        record.name = "v3-\(record.name)"
+                    }
+                    try context.save()
+                }),
+        ]
+    }
+}
+
 private enum MultiStageFailurePlan: SchemaMigrationPlan {
     static let failureSwitch = MigrationFailureSwitch()
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self, MigrationV3.self] }
@@ -510,6 +540,87 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return Int64(String(primaryKey))
             })
         XCTAssertEqual(reopenedPrimaryKeys, originalPrimaryKeyValues)
+    }
+
+    @MainActor
+    func testMigrationPlanStartsAtStoredMidChainVersionAndNoOpsWhenCurrent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationMidChain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let versionTwo = try ModelContainer(
+            for: MigrationPlanRecord.self,
+            migrationPlan: LightweightMigrationPlan.self,
+            configurations: .sqliteFile("migration-mid-chain", url: url))
+        versionTwo.mainContext.insert(MigrationPlanRecord(name: "already-v2"))
+        try versionTwo.mainContext.save()
+        try versionTwo.store?.close()
+
+        MigrationStageRecorder.shared.reset()
+        let versionThree = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: MidChainRecordingPlan.self,
+            configurations: .sqliteFile("migration-mid-chain", url: url))
+        XCTAssertEqual(MigrationStageRecorder.shared.values, ["mid-chain-stage2-will", "mid-chain-stage2-did"])
+        XCTAssertEqual(versionThree.schema.version, MigrationV3.versionIdentifier)
+        XCTAssertEqual(
+            try versionThree.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name), ["v3-already-v2"]
+        )
+        let stageTwoRows = try versionThree.store?.read { connection in
+            try connection.rows("SELECT ZNAME, ZNOTE, ZDETAIL FROM ZMIGRATIONPLANRECORD", arguments: [])
+        }
+        XCTAssertEqual(stageTwoRows ?? nil, [[.text("v3-already-v2"), .null, .null]])
+        let stageTwoMetadata = try versionThree.store?.read { connection in
+            try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+        }
+        let stageTwoPrimaryKeys = try versionThree.store?.read { connection in
+            try connection.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT", arguments: [])
+        }
+        let stageTwoTables = try versionThree.store?.read { connection in
+            try connection.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name", arguments: [])
+        }
+        let stageTwoIndexes = try versionThree.store?.read { connection in
+            try connection.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name", arguments: [])
+        }
+        try versionThree.store?.close()
+
+        MigrationStageRecorder.shared.reset()
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: MidChainRecordingPlan.self,
+            configurations: .sqliteFile("migration-mid-chain-current", url: url))
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        XCTAssertEqual(reopened.schema.version, MigrationV3.versionIdentifier)
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name),
+            ["v3-already-v2"])
+        XCTAssertEqual(
+            try reopened.store?.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            },
+            stageTwoMetadata)
+        XCTAssertEqual(
+            try reopened.store?.read { connection in
+                try connection.rows(
+                    "SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT", arguments: [])
+            },
+            stageTwoPrimaryKeys)
+        XCTAssertEqual(
+            try reopened.store?.read { connection in
+                try connection.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name", arguments: [])
+            },
+            stageTwoTables)
+        XCTAssertEqual(
+            try reopened.store?.read { connection in
+                try connection.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name", arguments: [])
+            },
+            stageTwoIndexes)
+        XCTAssertEqual(
+            try reopened.store?.read { connection in
+                try connection.rows("SELECT ZNAME, ZNOTE, ZDETAIL FROM ZMIGRATIONPLANRECORD", arguments: [])
+            },
+            stageTwoRows)
     }
 
     @MainActor

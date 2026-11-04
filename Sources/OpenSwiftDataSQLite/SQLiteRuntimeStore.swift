@@ -194,7 +194,15 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
                 guard consumed.insert(capturePath).inserted else {
                     throw SwiftDataError.unsupportedPredicate("Duplicate typed predicate capture at \(path)")
                 }
-                return .expression(name: name, children: [("value", .typedValue(value))])
+                let captureTypeName: String
+                if case let .capture(typeName, _)? = children.first?.1 {
+                    captureTypeName = typeName
+                } else {
+                    captureTypeName = ""
+                }
+                return .expression(
+                    name: name,
+                    children: [("value", .typedCapture(value, typeName: captureTypeName))])
             }
             return .expression(
                 name: name,

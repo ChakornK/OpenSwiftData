@@ -12,6 +12,9 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case comparison(PredicateComparisonOperator, PredicatePlan, PredicatePlan)
     case decimalComparison(PredicateComparisonOperator, PredicatePlan, PredicatePlan)
     case arithmetic(PredicateArithmeticOperator, PredicatePlan, PredicatePlan)
+    case boundedArithmetic(
+        PredicateArithmeticOperator, PredicatePlan, PredicatePlan, integerWidth: PredicateIntegerWidth)
+    case unaryNegation(PredicatePlan, integerWidth: PredicateIntegerWidth?)
     case isNull(PredicatePlan, negated: Bool)
     case property(String)
     case value(StoredValue)
@@ -36,6 +39,38 @@ public enum PredicateArithmeticOperator: Sendable, Equatable {
     case multiply
     case divide
     case remainder
+}
+
+/// The signed integer width used to validate arithmetic results.
+public enum PredicateIntegerWidth: Int, Sendable, Equatable, Codable {
+    /// An 8-bit signed integer width.
+    case int8 = 8
+    /// A 16-bit signed integer width.
+    case int16 = 16
+    /// A 32-bit signed integer width.
+    case int32 = 32
+    /// A 64-bit signed integer width.
+    case int64 = 64
+
+    /// The minimum value representable at this width.
+    public var minimumValue: Int64 {
+        switch self {
+        case .int8: Int64(Int8.min)
+        case .int16: Int64(Int16.min)
+        case .int32: Int64(Int32.min)
+        case .int64: Int64.min
+        }
+    }
+
+    /// The maximum value representable at this width.
+    public var maximumValue: Int64 {
+        switch self {
+        case .int8: Int64(Int8.max)
+        case .int16: Int64(Int16.max)
+        case .int32: Int64(Int32.max)
+        case .int64: Int64.max
+        }
+    }
 }
 
 /// A scalar comparison supported by predicate execution.

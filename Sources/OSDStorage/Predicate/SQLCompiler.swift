@@ -86,6 +86,12 @@ package enum PredicatePlanBuilder {
         case let .arithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
+        case let .boundedArithmetic(op, lhs, rhs, width):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .boundedArithmetic(runtimeArithmeticOperator(op), lhs, rhs, integerWidth: width)
+        case let .unaryNegation(value, width):
+            guard let value = build(value) else { return nil }
+            return .unaryNegation(value, integerWidth: width)
         case let .realArithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
@@ -261,6 +267,19 @@ package enum SQLCompiler {
                     lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
                 resolvePersistentIdentifierComparisons(
                     rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .boundedArithmetic(op, lhs, rhs, width):
+            return .boundedArithmetic(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                width)
+        case let .unaryNegation(value, width):
+            return .unaryNegation(
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                integerWidth: width)
         case let .realArithmetic(op, lhs, rhs):
             return .realArithmetic(
                 op,
@@ -493,6 +512,22 @@ package enum SQLCompiler {
                 }
             return
                 "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
+        case let .boundedArithmetic(op, lhs, rhs, integerWidth):
+            let function =
+                switch op {
+                case .add: "osd_int_bounded_add"
+                case .subtract: "osd_int_bounded_subtract"
+                case .multiply: "osd_int_bounded_multiply"
+                case .divide: "osd_int_bounded_divide"
+                case .remainder: "osd_int_bounded_remainder"
+                }
+            return
+                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(integerWidth.rawValue))"
+        case let .unaryNegation(value, integerWidth):
+            let function = integerWidth == nil ? "osd_real_negate" : "osd_int_negate"
+            let widthArgument = integerWidth.map { ", \($0.rawValue)" } ?? ""
+            return
+                "\(function)(\(try render(value, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias))\(widthArgument))"
         case let .realArithmetic(op, lhs, rhs):
             guard op != .remainder else {
                 throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
@@ -905,6 +940,10 @@ package enum SQLCompiler {
         case let .persistentIdentifierComparison(op, _, path):
             "persistentIdentifierCompare(\(op),\(path.joined(separator: ".")))"
         case let .arithmetic(op, lhs, rhs): "arithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .boundedArithmetic(op, lhs, rhs, width):
+            "boundedArithmetic(\(op),width=\(width.rawValue),\(structure(lhs)),\(structure(rhs)))"
+        case let .unaryNegation(value, width):
+            "unaryNegation(width=\(width?.rawValue.description ?? "real"),\(structure(value)))"
         case let .realArithmetic(op, lhs, rhs): "realArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
         case .persistentIdentifier: "persistentIdentifier"

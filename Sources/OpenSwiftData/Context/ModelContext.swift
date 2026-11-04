@@ -2263,11 +2263,12 @@ public final class ModelContext {
                         }
                     case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
                         let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+                        let .boundedArithmetic(_, lhs, rhs, _),
                         let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs),
                         let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
                         try collect(lhs)
                         try collect(rhs)
-                    case let .negation(value), let .isNull(value, _):
+                    case let .negation(value), let .unaryNegation(value, _), let .isNull(value, _):
                         try collect(value)
                     case let .conditional(test, yes, no):
                         try collect(test)

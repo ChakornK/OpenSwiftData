@@ -48,6 +48,30 @@ final class SQLiteDriverTests: XCTestCase {
             [[.int(10), .int(-3), .int(21), .int(-3), .int(-1), .int(1), .null, .null, .null, .null, .null, .null]])
     }
 
+    func testBoundedIntegerArithmeticUDFsRespectSignedWidths() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "bounded-integer-arithmetic"))
+        defer { try? driver.close() }
+
+        let rows = try driver.read { connection in
+            try connection.rows(
+                "SELECT osd_int_bounded_add(127, 1, 8), osd_int_bounded_add(126, 1, 8), "
+                    + "osd_int_bounded_subtract(-128, 1, 8), osd_int_bounded_multiply(64, 2, 8), "
+                    + "osd_int_bounded_divide(-128, -1, 8), osd_int_bounded_remainder(-128, -1, 8), "
+                    + "osd_int_bounded_add(32767, 1, 16), osd_int_bounded_add(2147483647, 1, 32), "
+                    + "osd_int_bounded_add(9223372036854775807, 1, 64), "
+                    + "osd_int_negate(-128, 8), osd_int_negate(-127, 8), "
+                    + "osd_int_negate(-2147483648, 32), osd_int_negate(-2147483647, 32)")
+        }
+        XCTAssertEqual(
+            rows,
+            [
+                [
+                    .null, .int(127), .null, .null, .null, .null, .null, .null, .null, .null, .int(127), .null,
+                    .int(2147483647),
+                ]
+            ])
+    }
+
     func testReadWriteReturnValuesAndErrors() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "results"))
         defer { try? driver.close() }

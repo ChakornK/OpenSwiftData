@@ -211,6 +211,8 @@ final class SQLiteCompositionTests: XCTestCase {
                 .property(RuntimePropertyReference(name: description))
             case let .capture(typeName, description): .capture(typeName: typeName, description: description)
             case let .typedValue(value): .capture(typeName: "Swift.Int", description: String(describing: value))
+            case let .typedCapture(value, typeName):
+                .capture(typeName: typeName, description: String(describing: value))
             case .persistentIdentifierReference, .identifierCapture:
                 preconditionFailure("Identifier nodes are not part of this legacy scalar fixture")
             case let .expression(name, children):

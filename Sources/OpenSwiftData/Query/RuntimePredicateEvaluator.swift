@@ -36,7 +36,7 @@ package enum RuntimePredicateEvaluator {
     package static func referencedProperties(in plan: PredicatePlan) -> Set<String> {
         switch plan {
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
-            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .boundedArithmetic(_, lhs, rhs, _),
             let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             referencedProperties(in: lhs).union(referencedProperties(in: rhs))
@@ -53,7 +53,7 @@ package enum RuntimePredicateEvaluator {
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
                 referencedProperties(in: falseBranch))
-        case let .negation(value):
+        case let .negation(value), let .unaryNegation(value, _):
             referencedProperties(in: value)
         case let .isNull(value, _):
             referencedProperties(in: value)
@@ -88,10 +88,10 @@ package enum RuntimePredicateEvaluator {
             return [components[0]: [components[1]]]
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
-        case let .negation(value), let .isNull(value, _):
+        case let .negation(value), let .unaryNegation(value, _), let .isNull(value, _):
             return relationshipProperties(in: value)
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
-            let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
+            let .arithmetic(_, lhs, rhs), let .boundedArithmetic(_, lhs, rhs, _), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
@@ -114,11 +114,12 @@ package enum RuntimePredicateEvaluator {
                 walk(body, collectionDepth: collectionDepth + 1)
             case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
                 let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+                let .boundedArithmetic(_, lhs, rhs, _),
                 let .coalesce(lhs, rhs), let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
                 let .stringStartsWith(lhs, rhs):
                 walk(lhs, collectionDepth: collectionDepth)
                 walk(rhs, collectionDepth: collectionDepth)
-            case let .negation(value), let .isNull(value, _):
+            case let .negation(value), let .unaryNegation(value, _), let .isNull(value, _):
                 walk(value, collectionDepth: collectionDepth)
             case let .conditional(test, yes, no):
                 walk(test, collectionDepth: collectionDepth)
@@ -140,10 +141,11 @@ package enum RuntimePredicateEvaluator {
         case let .relationshipContains(_, body):
             return depth > 0 || containsNestedRelationship(body, depth: depth + 1)
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs), let .comparison(_, lhs, rhs),
-            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
+            let .decimalComparison(_, lhs, rhs), let .arithmetic(_, lhs, rhs),
+            let .boundedArithmetic(_, lhs, rhs, _), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
             return containsNestedRelationship(lhs, depth: depth) || containsNestedRelationship(rhs, depth: depth)
-        case let .negation(value), let .isNull(value, _):
+        case let .negation(value), let .unaryNegation(value, _), let .isNull(value, _):
             return containsNestedRelationship(value, depth: depth)
         case let .conditional(test, yes, no):
             return containsNestedRelationship(test, depth: depth)
@@ -207,6 +209,8 @@ package enum RuntimePredicateEvaluator {
             }
             return compare(DecimalText.compare(left, right), op) ? .yes : .no
         case .arithmetic:
+            throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
+        case .boundedArithmetic, .unaryNegation:
             throw SwiftDataError.unsupportedPredicate("Arithmetic expression is not a boolean predicate")
         case let .isNull(value, negated):
             let isNull = try evaluateValue(value, context: context) == .null
@@ -284,6 +288,42 @@ package enum RuntimePredicateEvaluator {
         default:
             throw SwiftDataError.unsupportedPredicate("Arithmetic operands must have matching numeric types")
         }
+    }
+
+    private static func evaluateBoundedArithmetic(
+        _ operation: PredicateArithmeticOperator,
+        lhs: PredicatePlan,
+        rhs: PredicatePlan,
+        width: PredicateIntegerWidth,
+        context: Context
+    ) throws -> RuntimeValue {
+        let lhsValue = try evaluateValue(lhs, context: context)
+        let rhsValue = try evaluateValue(rhs, context: context)
+        guard case let .int(left) = lhsValue, case let .int(right) = rhsValue else {
+            if lhsValue == .null || rhsValue == .null { return .null }
+            throw SwiftDataError.unsupportedPredicate("Integer arithmetic requires signed integer operands")
+        }
+        if (operation == .divide || operation == .remainder), left == width.minimumValue, right == -1 {
+            return .null
+        }
+        let result: Int64?
+        switch operation {
+        case .add:
+            let (value, overflow) = left.addingReportingOverflow(right)
+            result = overflow ? nil : value
+        case .subtract:
+            let (value, overflow) = left.subtractingReportingOverflow(right)
+            result = overflow ? nil : value
+        case .multiply:
+            let (value, overflow) = left.multipliedReportingOverflow(by: right)
+            result = overflow ? nil : value
+        case .divide:
+            result = right == 0 || (left == .min && right == -1) ? nil : left / right
+        case .remainder:
+            result = right == 0 || (left == .min && right == -1) ? nil : left % right
+        }
+        guard let result, result >= width.minimumValue, result <= width.maximumValue else { return .null }
+        return .int(result)
     }
 
     private static func evaluateStringPredicate(
@@ -453,6 +493,27 @@ package enum RuntimePredicateEvaluator {
         case let .arithmetic(op, lhs, rhs):
             return try evaluateArithmetic(
                 op, lhs: lhs, rhs: rhs, context: context)
+        case let .boundedArithmetic(op, lhs, rhs, integerWidth):
+            return try evaluateBoundedArithmetic(
+                op, lhs: lhs, rhs: rhs, width: integerWidth, context: context)
+        case let .unaryNegation(value, integerWidth):
+            let operand = try evaluateValue(value, context: context)
+            switch (operand, integerWidth) {
+            case (.null, _): return .null
+            case let (.int(integer), .some(width)):
+                guard integer >= width.minimumValue, integer <= width.maximumValue,
+                    integer != width.minimumValue
+                else {
+                    return .null
+                }
+                return .int(-integer)
+            case let (.double(number), .none) where number.isFinite:
+                let negated = -number
+                return negated.isFinite ? .double(negated) : .null
+            case (.double(_), .none): return .null
+            default:
+                throw SwiftDataError.unsupportedPredicate("Unary minus operand type does not match its numeric width")
+            }
         case let .conditional(test, trueBranch, falseBranch):
             switch try evaluateTruth(test, context: context) {
             case .yes: return try evaluateValue(trueBranch, context: context)

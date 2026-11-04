@@ -81,11 +81,13 @@ final class NarrowIntegerPredicateFixture {
     var id: Int
     var small: Int8
     var medium: Int16
+    var wide: Int64
 
-    init(id: Int, small: Int8, medium: Int16) {
+    init(id: Int, small: Int8, medium: Int16, wide: Int64 = 0) {
         self.id = id
         self.small = small
         self.medium = medium
+        self.wide = wide
     }
 }
 
@@ -637,6 +639,40 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertFalse(try RuntimePredicateEvaluator.matches(divisionOverflow, values: ["count": .int(.min)]))
     }
 
+    func testPendingBoundedIntegerArithmeticTreatsNarrowOverflowAsUnknown() throws {
+        let overflowingAddition = PredicatePlan.comparison(
+            .greaterThan,
+            .boundedArithmetic(.add, .property("small"), .value(.int(1)), integerWidth: .int8),
+            .value(.int(0)))
+        let overflowingDivision = PredicatePlan.comparison(
+            .greaterThan,
+            .boundedArithmetic(.divide, .property("small"), .value(.int(-1)), integerWidth: .int8),
+            .value(.int(0)))
+        let overflowingRemainder = PredicatePlan.comparison(
+            .equal,
+            .boundedArithmetic(.remainder, .property("small"), .value(.int(-1)), integerWidth: .int8),
+            .value(.int(0)))
+        let overflowingNegation = PredicatePlan.comparison(
+            .lessThan,
+            .unaryNegation(.property("small"), integerWidth: .int8),
+            .value(.int(0)))
+
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(overflowingAddition, values: ["small": .int(127)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(overflowingDivision, values: ["small": .int(-128)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(overflowingRemainder, values: ["small": .int(-128)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(overflowingNegation, values: ["small": .int(-128)]))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(overflowingAddition, values: ["small": .int(1)]))
+    }
+
+    func testPendingBoundedInt64DivisionOverflowIsUnknown() throws {
+        let plan = PredicatePlan.comparison(
+            .greaterThan,
+            .boundedArithmetic(.divide, .property("count"), .value(.int(-1)), integerWidth: .int64),
+            .value(.int(0)))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(plan, values: ["count": .int(.min)]))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(plan, values: ["count": .int(-2)]))
+    }
+
     @MainActor
     func testOptionalCapturedPredicateValuesCompileForNilAndSome() throws {
         let container = try ModelContainer(
@@ -703,7 +739,7 @@ final class ContextPersistenceTests: XCTestCase {
                 captureEncoding: .typed,
                 attributeNames: Set(entity.attributes.map(\.name)),
                 attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
-        XCTAssertEqual(compiled.sql, "(osd_int_multiply(t0.ZCOUNT, ?) > ?)")
+        XCTAssertEqual(compiled.sql, "(osd_int_bounded_multiply(t0.ZCOUNT, ?, 64) > ?)")
         XCTAssertEqual(compiled.arguments, [.int(2), .int(10)])
     }
 
@@ -770,7 +806,7 @@ final class ContextPersistenceTests: XCTestCase {
                 captureEncoding: .typed,
                 attributeNames: Set(entity.attributes.map(\.name)),
                 attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
-        XCTAssertEqual(compiled.sql, "(osd_int_add(t0.ZCOUNT, ?) > ?)")
+        XCTAssertEqual(compiled.sql, "(osd_int_bounded_add(t0.ZCOUNT, ?, 64) > ?)")
         XCTAssertEqual(compiled.arguments, [.int(3), .int(10)])
     }
 
@@ -843,7 +879,8 @@ final class ContextPersistenceTests: XCTestCase {
                 attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
         XCTAssertEqual(
             compiled.sql,
-            "(osd_int_add(osd_int_divide(t0.ZCOUNT, ?), osd_int_remainder(t0.ZCOUNT, ?)) > ?)")
+            "(osd_int_bounded_add(osd_int_bounded_divide(t0.ZCOUNT, ?, 64), osd_int_bounded_remainder(t0.ZCOUNT, ?, 64), 64) > ?)"
+        )
         XCTAssertEqual(compiled.arguments, [.int(2), .int(3), .int(5)])
     }
 
@@ -879,7 +916,9 @@ final class ContextPersistenceTests: XCTestCase {
                 captureEncoding: .typed,
                 attributeNames: Set(entity.attributes.map(\.name)),
                 attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
-        XCTAssertEqual(compiled.sql, "(osd_int_add(osd_int_multiply(t0.ZCOUNT, ?), ?) > ?)")
+        XCTAssertEqual(
+            compiled.sql,
+            "(osd_int_bounded_add(osd_int_bounded_multiply(t0.ZCOUNT, ?, 64), ?, 64) > ?)")
         XCTAssertEqual(compiled.arguments, [.int(2), .int(1), .int(10)])
     }
 
@@ -1393,6 +1432,9 @@ final class ContextPersistenceTests: XCTestCase {
         let predicates: [(String, Predicate<PredicateDoubleAgreementFixture>)] = [
             ("negative-comparison", #Predicate { $0.score < -1.5 }),
             ("negative-zero-equality", #Predicate { $0.score == -0.0 }),
+            ("dynamic-negation", #Predicate { -$0.score == 2.0 }),
+            ("nested-dynamic-negation", #Predicate { -(-$0.score) == 1.5 }),
+            ("dynamic-negated-zero", #Predicate { -$0.score == -0.0 }),
         ]
 
         for (name, predicate) in predicates {
@@ -1449,26 +1491,164 @@ final class ContextPersistenceTests: XCTestCase {
         try container.mainContext.save()
         let minimumSmall = Int8.min
         let minimumMedium = Int16.min
+        let capturedSmall: Int8 = 1
         let predicates: [(String, Set<Int>, Predicate<NarrowIntegerPredicateFixture>)] = [
             ("int8-negative-literal", [1], #Predicate { $0.small == -2 }),
             ("int16-negative-literal", [5, 6], #Predicate { $0.medium < -10 }),
             ("int8-captured-minimum", [5], #Predicate { $0.small == minimumSmall }),
             ("int16-captured-minimum", [6], #Predicate { $0.medium == minimumMedium }),
+            ("int8-captured-arithmetic", [4], #Predicate { $0.small + capturedSmall == 4 }),
         ]
 
         for (name, expectedIDs, predicate) in predicates {
-            let foundationIDs = try Set(
-                zip(detachedRows, seeds).compactMap { row, seed in
-                    try predicate.evaluate(row) ? seed.id : nil
-                })
+            let foundationIDs: Set<Int>
+            do {
+                foundationIDs = try Set(
+                    zip(detachedRows, seeds).compactMap { row, seed in
+                        try predicate.evaluate(row) ? seed.id : nil
+                    })
+            } catch {
+                XCTFail("Foundation evaluation failed for \(name): \(error)")
+                continue
+            }
             let descriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
                 predicate: predicate,
                 sortBy: [SortDescriptor(\.id)],
                 includePendingChanges: false)
-            let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+            let sqliteIDs: Set<Int>
+            do {
+                sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+            } catch {
+                XCTFail("SQLite evaluation failed for \(name): \(error)")
+                continue
+            }
             XCTAssertEqual(foundationIDs, expectedIDs, "Foundation evaluation differs for \(name)")
             XCTAssertEqual(sqliteIDs, foundationIDs, "Predicate results differ for \(name)")
         }
+    }
+
+    @MainActor
+    func testNarrowIntegerArithmeticMatchesFoundationAndDoesNotWrapOverflow() throws {
+        let safeSeeds: [(id: Int, small: Int8)] = [
+            (1, -10),
+            (2, 0),
+            (3, 11),
+        ]
+        let detachedRows = safeSeeds.map {
+            NarrowIntegerPredicateFixture(id: $0.id, small: $0.small, medium: 0)
+        }
+        let container = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("foundation-narrow-integer-arithmetic"))
+        for seed in safeSeeds {
+            container.mainContext.insert(
+                NarrowIntegerPredicateFixture(id: seed.id, small: seed.small, medium: 0))
+        }
+        try container.mainContext.save()
+
+        let safePredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small + 10 > 20 }
+        let safeFoundationIDs = try Set(
+            zip(detachedRows, safeSeeds).compactMap { row, seed in
+                try safePredicate.evaluate(row) ? seed.id : nil
+            })
+        let safeDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: safePredicate, sortBy: [SortDescriptor(\.id)], includePendingChanges: false)
+        let safeSQLiteIDs = try Set(container.mainContext.fetch(safeDescriptor).map(\.id))
+        XCTAssertEqual(safeFoundationIDs, [3])
+        XCTAssertEqual(safeSQLiteIDs, safeFoundationIDs)
+
+        let overflowContainer = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("narrow-integer-overflow"))
+        overflowContainer.mainContext.insert(
+            NarrowIntegerPredicateFixture(id: 4, small: .max, medium: 0))
+        try overflowContainer.mainContext.save()
+        let overflowingPredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small + 1 > 0 }
+        let overflowingDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: overflowingPredicate, sortBy: [SortDescriptor(\.id)], includePendingChanges: false)
+        let overflowIDs = try overflowContainer.mainContext.fetch(overflowingDescriptor).map(\.id)
+        XCTAssertEqual(overflowIDs, [])
+    }
+
+    @MainActor
+    func testDynamicNarrowUnaryNegationAndDivisionOverflowAreUnknown() throws {
+        let seeds: [(id: Int, small: Int8)] = [
+            (1, -3),
+            (2, 0),
+            (3, 3),
+            (4, .min),
+        ]
+        let detachedRows = seeds.map {
+            NarrowIntegerPredicateFixture(id: $0.id, small: $0.small, medium: 0)
+        }
+        let container = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("dynamic-narrow-unary-negation"))
+        for seed in seeds {
+            container.mainContext.insert(
+                NarrowIntegerPredicateFixture(id: seed.id, small: seed.small, medium: 0))
+        }
+        try container.mainContext.save()
+
+        let safePredicate = #Predicate<NarrowIntegerPredicateFixture> { -$0.small == 3 }
+        let safeFoundationIDs = try Set(
+            zip(detachedRows.prefix(3), seeds.prefix(3)).compactMap { row, seed in
+                try safePredicate.evaluate(row) ? seed.id : nil
+            })
+        let safeDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: safePredicate, sortBy: [SortDescriptor(\.id)], includePendingChanges: false)
+        let safeSQLiteIDs = try Set(container.mainContext.fetch(safeDescriptor).map(\.id))
+        XCTAssertEqual(safeFoundationIDs, [1])
+        XCTAssertEqual(safeSQLiteIDs, safeFoundationIDs)
+
+        let overflowPredicate = #Predicate<NarrowIntegerPredicateFixture> { -$0.small < 0 }
+        let overflowDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: overflowPredicate, sortBy: [SortDescriptor(\.id)], includePendingChanges: false)
+        let overflowIDs = try Set(container.mainContext.fetch(overflowDescriptor).map(\.id))
+        XCTAssertEqual(overflowIDs, [3])
+
+        let divideOverflowPredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small / -1 > 0 }
+        let divideOverflowDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: divideOverflowPredicate, sortBy: [SortDescriptor(\.id)], includePendingChanges: false)
+        let divideIDs = try Set(container.mainContext.fetch(divideOverflowDescriptor).map(\.id))
+        XCTAssertEqual(divideIDs, [1])
+
+        let remainderOverflowPredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small % -1 == 0 }
+        let remainderOverflowDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: remainderOverflowPredicate,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        let remainderIDs = try Set(container.mainContext.fetch(remainderOverflowDescriptor).map(\.id))
+        XCTAssertEqual(remainderIDs, [1, 2, 3])
+    }
+
+    @MainActor
+    func testStoredNarrowAndInt64ArithmeticOverflowIsUnknown() throws {
+        let container = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("stored-integer-width-overflow"))
+        for row in [
+            NarrowIntegerPredicateFixture(id: 1, small: 0, medium: .max, wide: 0),
+            NarrowIntegerPredicateFixture(id: 2, small: 0, medium: 1, wide: -2),
+            NarrowIntegerPredicateFixture(id: 3, small: 0, medium: 0, wide: .min),
+        ] {
+            container.mainContext.insert(row)
+        }
+        try container.mainContext.save()
+
+        let narrowPredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.medium + 1 > 0 }
+        let narrowDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: narrowPredicate,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertEqual(try container.mainContext.fetch(narrowDescriptor).map(\.id), [2, 3])
+
+        let widePredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.wide / -1 > 0 }
+        let wideDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: widePredicate,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertEqual(try container.mainContext.fetch(wideDescriptor).map(\.id), [2])
     }
 
     @MainActor

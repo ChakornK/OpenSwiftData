@@ -7,6 +7,7 @@ package enum PredicateMirrorWalker {
         case capture(typeName: String, description: String)
         case propertyReference(String)
         case typedValue(StoredValue)
+        case typedCapture(StoredValue, typeName: String)
         case persistentIdentifierReference([String])
         case identifierCapture(PersistentIdentifier)
 
@@ -20,6 +21,8 @@ package enum PredicateMirrorWalker {
                 lhsName == rhsName
             case let (.typedValue(lhsValue), .typedValue(rhsValue)):
                 lhsValue == rhsValue
+            case let (.typedCapture(lhsValue, lhsType), .typedCapture(rhsValue, rhsType)):
+                lhsValue == rhsValue && lhsType == rhsType
             case let (.persistentIdentifierReference(lhsPath), .persistentIdentifierReference(rhsPath)):
                 lhsPath == rhsPath
             case let (.identifierCapture(lhsValue), .identifierCapture(rhsValue)):

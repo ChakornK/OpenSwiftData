@@ -202,6 +202,22 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     })
             }
             for (name, operation) in [
+                ("osd_int_bounded_add", IntegerOperation.add),
+                ("osd_int_bounded_subtract", IntegerOperation.subtract),
+                ("osd_int_bounded_multiply", IntegerOperation.multiply),
+                ("osd_int_bounded_divide", IntegerOperation.divide),
+                ("osd_int_bounded_remainder", IntegerOperation.remainder),
+            ] {
+                database.add(
+                    function: DatabaseFunction(name, argumentCount: 3, pure: true) { values in
+                        checkedBoundedIntegerArithmetic(values, operation: operation)
+                    })
+            }
+            database.add(
+                function: DatabaseFunction("osd_int_negate", argumentCount: 2, pure: true) { values in
+                    checkedIntegerNegation(values)
+                })
+            for (name, operation) in [
                 ("osd_real_add", RealOperation.add),
                 ("osd_real_subtract", RealOperation.subtract),
                 ("osd_real_multiply", RealOperation.multiply),
@@ -212,6 +228,13 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                         checkedRealArithmetic(values, operation: operation)
                     })
             }
+            database.add(
+                function: DatabaseFunction("osd_real_negate", argumentCount: 1, pure: true) { values in
+                    guard values.count == 1, let value = Double.fromDatabaseValue(values[0]), value.isFinite else {
+                        return nil
+                    }
+                    return -value
+                })
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
@@ -252,6 +275,37 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             result = rhs == 0 || (lhs == .min && rhs == -1) ? nil : lhs % rhs
         }
         return result
+    }
+
+    private static func checkedBoundedIntegerArithmetic(
+        _ values: [DatabaseValue], operation: IntegerOperation
+    ) -> Int64? {
+        guard values.count == 3,
+            let lhs = Int64.fromDatabaseValue(values[0]),
+            let rhs = Int64.fromDatabaseValue(values[1]),
+            let widthValue = Int64.fromDatabaseValue(values[2]),
+            let width = PredicateIntegerWidth(rawValue: Int(widthValue))
+        else { return nil }
+        if (operation == .divide || operation == .remainder), lhs == width.minimumValue, rhs == -1 {
+            return nil
+        }
+        guard let result = checkedIntegerArithmetic([values[0], values[1]], operation: operation),
+            result >= width.minimumValue, result <= width.maximumValue
+        else { return nil }
+        return result
+    }
+
+    private static func checkedIntegerNegation(_ values: [DatabaseValue]) -> Int64? {
+        guard values.count == 2,
+            let value = Int64.fromDatabaseValue(values[0]),
+            let widthValue = Int64.fromDatabaseValue(values[1]),
+            let width = PredicateIntegerWidth(rawValue: Int(widthValue))
+        else { return nil }
+        guard
+            value >= width.minimumValue, value <= width.maximumValue,
+            value != width.minimumValue
+        else { return nil }
+        return -value
     }
 
     private static func checkedRealArithmetic(

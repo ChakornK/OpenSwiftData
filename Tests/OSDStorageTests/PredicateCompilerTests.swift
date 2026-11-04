@@ -333,6 +333,46 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(requiredIR, .comparison(.lessThan, .keyPath(["optionalCount"]), .value(.int(5))))
     }
 
+    func testIntegerArithmeticPreservesCapturedWidthAndRejectsMixedWidths() throws {
+        let sameWidth = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("small")),
+                ("rhs", .capture(typeName: "Swift.Int8", description: "1")),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(sameWidth, attributeTypes: ["small": "Int8"]),
+            .boundedArithmetic(.add, .keyPath(["small"]), .value(.int(1)), .int8))
+
+        let mixedWidth = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("small")),
+                ("rhs", .capture(typeName: "Swift.Int16", description: "1")),
+            ])
+        XCTAssertThrowsError(try PredicateIRBuilder.build(mixedWidth, attributeTypes: ["small": "Int8"])) {
+            guard case SwiftDataError.unsupportedPredicate = $0 else {
+                return XCTFail("Expected mixed integer widths to fail closed, got \($0)")
+            }
+        }
+
+        let typedUnary = PredicateMirrorWalker.Node.expression(
+            name: "UnaryMinus",
+            children: [
+                (
+                    "wrapped",
+                    .expression(
+                        name: "Value",
+                        children: [("value", .capture(typeName: "Swift.Int8", description: "1"))])
+                )
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(typedUnary),
+            .unaryNegation(.value(.int(1)), integerWidth: .int8))
+    }
+
     func testOptionalDecimalOrderingKeepsOneBoundOperand() throws {
         let ir = PredicateIR.optionalComparison(
             .lessThan,

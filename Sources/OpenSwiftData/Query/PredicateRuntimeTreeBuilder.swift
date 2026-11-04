@@ -157,22 +157,34 @@ package enum PredicateRuntimeTreeBuilder {
                 let children = Array(mirror.children)
                 let childLabels = children.compactMap(\.label)
                 guard childLabels.count == children.count, Set(childLabels) == entry.requiredChildren,
-                    children.count == 1, children[0].label == "wrapped",
-                    let literal = try unaryMinusLiteral(children[0].value)
+                    children.count == 1, children[0].label == "wrapped"
                 else {
-                    throw SwiftDataError.unsupportedPredicate(
-                        "Unary minus requires a supported constant numeric value")
+                    throw SwiftDataError.unsupportedPredicate("Malformed unary-minus expression")
                 }
-                let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
-                captures[RuntimePredicatePath(labels: rewrittenPath)] = literal
+                if let literal = try unaryMinusLiteral(children[0].value) {
+                    let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
+                    captures[RuntimePredicatePath(labels: rewrittenPath)] = literal.value
+                    return .expression(
+                        name: "Value",
+                        children: [
+                            (
+                                "value",
+                                .capture(
+                                    typeName: literal.typeName,
+                                    description: String(describing: literal.value))
+                            )
+                        ])
+                }
                 return .expression(
-                    name: "Value",
+                    name: "UnaryMinus",
                     children: [
                         (
-                            "value",
-                            .capture(
-                                typeName: String(reflecting: type(of: literal)),
-                                description: String(describing: literal))
+                            "wrapped",
+                            try visit(
+                                children[0].value,
+                                path: path + ["wrapped"],
+                                bindings: bindings,
+                                capturePathRewrites: capturePathRewrites)
                         )
                     ])
             }
@@ -841,7 +853,7 @@ package enum PredicateRuntimeTreeBuilder {
         return nil
     }
 
-    private static func unaryMinusLiteral(_ value: Any) throws -> StoredValue? {
+    private static func unaryMinusLiteral(_ value: Any) throws -> (value: StoredValue, typeName: String)? {
         var current = value
         var negationCount = 1
         while true {
@@ -873,6 +885,7 @@ package enum PredicateRuntimeTreeBuilder {
         }
         guard negationCount > 0 else { return nil }
         let literal = current
+        let literalTypeName = String(reflecting: type(of: literal))
         let negated: Any
         switch literal {
         case let number as Int: negated = try checkedNegation(number, count: negationCount)
@@ -885,7 +898,8 @@ package enum PredicateRuntimeTreeBuilder {
         default: return nil
         }
         do {
-            return try StoredValue(predicateScalar: negated, type: type(of: negated))
+            let stored = try StoredValue(predicateScalar: negated, type: type(of: negated))
+            return (stored, literalTypeName)
         } catch {
             throw SwiftDataError.unsupportedPredicate("Unsupported unary-minus numeric value")
         }

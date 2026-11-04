@@ -1,7 +1,7 @@
 import OpenSwiftData
 import XCTest
 
-@Model
+@Model()
 final class ExampleModel {
     var title: String
     var count: Int = 0

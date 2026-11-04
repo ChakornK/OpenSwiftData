@@ -5633,6 +5633,61 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarDefaultAdditionAndIndexComposeWithMultipleOptionalToOneRemovals() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "primary", destination: "Target"),
+                    Schema.Relationship(name: "secondary", destination: "Target"),
+                ]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "rank", type: "Int16", defaultValue: "11"),
+                ],
+                indexes: [Schema.Index(properties: ["rank"])]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-to-one-scalar-index-add"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 7, 'target')")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (2, 9, 'other target')")
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZPRIMARY, ZSECONDARY) VALUES (1, 4, 'owner', 1, 2)"
+            )
+            try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+        }
+
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZRANK FROM ZOWNER") },
+            [[.int(1), .int(1), .int(4), .text("owner"), .int(11)]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET") },
+            [
+                [.int(1), .int(2), .int(7), .text("target")],
+                [.int(2), .int(2), .int(9), .text("other target")],
+            ])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("PRAGMA table_info(ZOWNER)") }.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            },
+            ["Z_PK", "Z_ENT", "Z_OPT", "ZNAME", "ZRANK"])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
+            },
+            [[.text("ZOWNER_ZRANK_INDEX"), .text("CREATE INDEX ZOWNER_ZRANK_INDEX ON ZOWNER (ZRANK)")]])
+        try driver.close()
+    }
+
     func testUniqueScalarAdditionWithRelationshipRemovalFailsAtomically() throws {
         let source = Schema([
             Schema.Entity(

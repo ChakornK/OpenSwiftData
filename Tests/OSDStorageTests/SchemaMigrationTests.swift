@@ -11448,6 +11448,27 @@ final class SchemaMigrationTests: XCTestCase {
         let sourceIDs = try initial.read {
             try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
         }
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT) VALUES (?, 2)", [.int(Int64(sourceIDs["Base"]!))])
+            try connection.execute(
+                "INSERT INTO ZTARGET (Z_ENT, Z_OPT) VALUES (?, 4)", [.int(Int64(sourceIDs["Target"]!))])
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourceBaseRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBASE ORDER BY Z_PK")
+        }
+        let sourceTargetRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET ORDER BY Z_PK")
+        }
         try initial.close()
 
         XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
@@ -11455,10 +11476,41 @@ final class SchemaMigrationTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBASE ORDER BY Z_PK") },
+            sourceBaseRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET ORDER BY Z_PK") },
+            sourceTargetRows)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
         let reopened = try LightweightMigration.openStore(location: location, schema: source)
         XCTAssertEqual(
             try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
             sourceIDs)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBASE ORDER BY Z_PK") },
+            sourceBaseRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTARGET ORDER BY Z_PK") },
+            sourceTargetRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
     }
 

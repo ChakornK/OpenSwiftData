@@ -3762,6 +3762,7 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.optionalTags.flatMap { $0.isEmpty } ?? false },
             includePendingChanges: false)
         XCTAssertEqual(Set(try context.fetch(optionalDescriptor).map(\.name)), ["empty-optional"])
+        XCTAssertEqual(try context.fetchIdentifiers(optionalDescriptor), [emptyOptional.persistentModelID])
 
         populated.tags = []
         populatedOptional.optionalTags = []
@@ -3807,6 +3808,7 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.optionalTags.flatMap { $0.count == zeroCount } ?? false },
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(optionalDescriptor).map(\.name), ["empty"])
+        XCTAssertEqual(try context.fetchIdentifiers(optionalDescriptor), [empty.persistentModelID])
     }
 
     @MainActor
@@ -4153,6 +4155,7 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [matching.persistentModelID])
 
         matching.values = []
         nilValue.values = [value]
@@ -4207,6 +4210,7 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["matching"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [matching.persistentModelID])
 
         matching.tags = []
         nilValue.tags = [needle]

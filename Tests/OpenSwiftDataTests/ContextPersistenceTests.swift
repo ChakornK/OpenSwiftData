@@ -2250,6 +2250,37 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testMultipleSortDescriptorsKeepPerKeyDirectionAcrossPendingMerge() throws {
+        let container = try ModelContainer(
+            for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("multi-key-sort"))
+        let context = container.mainContext
+        let highSecond = ReverseOrderPersistenceFixture(zebra: "same", alpha: 1, middle: "x", optionalValue: "a")
+        let lowSecond = ReverseOrderPersistenceFixture(zebra: "same", alpha: 2, middle: "z", optionalValue: "a")
+        let laterPrimaryKey = ReverseOrderPersistenceFixture(
+            zebra: "same", alpha: 3, middle: "x", optionalValue: "a")
+        context.insert(highSecond)
+        context.insert(lowSecond)
+        context.insert(laterPrimaryKey)
+        try context.save()
+        let pending = ReverseOrderPersistenceFixture(zebra: "same", alpha: 4, middle: "y", optionalValue: "a")
+        context.insert(pending)
+
+        let descriptor = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            sortBy: [
+                SortDescriptor(\.optionalValue, order: .reverse),
+                SortDescriptor(\.middle),
+            ])
+        let persistedDescriptor = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            sortBy: descriptor.sortBy, includePendingChanges: false)
+
+        XCTAssertEqual(try context.fetch(descriptor).map(\.alpha), [1, 3, 4, 2])
+        XCTAssertEqual(try context.fetch(persistedDescriptor).map(\.alpha), [1, 3, 2])
+        XCTAssertEqual(
+            try context.fetchIdentifiers(descriptor),
+            try context.fetch(descriptor).map(\.persistentModelID))
+    }
+
+    @MainActor
     func testPartialFetchFaultsOmittedPropertiesOnAccess() throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-fault"))

@@ -529,6 +529,52 @@ final class ThreeLevelQuantifierItemFixture {
 }
 
 @Model
+final class ThreeLevelHierarchyQuantifierOwnerFixture {
+    var name: String
+    @Relationship(inverse: nil) var groups: [ThreeLevelHierarchyQuantifierGroupFixture]
+    init(name: String, groups: [ThreeLevelHierarchyQuantifierGroupFixture]) {
+        self.name = name
+        self.groups = groups
+    }
+}
+
+@Model
+final class ThreeLevelHierarchyQuantifierGroupFixture {
+    @Relationship(inverse: nil) var children: [ThreeLevelHierarchyQuantifierChildFixture]
+    init(children: [ThreeLevelHierarchyQuantifierChildFixture]) { self.children = children }
+}
+
+@Model
+final class ThreeLevelHierarchyQuantifierChildFixture {
+    @Relationship(inverse: nil) var items: [ThreeLevelHierarchyQuantifierItemBaseFixture]
+    init(items: [ThreeLevelHierarchyQuantifierItemBaseFixture]) { self.items = items }
+}
+
+@Model
+class ThreeLevelHierarchyQuantifierItemBaseFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
+final class ThreeLevelHierarchyQuantifierItemLeafFixture: ThreeLevelHierarchyQuantifierItemBaseFixture {
+    var code: String
+    init(title: String, code: String) {
+        self.code = code
+        super.init(title: title)
+    }
+}
+
+@Model
+final class ThreeLevelHierarchyQuantifierItemSiblingFixture: ThreeLevelHierarchyQuantifierItemBaseFixture {
+    var label: String
+    init(title: String, label: String) {
+        self.label = label
+        super.init(title: title)
+    }
+}
+
+@Model
 final class FourLevelQuantifierRootFixture {
     @Relationship(inverse: nil) var groups: [FourLevelQuantifierGroupFixture]
     init(groups: [FourLevelQuantifierGroupFixture]) { self.groups = groups }
@@ -4033,6 +4079,69 @@ final class PersistentModelTests: XCTestCase {
             })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching-owner", "failing-owner"])
 
+    }
+
+    @MainActor
+    func testNestedThreeLevelContainsMatchesSubtypeOnlyHierarchyDestinationValues() throws {
+        let container = try ModelContainer(
+            for: ThreeLevelHierarchyQuantifierOwnerFixture.self,
+            ThreeLevelHierarchyQuantifierGroupFixture.self,
+            ThreeLevelHierarchyQuantifierChildFixture.self,
+            ThreeLevelHierarchyQuantifierItemLeafFixture.self,
+            ThreeLevelHierarchyQuantifierItemSiblingFixture.self,
+            configurations: .sqliteMemory("nested-hierarchy-quantifier-depth-three"))
+        let context = container.mainContext
+        let matchingItem = ThreeLevelHierarchyQuantifierItemLeafFixture(title: "match", code: "leaf")
+        let nonmatchingItem = ThreeLevelHierarchyQuantifierItemLeafFixture(title: "miss", code: "match")
+        let siblingItem = ThreeLevelHierarchyQuantifierItemSiblingFixture(title: "match", label: "sibling")
+        let matchingChild = ThreeLevelHierarchyQuantifierChildFixture(items: [matchingItem])
+        let nonmatchingChild = ThreeLevelHierarchyQuantifierChildFixture(items: [nonmatchingItem])
+        let siblingChild = ThreeLevelHierarchyQuantifierChildFixture(items: [siblingItem])
+        let matchingGroup = ThreeLevelHierarchyQuantifierGroupFixture(children: [matchingChild])
+        let nonmatchingGroup = ThreeLevelHierarchyQuantifierGroupFixture(children: [nonmatchingChild])
+        let siblingGroup = ThreeLevelHierarchyQuantifierGroupFixture(children: [siblingChild])
+        let matchingOwner = ThreeLevelHierarchyQuantifierOwnerFixture(
+            name: "matching", groups: [matchingGroup])
+        let nonmatchingOwner = ThreeLevelHierarchyQuantifierOwnerFixture(
+            name: "nonmatching", groups: [nonmatchingGroup])
+        let siblingOwner = ThreeLevelHierarchyQuantifierOwnerFixture(
+            name: "sibling", groups: [siblingGroup])
+        let emptyOwner = ThreeLevelHierarchyQuantifierOwnerFixture(name: "empty", groups: [])
+        for model in [matchingItem, nonmatchingItem, siblingItem] { context.insert(model) }
+        for model in [matchingChild, nonmatchingChild, siblingChild] { context.insert(model) }
+        for model in [matchingGroup, nonmatchingGroup, siblingGroup] { context.insert(model) }
+        for model in [matchingOwner, nonmatchingOwner, siblingOwner, emptyOwner] { context.insert(model) }
+        try context.save()
+
+        let descriptor = FetchDescriptor<ThreeLevelHierarchyQuantifierOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.title == "match" }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        let fetched = try context.fetch(descriptor)
+        XCTAssertEqual(fetched.map(\.name), ["matching", "sibling"])
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+
+        let pendingItem = ThreeLevelHierarchyQuantifierItemLeafFixture(title: "match", code: "pending")
+        context.insert(pendingItem)
+        nonmatchingOwner.groups[0].children[0].items.append(pendingItem)
+        let pendingDescriptor = FetchDescriptor<ThreeLevelHierarchyQuantifierOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.groups.contains { group in
+                    group.children.contains { child in
+                        child.items.contains { $0.title == "match" }
+                    }
+                }
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.map(\.name), ["matching", "nonmatching", "sibling"])
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
     }
 
     @MainActor

@@ -68,7 +68,10 @@ var targets: [Target] = [
     ),
     .testTarget(
         name: "OpenSwiftDataTests",
-        dependencies: ["OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDConformance", "OSDCore"],
+        dependencies: [
+            "OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDConformance", "OSDCore",
+            .product(name: "GRDB", package: "GRDB.swift"),
+        ],
         path: "Tests/OpenSwiftDataTests"
     ),
     .testTarget(

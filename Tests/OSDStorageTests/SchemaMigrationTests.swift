@@ -2110,6 +2110,108 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testSequentialRenameThenNumericWideningUsesPersistedSchema() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("rename-then-widen.sqlite"))
+        let version1 = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "count", type: "Int64"),
+                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                ],
+                indexes: [Schema.Index(properties: ["count"])])
+        ])
+        let version2 = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "count", type: "Int64"),
+                    Schema.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
+                ],
+                indexes: [Schema.Index(properties: ["count"])])
+        ])
+        let version3 = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "count", type: "Double"),
+                    Schema.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
+                ],
+                indexes: [Schema.Index(properties: ["count"])])
+        ])
+
+        let initial = try LightweightMigration.openStore(location: location, schema: version1)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZCOUNT, ZLABEL) VALUES (7, 1, 3, 16, 'one')")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZCOUNT, ZLABEL) VALUES (12, 1, 8, 32, 'two')")
+        }
+        try initial.close()
+
+        let renamed = try LightweightMigration.openStore(location: location, schema: version2)
+        XCTAssertEqual(
+            try renamed.read { try $0.rows("SELECT Z_PK, Z_OPT, ZCOUNT, ZTITLE FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(7), .int(3), .int(16), .text("one")], [.int(12), .int(8), .int(32), .text("two")]])
+        XCTAssertEqual(
+            try renamed.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [[.text("ZRECORD_ZCOUNT_INDEX")], [.text("ZRECORD_ZTITLE_UNIQUE_INDEX")]])
+        XCTAssertEqual(
+            try renamed.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            .blob(Array(SchemaHash.hexDigest(version2).utf8)))
+        let storedVersion2 = try renamed.read {
+            try $0.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaDescriptionKey)]
+            ).first?.first
+        }
+        guard case let .blob(version2Description)? = storedVersion2,
+            let decodedVersion2 = String(bytes: version2Description, encoding: .utf8)
+        else { return XCTFail("Expected the renamed schema description to be stored.") }
+        XCTAssertEqual(decodedVersion2, SchemaHash.canonicalDescription(of: version2))
+        try renamed.close()
+
+        let widened = try LightweightMigration.openStore(location: location, schema: version3)
+        XCTAssertEqual(
+            try widened.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, typeof(ZCOUNT), ZCOUNT, ZTITLE FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(7), .int(3), .text("real"), .double(16), .text("one")],
+                [.int(12), .int(8), .text("real"), .double(32), .text("two")],
+            ])
+        XCTAssertEqual(
+            try widened.read {
+                try $0.rows(
+                    "SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)]
+                ).first?.first
+            },
+            .blob(Array(SchemaHash.hexDigest(version3).utf8)))
+        XCTAssertThrowsError(
+            try widened.write {
+                try $0.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCOUNT, ZTITLE) VALUES (1, 9, 64, 'one')")
+            })
+        XCTAssertEqual(try widened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try widened.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: version3)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZCOUNT, ZTITLE FROM ZRECORD ORDER BY Z_PK") },
+            [[.int(7), .int(3), .double(16), .text("one")], [.int(12), .int(8), .double(32), .text("two")]])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testIntegerToDoubleRebuildPreservesOrdinaryIndexes() throws {
         let source = Schema([
             Schema.Entity(

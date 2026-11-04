@@ -35,6 +35,20 @@ private enum MigrationV2: VersionedSchema {
         ], version: versionIdentifier)
 }
 
+private enum MigrationV2_1: VersionedSchema {
+    static let versionIdentifier = Schema.Version(version: [2, 1, 0], identifier: "migration-v2.1")
+    static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
+    static let schema = Schema(
+        [
+            Schema.Entity(
+                name: "MigrationPlanRecord",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ], version: versionIdentifier)
+}
+
 private enum MigrationV3: VersionedSchema {
     static let versionIdentifier = Schema.Version(version: [3, 0, 0], identifier: "migration-v3")
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
@@ -54,6 +68,16 @@ private enum LightweightMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
     static var stages: [MigrationStage] {
         [.lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self)]
+    }
+}
+
+private enum VersionOnlyMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self, MigrationV2_1.self] }
+    static var stages: [MigrationStage] {
+        [
+            .lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self),
+            .lightweight(fromVersion: MigrationV2.self, toVersion: MigrationV2_1.self),
+        ]
     }
 }
 
@@ -457,6 +481,80 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+    }
+
+    @MainActor
+    func testVersionOnlyStageAdvancesVersionWithoutChangingSchemaData() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataVersionOnlyMigration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let versionTwo = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: LightweightMigrationPlan.self,
+            configurations: .sqliteFile("migration-version-only", url: url))
+        versionTwo.mainContext.insert(MigrationPlanRecord(name: "preserved-a"))
+        versionTwo.mainContext.insert(MigrationPlanRecord(name: "preserved-b"))
+        try versionTwo.mainContext.save()
+        try versionTwo.store?.close()
+
+        func query(_ sql: String) throws -> [String] {
+            var configuration = Configuration()
+            configuration.readonly = true
+            let database = try DatabaseQueue(path: url.path, configuration: configuration)
+            defer { try? database.close() }
+            return try database.read { try String.fetchAll($0, sql: sql) }
+        }
+        let metadataSQL = "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key"
+        let rowsSQL =
+            "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME || ':' || COALESCE(ZNOTE, 'NULL') FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
+        let primaryKeysSQL =
+            "SELECT CAST(Z_ENT AS TEXT) || ':' || Z_NAME || ':' || CAST(Z_SUPER AS TEXT) || ':' || CAST(Z_MAX AS TEXT) FROM Z_PRIMARYKEY ORDER BY Z_ENT"
+        let tablesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        let indexesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY name"
+        let sourceMetadata = try query(metadataSQL)
+        let sourceRows = try query(rowsSQL)
+        let sourcePrimaryKeys = try query(primaryKeysSQL)
+        let sourceTables = try query(tablesSQL)
+        let sourceIndexes = try query(indexesSQL)
+        MigrationStageRecorder.shared.reset()
+
+        let versionOnly = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: VersionOnlyMigrationPlan.self,
+            configurations: .sqliteFile("migration-version-only", url: url))
+        XCTAssertEqual(versionOnly.schema.version, MigrationV2_1.versionIdentifier)
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        XCTAssertEqual(try query(rowsSQL), sourceRows)
+        XCTAssertEqual(try query(primaryKeysSQL), sourcePrimaryKeys)
+        XCTAssertEqual(try query(tablesSQL), sourceTables)
+        XCTAssertEqual(try query(indexesSQL), sourceIndexes)
+        let versionOnlyMetadata = try query(metadataSQL)
+        let encodedVersion = try MigrationV2_1.versionIdentifier.encoded()
+        let versionHex = encodedVersion.map { String(format: "%02X", $0) }.joined()
+        XCTAssertTrue(versionOnlyMetadata.contains("schema.version.v1:\(versionHex)"))
+        XCTAssertEqual(
+            versionOnlyMetadata.filter { !$0.hasPrefix("schema.version.v1:") },
+            sourceMetadata.filter { !$0.hasPrefix("schema.version.v1:") })
+        try versionOnly.store?.close()
+
+        MigrationStageRecorder.shared.reset()
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: VersionOnlyMigrationPlan.self,
+            configurations: .sqliteFile("migration-version-only-reopen", url: url))
+        XCTAssertEqual(reopened.schema.version, MigrationV2_1.versionIdentifier)
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        XCTAssertEqual(try query(metadataSQL), versionOnlyMetadata)
+        XCTAssertEqual(try query(rowsSQL), sourceRows)
+        XCTAssertEqual(try query(primaryKeysSQL), sourcePrimaryKeys)
+        XCTAssertEqual(try query(tablesSQL), sourceTables)
+        XCTAssertEqual(try query(indexesSQL), sourceIndexes)
+        let nextRecord = MigrationPlanRecord(name: "after-version-only")
+        reopened.mainContext.insert(nextRecord)
+        try reopened.mainContext.save()
+        XCTAssertEqual(try XCTUnwrap(nextRecord.persistentModelID.primaryKey), 3)
+        XCTAssertEqual(
+            try query("SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"),
+            ["1:preserved-a", "2:preserved-b", "3:after-version-only"])
     }
 
     @MainActor

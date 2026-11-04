@@ -17,6 +17,29 @@ final class PredicateCompilerTests: XCTestCase {
             .value(.double(Double(Float(0.1)))))
     }
 
+    func testLegacyFloatCaptureRoundsBeforeSQLBinding() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "Comparison",
+            children: [
+                ("op", .capture(typeName: "ComparisonOperator", description: "greaterThan")),
+                (
+                    "lhs",
+                    .expression(
+                        name: "Arithmetic",
+                        children: [
+                            ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                            ("lhs", .propertyReference("score")),
+                            ("rhs", .capture(typeName: "Swift.Float", description: "0.1")),
+                        ])
+                ),
+                ("rhs", .capture(typeName: "Swift.Float", description: "1.0")),
+            ])
+        let ir = try PredicateIRBuilder.build(node, attributeTypes: ["score": "Float"])
+        let compiled = try SQLCompiler.compile(ir, entity: "Item")
+        XCTAssertEqual(compiled.sql, "(osd_f32_add(t0.ZSCORE, ?) > ?)")
+        XCTAssertEqual(compiled.arguments, [.double(Double(Float(0.1))), .double(Double(Float(1.0)))])
+    }
+
     func testResolvesPredicateKeyPathThroughTypedMetadata() throws {
         let predicate = #Predicate<CompilerRow> { $0.age > 4 }
         let keyPath = \CompilerRow.age
@@ -113,6 +136,27 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(
             try PredicateIRBuilder.build(node, attributeTypes: ["score": "Float"]),
             .floatArithmetic(.add, .keyPath(["score"]), .value(.double(2.0))))
+    }
+
+    func testFloatArithmeticRejectsMixedDoubleCoalescing() throws {
+        let coalesced = PredicateMirrorWalker.Node.expression(
+            name: "NilCoalesce",
+            children: [
+                ("lhs", .propertyReference("optionalScore")),
+                ("rhs", .capture(typeName: "Swift.Double", description: "1.0")),
+            ])
+        let arithmetic = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", coalesced),
+                ("rhs", .capture(typeName: "Swift.Float", description: "2.0")),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(
+                arithmetic,
+                attributeTypes: ["optionalScore": "Float?"],
+                optionalAttributeNames: ["optionalScore"]))
     }
 
     func testArithmeticRejectsDoubleRemainder() throws {

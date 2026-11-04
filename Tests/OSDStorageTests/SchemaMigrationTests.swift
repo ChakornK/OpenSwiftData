@@ -6676,6 +6676,104 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
     }
 
+    func testMultipleExternalStorageAttributeRemovalReconcilesAllSidecarsAfterCommit() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("external-multiple-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "firstDiscarded", type: "Data", options: [.externalStorage]),
+                    Schema.Attribute(
+                        name: "secondDiscarded", type: "Data", isOptional: true, options: [.externalStorage]),
+                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage])])
+        ])
+        let sourceColumns: Set<String> = [
+            "ZRECORD.ZFIRSTDISCARDED", "ZRECORD.ZSECONDDISCARDED", "ZRECORD.ZRETAINED",
+        ]
+        let destinationColumns: Set<String> = ["ZRECORD.ZRETAINED"]
+        let firstPayload = Array(repeating: UInt8(0x17), count: ExternalStorage.threshold + 1)
+        let secondPayload = Array(repeating: UInt8(0x28), count: ExternalStorage.threshold + 2)
+        let retainedPayload = Array(repeating: UInt8(0x39), count: ExternalStorage.threshold + 3)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: sourceColumns)
+        let markers = try initial.writeWithExternalData {
+            connection, session -> (StoredValue, StoredValue, StoredValue) in
+            let firstMarker = try session.externalizedValue(firstPayload)
+            let secondMarker = try session.externalizedValue(secondPayload)
+            let retainedMarker = try session.externalizedValue(retainedPayload)
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRSTDISCARDED, ZSECONDDISCARDED, ZRETAINED) "
+                    + "VALUES (1, 4, ?, ?, ?)",
+                [firstMarker, .null, retainedMarker])
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZFIRSTDISCARDED, ZSECONDDISCARDED, ZRETAINED) "
+                    + "VALUES (1, 4, NULL, ?, ?)",
+                [secondMarker, retainedMarker])
+            return (firstMarker, secondMarker, retainedMarker)
+        }
+        guard case let .blob(firstBytes) = markers.0, case let .blob(secondBytes) = markers.1,
+            case let .blob(retainedBytes) = markers.2,
+            let firstName = ExternalStorage.fileName(in: firstBytes),
+            let secondName = ExternalStorage.fileName(in: secondBytes),
+            let retainedName = ExternalStorage.fileName(in: retainedBytes)
+        else { return XCTFail("Expected external Data markers.") }
+        let sidecarDirectory = directory.appendingPathComponent(
+            "external-multiple-removal.sqlite.external", isDirectory: true)
+        let firstURL = sidecarDirectory.appendingPathComponent(firstName)
+        let secondURL = sidecarDirectory.appendingPathComponent(secondName)
+        let retainedURL = sidecarDirectory.appendingPathComponent(retainedName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedURL.path))
+
+        XCTAssertThrowsError(
+            try initial.write { connection in
+                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
+                throw ExternalStorageMigrationFailure.expected
+            }
+        ) { error in
+            XCTAssertTrue(error is ExternalStorageMigrationFailure)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedURL.path))
+        XCTAssertEqual(
+            try initial.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, ZFIRSTDISCARDED, ZSECONDDISCARDED, ZRETAINED "
+                        + "FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(4), .blob(firstBytes), .null, .blob(retainedBytes)],
+                [.int(2), .int(4), .null, .blob(secondBytes), .blob(retainedBytes)],
+            ])
+        try initial.close()
+        let migrated = try LightweightMigration.openStore(
+            location: location, schema: destination, externalColumns: destinationColumns)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: secondURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedURL.path))
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD ORDER BY Z_PK") },
+            [
+                [.int(1), .int(4), .blob(retainedBytes)],
+                [.int(2), .int(4), .blob(retainedBytes)],
+            ])
+        XCTAssertEqual(try migrated.read { try $0.resolved(.blob(retainedBytes)) }, .blob(retainedPayload))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: secondURL.path))
+        try migrated.close()
+    }
+
     func testOptionalExternalStorageAttributeAdditionPreservesExistingSidecars() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

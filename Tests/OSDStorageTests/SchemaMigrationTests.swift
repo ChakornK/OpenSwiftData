@@ -6392,7 +6392,8 @@ final class SchemaMigrationTests: XCTestCase {
         let source = Schema([
             Schema.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                indexes: [Schema.Index(properties: ["payload"])])
         ])
         let destination = Schema([
             Schema.Entity(
@@ -6400,7 +6401,8 @@ final class SchemaMigrationTests: XCTestCase {
                 attributes: [
                     Schema.Attribute(
                         name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload")
-                ])
+                ],
+                indexes: [Schema.Index(properties: ["renamedPayload"])])
         ])
         let sourceColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
         let destinationColumns: Set<String> = ["ZRECORD.ZRENAMEDPAYLOAD"]
@@ -6431,6 +6433,17 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRENAMEDPAYLOAD FROM ZRECORD") },
             [[.int(1), .int(6), .blob(marker)]])
+        let expectedIndexes = try SchemaBuilder.build(destination).statements.filter {
+            $0.hasPrefix("CREATE INDEX") && $0.contains(" ON ZRECORD ")
+        }
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
+            },
+            expectedIndexes.map { statement in
+                let tokens = statement.split(whereSeparator: \.isWhitespace)
+                return [.text(String(tokens[2])), .text(String(statement.dropLast()))]
+            })
         XCTAssertEqual(try migrated.read { try $0.resolved(.blob(marker)) }, .blob(payload))
         XCTAssertEqual(
             try migrated.read {

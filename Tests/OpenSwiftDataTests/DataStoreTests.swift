@@ -96,6 +96,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
     private var snapshots: [PersistentIdentifier: DataStoreSnapshot] = [:]
     private var reservations: [PersistentIdentifier: PersistentIdentifier] = [:]
     private(set) var lastFetchedValueKeys: Set<String>?
+    private var snapshotReadIdentifiers: [PersistentIdentifier] = []
 
     func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         lock.lock()
@@ -172,7 +173,14 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
     func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
         lock.lock()
         defer { lock.unlock() }
+        snapshotReadIdentifiers.append(identifier)
         return snapshots[identifier]
+    }
+
+    var fetchedSnapshotIdentifiers: [PersistentIdentifier] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotReadIdentifiers
     }
 }
 
@@ -607,6 +615,38 @@ final class DataStoreTests: XCTestCase {
             try reader.fetchCount(
                 FetchDescriptor<CustomHierarchyChild>(fetchLimit: 1, fetchOffset: 2, includePendingChanges: true)),
             1)
+    }
+
+    @MainActor
+    func testDataStoreHierarchyPartialFetchFaultsSubtypeProperties() throws {
+        let store = DictionaryDataStore()
+        let configuration = ModelConfiguration(
+            "custom-store-hierarchy-partial",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(
+            for: CustomHierarchyBase.self, CustomHierarchyChild.self, CustomHierarchyGrandchild.self,
+            configurations: configuration)
+        let writer = container.mainContext
+        writer.insert(CustomHierarchyChild(name: "child", score: 2))
+        writer.insert(CustomHierarchyGrandchild(name: "grandchild", score: 3, rank: 9))
+        try writer.save()
+
+        let reader = container.makeContext()
+        let descriptor = FetchDescriptor<CustomHierarchyChild>(propertiesToFetch: [\.name])
+        let projected = try reader.fetch(descriptor)
+        XCTAssertEqual(projected.map(\.name), ["child", "grandchild"])
+        XCTAssertTrue(projected[1] is CustomHierarchyGrandchild)
+        XCTAssertEqual(store.lastFetchedValueKeys, ["name"])
+
+        let readsBeforeFaults = store.fetchedSnapshotIdentifiers.count
+        XCTAssertEqual(projected[0].score, 2)
+        XCTAssertEqual(projected[1].score, 3)
+        let faultedIdentifiers = Array(store.fetchedSnapshotIdentifiers.dropFirst(readsBeforeFaults))
+        XCTAssertEqual(faultedIdentifiers, projected.map(\.persistentModelID))
+
+        let grandchild = try XCTUnwrap(projected[1] as? CustomHierarchyGrandchild)
+        XCTAssertEqual(grandchild.rank, 9)
+        XCTAssertEqual(store.fetchedSnapshotIdentifiers.count, readsBeforeFaults + 2)
     }
 
     @MainActor

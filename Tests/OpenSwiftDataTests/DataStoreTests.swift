@@ -89,6 +89,17 @@ final class CustomHierarchyOwner {
 }
 
 @Model
+final class CustomHierarchyChildOwner {
+    var label: String
+    @Relationship(inverse: nil) var target: CustomHierarchyChild?
+
+    init(label: String, target: CustomHierarchyChild? = nil) {
+        self.label = label
+        self.target = target
+    }
+}
+
+@Model
 class CustomHierarchyRelationshipOwnerBase {
     var label: String
     @Relationship(inverse: nil) var target: CustomHierarchyBase?
@@ -372,6 +383,49 @@ private struct InvalidHierarchyRelationshipDataStore: DataStore {
             persistentIdentifier: wrongTargetIdentifier,
             entityName: "CustomDataStoreFixture",
             values: ["value": .int(1)])
+    }
+}
+
+private struct HierarchyDestinationRelationshipDataStore: DataStore {
+    let identifier = "custom.hierarchy.destination-relationship"
+    let supportsInheritance = true
+    let targetEntityName: String
+
+    private var ownerIdentifier: PersistentIdentifier {
+        PersistentIdentifier(storeIdentifier: identifier, entityName: "CustomHierarchyChildOwner", primaryKey: 1)
+    }
+
+    private var targetIdentifier: PersistentIdentifier {
+        PersistentIdentifier(storeIdentifier: identifier, entityName: targetEntityName, primaryKey: 2)
+    }
+
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+        guard request.entity.name == "CustomHierarchyChildOwner" else { return DataStoreFetchResult(snapshots: []) }
+        return DataStoreFetchResult(
+            snapshots: [
+                DataStoreSnapshot(
+                    persistentIdentifier: ownerIdentifier,
+                    entityName: "CustomHierarchyChildOwner",
+                    values: ["label": .text("owner")],
+                    relationships: ["target": [targetIdentifier]])
+            ])
+    }
+
+    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+        guard identifier == targetIdentifier else { return nil }
+        let values: [String: StoredValue]
+        switch targetEntityName {
+        case "CustomHierarchyChild":
+            values = ["name": .text("child"), "score": .int(4)]
+        case "CustomHierarchyGrandchild":
+            values = ["name": .text("grandchild"), "score": .int(5), "rank": .int(11)]
+        default:
+            values = ["name": .text("base")]
+        }
+        return DataStoreSnapshot(
+            persistentIdentifier: targetIdentifier, entityName: targetEntityName, values: values)
     }
 }
 
@@ -859,6 +913,37 @@ final class DataStoreTests: XCTestCase {
             configurations: configuration)
 
         XCTAssertThrowsError(try container.mainContext.fetch(FetchDescriptor<CustomHierarchyOwner>())) { error in
+            guard case SwiftDataError.unsupportedStore = error else {
+                return XCTFail("Expected unsupportedStore, received \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    func testDataStoreChildDestinationAcceptsGrandchildAndRejectsBaseTarget() throws {
+        let acceptedConfiguration = ModelConfiguration(
+            "custom-hierarchy-child-destination-accepted",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(
+                store: HierarchyDestinationRelationshipDataStore(targetEntityName: "CustomHierarchyGrandchild")))
+        let acceptedContainer = try ModelContainer(
+            for: CustomHierarchyChildOwner.self, CustomHierarchyBase.self, CustomHierarchyChild.self,
+            CustomHierarchyGrandchild.self, configurations: acceptedConfiguration)
+        let acceptedOwner = try XCTUnwrap(
+            acceptedContainer.mainContext.fetch(FetchDescriptor<CustomHierarchyChildOwner>()).first)
+        XCTAssertEqual(acceptedOwner.label, "owner")
+        XCTAssertTrue(acceptedOwner.target is CustomHierarchyGrandchild)
+        XCTAssertEqual((acceptedOwner.target as? CustomHierarchyGrandchild)?.rank, 11)
+
+        let rejectedConfiguration = ModelConfiguration(
+            "custom-hierarchy-child-destination-rejected",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(
+                store: HierarchyDestinationRelationshipDataStore(targetEntityName: "CustomHierarchyBase")))
+        let rejectedContainer = try ModelContainer(
+            for: CustomHierarchyChildOwner.self, CustomHierarchyBase.self, CustomHierarchyChild.self,
+            CustomHierarchyGrandchild.self, configurations: rejectedConfiguration)
+        XCTAssertThrowsError(
+            try rejectedContainer.mainContext.fetch(FetchDescriptor<CustomHierarchyChildOwner>())
+        ) { error in
             guard case SwiftDataError.unsupportedStore = error else {
                 return XCTFail("Expected unsupportedStore, received \(error)")
             }

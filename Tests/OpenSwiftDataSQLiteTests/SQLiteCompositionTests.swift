@@ -24,6 +24,15 @@ private final class IndexedPredicateFixture {
 }
 
 @Model
+private final class OptionalIndexedPredicateFixture {
+    var value: String?
+
+    #Index(\OptionalIndexedPredicateFixture.value)
+
+    init(value: String?) { self.value = value }
+}
+
+@Model
 private final class ExternalPollingFixture {
     var value: String
     init(value: String) { self.value = value }
@@ -302,6 +311,65 @@ final class SQLiteCompositionTests: XCTestCase {
         XCTAssertTrue(
             details.contains {
                 $0.contains("SEARCH") && $0.contains("USING INDEX ZINDEXEDPREDICATEFIXTURE_ZRANK_INDEX")
+            },
+            details.joined(separator: "\n"))
+        XCTAssertFalse(
+            details.contains { $0 == "SCAN Z\(entity.name.uppercased())" },
+            details.joined(separator: "\n"))
+    }
+
+    @MainActor
+    func testOptionalIndexedEqualityPlanUsesSQLiteIndex() throws {
+        let container = try ModelContainer(
+            for: OptionalIndexedPredicateFixture.self, configurations: .sqliteMemory("optional-query-plan"))
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected a query-capable SQLite store")
+        }
+        for index in 0..<1_000 {
+            let value = index.isMultiple(of: 5) ? nil : "value-\(index)"
+            container.mainContext.insert(OptionalIndexedPredicateFixture(value: value))
+        }
+        try container.mainContext.save()
+
+        let capturedValue = "value-997"
+        let predicate = #Predicate<OptionalIndexedPredicateFixture> { $0.value == capturedValue }
+        let descriptor = FetchDescriptor<OptionalIndexedPredicateFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(try container.mainContext.fetch(descriptor).compactMap(\.value), [capturedValue])
+
+        let entity = try XCTUnwrap(
+            container.schema.entity(forName: String(describing: OptionalIndexedPredicateFixture.self)))
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            predicate.expression, modelType: OptionalIndexedPredicateFixture.self, entity: entity,
+            schema: container.schema)
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: [],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)))
+        )
+        let query = FetchSQLBuilder.build(
+            FetchSQLInput(
+                table: "Z\(entity.name.uppercased())",
+                columns: ["ZVALUE"],
+                predicateSQL: compiled.sql,
+                predicateArguments: compiled.arguments,
+                orderSQL: "t0.Z_PK ASC",
+                limit: nil,
+                offset: nil))
+        let plan = try store.read { connection in
+            try connection.rows("EXPLAIN QUERY PLAN \(query.sql)", arguments: query.arguments)
+        }
+        let details = plan.compactMap { row -> String? in
+            guard let last = row.last, case let .text(detail) = last else { return nil }
+            return detail
+        }
+        XCTAssertTrue(
+            details.contains {
+                $0.contains("SEARCH") && $0.contains("USING INDEX ZOPTIONALINDEXEDPREDICATEFIXTURE_ZVALUE_INDEX")
             },
             details.joined(separator: "\n"))
         XCTAssertFalse(

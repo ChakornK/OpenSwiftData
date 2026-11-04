@@ -10274,6 +10274,105 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyLeafInverseAttachmentRollsBackWhenMetadataWriteFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-inverse-rollback.sqlite"))
+        let triggerError = "hierarchy metadata write failure"
+        let source = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
+            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            source.entities[0],
+            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "TargetLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [
+                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                ],
+                superentityName: "TargetBase"),
+        ])
+        let targetTable = "Z" + "TargetBase".uppercased()
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (?, 3, 'owner', NULL)",
+                [.int(Int64(sourceIDs["Owner"] ?? 0))])
+            try connection.execute(
+                "INSERT INTO \(targetTable) (Z_ENT, Z_OPT, ZNAME) VALUES (?, 5, 'target')",
+                [.int(Int64(sourceIDs["TargetBase"] ?? 0))])
+            try connection.execute("UPDATE ZOWNER SET ZTARGET = 1 WHERE Z_PK = 1")
+            try connection.execute(
+                "CREATE TRIGGER fail_hierarchy_schema_description BEFORE UPDATE ON _osd_meta "
+                    + "WHEN NEW.key = '\(LightweightMigration.schemaDescriptionKey)' "
+                    + "BEGIN SELECT RAISE(ABORT, '\(triggerError)'); END")
+        }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZOWNER")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            XCTAssertTrue(String(describing: error).contains(triggerError), "Unexpected migration failure: \(error)")
+        }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZOWNER") },
+            originalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            [[.text("Owner")], [.text("TargetBase")]])
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT COUNT(*) FROM Z_PRIMARYKEY WHERE Z_NAME = 'TargetLeaf'")
+            },
+            [[.int(0)]])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.write { connection in
+            try connection.execute("DROP TRIGGER fail_hierarchy_schema_description")
+        }
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZOWNER") },
+            originalRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testHierarchyLeafRelationshipMigrationRejectsRequiredToOneRelationship() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

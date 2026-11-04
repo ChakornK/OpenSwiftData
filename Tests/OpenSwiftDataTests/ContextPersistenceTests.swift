@@ -1641,14 +1641,33 @@ final class ContextPersistenceTests: XCTestCase {
             predicate: narrowPredicate,
             sortBy: [SortDescriptor(\.id)],
             includePendingChanges: false)
-        XCTAssertEqual(try container.mainContext.fetch(narrowDescriptor).map(\.id), [2, 3])
+        let narrowMatches = try container.mainContext.fetch(narrowDescriptor)
+        XCTAssertEqual(narrowMatches.map(\.id), [2, 3])
+        XCTAssertEqual(try container.mainContext.fetchCount(narrowDescriptor), 2)
+        XCTAssertEqual(
+            try container.mainContext.fetchIdentifiers(narrowDescriptor), narrowMatches.map(\.persistentModelID))
 
         let widePredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.wide / -1 > 0 }
         let wideDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
             predicate: widePredicate,
             sortBy: [SortDescriptor(\.id)],
             includePendingChanges: false)
-        XCTAssertEqual(try container.mainContext.fetch(wideDescriptor).map(\.id), [2])
+        let wideMatches = try container.mainContext.fetch(wideDescriptor)
+        XCTAssertEqual(wideMatches.map(\.id), [2])
+        XCTAssertEqual(try container.mainContext.fetchCount(wideDescriptor), 1)
+        XCTAssertEqual(try container.mainContext.fetchIdentifiers(wideDescriptor), wideMatches.map(\.persistentModelID))
+
+        container.mainContext.insert(NarrowIntegerPredicateFixture(id: 4, small: .max, medium: 0))
+        container.mainContext.insert(NarrowIntegerPredicateFixture(id: 5, small: 1, medium: 0))
+        let pendingPredicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small + 1 > 0 }
+        let pendingDescriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: pendingPredicate, sortBy: [SortDescriptor(\.id)])
+        let pendingMatches = try container.mainContext.fetch(pendingDescriptor)
+        XCTAssertEqual(pendingMatches.map(\.id), [1, 2, 3, 5])
+        XCTAssertEqual(try container.mainContext.fetchCount(pendingDescriptor), 4)
+        XCTAssertEqual(
+            try container.mainContext.fetchIdentifiers(pendingDescriptor),
+            pendingMatches.map(\.persistentModelID))
     }
 
     @MainActor

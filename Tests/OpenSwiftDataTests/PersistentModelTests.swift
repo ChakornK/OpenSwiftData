@@ -4082,6 +4082,81 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNestedContainsAndAllSatisfyHonorVacuousTruthAtThreeLevels() throws {
+        let container = try ModelContainer(
+            for: ThreeLevelQuantifierOwnerFixture.self,
+            ThreeLevelQuantifierGroupFixture.self,
+            ThreeLevelQuantifierChildFixture.self,
+            ThreeLevelQuantifierItemFixture.self,
+            configurations: .sqliteMemory("nested-contains-all-satisfy-depth-three"))
+        let context = container.mainContext
+        let matchingItem = ThreeLevelQuantifierItemFixture(value: "match")
+        let existentialItem = ThreeLevelQuantifierItemFixture(value: "match")
+        let mixedMatchingItem = ThreeLevelQuantifierItemFixture(value: "match")
+        let nonmatchingItem = ThreeLevelQuantifierItemFixture(value: "other")
+        let matchingChild = ThreeLevelQuantifierChildFixture(name: "matching", items: [matchingItem])
+        let existentialChild = ThreeLevelQuantifierChildFixture(name: "existential", items: [existentialItem])
+        let mixedMatchingChild = ThreeLevelQuantifierChildFixture(name: "matching", items: [mixedMatchingItem])
+        let mixedChild = ThreeLevelQuantifierChildFixture(name: "mixed", items: [nonmatchingItem])
+        let emptyChild = ThreeLevelQuantifierChildFixture(name: "empty", items: [])
+        let matchingGroup = ThreeLevelQuantifierGroupFixture(name: "matching", children: [matchingChild])
+        let mixedGroup = ThreeLevelQuantifierGroupFixture(
+            name: "mixed", children: [mixedMatchingChild, mixedChild])
+        let existentialGroup = ThreeLevelQuantifierGroupFixture(name: "existential", children: [existentialChild])
+        let emptyChildGroup = ThreeLevelQuantifierGroupFixture(name: "empty-child", children: [emptyChild])
+        let emptyGroup = ThreeLevelQuantifierGroupFixture(name: "empty-group", children: [])
+        let matchingOwner = ThreeLevelQuantifierOwnerFixture(name: "matching", groups: [matchingGroup])
+        let mixedOwner = ThreeLevelQuantifierOwnerFixture(name: "mixed", groups: [mixedGroup])
+        let existentialOwner = ThreeLevelQuantifierOwnerFixture(
+            name: "existential", groups: [mixedGroup, existentialGroup])
+        let emptyChildOwner = ThreeLevelQuantifierOwnerFixture(name: "empty-child", groups: [emptyChildGroup])
+        let emptyGroupOwner = ThreeLevelQuantifierOwnerFixture(name: "empty-group", groups: [emptyGroup])
+        let emptyOwner = ThreeLevelQuantifierOwnerFixture(name: "empty-owner", groups: [])
+        for model in [matchingItem, existentialItem, mixedMatchingItem, nonmatchingItem] { context.insert(model) }
+        for model in [matchingChild, existentialChild, mixedMatchingChild, mixedChild, emptyChild] {
+            context.insert(model)
+        }
+        for model in [matchingGroup, mixedGroup, existentialGroup, emptyChildGroup, emptyGroup] {
+            context.insert(model)
+        }
+        for model in [matchingOwner, mixedOwner, existentialOwner, emptyChildOwner, emptyGroupOwner, emptyOwner] {
+            context.insert(model)
+        }
+        try context.save()
+
+        let expected = "match"
+        let descriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.groups.contains { group in
+                    group.children.allSatisfy { child in
+                        child.items.allSatisfy { $0.value == expected }
+                    }
+                }
+            },
+            includePendingChanges: false)
+        let fetched = try context.fetch(descriptor)
+        XCTAssertEqual(Set(fetched.map(\.name)), Set(["empty-child", "empty-group", "existential", "matching"]))
+        XCTAssertEqual(try context.fetchCount(descriptor), 4)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+
+        let pendingItem = ThreeLevelQuantifierItemFixture(value: "other")
+        context.insert(pendingItem)
+        matchingChild.items.append(pendingItem)
+        let pendingDescriptor = FetchDescriptor<ThreeLevelQuantifierOwnerFixture>(
+            predicate: #Predicate { owner in
+                owner.groups.contains { group in
+                    group.children.allSatisfy { child in
+                        child.items.allSatisfy { $0.value == expected }
+                    }
+                }
+            })
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(Set(pendingMatches.map(\.name)), Set(["empty-child", "empty-group", "existential"]))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+    }
+
+    @MainActor
     func testNestedThreeLevelContainsMatchesSubtypeOnlyHierarchyDestinationValues() throws {
         let container = try ModelContainer(
             for: ThreeLevelHierarchyQuantifierOwnerFixture.self,

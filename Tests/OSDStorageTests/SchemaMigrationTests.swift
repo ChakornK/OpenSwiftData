@@ -10837,8 +10837,29 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try initial.write { connection in
             try connection.execute(
-                "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 1)",
+                "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 2)",
+                [.int(Int64(try XCTUnwrap(sourceIDs["Animal"])))])
+            try connection.execute(
+                "INSERT INTO ZDOG (Z_ENT, Z_OPT) VALUES (?, 3)",
                 [.int(Int64(try XCTUnwrap(sourceIDs["Dog"])))])
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourceAnimalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZANIMAL ORDER BY Z_PK")
+        }
+        let sourceDogRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZDOG ORDER BY Z_PK")
+        }
+        let sourcePrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
         }
         try initial.close()
 
@@ -10847,13 +10868,52 @@ final class SchemaMigrationTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZANIMAL ORDER BY Z_PK") },
+            sourceAnimalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZDOG ORDER BY Z_PK") },
+            sourceDogRows)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            sourcePrimaryKeys)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
         let reopened = try LightweightMigration.openStore(location: location, schema: source)
         XCTAssertEqual(
             try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
             sourceIDs)
-        let rows = try reopened.read { try $0.rows("SELECT Z_ENT FROM ZANIMAL") }
-        XCTAssertEqual(rows, [[.int(Int64(try XCTUnwrap(sourceIDs["Dog"])))]])
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZANIMAL ORDER BY Z_PK") },
+            sourceAnimalRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZDOG ORDER BY Z_PK") },
+            sourceDogRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
     }
 
     func testHierarchyAttributeRemovalFailsBeforeWrites() throws {

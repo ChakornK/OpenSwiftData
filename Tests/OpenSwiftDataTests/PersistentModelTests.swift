@@ -3829,6 +3829,8 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["matching", "empty"])
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(descriptor)), Set([matching.persistentModelID, empty.persistentModelID]))
 
         let rejected = "rejected"
         let notEqualDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
@@ -3841,6 +3843,9 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.tags.allSatisfy { $0 == expected } })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["matching", "mixed", "empty"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matching.persistentModelID, mixed.persistentModelID, empty.persistentModelID]))
     }
 
     @MainActor
@@ -3863,6 +3868,8 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertEqual(Set(try context.fetch(descriptor).map(\.name)), ["qualifying", "empty"])
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(descriptor)), Set([qualifying.persistentModelID, empty.persistentModelID]))
 
         let reversedDescriptor = FetchDescriptor<CodableStringCollectionFixture>(
             predicate: #Predicate { $0.numbers.allSatisfy { lowerBound <= $0 } },
@@ -3874,6 +3881,9 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.numbers.allSatisfy { $0 >= lowerBound } })
         XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["qualifying", "violating", "empty"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([qualifying.persistentModelID, violating.persistentModelID, empty.persistentModelID]))
     }
 
     @MainActor

@@ -15217,7 +15217,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCardinalityChangeFailsAndPreservesStore() throws {
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-cardinality"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
         let source = Schema([
             Schema.Entity(
                 name: "Owner",
@@ -15230,23 +15233,88 @@ final class SchemaMigrationTests: XCTestCase {
                 relationships: [Schema.Relationship(name: "child", destination: "Child", isToMany: true)]),
             Schema.Entity(name: "Child"),
         ])
-        try bootstrap(source, driver: driver)
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZCHILD) VALUES (?, 5, 1)",
+                [.int(Int64(sourceIDs["Owner"]!))])
+            try connection.execute(
+                "INSERT INTO ZCHILD (Z_ENT, Z_OPT) VALUES (?, 7)",
+                [.int(Int64(sourceIDs["Child"]!))])
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourcePrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let sourceOwnerRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZCHILD FROM ZOWNER ORDER BY Z_PK")
+        }
+        let sourceChildRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZCHILD ORDER BY Z_PK")
+        }
+        try initial.close()
 
-        XCTAssertThrowsError(
-            try driver.write { connection in
-                try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
-            }
-        ) { error in
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
-                XCTFail("Expected migrationUnsupported, got \(error)")
-                return
+                return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
-        let tables = try driver.read {
-            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            sourcePrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZCHILD FROM ZOWNER ORDER BY Z_PK") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZCHILD ORDER BY Z_PK") },
+            sourceChildRows)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZCHILD FROM ZOWNER ORDER BY Z_PK") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZCHILD ORDER BY Z_PK") },
+            sourceChildRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
         }
-        XCTAssertTrue(tables.contains([.text("ZOWNER")]))
-        try driver.close()
     }
 
     func testFailedMigrationRollsBackSchemaAndRows() throws {

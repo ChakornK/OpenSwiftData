@@ -10395,7 +10395,7 @@ final class SchemaMigrationTests: XCTestCase {
         let source = Schema([
             Schema.Entity(name: "Animal"),
             Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
         ])
         let destination = Schema([
             Schema.Entity(
@@ -10405,7 +10405,7 @@ final class SchemaMigrationTests: XCTestCase {
                 ]),
             Schema.Entity(name: "Animal"),
             Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -10413,6 +10413,15 @@ final class SchemaMigrationTests: XCTestCase {
         try initial.write { connection in
             try connection.execute(
                 "INSERT INTO ZANIMAL (Z_ENT, Z_OPT) VALUES (?, 1)", [.int(Int64(sourceIDs["Dog"]!))])
+            try connection.execute(
+                "INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (?, 4, 'target')",
+                [.int(Int64(sourceIDs["Target"]!))])
+        }
+        let originalAnimalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZANIMAL ORDER BY Z_PK")
+        }
+        let originalTargetRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET ORDER BY Z_PK")
         }
         try initial.close()
 
@@ -10423,6 +10432,8 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(destinationIDs["Dog"], sourceIDs["Dog"])
         XCTAssertEqual(destinationIDs["Target"], sourceIDs["Target"])
         let rootID = try XCTUnwrap(destinationIDs["Aardvark"])
+        let targetPK = try XCTUnwrap(
+            migrated.read { try $0.rows("SELECT Z_PK FROM ZTARGET ORDER BY Z_PK").first?.first })
         let columns = try migrated.read { try $0.rows("PRAGMA table_info(ZAARDVARK)") }
         XCTAssertTrue(columns.contains { $0.count > 1 && $0[1] == .text("ZTARGET") })
         let rootIndexes = try migrated.read {
@@ -10439,9 +10450,49 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(parent, .int(0))
         let oldRows = try migrated.read { try $0.rows("SELECT Z_ENT, Z_PK FROM ZANIMAL") }
         XCTAssertEqual(oldRows, [[.int(Int64(sourceIDs["Dog"]!)), .int(1)]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZANIMAL ORDER BY Z_PK") },
+            originalAnimalRows)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET ORDER BY Z_PK")
+            },
+            originalTargetRows)
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZTARGET FROM ZAARDVARK") }, [])
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZTARGET) VALUES (?, 2, NULL)",
+                [.int(Int64(rootID))])
+            try connection.execute(
+                "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZTARGET) VALUES (?, 3, ?)",
+                [.int(Int64(rootID)), targetPK])
+        }
+        let newRootRows = try migrated.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZTARGET FROM ZAARDVARK ORDER BY Z_PK")
+        }
+        XCTAssertEqual(
+            newRootRows,
+            [
+                [.int(1), .int(Int64(rootID)), .int(2), .null],
+                [.int(2), .int(Int64(rootID)), .int(3), targetPK],
+            ])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK FROM ZTARGET WHERE Z_PK = ?", [targetPK]) }, [[targetPK]])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try migrated.close()
 
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZTARGET FROM ZAARDVARK ORDER BY Z_PK")
+            },
+            newRootRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZTARGET ORDER BY Z_PK") },
+            originalTargetRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
     }
 

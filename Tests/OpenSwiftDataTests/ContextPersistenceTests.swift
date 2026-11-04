@@ -76,6 +76,19 @@ final class PredicateAgreementFixture {
     }
 }
 
+@Model
+final class NarrowIntegerPredicateFixture {
+    var id: Int
+    var small: Int8
+    var medium: Int16
+
+    init(id: Int, small: Int8, medium: Int16) {
+        self.id = id
+        self.small = small
+        self.medium = medium
+    }
+}
+
 struct CodablePayload: Codable, Equatable {
     let label: String
     let count: Int
@@ -1410,6 +1423,51 @@ final class ContextPersistenceTests: XCTestCase {
                 return XCTFail("Expected overflowing unary minus to fail safely, got \(error)")
             }
             XCTAssertTrue(message.contains("overflows"), "Unexpected unary-minus error: \(message)")
+        }
+    }
+
+    @MainActor
+    func testNegativeNarrowIntegerLiteralsMatchFoundationEvaluator() throws {
+        let seeds: [(id: Int, small: Int8, medium: Int16)] = [
+            (1, -2, -10),
+            (2, -1, 0),
+            (3, 0, 10),
+            (4, 3, 20),
+            (5, .min, -20),
+            (6, 1, .min),
+        ]
+        let detachedRows = seeds.map {
+            NarrowIntegerPredicateFixture(id: $0.id, small: $0.small, medium: $0.medium)
+        }
+        let container = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("foundation-narrow-negative-integer"))
+        for seed in seeds {
+            container.mainContext.insert(
+                NarrowIntegerPredicateFixture(id: seed.id, small: seed.small, medium: seed.medium))
+        }
+        try container.mainContext.save()
+        let minimumSmall = Int8.min
+        let minimumMedium = Int16.min
+        let predicates: [(String, Set<Int>, Predicate<NarrowIntegerPredicateFixture>)] = [
+            ("int8-negative-literal", [1], #Predicate { $0.small == -2 }),
+            ("int16-negative-literal", [5, 6], #Predicate { $0.medium < -10 }),
+            ("int8-captured-minimum", [5], #Predicate { $0.small == minimumSmall }),
+            ("int16-captured-minimum", [6], #Predicate { $0.medium == minimumMedium }),
+        ]
+
+        for (name, expectedIDs, predicate) in predicates {
+            let foundationIDs = try Set(
+                zip(detachedRows, seeds).compactMap { row, seed in
+                    try predicate.evaluate(row) ? seed.id : nil
+                })
+            let descriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.id)],
+                includePendingChanges: false)
+            let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+            XCTAssertEqual(foundationIDs, expectedIDs, "Foundation evaluation differs for \(name)")
+            XCTAssertEqual(sqliteIDs, foundationIDs, "Predicate results differ for \(name)")
         }
     }
 

@@ -45,6 +45,7 @@ private enum MigrationV3: VersionedSchema {
                 attributes: [
                     Schema.Attribute(name: "name", type: "String"),
                     Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "detail", type: "String", isOptional: true),
                 ])
         ], version: versionIdentifier)
 }
@@ -62,6 +63,39 @@ private enum VersionThreePlan: SchemaMigrationPlan {
         [
             .lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self),
             .lightweight(fromVersion: MigrationV2.self, toVersion: MigrationV3.self),
+        ]
+    }
+}
+
+private enum MultiStageFailurePlan: SchemaMigrationPlan {
+    static let failureSwitch = MigrationFailureSwitch()
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self, MigrationV3.self] }
+    static var stages: [MigrationStage] {
+        [
+            .custom(
+                fromVersion: MigrationV1.self,
+                toVersion: MigrationV2.self,
+                willMigrate: { _ in MigrationStageRecorder.shared.append("stage1-will") },
+                didMigrate: { context in
+                    MigrationStageRecorder.shared.append("stage1-did")
+                    for record in try context.fetch(FetchDescriptor<MigrationPlanRecord>()) {
+                        record.name = "stage1-\(record.name)"
+                    }
+                    try context.save()
+                }),
+            .custom(
+                fromVersion: MigrationV2.self,
+                toVersion: MigrationV3.self,
+                willMigrate: { _ in MigrationStageRecorder.shared.append("stage2-will") },
+                didMigrate: { context in
+                    MigrationStageRecorder.shared.append("stage2-did")
+                    let record = try XCTUnwrap(context.fetch(FetchDescriptor<MigrationPlanRecord>()).first)
+                    record.name = "stage2-\(record.name)"
+                    try context.save()
+                    if failureSwitch.shouldFail {
+                        throw SwiftDataError.migrationUnsupported("expected stage 2 destination failure")
+                    }
+                }),
         ]
     }
 }
@@ -476,6 +510,103 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return Int64(String(primaryKey))
             })
         XCTAssertEqual(reopenedPrimaryKeys, originalPrimaryKeyValues)
+    }
+
+    @MainActor
+    func testLaterStageDidFailureResumesWithoutRepeatingCompletedStage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationLaterStageRetry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let source = try ModelContainer(
+            for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
+            configurations: [.sqliteFile("migration-later-stage-retry", url: url)])
+        source.mainContext.insert(MigrationPlanRecord(name: "first"))
+        source.mainContext.insert(MigrationPlanRecord(name: "second"))
+        try source.mainContext.save()
+        try source.store?.close()
+
+        MigrationStageRecorder.shared.reset()
+        MultiStageFailurePlan.failureSwitch.shouldFail = true
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: MigrationPlanRecord.self, migrationPlan: MultiStageFailurePlan.self,
+                configurations: .sqliteFile("migration-later-stage-retry", url: url))
+        ) { error in
+            XCTAssertEqual(error as? SwiftDataError, .migrationUnsupported("expected stage 2 destination failure"))
+        }
+        XCTAssertEqual(
+            MigrationStageRecorder.shared.values,
+            ["stage1-will", "stage1-did", "stage2-will", "stage2-did"])
+
+        let pendingPlanIdentifier = MultiStageFailurePlan.stages[1].destinationVersion.identifier
+        func hex(_ bytes: [UInt8]) -> String {
+            bytes.map { String(format: "%02X", $0) }.joined()
+        }
+        var readOnly = Configuration()
+        readOnly.readonly = true
+        let pendingDatabase = try DatabaseQueue(path: url.path, configuration: readOnly)
+        let pendingMetadata = try pendingDatabase.read { database in
+            try String.fetchAll(
+                database, sql: "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key")
+        }
+        let encodedDestinationVersion = try MigrationV3.versionIdentifier.encoded()
+        XCTAssertTrue(
+            pendingMetadata.contains(where: {
+                $0 == "schema.version.v1:" + hex(Array(encodedDestinationVersion))
+            }),
+            "Expected schema.version.v1:\(hex(Array(encodedDestinationVersion))); got \(pendingMetadata)")
+        XCTAssertTrue(
+            pendingMetadata.contains(where: {
+                $0 == "schema.migration.pending.v1:" + hex(Array(pendingPlanIdentifier.utf8))
+            }),
+            "Expected schema.migration.pending.v1:\(hex(Array(pendingPlanIdentifier.utf8))); got \(pendingMetadata)")
+        XCTAssertTrue(pendingMetadata.contains(where: { $0.hasPrefix("schema.hash.v1:") }))
+        let pendingRows = try pendingDatabase.read { database in
+            try String.fetchAll(
+                database,
+                sql: "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
+            )
+        }
+        XCTAssertEqual(pendingRows, ["1:stage1-first", "2:stage1-second"])
+        XCTAssertEqual(
+            try pendingDatabase.read { database in
+                try String.fetchAll(
+                    database,
+                    sql: "SELECT name FROM pragma_table_info('ZMIGRATIONPLANRECORD') WHERE name = 'ZDETAIL'")
+            },
+            ["ZDETAIL"])
+        XCTAssertEqual(try pendingDatabase.read { try String.fetchOne($0, sql: "PRAGMA integrity_check") }, "ok")
+        try pendingDatabase.close()
+
+        MultiStageFailurePlan.failureSwitch.shouldFail = false
+        let retried = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: MultiStageFailurePlan.self,
+            configurations: .sqliteFile("migration-later-stage-retry", url: url))
+        XCTAssertEqual(
+            MigrationStageRecorder.shared.values,
+            ["stage1-will", "stage1-did", "stage2-will", "stage2-did", "stage2-did"])
+        XCTAssertEqual(retried.schema.version, MigrationV3.versionIdentifier)
+        XCTAssertEqual(
+            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["stage1-second", "stage2-stage1-first"])
+        let completedMetadata = try retried.store?.read { connection in
+            try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+        }
+        XCTAssertFalse(
+            completedMetadata?.contains { row in
+                row.first == .text("schema.migration.pending.v1")
+            } ?? true)
+        try retried.store?.close()
+        MigrationStageRecorder.shared.reset()
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: MultiStageFailurePlan.self,
+            configurations: .sqliteFile("migration-later-stage-retry-reopen", url: url))
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["stage1-second", "stage2-stage1-first"])
     }
 
     @MainActor

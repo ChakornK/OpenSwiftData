@@ -9863,6 +9863,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyDestinationChangeFailsClosed() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
         let source = Schema([
             Schema.Entity(
                 name: "Owner",
@@ -9877,28 +9881,102 @@ final class SchemaMigrationTests: XCTestCase {
             Schema.Entity(name: "First"),
             Schema.Entity(name: "Second"),
         ])
+        let ownerEntity = try XCTUnwrap(source.entity(forName: "Owner"))
+        let sourceRelationship = try XCTUnwrap(ownerEntity.relationships.first)
         let sourceJoin = try XCTUnwrap(
-            SchemaBuilder.joinTableName(
-                for: try XCTUnwrap(source.entity(forName: "Owner")),
-                relationship: try XCTUnwrap(source.entity(forName: "Owner")?.relationships.first),
-                schema: source))
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-destination-change"))
-        try bootstrap(source, driver: driver)
-        XCTAssertThrowsError(
-            try driver.write {
-                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
-            }
-        ) { error in
+            SchemaBuilder.joinTableName(for: ownerEntity, relationship: sourceRelationship, schema: source))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        let ownerID = try XCTUnwrap(sourceIDs["Owner"])
+        let firstID = try XCTUnwrap(sourceIDs["First"])
+        let secondID = try XCTUnwrap(sourceIDs["Second"])
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (?, 3)", [.int(Int64(ownerID))])
+            try connection.execute("INSERT INTO ZFIRST (Z_ENT, Z_OPT) VALUES (?, 5)", [.int(Int64(firstID))])
+            try connection.execute("INSERT INTO ZSECOND (Z_ENT, Z_OPT) VALUES (?, 7)", [.int(Int64(secondID))])
+            try connection.execute("INSERT INTO \(sourceJoin) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourcePrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let sourceOwnerRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZOWNER ORDER BY Z_PK")
+        }
+        let sourceFirstRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZFIRST ORDER BY Z_PK")
+        }
+        let sourceSecondRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZSECOND ORDER BY Z_PK")
+        }
+        let sourceJoinRows = try initial.read {
+            try $0.rows("SELECT Z_A, Z_B FROM \(sourceJoin) ORDER BY Z_A, Z_B")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
                 return XCTFail("Expected to-many destination change to fail closed, got \(error)")
             }
         }
+        let inspection = try GRDBSQLiteDriver(location: location)
         XCTAssertEqual(
-            try driver.read {
-                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(sourceJoin)])
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
             },
-            [[.text(sourceJoin)]])
-        try driver.close()
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            sourcePrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZOWNER ORDER BY Z_PK") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZFIRST ORDER BY Z_PK") },
+            sourceFirstRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZSECOND ORDER BY Z_PK") },
+            sourceSecondRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_A, Z_B FROM \(sourceJoin) ORDER BY Z_A, Z_B") },
+            sourceJoinRows)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_A, Z_B FROM \(sourceJoin) ORDER BY Z_A, Z_B") },
+            sourceJoinRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected to-many destination change to fail closed, got \(error)")
+            }
+        }
     }
 
     func testFlatToManyAdditionRejectsJoinObjectNameCollisionBeforeDDL() throws {

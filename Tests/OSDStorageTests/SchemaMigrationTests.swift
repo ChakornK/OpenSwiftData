@@ -14313,7 +14313,8 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndependentRootRemovalRejectsUnsafeOutgoingAndInboundRelationships() throws {
-        let cases: [(String, Schema, Schema)] = [
+        let unsafeRelationshipReason = "Entity removal is limited to unreferenced flat roots without relationships"
+        let cases: [(String, Schema, Schema, String)] = [
             (
                 "required",
                 Schema([
@@ -14322,7 +14323,8 @@ final class SchemaMigrationTests: XCTestCase {
                         relationships: [Schema.Relationship(name: "target", destination: "Target", isOptional: false)]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "cascade",
@@ -14334,7 +14336,8 @@ final class SchemaMigrationTests: XCTestCase {
                         ]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "inbound",
@@ -14346,7 +14349,8 @@ final class SchemaMigrationTests: XCTestCase {
                 Schema([
                     Schema.Entity(
                         name: "Target", relationships: [Schema.Relationship(name: "owner", destination: "Owner")])
-                ])
+                ]),
+                unsafeRelationshipReason
             ),
             (
                 "to-many",
@@ -14356,7 +14360,8 @@ final class SchemaMigrationTests: XCTestCase {
                         relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "inverse",
@@ -14368,7 +14373,8 @@ final class SchemaMigrationTests: XCTestCase {
                         name: "Target",
                         relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "target")]),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "minimum-count",
@@ -14380,7 +14386,8 @@ final class SchemaMigrationTests: XCTestCase {
                         ]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "maximum-count",
@@ -14392,7 +14399,8 @@ final class SchemaMigrationTests: XCTestCase {
                         ]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "deny",
@@ -14402,7 +14410,8 @@ final class SchemaMigrationTests: XCTestCase {
                         relationships: [Schema.Relationship(name: "target", destination: "Target", deleteRule: .deny)]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
             (
                 "external-storage",
@@ -14413,10 +14422,11 @@ final class SchemaMigrationTests: XCTestCase {
                         relationships: [Schema.Relationship(name: "target", destination: "Target")]),
                     Schema.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")])
+                Schema([Schema.Entity(name: "Target")]),
+                unsafeRelationshipReason
             ),
         ]
-        for (name, source, destination) in cases {
+        for (name, source, destination, expectedReason) in cases {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-unsafe-relationship-\(name)"))
             try bootstrap(source, driver: driver)
             XCTAssertThrowsError(
@@ -14424,13 +14434,20 @@ final class SchemaMigrationTests: XCTestCase {
                     try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
                 }
             ) { error in
-                guard case SwiftDataError.migrationUnsupported = error else {
+                guard case let SwiftDataError.migrationUnsupported(reason) = error else {
                     return XCTFail("Expected \(name) relationship removal to fail closed, got \(error)")
                 }
+                XCTAssertTrue(
+                    reason.contains(expectedReason),
+                    "Expected \(name) rejection to contain '\(expectedReason)', got '\(reason)'")
             }
+            let removedRoot = try XCTUnwrap(source.entities.first { destination.entity(forName: $0.name) == nil })
             XCTAssertTrue(
                 try driver.read {
-                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZOWNER'").count == 1
+                    try $0.rows(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        [.text("Z\(removedRoot.name.uppercased())")]
+                    ).count == 1
                 })
             try driver.close()
         }

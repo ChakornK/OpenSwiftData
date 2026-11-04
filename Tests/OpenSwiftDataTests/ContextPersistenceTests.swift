@@ -1037,6 +1037,199 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testEnumerationRejectsAndRestoresModelMutationsByDefault() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-mutation-default"))
+        let writer = container.mainContext
+        let model = PersistenceTestModel(title: "stored")
+        writer.insert(model)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistenceTestModel>()).first)
+        let identifier = fetched.persistentModelID
+        let rowBefore = try container.store?.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE FROM ZPERSISTENCETESTMODEL", arguments: [])
+        }
+
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistenceTestModel>()) { $0.title = "changed" }
+        ) { error in
+            guard case SwiftDataError.unsupportedStore("Enumeration mutations are not allowed") = error else {
+                return XCTFail("Expected enumeration mutation rejection, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(fetched.title, "stored")
+        XCTAssertEqual(fetched.persistentModelID, identifier)
+        XCTAssertFalse(fetched.isDeleted)
+        XCTAssertFalse(fetched.hasChanges)
+        XCTAssertFalse(reader.hasChanges)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZTITLE FROM ZPERSISTENCETESTMODEL", arguments: [])
+            },
+            rowBefore)
+        XCTAssertEqual(try reader.fetch(FetchDescriptor<PersistenceTestModel>()).first?.title, "stored")
+
+        fetched.title = "preexisting"
+        XCTAssertTrue(fetched.hasChanges)
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistenceTestModel>()) { $0.title = "rejected" }
+        )
+        XCTAssertEqual(fetched.title, "preexisting")
+        XCTAssertTrue(fetched.hasChanges)
+        XCTAssertTrue(reader.hasChanges)
+
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistenceTestModel>()) { model in
+                model.title = "thrown"
+                throw SwiftDataError.unsupportedStore("Enumeration callback failed")
+            }
+        )
+        XCTAssertEqual(fetched.title, "preexisting")
+        XCTAssertTrue(fetched.hasChanges)
+        XCTAssertTrue(reader.hasChanges)
+
+        let unrelated = PersistenceTestModel(title: "unrelated")
+        reader.insert(unrelated)
+        try reader.enumerate(FetchDescriptor<PersistenceTestModel>()) { model in
+            if model === fetched { unrelated.title = "independent" }
+        }
+        XCTAssertEqual(fetched.title, "preexisting")
+        XCTAssertEqual(unrelated.title, "independent")
+        XCTAssertTrue(fetched.hasChanges)
+        XCTAssertTrue(unrelated.hasChanges)
+
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistenceTestModel>()) { model in
+                if model === fetched {
+                    model.title = "rejected again"
+                    unrelated.title = "discarded"
+                }
+            }
+        )
+        XCTAssertEqual(fetched.title, "preexisting")
+        XCTAssertEqual(unrelated.title, "independent")
+        XCTAssertTrue(fetched.hasChanges)
+        XCTAssertTrue(unrelated.hasChanges)
+        try reader.save()
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT ZTITLE FROM ZPERSISTENCETESTMODEL ORDER BY Z_PK", arguments: [])
+            },
+            [[.text("preexisting")], [.text("independent")]])
+    }
+
+    @MainActor
+    func testEnumerationRejectsAndRestoresRelationshipMutations() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("enumeration-relationship-mutation"))
+        let writer = container.mainContext
+        let owner = PersistentRelationshipOwner(title: "owner")
+        let child = PersistentRelationshipChild(title: "child")
+        writer.insert(owner)
+        writer.insert(child)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedOwner = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistentRelationshipOwner>()).first)
+        let fetchedChild = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistentRelationshipChild>()).first)
+        let originalOwnerRows = try container.store?.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZFAVORITE FROM ZPERSISTENTRELATIONSHIPOWNER", arguments: [])
+        }
+        let originalChildRows = try container.store?.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZOWNER FROM ZPERSISTENTRELATIONSHIPCHILD", arguments: [])
+        }
+
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistentRelationshipOwner>()) { $0.favorite = fetchedChild }
+        )
+        XCTAssertNil(fetchedOwner.favorite)
+        XCTAssertTrue(fetchedChild.owner == nil)
+        XCTAssertFalse(fetchedOwner.hasChanges)
+        XCTAssertFalse(fetchedChild.hasChanges)
+        XCTAssertFalse(reader.hasChanges)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZFAVORITE FROM ZPERSISTENTRELATIONSHIPOWNER", arguments: [])
+            },
+            originalOwnerRows)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZOWNER FROM ZPERSISTENTRELATIONSHIPCHILD", arguments: [])
+            },
+            originalChildRows)
+
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistentRelationshipOwner>()) { $0.children = [fetchedChild] }
+        )
+        XCTAssertTrue(fetchedOwner.children.isEmpty)
+        XCTAssertNil(fetchedChild.owner)
+        XCTAssertFalse(fetchedOwner.hasChanges)
+        XCTAssertFalse(fetchedChild.hasChanges)
+        XCTAssertFalse(reader.hasChanges)
+
+        let detachedChild = PersistentRelationshipChild(title: "detached")
+        XCTAssertThrowsError(
+            try reader.enumerate(FetchDescriptor<PersistentRelationshipOwner>()) {
+                $0.favorite = detachedChild
+            }
+        )
+        XCTAssertNil(fetchedOwner.favorite)
+        XCTAssertNil(detachedChild.modelContext)
+        XCTAssertFalse(reader.insertedModelsArray.contains { $0 === detachedChild })
+        XCTAssertFalse(reader.hasChanges)
+    }
+
+    @MainActor
+    func testRejectedEnumerationRestoresOnlyItsNestedTransactionFrame() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-nested-transaction"))
+        let writer = container.mainContext
+        let model = PersistenceTestModel(title: "stored")
+        writer.insert(model)
+        try writer.save()
+
+        let context = container.makeContext()
+        let fetched = try XCTUnwrap(context.fetch(FetchDescriptor<PersistenceTestModel>()).first)
+        try context.transaction {
+            fetched.title = "outer"
+            XCTAssertThrowsError(
+                try context.enumerate(FetchDescriptor<PersistenceTestModel>()) { $0.title = "inner" }
+            )
+            XCTAssertEqual(fetched.title, "outer")
+            XCTAssertTrue(fetched.hasChanges)
+            XCTAssertTrue(context.hasChanges)
+            fetched.count = 7
+        }
+
+        XCTAssertEqual(fetched.title, "outer")
+        XCTAssertEqual(fetched.count, 7)
+        XCTAssertFalse(fetched.hasChanges)
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT ZTITLE, ZCOUNT FROM ZPERSISTENCETESTMODEL", arguments: [])
+            },
+            [[.text("outer"), .int(7)]])
+
+        try context.enumerate(FetchDescriptor<PersistenceTestModel>()) { model in
+            do {
+                try context.transaction {
+                    model.title = "nested callback"
+                    throw SwiftDataError.unsupportedStore("Nested callback failure")
+                }
+            } catch {
+                XCTAssertEqual(model.title, "outer")
+            }
+        }
+        XCTAssertEqual(fetched.title, "outer")
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
     func testPredicateFetchAppliesPredicateToStoredRows() throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("stored-fetch-predicate"))

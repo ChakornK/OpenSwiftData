@@ -10,6 +10,7 @@ package final class ContextState: @unchecked Sendable {
     }
 
     struct TransactionFrame {
+        let id: UUID
         var pending: PendingState
         var snapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
         var baselineSnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]
@@ -753,16 +754,32 @@ package final class ContextState: @unchecked Sendable {
         locked { snapshots[ObjectIdentifier(model)]?.1.identifier }
     }
 
-    func beginTransaction(entrySnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]) {
+    @discardableResult
+    func beginTransaction(entrySnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)]) -> UUID {
         locked {
             let pending = PendingState(
                 inserted: inserted, changed: changed, deleted: deleted, snapshots: snapshots,
                 relationshipMutationEvents: relationshipMutationEvents)
+            let id = UUID()
             transactionFrames.append(
                 TransactionFrame(
+                    id: id,
                     pending: pending, snapshots: [:], baselineSnapshots: baselineSnapshots,
                     modelSnapshots: entrySnapshots))
+            return id
         }
+    }
+
+    func beginTransactionFrame() -> UUID {
+        let pending = pendingState()
+        var entrySnapshots: [ObjectIdentifier: (any PersistentModel, BackingDataSnapshot)] = [:]
+        for model in pending.inserted + pending.changed + pending.deleted {
+            let identifier = ObjectIdentifier(model)
+            if entrySnapshots[identifier] == nil {
+                entrySnapshots[identifier] = (model, model.snapshotLifecycle())
+            }
+        }
+        return beginTransaction(entrySnapshots: entrySnapshots)
     }
 
     func contains(_ model: any PersistentModel, in models: [any PersistentModel]) -> Bool {
@@ -772,6 +789,29 @@ package final class ContextState: @unchecked Sendable {
     func popTransaction() { locked { _ = transactionFrames.popLast() } }
 
     func popTransactionSnapshot() -> TransactionFrame? { locked { transactionFrames.popLast() } }
+
+    func popTransactionSnapshot(id: UUID) -> TransactionFrame? {
+        locked {
+            guard transactionFrames.last?.id == id else { return nil }
+            return transactionFrames.popLast()
+        }
+    }
+
+    func commitTransactionFrame() {
+        locked {
+            guard let frame = transactionFrames.popLast(), let parentIndex = transactionFrames.indices.last else {
+                return
+            }
+            for (identifier, snapshot) in frame.snapshots
+            where transactionFrames[parentIndex].snapshots[identifier] == nil {
+                transactionFrames[parentIndex].snapshots[identifier] = snapshot
+            }
+            for (identifier, snapshot) in frame.modelSnapshots
+            where transactionFrames[parentIndex].modelSnapshots[identifier] == nil {
+                transactionFrames[parentIndex].modelSnapshots[identifier] = snapshot
+            }
+        }
+    }
 
     func pendingState() -> PendingState {
         locked {
@@ -822,13 +862,8 @@ package final class ContextState: @unchecked Sendable {
 
     private func capture(_ model: any PersistentModel, current: BackingDataSnapshot) {
         let identifier = ObjectIdentifier(model)
-        let firstTransactionSnapshot = !transactionFrames.contains {
-            $0.modelSnapshots[identifier] != nil
-        }
-        if firstTransactionSnapshot {
-            for index in transactionFrames.indices {
-                transactionFrames[index].modelSnapshots[identifier] = (model, current)
-            }
+        for index in transactionFrames.indices where transactionFrames[index].modelSnapshots[identifier] == nil {
+            transactionFrames[index].modelSnapshots[identifier] = (model, current)
         }
         if snapshots[identifier] == nil {
             let baseline = baselineSnapshots[identifier]?.1

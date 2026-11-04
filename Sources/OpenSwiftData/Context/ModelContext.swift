@@ -1268,18 +1268,35 @@ public final class ModelContext {
                 if allowEscapingMutations {
                     try block(model)
                 } else {
-                    let snapshot = model.snapshotLifecycle()
                     let before = try modelValues(model)
+                    let relationshipState = relationshipMutationValues(model)
+                    let pendingBefore = state.pendingState()
+                    let frameID = state.beginTransactionFrame()
+                    let didMutate: Bool
                     do {
                         try block(model)
+                        let changedRelationships =
+                            relationshipMutationValues(model) != relationshipState
+                            || state.pendingState().relationshipMutationEvents.dropFirst(
+                                pendingBefore.relationshipMutationEvents.count
+                            ).contains { event in
+                                event.owner === model || event.oldEndpoints.contains(where: { $0 === model })
+                                    || event.newEndpoints.contains(where: { $0 === model })
+                            }
+                        didMutate = try modelValues(model) != before || changedRelationships
                     } catch {
-                        model.restoreLifecycle(snapshot)
+                        guard rollbackCurrentTransaction(expectedFrameID: frameID) else {
+                            throw SwiftDataError.unsupportedStore("Enumeration transaction frame changed")
+                        }
                         throw error
                     }
-                    if try modelValues(model) != before {
-                        model.restoreLifecycle(snapshot)
+                    if didMutate {
+                        guard rollbackCurrentTransaction(expectedFrameID: frameID) else {
+                            throw SwiftDataError.unsupportedStore("Enumeration transaction frame changed")
+                        }
                         throw SwiftDataError.unsupportedStore("Enumeration mutations are not allowed")
                     }
+                    state.commitTransactionFrame()
                 }
             }
         }
@@ -2500,6 +2517,21 @@ public final class ModelContext {
             values[adapter.columnName] = try adapter.encoded(model)
         }
         return values
+    }
+
+    private struct RelationshipMutationValue: Equatable {
+        let name: String
+        let endpoints: [PersistentIdentifier]
+    }
+
+    private func relationshipMutationValues<Model: PersistentModel>(_ model: Model) -> [RelationshipMutationValue] {
+        (containerStorage?.relationshipAdapterTable[ObjectIdentifier(type(of: model))] ?? [])
+            .sorted { $0.name < $1.name }
+            .map { adapter in
+                RelationshipMutationValue(
+                    name: adapter.name,
+                    endpoints: (adapter.read(model) ?? []).map(\.persistentModelID))
+            }
     }
 
     private func sortProperties<Model: PersistentModel>(
@@ -4348,9 +4380,16 @@ public final class ModelContext {
         state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 
-    private func rollbackCurrentTransaction() {
+    @discardableResult
+    private func rollbackCurrentTransaction(expectedFrameID: UUID? = nil) -> Bool {
         assertAffinity()
-        guard let frame = state.popTransactionSnapshot() else { return }
+        let frame: ContextState.TransactionFrame?
+        if let expectedFrameID {
+            frame = state.popTransactionSnapshot(id: expectedFrameID)
+        } else {
+            frame = state.popTransactionSnapshot()
+        }
+        guard let frame else { return false }
         let pending = state.pendingState()
         let currentModels = pending.inserted + pending.changed + pending.deleted
         let frameInsertions = frame.pending.inserted
@@ -4383,6 +4422,7 @@ public final class ModelContext {
         }
         state.restorePendingState(frame.pending)
         state.restoreBaselineSnapshots(frame.baselineSnapshots)
+        return true
     }
 
     private func finalizePendingChanges() {

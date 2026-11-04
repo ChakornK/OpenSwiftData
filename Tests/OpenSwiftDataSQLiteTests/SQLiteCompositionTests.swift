@@ -319,6 +319,52 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexedNumericSortPlanAvoidsTemporaryOrderByTree() throws {
+        let container = try ModelContainer(
+            for: IndexedPredicateFixture.self, configurations: .sqliteMemory("numeric-sort-query-plan"))
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected a query-capable SQLite store")
+        }
+        for rank in (0..<1_000).reversed() {
+            container.mainContext.insert(
+                IndexedPredicateFixture(rank: rank, identity: "sort-identity-\(rank)", label: "sort-label-\(rank)"))
+        }
+        try container.mainContext.save()
+
+        let descriptor = FetchDescriptor<IndexedPredicateFixture>(
+            sortBy: [SortDescriptor(\.rank)], fetchLimit: 5, includePendingChanges: false)
+        XCTAssertEqual(try container.mainContext.fetch(descriptor).map(\.rank), [0, 1, 2, 3, 4])
+
+        let entity = try XCTUnwrap(
+            container.schema.entity(forName: String(describing: IndexedPredicateFixture.self)))
+        let query = FetchSQLBuilder.build(
+            FetchSQLInput(
+                table: "Z\(entity.name.uppercased())",
+                columns: ["ZRANK"],
+                predicateSQL: nil,
+                predicateArguments: [],
+                orderSQL: "t0.ZRANK ASC",
+                limit: 5,
+                offset: nil))
+        let plan = try store.read { connection in
+            try connection.rows("EXPLAIN QUERY PLAN \(query.sql)", arguments: query.arguments)
+        }
+        let details = plan.compactMap { row -> String? in
+            guard let last = row.last, case let .text(detail) = last else { return nil }
+            return detail
+        }
+        XCTAssertTrue(
+            details.contains {
+                ($0.contains("SCAN") || $0.contains("SEARCH"))
+                    && $0.contains("USING INDEX ZINDEXEDPREDICATEFIXTURE_ZRANK_INDEX")
+            },
+            details.joined(separator: "\n"))
+        XCTAssertFalse(
+            details.contains { $0.contains("USE TEMP B-TREE FOR ORDER BY") },
+            details.joined(separator: "\n"))
+    }
+
+    @MainActor
     func testOptionalIndexedEqualityPlanUsesSQLiteIndex() throws {
         let container = try ModelContainer(
             for: OptionalIndexedPredicateFixture.self, configurations: .sqliteMemory("optional-query-plan"))

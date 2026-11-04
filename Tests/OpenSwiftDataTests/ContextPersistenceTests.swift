@@ -2247,6 +2247,44 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(persistedDescending).map(\.alpha), [2, 1, 4])
         XCTAssertEqual(try context.fetchIdentifiers(ascending), ascendingRows.map(\.persistentModelID))
         XCTAssertEqual(try context.fetch(persistedStringOrder).map(\.alpha), [2, 4, 1])
+        let pendingStringOrder = FetchDescriptor<ReverseOrderPersistenceFixture>(
+            sortBy: [SortDescriptor(\.zebra)])
+        XCTAssertEqual(try context.fetch(pendingStringOrder).map(\.alpha), [3, 2, 4, 5, 1])
+    }
+
+    func testSortCollationMatchesScalarStorageSemantics() {
+        func assertCollation(
+            for attribute: Schema.Attribute,
+            equals expectedCollation: String?,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            XCTAssertEqual(
+                ModelContext.sortCollation(for: attribute), expectedCollation, attribute.name, file: file, line: line)
+        }
+        assertCollation(
+            for: Schema.Attribute(name: "string", type: "String"), equals: "swiftLocalizedStandardCompare")
+        assertCollation(
+            for: Schema.Attribute(name: "optionalString", type: "Foundation.String?"),
+            equals: "swiftLocalizedStandardCompare")
+        assertCollation(
+            for: Schema.Attribute(name: "url", type: "URL"), equals: "swiftLocalizedStandardCompare")
+        assertCollation(
+            for: Schema.Attribute(name: "optionalURL", type: "Foundation.URL?"),
+            equals: "swiftLocalizedStandardCompare")
+        assertCollation(for: Schema.Attribute(name: "decimal", type: "Decimal"), equals: "OSD_DECIMAL")
+        assertCollation(
+            for: Schema.Attribute(name: "optionalDecimal", type: "Foundation.Decimal?"), equals: "OSD_DECIMAL")
+        assertCollation(for: Schema.Attribute(name: "integer", type: "Int64"), equals: nil)
+        assertCollation(for: Schema.Attribute(name: "date", type: "Date"), equals: nil)
+        assertCollation(for: Schema.Attribute(name: "uuid", type: "UUID"), equals: nil)
+        assertCollation(for: Schema.Attribute(name: "data", type: "Data"), equals: nil)
+        assertCollation(
+            for: Schema.Attribute(name: "codableString", type: "String", options: [.codable]), equals: nil)
+        assertCollation(
+            for: Schema.Attribute(
+                name: "transformableString", type: "String", options: [.transformable(by: "Test")]),
+            equals: nil)
     }
 
     @MainActor

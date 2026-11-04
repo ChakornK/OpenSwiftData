@@ -2113,8 +2113,18 @@ public final class ModelContext {
             else {
                 throw SwiftDataError.unsupportedPredicate("Sort key must be a direct persisted attribute")
             }
-            let collation = isDecimalAttribute(property, in: entity) ? "OSD_DECIMAL" : "swiftLocalizedStandardCompare"
-            return "t0.Z\(property.uppercased()) COLLATE \(collation) \(descriptor.isAscending ? "ASC" : "DESC")"
+            let collation: String?
+            if let attribute = entity.attributes.first(where: { $0.name == property }) {
+                collation = Self.sortCollation(for: attribute)
+            } else if let component = entity.attributes.lazy.flatMap(\.components)
+                .first(where: { $0.columnName == property })
+            {
+                collation = Self.sortCollation(forType: component.type)
+            } else {
+                throw SwiftDataError.unsupportedPredicate("Sort key is not a persisted attribute")
+            }
+            let collationSQL = collation.map { " COLLATE \($0)" } ?? ""
+            return "t0.Z\(property.uppercased())\(collationSQL) \(descriptor.isAscending ? "ASC" : "DESC")"
         }
         return columns.isEmpty ? "t0.Z_PK ASC" : columns.joined(separator: ", ")
     }
@@ -2557,10 +2567,42 @@ public final class ModelContext {
         }
     }
 
+    package static func sortCollation(for attribute: Schema.Attribute) -> String? {
+        if attribute.options.contains(.codable)
+            || attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+        {
+            return nil
+        }
+        return sortCollation(forType: attribute.type)
+    }
+
+    private static func sortCollation(forType typeName: String) -> String? {
+        let type = normalizedSortType(typeName)
+        if type == "Decimal" { return "OSD_DECIMAL" }
+        switch type {
+        case "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
+            "Bool", "Float", "Double", "Date", "UUID", "Data":
+            return nil
+        case "String":
+            return "swiftLocalizedStandardCompare"
+        case "URL":
+            return "swiftLocalizedStandardCompare"
+        default:
+            return nil
+        }
+    }
+
     private func isDecimalAttribute(_ property: String, in entity: Schema.Entity) -> Bool {
         guard let attribute = entity.attributes.first(where: { $0.name == property }) else { return false }
-        let type = attribute.type.hasSuffix("?") ? String(attribute.type.dropLast()) : attribute.type
-        return type == "Decimal" || type == "Foundation.Decimal"
+        return Self.normalizedSortType(attribute.type) == "Decimal"
+    }
+
+    private static func normalizedSortType(_ type: String) -> String {
+        var unwrapped = type
+        while unwrapped.hasSuffix("?") {
+            unwrapped.removeLast()
+        }
+        return unwrapped.split(separator: ".").last.map(String.init) ?? unwrapped
     }
 
     private func compareIntegerAndDouble(_ integer: Int64, _ real: Double) -> ComparisonResult {

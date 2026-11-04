@@ -5797,6 +5797,50 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSubtypeSortKeyOrdersHierarchyRowsAndPendingUpdates() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-subtype-sort"))
+        let writer = container.mainContext
+        let child = InheritanceMacroChildFixture(name: "child", age: 30)
+        let grandchild = InheritanceMacroGrandchildFixture(name: "grandchild", age: 10, rank: 1)
+        writer.insert(child)
+        writer.insert(grandchild)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let descriptor = FetchDescriptor<InheritanceMacroChildFixture>(
+            sortBy: [SortDescriptor(\.age)],
+            fetchLimit: 1)
+        let firstStoredPage = try reader.fetch(descriptor)
+        XCTAssertTrue(try XCTUnwrap(firstStoredPage.first) is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(firstStoredPage.first?.age, 10)
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), firstStoredPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(descriptor), 1)
+
+        let fetchedChild = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroChildFixture>()).first { $0.name == "child" })
+        fetchedChild.age = 5
+        let updatedPage = try reader.fetch(descriptor)
+        XCTAssertEqual(updatedPage.map(\.name), ["child"])
+        XCTAssertEqual(updatedPage.first?.age, 5)
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), updatedPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(descriptor), 1)
+
+        try reader.save()
+        let reopenedPage = try reader.fetch(
+            FetchDescriptor<InheritanceMacroChildFixture>(
+                sortBy: [SortDescriptor(\.age)],
+                fetchLimit: 2,
+                includePendingChanges: false))
+        XCTAssertEqual(reopenedPage.map(\.name), ["child", "grandchild"])
+        XCTAssertEqual(reopenedPage.map(\.age), [5, 10])
+        XCTAssertTrue(reopenedPage[1] is InheritanceMacroGrandchildFixture)
+    }
+
+    @MainActor
     func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() throws {
         let container = try ModelContainer(
             for: InheritanceIdentifierOwnerFixture.self,

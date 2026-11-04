@@ -253,6 +253,62 @@ final class SQLiteCompositionTests: XCTestCase {
             })
     }
 
+    @MainActor
+    func testIndexedRangePredicateFetchPlanUsesSQLiteIndex() throws {
+        let container = try ModelContainer(
+            for: IndexedPredicateFixture.self, configurations: .sqliteMemory("range-query-plan"))
+        guard let store = container.store as? any RuntimeQueryStore else {
+            return XCTFail("Expected a query-capable SQLite store")
+        }
+        for rank in 0..<1_000 {
+            container.mainContext.insert(
+                IndexedPredicateFixture(rank: rank, identity: "range-identity-\(rank)", label: "range-label-\(rank)"))
+        }
+        try container.mainContext.save()
+
+        let predicate = #Predicate<IndexedPredicateFixture> { $0.rank >= 997 }
+        let descriptor = FetchDescriptor<IndexedPredicateFixture>(
+            predicate: predicate, sortBy: [SortDescriptor(\.rank)], includePendingChanges: false)
+        XCTAssertEqual(try container.mainContext.fetch(descriptor).map(\.rank), [997, 998, 999])
+        let entity = try XCTUnwrap(
+            container.schema.entity(forName: String(describing: IndexedPredicateFixture.self)))
+        let tree = try PredicateRuntimeTreeBuilder.build(
+            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schema)
+        let compiled = try store.compile(
+            RuntimePredicateRequest(
+                entityName: entity.name,
+                root: tree.root,
+                ordering: ["rank"],
+                typedCaptures: tree.captures,
+                captureEncoding: .typed,
+                attributeNames: Set(entity.attributes.map(\.name)))
+        )
+        let query = FetchSQLBuilder.build(
+            FetchSQLInput(
+                table: "Z\(entity.name.uppercased())",
+                columns: ["ZRANK"],
+                predicateSQL: compiled.sql,
+                predicateArguments: compiled.arguments,
+                orderSQL: "t0.ZRANK COLLATE swiftLocalizedStandardCompare ASC",
+                limit: nil,
+                offset: nil))
+        let plan = try store.read { connection in
+            try connection.rows("EXPLAIN QUERY PLAN \(query.sql)", arguments: query.arguments)
+        }
+        let details = plan.compactMap { row -> String? in
+            guard let last = row.last, case let .text(detail) = last else { return nil }
+            return detail
+        }
+        XCTAssertTrue(
+            details.contains {
+                $0.contains("SEARCH") && $0.contains("USING INDEX ZINDEXEDPREDICATEFIXTURE_ZRANK_INDEX")
+            },
+            details.joined(separator: "\n"))
+        XCTAssertFalse(
+            details.contains { $0 == "SCAN Z\(entity.name.uppercased())" },
+            details.joined(separator: "\n"))
+    }
+
     func testLocalizedStandardContainsSQLiteFunctionMatchesFoundation() throws {
         let container = try ModelContainer(
             for: Schema([Schema.Entity(name: "Probe")]), configurations: [.sqliteMemory("localized-function")])

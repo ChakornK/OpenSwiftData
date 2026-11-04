@@ -111,6 +111,27 @@ private enum FailingDeleteMigrationPlan: SchemaMigrationPlan {
     }
 }
 
+private enum FailingSourceUpdateMigrationPlan: SchemaMigrationPlan {
+    static let failureSwitch = MigrationFailureSwitch()
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
+    static var stages: [MigrationStage] {
+        [
+            .custom(
+                fromVersion: MigrationV1.self,
+                toVersion: MigrationV2.self,
+                willMigrate: { context in
+                    guard failureSwitch.shouldFail else { return }
+                    let target = try XCTUnwrap(
+                        context.fetch(FetchDescriptor<MigrationPlanRecord>()).first(where: { $0.name == "saved-a" }))
+                    target.name = "updated-before-failure"
+                    context.insert(MigrationPlanRecord(name: "inserted-before-failure"))
+                    try context.save()
+                    throw SwiftDataError.migrationUnsupported("expected source update failure")
+                })
+        ]
+    }
+}
+
 private enum FailingDestinationPlan: SchemaMigrationPlan {
     static let failureSwitch = MigrationFailureSwitch()
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
@@ -477,6 +498,63 @@ final class CustomMigrationPlanTests: XCTestCase {
         let rows = try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
         XCTAssertEqual(rows.map(\.name).sorted(), ["saved-a", "saved-b"])
         XCTAssertTrue(rows.contains(where: { $0.persistentModelID == targetID }))
+    }
+
+    @MainActor
+    func testFailedWillMigrateRestoresUpdatedAndInsertedRowsBeforeRetry() throws {
+        FailingSourceUpdateMigrationPlan.failureSwitch.shouldFail = true
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationSourceUpdateRetry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let source = try ModelContainer(
+            for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
+            configurations: [.sqliteFile("migration-source-update-retry", url: url)])
+        let first = MigrationPlanRecord(name: "saved-a")
+        let second = MigrationPlanRecord(name: "saved-b")
+        source.mainContext.insert(first)
+        source.mainContext.insert(second)
+        try source.mainContext.save()
+        let originalIdentifiers = Set([try XCTUnwrap(first.persistentModelID), try XCTUnwrap(second.persistentModelID)])
+        let sourceRows = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            } ?? nil)
+        let sourceMetadata = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            } ?? nil)
+        try source.store?.close()
+
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: MigrationPlanRecord.self, migrationPlan: FailingSourceUpdateMigrationPlan.self,
+                configurations: .sqliteFile("migration-source-update-retry", url: url))
+        ) { error in
+            XCTAssertEqual(error as? SwiftDataError, .migrationUnsupported("expected source update failure"))
+        }
+        let inspection = try OpenSwiftDataSQLite.sqliteFactory(.file(url), MigrationV1.schema)
+        XCTAssertEqual(
+            try inspection.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            },
+            sourceRows)
+        XCTAssertEqual(
+            try inspection.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            },
+            sourceMetadata)
+        try inspection.close()
+
+        FailingSourceUpdateMigrationPlan.failureSwitch.shouldFail = false
+        let retried = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: FailingSourceUpdateMigrationPlan.self,
+            configurations: .sqliteFile("migration-source-update-retry", url: url))
+        XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
+        let retriedRows = try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
+        XCTAssertEqual(retriedRows.map(\.name).sorted(), ["saved-a", "saved-b"])
+        XCTAssertEqual(Set(retriedRows.map(\.persistentModelID)), originalIdentifiers)
     }
 
     @MainActor

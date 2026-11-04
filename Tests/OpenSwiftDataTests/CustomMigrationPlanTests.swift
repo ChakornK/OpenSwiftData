@@ -55,6 +55,19 @@ private enum VersionRecoveryPlan: SchemaMigrationPlan {
     }
 }
 
+private enum UnversionedRecoveryPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
+    static var stages: [MigrationStage] {
+        [
+            .custom(
+                fromVersion: MigrationV1.self,
+                toVersion: MigrationV2.self,
+                willMigrate: { _ in MigrationStageRecorder.shared.append("unversioned-recovery-will") },
+                didMigrate: { _ in MigrationStageRecorder.shared.append("unversioned-recovery-did") })
+        ]
+    }
+}
+
 private enum TestMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
     static var stages: [MigrationStage] {
@@ -368,10 +381,32 @@ final class CustomMigrationPlanTests: XCTestCase {
         let source = try ModelContainer(
             for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
             configurations: [.sqliteFile("migration-unversioned", url: url)])
+        source.mainContext.insert(MigrationPlanRecord(name: "preserved"))
+        try source.mainContext.save()
+        var readConfiguration = Configuration()
+        readConfiguration.readonly = true
+        let initialDatabase = try DatabaseQueue(path: url.path, configuration: readConfiguration)
+        let originalMetadata = try initialDatabase.read { database in
+            try String.fetchAll(
+                database, sql: "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key")
+        }
+        let originalRows = try initialDatabase.read { database in
+            try String.fetchAll(
+                database,
+                sql: "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK")
+        }
+        let originalVersion = try initialDatabase.read { database in
+            try Data.fetchOne(
+                database, sql: "SELECT value FROM _osd_meta WHERE key = ?", arguments: ["schema.version.v1"])
+        }
+        let encodedOriginalVersion = try XCTUnwrap(originalVersion)
+        try initialDatabase.close()
         try source.store?.write { connection in
             try connection.execute(
                 "DELETE FROM _osd_meta WHERE key = ?", arguments: [RuntimeValue.text("schema.version.v1")])
         }
+        try source.store?.close()
+        MigrationStageRecorder.shared.reset()
         XCTAssertThrowsError(
             try ModelContainer(
                 for: MigrationPlanRecord.self, migrationPlan: TestMigrationPlan.self,
@@ -381,6 +416,50 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return XCTFail("Expected migrationUnsupported, got \(error)")
             }
         }
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        var verificationConfiguration = Configuration()
+        verificationConfiguration.readonly = true
+        let verificationDatabase = try DatabaseQueue(path: url.path, configuration: verificationConfiguration)
+        let failedMetadata = try verificationDatabase.read { database in
+            try String.fetchAll(
+                database, sql: "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key")
+        }
+        XCTAssertEqual(failedMetadata, originalMetadata.filter { !$0.hasPrefix("schema.version.v1:") })
+        XCTAssertFalse(failedMetadata.contains(where: { $0.hasPrefix("schema.version.v1:") }))
+        XCTAssertEqual(
+            try verificationDatabase.read { database in
+                try String.fetchAll(
+                    database,
+                    sql: "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK")
+            },
+            originalRows)
+        XCTAssertEqual(
+            try verificationDatabase.read { database in try String.fetchOne(database, sql: "PRAGMA integrity_check") },
+            "ok")
+        try verificationDatabase.close()
+
+        var repairConfiguration = Configuration()
+        repairConfiguration.readonly = false
+        let repairDatabase = try DatabaseQueue(path: url.path, configuration: repairConfiguration)
+        try repairDatabase.write { database in
+            try database.execute(
+                sql: "INSERT INTO _osd_meta (key, value) VALUES (?, ?)",
+                arguments: ["schema.version.v1", encodedOriginalVersion])
+            XCTAssertEqual(database.changesCount, 1)
+        }
+        try repairDatabase.close()
+        let retried = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: UnversionedRecoveryPlan.self,
+            configurations: .sqliteFile("migration-unversioned", url: url))
+        XCTAssertEqual(MigrationStageRecorder.shared.values, ["unversioned-recovery-will", "unversioned-recovery-did"])
+        XCTAssertEqual(
+            try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["preserved"])
+        XCTAssertEqual(
+            try retried.store?.read { connection in
+                try connection.rows("SELECT ZNAME, ZNOTE FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            } ?? nil,
+            [[.text("preserved"), .null]])
     }
 
     @MainActor
@@ -396,51 +475,38 @@ final class CustomMigrationPlanTests: XCTestCase {
         source.mainContext.insert(MigrationPlanRecord(name: "preserved-a"))
         source.mainContext.insert(MigrationPlanRecord(name: "preserved-b"))
         try source.mainContext.save()
-        func query(_ sql: String, readOnly: Bool = true) throws -> [[DatabaseValue]] {
+        func query(_ sql: String, readOnly: Bool = true) throws -> [String] {
             var configuration = Configuration()
             configuration.readonly = readOnly
             let database = try DatabaseQueue(path: url.path, configuration: configuration)
             defer { try? database.close() }
-            return try database.read { database in
-                try Row.fetchAll(database, sql: sql).map { row in
-                    row.columnNames.map { row[$0] }
-                }
-            }
+            return try database.read { try String.fetchAll($0, sql: sql) }
         }
-        let metadataSQL = "SELECT key, value FROM _osd_meta ORDER BY key"
-        let rowsSQL = "SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
-        let primaryKeysSQL = "SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT"
-        let tablesSQL = "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
-        let indexesSQL = "SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name"
+        let metadataSQL = "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key"
+        let rowsSQL = "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
+        let primaryKeysSQL =
+            "SELECT CAST(Z_ENT AS TEXT) || ':' || Z_NAME || ':' || CAST(Z_SUPER AS TEXT) || ':' || CAST(Z_MAX AS TEXT) FROM Z_PRIMARYKEY ORDER BY Z_ENT"
+        let tablesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        let indexesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY name"
         let originalMetadata = try query(metadataSQL)
         let originalRows = try query(rowsSQL)
         let originalPrimaryKeys = try query(primaryKeysSQL)
         let originalTables = try query(tablesSQL)
         let originalIndexes = try query(indexesSQL)
-        var versionConfiguration = Configuration()
-        versionConfiguration.readonly = true
-        let versionDatabase = try DatabaseQueue(path: url.path, configuration: versionConfiguration)
-        let originalVersion = try versionDatabase.read { database in
-            try Data.fetchOne(
-                database, sql: "SELECT value FROM _osd_meta WHERE key = ?", arguments: ["schema.version.v1"])
-        }
-        try versionDatabase.close()
-        guard let encodedOriginalVersion = originalVersion else {
-            return XCTFail("Expected a persisted V1 schema version.")
-        }
+        let encodedOriginalVersion = try MigrationV1.versionIdentifier.encoded()
         try source.store?.close()
 
         MigrationStageRecorder.shared.reset()
-        let malformedVersion = Array("{\"version\":[1,\"bad\"]".utf8)
+        let malformedVersion = Data("{\"version\":[1,\"bad\"]".utf8)
         do {
             var configuration = Configuration()
             configuration.readonly = false
             let database = try DatabaseQueue(path: url.path, configuration: configuration)
-            try database.write { database in
-                try database.execute(
+            try database.write { db in
+                try db.execute(
                     sql: "UPDATE _osd_meta SET value = ? WHERE key = ?",
-                    arguments: [Data(malformedVersion), "schema.version.v1"])
-                XCTAssertEqual(database.changesCount, 1)
+                    arguments: [malformedVersion, "schema.version.v1"])
+                XCTAssertEqual(db.changesCount, 1)
             }
             try database.close()
         }
@@ -465,11 +531,11 @@ final class CustomMigrationPlanTests: XCTestCase {
             var configuration = Configuration()
             configuration.readonly = false
             let database = try DatabaseQueue(path: url.path, configuration: configuration)
-            try database.write { database in
-                try database.execute(
+            try database.write { db in
+                try db.execute(
                     sql: "UPDATE _osd_meta SET value = ? WHERE key = ?",
-                    arguments: [encodedOriginalVersion, "schema.version.v1"])
-                XCTAssertEqual(database.changesCount, 1)
+                    arguments: [Data(encodedOriginalVersion), "schema.version.v1"])
+                XCTAssertEqual(db.changesCount, 1)
             }
             try database.close()
         }

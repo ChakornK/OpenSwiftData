@@ -103,6 +103,82 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testExternalStorageOptionRemovalFailsWithoutChangingSidecarOrMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("external-option-toggle.sqlite"))
+        let external = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+        ])
+        let inline = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "payload", type: "Data")])
+        ])
+        let externalColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
+        let payload = Array(repeating: UInt8(0x6D), count: ExternalStorage.threshold + 1)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: external, externalColumns: externalColumns)
+        try initial.writeWithExternalData { connection, session in
+            let marker = try session.externalizedValue(payload)
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 3, ?)", [marker])
+        }
+        let originalRows = try initial.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        guard case let .blob(marker)? = originalRows.first?.last,
+            let fileName = ExternalStorage.fileName(in: marker)
+        else { return XCTFail("Expected the stored value to be an external Data marker.") }
+        let sidecarURL = directory.appendingPathComponent("external-option-toggle.sqlite.external", isDirectory: true)
+            .appendingPathComponent(fileName)
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        try initial.close()
+
+        XCTAssertThrowsError(
+            try LightweightMigration.openStore(location: location, schema: inline)
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+
+        let inspection = try GRDBSQLiteDriver(location: location, externalColumns: externalColumns)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, originalMetadata)
+        XCTAssertEqual(try inspection.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(
+            location: location, schema: external, externalColumns: externalColumns)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(try reopened.read { try $0.resolved(.blob(marker)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        try reopened.close()
+    }
+
     func testBlobToFlattenedAttributeMigrationFailsClosedWithoutChangingStore() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "blob-to-flattened-migration"))
         let blob = Schema([

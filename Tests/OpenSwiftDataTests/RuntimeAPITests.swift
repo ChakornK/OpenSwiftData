@@ -73,8 +73,13 @@ final class MissingDestinationWithoutInverseFixture: PersistentModel {
 
 @Model
 final class OptionalScalarCollectionFixture {
-    var strings: [String?] = []
-    var integers: Set<Int?> = []
+    var strings: [String?]
+    var integers: Set<Int?>
+
+    init(strings: [String?] = [], integers: Set<Int?> = []) {
+        self.strings = strings
+        self.integers = integers
+    }
 }
 
 @Model
@@ -352,6 +357,22 @@ final class RuntimeAPITests: XCTestCase {
         let entity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarCollectionFixture"))
         XCTAssertEqual(entity.attributes.map(\.name), ["strings", "integers"])
         XCTAssertTrue(entity.relationships.isEmpty)
+    }
+
+    @MainActor
+    func testOptionalScalarCollectionElementsPersistAndMaterialize() throws {
+        let container = try ModelContainer(
+            for: OptionalScalarCollectionFixture.self,
+            configurations: .sqliteMemory("optional-scalar-collection-elements"))
+        let writer = container.mainContext
+        let model = OptionalScalarCollectionFixture(strings: [nil, "present"], integers: [nil, 7])
+        writer.insert(model)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<OptionalScalarCollectionFixture>()).first)
+        XCTAssertEqual(fetched.strings, [nil, "present"])
+        XCTAssertEqual(fetched.integers, Set([nil, 7]))
     }
 
     @MainActor

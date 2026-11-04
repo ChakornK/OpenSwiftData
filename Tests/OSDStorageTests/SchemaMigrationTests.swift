@@ -6757,6 +6757,65 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testExternalStorageRenameComposesWithOptionalScalarAddition() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("external-rename-addition.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(
+                        name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ])
+        let sourceColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
+        let destinationColumns: Set<String> = ["ZRECORD.ZRENAMEDPAYLOAD"]
+        let payload = Array(repeating: UInt8(0x6D), count: ExternalStorage.threshold + 1)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: sourceColumns)
+        let marker = try initial.writeWithExternalData { connection, session in
+            let value = try session.externalizedValue(payload)
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZPAYLOAD) VALUES (1, 5, ?)", [value])
+            return value
+        }
+        guard case let .blob(markerBytes) = marker,
+            let fileName = ExternalStorage.fileName(in: markerBytes)
+        else { return XCTFail("Expected external Data marker.") }
+        let sidecarURL = directory.appendingPathComponent("external-rename-addition.sqlite.external", isDirectory: true)
+            .appendingPathComponent(fileName)
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(
+            location: location, schema: destination, externalColumns: destinationColumns)
+        let migratedColumns = try migrated.read {
+            try $0.rows("PRAGMA table_info(ZRECORD)").compactMap { row in row.count > 1 ? row[1] : nil }
+        }
+        XCTAssertEqual(
+            migratedColumns,
+            [.text("Z_PK"), .text("Z_ENT"), .text("Z_OPT"), .text("ZRENAMEDPAYLOAD"), .text("ZNOTE")])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRENAMEDPAYLOAD, ZNOTE FROM ZRECORD") },
+            [[.int(1), .int(5), .blob(markerBytes), .null]])
+        XCTAssertEqual(try migrated.read { try $0.resolved(.blob(markerBytes)) }, .blob(payload))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(
+            location: location, schema: destination, externalColumns: destinationColumns)
+        XCTAssertEqual(try reopened.read { try $0.resolved(.blob(markerBytes)) }, .blob(payload))
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT ZNOTE FROM ZRECORD") }, [[.null]])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
+        try reopened.close()
+    }
+
     func testEntityRemovalRejectsUntrackedIndexes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-untracked-index"))
         let source = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])

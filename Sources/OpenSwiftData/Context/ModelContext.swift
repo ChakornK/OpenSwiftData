@@ -1264,7 +1264,7 @@ public final class ModelContext {
         for start in stride(from: 0, to: identifiers.count, by: batchSize) {
             let end = min(start + batchSize, identifiers.count)
             for identifier in identifiers[start..<end] {
-                guard let model: Model = try model(for: identifier) else { continue }
+                guard let model = try enumeratedModel(for: identifier, descriptor: descriptor) else { continue }
                 if allowEscapingMutations {
                     try block(model)
                 } else {
@@ -1283,6 +1283,18 @@ public final class ModelContext {
                 }
             }
         }
+    }
+
+    private func enumeratedModel<Model: PersistentModel>(
+        for identifier: PersistentIdentifier,
+        descriptor: FetchDescriptor<Model>
+    ) throws -> Model? {
+        if !descriptor.includePendingChanges,
+            let deleted = state.deletedModels.first(where: { $0.persistentModelID == identifier }) as? Model
+        {
+            return deleted
+        }
+        return try model(for: identifier)
     }
 
     /// Finds a model by its persistent identifier, which requires a persistent store.

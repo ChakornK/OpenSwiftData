@@ -5736,6 +5736,45 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-enumeration-committed-deletion"))
+        let writer = container.mainContext
+        let child = InheritanceMacroChildFixture(name: "child", age: 2)
+        let grandchild = InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4)
+        writer.insert(child)
+        writer.insert(grandchild)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let fetchedChild = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritanceMacroChildFixture>()).first { $0.name == "child" })
+        reader.delete(fetchedChild)
+
+        let committedDescriptor = FetchDescriptor<InheritanceMacroBaseFixture>(includePendingChanges: false)
+        let committedFetch = try reader.fetch(committedDescriptor)
+        var committedEnumeration: [InheritanceMacroBaseFixture] = []
+        try reader.enumerate(committedDescriptor, batchSize: 1) { committedEnumeration.append($0) }
+        XCTAssertEqual(committedEnumeration.map(\.persistentModelID), committedFetch.map(\.persistentModelID))
+        XCTAssertTrue(committedEnumeration[0] === fetchedChild)
+        XCTAssertTrue(committedEnumeration[0].isDeleted)
+        XCTAssertEqual(committedEnumeration.map(\.name), ["child", "grandchild"])
+
+        let pendingDescriptor = FetchDescriptor<InheritanceMacroBaseFixture>()
+        let pendingFetch = try reader.fetch(pendingDescriptor)
+        var pendingEnumeration: [InheritanceMacroBaseFixture] = []
+        try reader.enumerate(pendingDescriptor, batchSize: 1) { pendingEnumeration.append($0) }
+        XCTAssertEqual(pendingEnumeration.map(\.persistentModelID), pendingFetch.map(\.persistentModelID))
+        XCTAssertEqual(pendingEnumeration.map(\.name), ["grandchild"])
+
+        try reader.save()
+        XCTAssertEqual(try reader.fetch(committedDescriptor).map(\.name), ["grandchild"])
+    }
+
+    @MainActor
     func testPendingHierarchyDeletionMatchesCommittedOnlyQueries() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,

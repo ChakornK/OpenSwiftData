@@ -7641,6 +7641,22 @@ final class SchemaMigrationTests: XCTestCase {
         let location = StoreLocation.file(directory.appendingPathComponent("allocator.sqlite"))
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
         try initial.write { connection in
+            try connection.execute("INSERT INTO ZALPHA (Z_ENT, Z_OPT) VALUES (1, 4)")
+            try connection.execute("INSERT INTO ZBETA (Z_ENT, Z_OPT) VALUES (2, 7)")
+        }
+        let originalMetadata = try initial.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }
+        let originalPrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalAlphaRows = try initial.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZALPHA ORDER BY Z_PK") }
+        let originalBetaRows = try initial.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBETA ORDER BY Z_PK") }
+        try initial.write { connection in
             try connection.execute(
                 "UPDATE _osd_meta SET value = ? WHERE key = ?",
                 [.blob(Array("invalid".utf8)), .text(LightweightMigration.entityIDHighWatermarkKey)])
@@ -7657,6 +7673,52 @@ final class SchemaMigrationTests: XCTestCase {
                 return XCTFail("Expected invalid allocator metadata to fail closed, got \(error)")
             }
         }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata.map { row in
+                guard row.first == .text(LightweightMigration.entityIDHighWatermarkKey) else { return row }
+                return [.text(LightweightMigration.entityIDHighWatermarkKey), .blob(Array("invalid".utf8))]
+            })
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows(
+                    "SELECT typeof(value) FROM _osd_meta WHERE key = ?",
+                    [
+                        .text(
+                            LightweightMigration.entityIDHighWatermarkKey)
+                    ])
+            },
+            [[.text("blob")]])
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            originalPrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZALPHA ORDER BY Z_PK") },
+            originalAlphaRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZBETA ORDER BY Z_PK") },
+            originalBetaRows)
+        XCTAssertTrue(
+            try inspection.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ZGAMMA'")
+            }
+            .isEmpty)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
         let repair = try GRDBSQLiteDriver(location: location)
         try repair.write { connection in
             try connection.execute(

@@ -9,6 +9,12 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(
             try PredicateIRBuilder.build(.capture(typeName: "Swift.String", description: "Ada")),
             .value(.text("Ada")))
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(.capture(typeName: "Swift.Float", description: "0.1")),
+            .value(.double(Double(Float(0.1)))))
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(.typedCapture(.double(0.1), typeName: "Swift.Float")),
+            .value(.double(Double(Float(0.1)))))
     }
 
     func testResolvesPredicateKeyPathThroughTypedMetadata() throws {
@@ -96,21 +102,17 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(1), .text("UInt64"), .text("greaterThan")])
     }
 
-    func testArithmeticRejectsFloatUntilFloatFunctionsAreAvailable() throws {
+    func testArithmeticSelectsFloatIRForFloatOperands() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Arithmetic",
             children: [
                 ("lhs", .propertyReference("score")),
-                ("rhs", .typedValue(.double(2.0))),
+                ("rhs", .capture(typeName: "Swift.Float", description: "2.0")),
                 ("op", .capture(typeName: "PredicateExpressions.ArithmeticOperator", description: "add")),
             ])
-        XCTAssertThrowsError(
-            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Float"])
-        ) { error in
-            guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected unsupported Float arithmetic, got \(error)")
-            }
-        }
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(node, attributeTypes: ["score": "Float"]),
+            .floatArithmetic(.add, .keyPath(["score"]), .value(.double(2.0))))
     }
 
     func testArithmeticRejectsDoubleRemainder() throws {

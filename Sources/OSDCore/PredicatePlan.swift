@@ -15,6 +15,8 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case boundedArithmetic(
         PredicateArithmeticOperator, PredicatePlan, PredicatePlan, integerWidth: PredicateIntegerWidth)
     case unaryNegation(PredicatePlan, integerWidth: PredicateIntegerWidth?)
+    case floatArithmetic(PredicateArithmeticOperator, PredicatePlan, PredicatePlan)
+    case floatNegation(PredicatePlan)
     case isNull(PredicatePlan, negated: Bool)
     case property(String)
     case value(StoredValue)

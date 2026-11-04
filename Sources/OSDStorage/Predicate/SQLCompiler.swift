@@ -95,6 +95,12 @@ package enum PredicatePlanBuilder {
         case let .realArithmetic(op, lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .arithmetic(runtimeArithmeticOperator(op), lhs, rhs)
+        case let .floatArithmetic(op, lhs, rhs):
+            guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
+            return .floatArithmetic(runtimeArithmeticOperator(op), lhs, rhs)
+        case let .floatNegation(value):
+            guard let value = build(value) else { return nil }
+            return .floatNegation(value)
         case let .keyPath(path):
             guard !path.isEmpty else { return nil }
             return .property(path.joined(separator: "."))
@@ -287,6 +293,17 @@ package enum SQLCompiler {
                     lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
                 resolvePersistentIdentifierComparisons(
                     rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .floatArithmetic(op, lhs, rhs):
+            return .floatArithmetic(
+                op,
+                resolvePersistentIdentifierComparisons(
+                    lhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName),
+                resolvePersistentIdentifierComparisons(
+                    rhs, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .floatNegation(value):
+            return .floatNegation(
+                resolvePersistentIdentifierComparisons(
+                    value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
         case let .nilCoalesce(lhs, rhs):
             return .nilCoalesce(
                 resolvePersistentIdentifierComparisons(
@@ -528,6 +545,23 @@ package enum SQLCompiler {
             let widthArgument = integerWidth.map { ", \($0.rawValue)" } ?? ""
             return
                 "\(function)(\(try render(value, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias))\(widthArgument))"
+        case let .floatArithmetic(op, lhs, rhs):
+            guard op != .remainder else {
+                throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
+            }
+            let function =
+                switch op {
+                case .add: "osd_f32_add"
+                case .subtract: "osd_f32_subtract"
+                case .multiply: "osd_f32_multiply"
+                case .divide: "osd_f32_divide"
+                case .remainder: throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
+                }
+            return
+                "\(function)(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
+        case let .floatNegation(value):
+            return
+                "osd_f32_negate(\(try render(value, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .realArithmetic(op, lhs, rhs):
             guard op != .remainder else {
                 throw SwiftDataError.unsupportedPredicate("Floating-point remainder is unsupported.")
@@ -945,6 +979,8 @@ package enum SQLCompiler {
         case let .unaryNegation(value, width):
             "unaryNegation(width=\(width?.rawValue.description ?? "real"),\(structure(value)))"
         case let .realArithmetic(op, lhs, rhs): "realArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .floatArithmetic(op, lhs, rhs): "floatArithmetic(\(op),\(structure(lhs)),\(structure(rhs)))"
+        case let .floatNegation(value): "floatNegation(\(structure(value)))"
         case let .keyPath(path): "keypath(\(path.joined(separator: ".")))"
         case .persistentIdentifier: "persistentIdentifier"
         case .identifierValue: "identifierValue"

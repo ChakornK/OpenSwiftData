@@ -235,6 +235,23 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     }
                     return -value
                 })
+            for (name, operation) in [
+                ("osd_f32_add", RealOperation.add),
+                ("osd_f32_subtract", RealOperation.subtract),
+                ("osd_f32_multiply", RealOperation.multiply),
+                ("osd_f32_divide", RealOperation.divide),
+            ] {
+                database.add(
+                    function: DatabaseFunction(name, argumentCount: 2, pure: true) { values in
+                        checkedFloatArithmetic(values, operation: operation)
+                    })
+            }
+            database.add(
+                function: DatabaseFunction("osd_f32_negate", argumentCount: 1, pure: true) { values in
+                    guard let value = floatOperand(values, index: 0) else { return nil }
+                    let result = -value
+                    return result.isFinite ? Double(result) : nil
+                })
             try database.execute(sql: "PRAGMA synchronous = NORMAL")
             try database.execute(sql: "PRAGMA foreign_keys = OFF")
             try database.execute(sql: "PRAGMA busy_timeout = 5000")
@@ -330,6 +347,31 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
         case .divide: result = lhs / rhs
         }
         return result.isFinite ? result : nil
+    }
+
+    private static func floatOperand(_ values: [DatabaseValue], index: Int) -> Float? {
+        guard values.indices.contains(index),
+            let value = Double.fromDatabaseValue(values[index]),
+            value.isFinite
+        else { return nil }
+        let rounded = Float(value)
+        guard rounded.isFinite, Double(rounded) == value else { return nil }
+        return rounded
+    }
+
+    private static func checkedFloatArithmetic(_ values: [DatabaseValue], operation: RealOperation) -> Double? {
+        guard values.count == 2,
+            let lhs = floatOperand(values, index: 0),
+            let rhs = floatOperand(values, index: 1)
+        else { return nil }
+        let result: Float
+        switch operation {
+        case .add: result = lhs + rhs
+        case .subtract: result = lhs - rhs
+        case .multiply: result = lhs * rhs
+        case .divide: result = lhs / rhs
+        }
+        return result.isFinite ? Double(result) : nil
     }
 
     private static func jsonArrayMembership(_ values: [DatabaseValue], all: Bool) -> Int? {

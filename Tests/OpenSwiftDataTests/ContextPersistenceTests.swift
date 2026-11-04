@@ -27,6 +27,19 @@ final class PredicateDoubleAgreementFixture {
 }
 
 @Model
+final class PredicateFloatAgreementFixture {
+    var id: Int
+    var value: Float
+    var optionalValue: Float?
+
+    init(id: Int, value: Float, optionalValue: Float? = nil) {
+        self.id = id
+        self.value = value
+        self.optionalValue = optionalValue
+    }
+}
+
+@Model
 final class ReverseOrderPersistenceFixture {
     var zebra: String
     var alpha: Int
@@ -1477,6 +1490,83 @@ final class ContextPersistenceTests: XCTestCase {
             let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
             XCTAssertEqual(sqliteIDs, foundationIDs, "Predicate results differ for \(name)")
         }
+    }
+
+    @MainActor
+    func testFloatArithmeticMatchesFoundationWithBinary32Rounding() throws {
+        let container = try ModelContainer(
+            for: PredicateFloatAgreementFixture.self,
+            configurations: .sqliteMemory("foundation-float-arithmetic"))
+        let values: [Float] = [0.1, 1.5, -0.0, 0.0, -2.0, Float.leastNonzeroMagnitude]
+        let rows = values.enumerated().map { index, value in
+            PredicateFloatAgreementFixture(id: index + 1, value: value)
+        }
+        for row in rows {
+            container.mainContext.insert(row)
+        }
+        try container.mainContext.save()
+        let increment: Float = 0.2
+        let predicates: [(String, Predicate<PredicateFloatAgreementFixture>)] = [
+            ("binary32-addition", #Predicate { $0.value + increment > 0.29 }),
+            ("binary32-multiplication", #Predicate { $0.value * 2 == 3 }),
+            ("binary32-division", #Predicate { $0.value / 2 < 0 }),
+            ("binary32-negative-zero", #Predicate { -$0.value == -0.0 }),
+            ("binary32-nested-negation", #Predicate { -(-$0.value) == $0.value }),
+        ]
+        for (name, predicate) in predicates {
+            let foundationIDs = try Set(rows.compactMap { row in try predicate.evaluate(row) ? row.id : nil })
+            let descriptor = FetchDescriptor<PredicateFloatAgreementFixture>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.id)],
+                includePendingChanges: false)
+            let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+            XCTAssertEqual(sqliteIDs, foundationIDs, "Float predicate results differ for \(name)")
+        }
+
+        let pending = PredicateFloatAgreementFixture(id: 7, value: 2.0)
+        container.mainContext.insert(pending)
+        let pendingPredicate = #Predicate<PredicateFloatAgreementFixture> { $0.value * 2 > 3 }
+        let pendingDescriptor = FetchDescriptor<PredicateFloatAgreementFixture>(
+            predicate: pendingPredicate, sortBy: [SortDescriptor(\.id)])
+        XCTAssertEqual(try container.mainContext.fetch(pendingDescriptor).map(\.id), [7])
+        XCTAssertEqual(try container.mainContext.fetchCount(pendingDescriptor), 1)
+
+        let optionalContainer = try ModelContainer(
+            for: PredicateFloatAgreementFixture.self,
+            configurations: .sqliteMemory("float-coalesced-arithmetic"))
+        let optionalRows = [
+            PredicateFloatAgreementFixture(id: 1, value: 0, optionalValue: nil),
+            PredicateFloatAgreementFixture(id: 2, value: 0, optionalValue: 1.0),
+        ]
+        for row in optionalRows {
+            optionalContainer.mainContext.insert(row)
+        }
+        try optionalContainer.mainContext.save()
+        let fallback: Float = 1.5
+        let coalescedIncrement: Float = 1.0
+        let coalesced = #Predicate<PredicateFloatAgreementFixture> {
+            ($0.optionalValue ?? fallback) + coalescedIncrement > 2.0
+        }
+        let expectedCoalescedIDs = try Set(
+            optionalRows.compactMap { row in try coalesced.evaluate(row) ? row.id : nil })
+        let coalescedDescriptor = FetchDescriptor<PredicateFloatAgreementFixture>(
+            predicate: coalesced,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertEqual(expectedCoalescedIDs, [1])
+        let coalescedMatches: [PredicateFloatAgreementFixture] = try optionalContainer.mainContext.fetch(
+            coalescedDescriptor)
+        XCTAssertEqual(Set(coalescedMatches.map(\.id)), expectedCoalescedIDs)
+
+        let overflowContainer = try ModelContainer(
+            for: PredicateFloatAgreementFixture.self,
+            configurations: .sqliteMemory("float-arithmetic-overflow"))
+        overflowContainer.mainContext.insert(
+            PredicateFloatAgreementFixture(id: 1, value: .greatestFiniteMagnitude))
+        try overflowContainer.mainContext.save()
+        let overflowDescriptor = FetchDescriptor<PredicateFloatAgreementFixture>(
+            predicate: #Predicate { $0.value * 2 > 0 }, includePendingChanges: false)
+        XCTAssertTrue(try overflowContainer.mainContext.fetch(overflowDescriptor).isEmpty)
     }
 
     @MainActor

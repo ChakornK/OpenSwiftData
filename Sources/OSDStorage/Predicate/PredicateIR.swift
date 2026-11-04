@@ -12,6 +12,8 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case boundedArithmetic(ArithmeticOperator, PredicateIR, PredicateIR, PredicateIntegerWidth)
     case realArithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
     case unaryNegation(PredicateIR, integerWidth: PredicateIntegerWidth?)
+    case floatArithmetic(ArithmeticOperator, PredicateIR, PredicateIR)
+    case floatNegation(PredicateIR)
     case keyPath([String])
     case persistentIdentifier([String])
     case identifierValue(PersistentIdentifier)
@@ -77,7 +79,13 @@ package enum PredicateIRBuilder {
             return .identifierValue(identifier)
         case let .typedValue(value):
             return .value(value)
-        case let .typedCapture(value, _):
+        case let .typedCapture(value, typeName):
+            if typeName == "Swift.Float", case let .double(number) = value {
+                guard number.isFinite else { throw SwiftDataError.unsupportedPredicate(typeName) }
+                let rounded = Float(number)
+                guard rounded.isFinite else { throw SwiftDataError.unsupportedPredicate(typeName) }
+                return .value(.double(Double(rounded)))
+            }
             return .value(value)
         case let .capture(typeName, description):
             if typeName.hasPrefix("Swift.KeyPath<") {
@@ -109,6 +117,9 @@ package enum PredicateIRBuilder {
                         throw SwiftDataError.unsupportedPredicate("Unary minus is unsupported for unsigned integers.")
                     }
                     return .unaryNegation(operand, integerWidth: width)
+                }
+                if isFloatArithmeticOperand(fields["wrapped"]!, attributeTypes: attributeTypes) {
+                    return .floatNegation(operand)
                 }
                 guard isDoubleArithmeticOperand(operand, attributeTypes: attributeTypes) else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -146,6 +157,12 @@ package enum PredicateIRBuilder {
                         for: fields["lhs"]!, and: fields["rhs"]!, attributeTypes: attributeTypes)
                 } catch {
                     if op != .remainder,
+                        isFloatArithmeticOperand(fields["lhs"]!, attributeTypes: attributeTypes),
+                        isFloatArithmeticOperand(fields["rhs"]!, attributeTypes: attributeTypes)
+                    {
+                        return .floatArithmetic(op, lhs, rhs)
+                    }
+                    if op != .remainder,
                         isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
                         isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
                     {
@@ -159,6 +176,12 @@ package enum PredicateIRBuilder {
                 if case .value(.int) = lhs, case .value(.int) = rhs {
                     return .boundedArithmetic(op, lhs, rhs, .int64)
                 }
+                if op != .remainder,
+                    isFloatArithmeticOperand(fields["lhs"]!, attributeTypes: attributeTypes),
+                    isFloatArithmeticOperand(fields["rhs"]!, attributeTypes: attributeTypes)
+                {
+                    return .floatArithmetic(op, lhs, rhs)
+                }
                 guard op != .remainder,
                     isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
@@ -170,6 +193,11 @@ package enum PredicateIRBuilder {
             case "FloatDivision":
                 let lhs = try field("lhs", from: fields)
                 let rhs = try field("rhs", from: fields)
+                if isFloatArithmeticOperand(fields["lhs"]!, attributeTypes: attributeTypes),
+                    isFloatArithmeticOperand(fields["rhs"]!, attributeTypes: attributeTypes)
+                {
+                    return .floatArithmetic(.divide, lhs, rhs)
+                }
                 guard isDoubleArithmeticOperand(lhs, attributeTypes: attributeTypes),
                     isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
@@ -573,6 +601,14 @@ package enum PredicateIRBuilder {
                 op,
                 try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
                 try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
+        case let .floatArithmetic(op, lhs, rhs):
+            return .floatArithmetic(
+                op,
+                try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
+                try prefixRelationshipPath(rhs, relationships: relationships, attributeTypes: attributeTypes))
+        case let .floatNegation(value):
+            return .floatNegation(
+                try prefixRelationshipPath(value, relationships: relationships, attributeTypes: attributeTypes))
         case let .nilCoalesce(lhs, rhs):
             return .nilCoalesce(
                 try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
@@ -701,12 +737,15 @@ package enum PredicateIRBuilder {
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
             let .optionalComparison(_, lhs, rhs, _), let .arithmetic(_, lhs, rhs),
             let .boundedArithmetic(_, lhs, rhs, _), let .realArithmetic(_, lhs, rhs),
+            let .floatArithmetic(_, lhs, rhs),
             let .nilCoalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs), let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return referencesDecimal(lhs, attributeTypes: attributeTypes)
                 || referencesDecimal(rhs, attributeTypes: attributeTypes)
         case let .unaryNegation(value, _):
+            return referencesDecimal(value, attributeTypes: attributeTypes)
+        case let .floatNegation(value):
             return referencesDecimal(value, attributeTypes: attributeTypes)
         case let .conditional(test, trueBranch, falseBranch):
             return referencesDecimal(test, attributeTypes: attributeTypes)
@@ -829,12 +868,16 @@ package enum PredicateIRBuilder {
         case .value(.null):
             return true
         case let .arithmetic(_, lhs, rhs), let .realArithmetic(_, lhs, rhs),
+            let .floatArithmetic(_, lhs, rhs),
             let .boundedArithmetic(_, lhs, rhs, _):
             return isNullablePredicateValue(
                 lhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
                 || isNullablePredicateValue(
                     rhs, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
         case let .unaryNegation(value, _):
+            return isNullablePredicateValue(
+                value, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case let .floatNegation(value):
             return isNullablePredicateValue(
                 value, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
         case let .nilCoalesce(lhs, rhs):
@@ -1146,6 +1189,45 @@ package enum PredicateIRBuilder {
         }
     }
 
+    private static func isFloatArithmeticOperand(
+        _ node: PredicateMirrorWalker.Node,
+        attributeTypes: [String: String]
+    ) -> Bool {
+        func isFloat(_ typeName: String?) -> Bool {
+            let unwrapped = typeName.map { $0.hasSuffix("?") ? String($0.dropLast()) : $0 }
+            return ["Float", "Swift.Float"].contains(unwrapped ?? "")
+        }
+        switch node {
+        case let .propertyReference(path):
+            return isFloat(attributeType(for: path, in: attributeTypes))
+        case let .capture(typeName, _), let .typedCapture(_, typeName):
+            return isFloat(typeName)
+        case let .expression(name, children):
+            let fields = Dictionary(uniqueKeysWithValues: children)
+            switch name {
+            case "Value", "UnaryMinus":
+                let label = name == "Value" ? "value" : "wrapped"
+                guard let operand = fields[label] else { return false }
+                return isFloatArithmeticOperand(operand, attributeTypes: attributeTypes)
+            case "Arithmetic", "FloatDivision":
+                guard let lhs = fields["lhs"], let rhs = fields["rhs"] else { return false }
+                return isFloatArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                    && isFloatArithmeticOperand(rhs, attributeTypes: attributeTypes)
+            case "NilCoalesce":
+                guard let lhs = fields["lhs"], let rhs = fields["rhs"] else { return false }
+                return isFloatArithmeticOperand(lhs, attributeTypes: attributeTypes)
+                    && isFloatArithmeticOperand(rhs, attributeTypes: attributeTypes)
+            case "OptionalFlatMap":
+                guard let transform = fields["transform"] else { return false }
+                return isFloatArithmeticOperand(transform, attributeTypes: attributeTypes)
+            default:
+                return false
+            }
+        case .typedValue, .persistentIdentifierReference, .identifierCapture:
+            return false
+        }
+    }
+
     private static func scalarCollectionElementType(_ typeName: String?) -> String? {
         guard let typeName,
             let opening = typeName.firstIndex(of: "<"), typeName.last == ">"
@@ -1270,7 +1352,12 @@ package enum PredicateIRBuilder {
         case "Swift.Int", "Swift.Int64":
             guard let value = Int64(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
             return .value(.int(value))
-        case "Swift.Double", "Swift.Float":
+        case "Swift.Float":
+            guard let value = Float(description), value.isFinite else {
+                throw SwiftDataError.unsupportedPredicate(typeName)
+            }
+            return .value(.double(Double(value)))
+        case "Swift.Double":
             guard let value = Double(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
             return .value(.double(value))
         case "Swift.UInt8":

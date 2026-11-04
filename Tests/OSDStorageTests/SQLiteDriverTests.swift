@@ -88,6 +88,37 @@ final class SQLiteDriverTests: XCTestCase {
             rows, [[.int(11), .null, .null, .null, .int(5), .null, .int(1), .null, .null, .null]])
     }
 
+    func testFloat32ArithmeticFunctionsRoundAndFailClosed() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "float32-arithmetic"))
+        defer { try? driver.close() }
+
+        let rows = try driver.read { connection in
+            try connection.rows(
+                "SELECT osd_f32_add(?, ?), osd_f32_multiply(?, ?), osd_f32_divide(?, ?), "
+                    + "osd_f32_multiply(?, ?), osd_f32_divide(?, ?), osd_f32_negate(?)",
+                [
+                    .double(Double(Float(0.1))), .double(Double(Float(0.2))),
+                    .double(Double(Float(1.5))), .double(2.0),
+                    .double(Double(Float(1.5))), .double(2.0),
+                    .double(Double(Float.greatestFiniteMagnitude)), .double(2.0),
+                    .double(1.0), .double(0.0), .double(0.0),
+                ])
+        }
+        guard let row = rows.first, row.count == 6 else {
+            return XCTFail("Expected six Float32 arithmetic results")
+        }
+        XCTAssertEqual(row[0], StoredValue.double(Double(Float(0.1) + Float(0.2))))
+        XCTAssertEqual(row[1], StoredValue.double(3.0))
+        XCTAssertEqual(row[2], StoredValue.double(Double(Float(0.75))))
+        XCTAssertEqual(row[3], StoredValue.null)
+        XCTAssertEqual(row[4], StoredValue.null)
+        guard case let .double(negatedZero) = row[5] else {
+            return XCTFail("Expected Float32 negation to return REAL zero")
+        }
+        XCTAssertEqual(negatedZero, 0.0)
+        XCTAssertEqual(negatedZero.sign, .minus)
+    }
+
     func testReadWriteReturnValuesAndErrors() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "results"))
         defer { try? driver.close() }

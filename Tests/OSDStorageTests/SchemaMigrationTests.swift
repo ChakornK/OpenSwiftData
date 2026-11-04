@@ -11793,7 +11793,7 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
-    func testHierarchyTopologyAndAttributeMovesFailClosedOnPopulatedFileStores() throws {
+    func testHierarchyAttributeRemovalAndEntityReplacementFailClosedOnPopulatedFileStores() throws {
         let source = Schema([
             Schema.Entity(
                 name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
@@ -11856,10 +11856,6 @@ final class SchemaMigrationTests: XCTestCase {
                     "INSERT INTO ZSECOND (Z_ENT, Z_OPT) VALUES (?, 7)", [.int(Int64(secondID))])
                 try connection.execute(
                     "INSERT INTO ZSECOND (Z_ENT, Z_OPT) VALUES (?, 9)", [.int(Int64(grandchildID))])
-                for entityID in [rootID, childID, secondID, grandchildID] {
-                    try connection.execute(
-                        "UPDATE Z_PRIMARYKEY SET Z_MAX = 2 WHERE Z_ENT = ?", [.int(Int64(entityID))])
-                }
             }
             let sourceTables = try initial.read {
                 try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")

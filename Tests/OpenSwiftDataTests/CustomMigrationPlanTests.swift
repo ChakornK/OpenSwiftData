@@ -89,6 +89,28 @@ private enum FailingMigrationPlan: SchemaMigrationPlan {
     }
 }
 
+private enum FailingDeleteMigrationPlan: SchemaMigrationPlan {
+    static let failureSwitch = MigrationFailureSwitch()
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
+    static var stages: [MigrationStage] {
+        [
+            .custom(
+                fromVersion: MigrationV1.self,
+                toVersion: MigrationV2.self,
+                willMigrate: { context in
+                    if failureSwitch.shouldFail {
+                        let target = try XCTUnwrap(
+                            context.fetch(FetchDescriptor<MigrationPlanRecord>()).first(where: { $0.name == "saved-a" })
+                        )
+                        context.delete(target)
+                        try context.save()
+                        throw SwiftDataError.migrationUnsupported("expected delete migration failure")
+                    }
+                })
+        ]
+    }
+}
+
 private enum FailingDestinationPlan: SchemaMigrationPlan {
     static let failureSwitch = MigrationFailureSwitch()
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
@@ -399,6 +421,62 @@ final class CustomMigrationPlanTests: XCTestCase {
         XCTAssertEqual(
             try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
             ["saved-a", "saved-b"])
+    }
+
+    @MainActor
+    func testFailedWillMigrateRestoresDeletedRowsBeforeRetry() throws {
+        FailingDeleteMigrationPlan.failureSwitch.shouldFail = true
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationDeleteRetry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let source = try ModelContainer(
+            for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
+            configurations: [.sqliteFile("migration-delete-retry", url: url)])
+        let target = MigrationPlanRecord(name: "saved-a")
+        source.mainContext.insert(target)
+        source.mainContext.insert(MigrationPlanRecord(name: "saved-b"))
+        try source.mainContext.save()
+        let targetID = try XCTUnwrap(target.persistentModelID)
+        let sourceRows = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            } ?? nil)
+        let sourceMetadata = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            } ?? nil)
+        try source.store?.close()
+
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: MigrationPlanRecord.self, migrationPlan: FailingDeleteMigrationPlan.self,
+                configurations: .sqliteFile("migration-delete-retry", url: url))
+        ) { error in
+            XCTAssertEqual(error as? SwiftDataError, .migrationUnsupported("expected delete migration failure"))
+        }
+        let inspection = try OpenSwiftDataSQLite.sqliteFactory(.file(url), MigrationV1.schema)
+        XCTAssertEqual(
+            try inspection.read { connection in
+                try connection.rows("SELECT Z_PK, ZNAME FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK", arguments: [])
+            },
+            sourceRows)
+        XCTAssertEqual(
+            try inspection.read { connection in
+                try connection.rows("SELECT key, value FROM _osd_meta ORDER BY key", arguments: [])
+            },
+            sourceMetadata)
+        try inspection.close()
+
+        FailingDeleteMigrationPlan.failureSwitch.shouldFail = false
+        let retried = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: FailingDeleteMigrationPlan.self,
+            configurations: .sqliteFile("migration-delete-retry", url: url))
+        XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
+        let rows = try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
+        XCTAssertEqual(rows.map(\.name).sorted(), ["saved-a", "saved-b"])
+        XCTAssertTrue(rows.contains(where: { $0.persistentModelID == targetID }))
     }
 
     @MainActor

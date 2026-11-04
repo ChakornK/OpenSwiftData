@@ -269,6 +269,64 @@ final class SQLiteDriverTests: XCTestCase {
         try driver.close()
     }
 
+    func testAfterCommitExternalReconciliationPreservesSharedFilesAndSkipsRollback() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OSDExternalDeferredCleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("store.sqlite")
+        let columns: Set<String> = ["ZRECORD.ZREMOVED", "ZRECORD.ZRETAINED", "ZRECORD.ZROLLBACK"]
+        let driver = try GRDBSQLiteDriver(location: .file(databaseURL), externalColumns: columns)
+        let sharedPayload = Array(repeating: UInt8(0x31), count: ExternalStorage.threshold + 1)
+        let rollbackPayload = Array(repeating: UInt8(0x72), count: ExternalStorage.threshold + 2)
+        let markers = try driver.writeWithExternalData { connection, session -> [StoredValue] in
+            try connection.execute(
+                "CREATE TABLE ZRECORD (ZREMOVED BLOB, ZRETAINED BLOB, ZROLLBACK BLOB)")
+            let sharedMarker = try session.externalizedValue(sharedPayload)
+            let rollbackMarker = try session.externalizedValue(rollbackPayload)
+            try connection.execute(
+                "INSERT INTO ZRECORD VALUES (?, ?, ?)", [sharedMarker, sharedMarker, rollbackMarker])
+            return [sharedMarker, rollbackMarker]
+        }
+        guard case let .blob(sharedMarker) = markers[0], case let .blob(rollbackMarker) = markers[1],
+            let sharedName = ExternalStorage.fileName(in: sharedMarker),
+            let rollbackName = ExternalStorage.fileName(in: rollbackMarker)
+        else { return XCTFail("Expected external sidecar markers.") }
+        let sidecarDirectory = directory.appendingPathComponent("store.sqlite.external", isDirectory: true)
+        let sharedURL = sidecarDirectory.appendingPathComponent(sharedName)
+        let rollbackURL = sidecarDirectory.appendingPathComponent(rollbackName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rollbackURL.path))
+
+        try driver.write { connection in
+            try connection.execute("ALTER TABLE ZRECORD DROP COLUMN ZREMOVED")
+            connection.afterCommitReconcileExternalFiles(
+                externalColumns: ["ZRECORD.ZRETAINED", "ZRECORD.ZROLLBACK"])
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rollbackURL.path))
+
+        XCTAssertThrowsError(
+            try driver.write { connection in
+                try connection.execute("ALTER TABLE ZRECORD DROP COLUMN ZROLLBACK")
+                connection.afterCommitReconcileExternalFiles(externalColumns: ["ZRECORD.ZRETAINED"])
+                throw TestFailure.expected
+            }
+        ) { error in
+            XCTAssertTrue(error is TestFailure)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rollbackURL.path))
+        XCTAssertEqual(try driver.read { try $0.resolved(.blob(rollbackMarker)) }, .blob(rollbackPayload))
+
+        try driver.write { connection in
+            try connection.execute("ALTER TABLE ZRECORD DROP COLUMN ZROLLBACK")
+            connection.afterCommitReconcileExternalFiles(externalColumns: ["ZRECORD.ZRETAINED"])
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rollbackURL.path))
+        XCTAssertEqual(try driver.read { try $0.resolved(.blob(sharedMarker)) }, .blob(sharedPayload))
+        try driver.close()
+    }
+
     func testOpenRemovesUnreferencedSidecarFiles() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OSDExternalOrphan-\(UUID().uuidString)", isDirectory: true)

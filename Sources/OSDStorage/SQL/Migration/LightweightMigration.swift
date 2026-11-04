@@ -2672,6 +2672,7 @@ package enum LightweightMigration {
                         ? attribute.components.map { "Z\($0.columnName.uppercased())" }
                         : ["Z\(attribute.name.uppercased())"]
                 })
+            let removesExternalStorage = removedAttributes.contains { $0.options.contains(.externalStorage) }
             try validateColumnRemovalSideEffects(
                 table: table,
                 entity: source,
@@ -2769,6 +2770,9 @@ package enum LightweightMigration {
                 try connection.execute(
                     "ALTER TABLE \(table) ADD COLUMN Z\(attribute.name.uppercased()) \(type.rawValue)"
                         + "\(required)\(defaultSQL)")
+            }
+            if removesExternalStorage {
+                connection.afterCommitReconcileExternalFiles(externalColumns: externalColumns(in: destinationEntities))
             }
             indexTransitions.append(
                 (
@@ -4431,9 +4435,15 @@ package enum LightweightMigration {
 
     private static func isRemovableAttributeStorage(_ attribute: Schema.Attribute, entity: Schema.Entity) throws -> Bool
     {
-        guard !attribute.options.contains(.externalStorage),
-            !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
-        else { return false }
+        if attribute.options.contains(.externalStorage) {
+            return attribute.type == "Data"
+                && !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
+                && !attribute.options.contains(.codable) && !attribute.options.contains(.flattened)
+                && !attribute.options.contains(.unique)
+        }
+        guard !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } }) else {
+            return false
+        }
         guard attribute.options.contains(.flattened) else { return true }
         guard !attribute.isOptional,
             !attribute.options.contains(.unique),
@@ -4450,6 +4460,16 @@ package enum LightweightMigration {
                 component.type, property: "\(entity.name).\(component.columnName)")
         }
         return true
+    }
+
+    private static func externalColumns(in entities: [Schema.Entity]) -> Set<String> {
+        Set(
+            entities.flatMap { entity in
+                entity.attributes.compactMap { attribute in
+                    guard attribute.options.contains(.externalStorage) else { return nil }
+                    return "Z\(entity.name.uppercased()).Z\(attribute.name.uppercased())"
+                }
+            })
     }
 
     private static func validateColumnRemovalSideEffects(

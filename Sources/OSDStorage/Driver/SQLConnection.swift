@@ -52,8 +52,13 @@ package struct SQLConnection {
     }
 
     package func reconcileExternalFiles() throws {
+        try reconcileExternalFiles(externalColumns: externalColumns)
+    }
+
+    package func reconcileExternalFiles(externalColumns: Set<String>) throws {
         guard let externalStorage else { return }
-        try externalStorage.removeOrphans(referencedNames: referencedExternalFileNames())
+        try externalStorage.removeOrphans(
+            referencedNames: referencedExternalFileNames(externalColumns: externalColumns))
     }
 
     package func afterCommit(_ action: @escaping (SQLConnection) -> Void) {
@@ -65,7 +70,17 @@ package struct SQLConnection {
         }
     }
 
-    private func referencedExternalFileNames() throws -> Set<String> {
+    package func afterCommitReconcileExternalFiles(externalColumns: Set<String>) {
+        afterCommit { connection in
+            do {
+                try connection.reconcileExternalFiles(externalColumns: externalColumns)
+            } catch {
+                OSDLog.debug("External Data orphan cleanup failed: \(error)")
+            }
+        }
+    }
+
+    private func referencedExternalFileNames(externalColumns: Set<String>) throws -> Set<String> {
         let tables = try rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
         return try tables.reduce(into: Set<String>()) { names, row in
             guard case let .text(table)? = row.first, table != "_osd_meta", table != "Z_PRIMARYKEY",
@@ -76,7 +91,7 @@ package struct SQLConnection {
             let columns = try rows("PRAGMA table_info(\(table))")
             for column in columns {
                 guard column.count > 1, case let .text(name) = column[1], name.hasPrefix("Z"),
-                    externalColumns.contains("\(table).\(name)"),
+                    externalColumns.contains("\(table.uppercased()).\(name.uppercased())"),
                     name.utf8.allSatisfy({
                         ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
                     })

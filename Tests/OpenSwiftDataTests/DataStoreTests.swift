@@ -610,6 +610,45 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDataStoreEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() throws {
+        let store = DictionaryDataStore()
+        let configuration = ModelConfiguration(
+            "custom-store-enumeration-delete",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(
+            for: CustomHierarchyBase.self, CustomHierarchyChild.self, CustomHierarchyGrandchild.self,
+            configurations: configuration)
+        let writer = container.mainContext
+        writer.insert(CustomHierarchyChild(name: "child", score: 2))
+        writer.insert(CustomHierarchyGrandchild(name: "grandchild", score: 3, rank: 9))
+        try writer.save()
+
+        let reader = container.makeContext()
+        let child = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<CustomHierarchyChild>()).first { $0.name == "child" })
+        reader.delete(child)
+        let committedDescriptor = FetchDescriptor<CustomHierarchyBase>(includePendingChanges: false)
+        let committedFetch = try reader.fetch(committedDescriptor)
+        var committedEnumeration: [CustomHierarchyBase] = []
+        try reader.enumerate(committedDescriptor, batchSize: 1) { committedEnumeration.append($0) }
+
+        XCTAssertEqual(committedEnumeration.map(\.persistentModelID), committedFetch.map(\.persistentModelID))
+        XCTAssertTrue(committedEnumeration.first === child)
+        XCTAssertTrue(child.isDeleted)
+        XCTAssertEqual(committedEnumeration.map(\.name), ["child", "grandchild"])
+
+        let pendingDescriptor = FetchDescriptor<CustomHierarchyBase>()
+        let pendingFetch = try reader.fetch(pendingDescriptor)
+        var pendingEnumeration: [CustomHierarchyBase] = []
+        try reader.enumerate(pendingDescriptor, batchSize: 1) { pendingEnumeration.append($0) }
+        XCTAssertEqual(pendingEnumeration.map(\.persistentModelID), pendingFetch.map(\.persistentModelID))
+        XCTAssertEqual(pendingEnumeration.map(\.name), ["grandchild"])
+
+        try reader.save()
+        XCTAssertEqual(try reader.fetch(committedDescriptor).map(\.name), ["grandchild"])
+    }
+
+    @MainActor
     func testFlatDataStoreRejectsHierarchySchemaWithoutCapability() throws {
         let configuration = ModelConfiguration(
             "custom-flat-only",

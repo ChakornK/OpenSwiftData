@@ -72,6 +72,22 @@ final class SQLiteDriverTests: XCTestCase {
             ])
     }
 
+    func testBoundedIntegerArithmeticUDFsRespectUnsignedWidths() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "bounded-unsigned-arithmetic"))
+        defer { try? driver.close() }
+
+        let rows = try driver.read { connection in
+            try connection.rows(
+                "SELECT osd_int_bounded_add(9, 2, 108), osd_int_bounded_add(255, 1, 108), "
+                    + "osd_int_bounded_subtract(0, 1, 108), osd_int_bounded_multiply(65536, 65536, 132), "
+                    + "osd_int_bounded_divide(10, 2, 116), osd_int_bounded_divide(10, 0, 116), "
+                    + "osd_int_bounded_remainder(10, 3, 108), osd_int_bounded_add(-1, 1, 108), "
+                    + "osd_int_bounded_add(256, 0, 108), osd_int_bounded_add(0, 256, 108)")
+        }
+        XCTAssertEqual(
+            rows, [[.int(11), .null, .null, .null, .int(5), .null, .int(1), .null, .null, .null]])
+    }
+
     func testReadWriteReturnValuesAndErrors() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "results"))
         defer { try? driver.close() }

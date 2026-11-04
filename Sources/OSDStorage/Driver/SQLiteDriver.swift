@@ -286,7 +286,13 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             let widthValue = Int64.fromDatabaseValue(values[2]),
             let width = PredicateIntegerWidth(rawValue: Int(widthValue))
         else { return nil }
-        if (operation == .divide || operation == .remainder), lhs == width.minimumValue, rhs == -1 {
+        if !width.isSigned,
+            lhs < width.minimumValue || lhs > width.maximumValue
+                || rhs < width.minimumValue || rhs > width.maximumValue
+        {
+            return nil
+        }
+        if width.isSigned, (operation == .divide || operation == .remainder), lhs == width.minimumValue, rhs == -1 {
             return nil
         }
         guard let result = checkedIntegerArithmetic([values[0], values[1]], operation: operation),
@@ -301,6 +307,7 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             let widthValue = Int64.fromDatabaseValue(values[1]),
             let width = PredicateIntegerWidth(rawValue: Int(widthValue))
         else { return nil }
+        guard width.isSigned else { return nil }
         guard
             value >= width.minimumValue, value <= width.maximumValue,
             value != width.minimumValue

@@ -41,7 +41,9 @@ public enum PredicateArithmeticOperator: Sendable, Equatable {
     case remainder
 }
 
-/// The signed integer width used to validate arithmetic results.
+/// The integer width used to validate predicate arithmetic.
+///
+/// Raw values are stable runtime tags; use `bitWidth` to inspect the integer width.
 public enum PredicateIntegerWidth: Int, Sendable, Equatable, Codable {
     /// An 8-bit signed integer width.
     case int8 = 8
@@ -51,6 +53,30 @@ public enum PredicateIntegerWidth: Int, Sendable, Equatable, Codable {
     case int32 = 32
     /// A 64-bit signed integer width.
     case int64 = 64
+    /// An 8-bit unsigned integer width.
+    case uint8 = 108
+    /// A 16-bit unsigned integer width.
+    case uint16 = 116
+    /// A 32-bit unsigned integer width.
+    case uint32 = 132
+
+    /// Whether this width represents a signed integer type.
+    public var isSigned: Bool {
+        switch self {
+        case .int8, .int16, .int32, .int64: true
+        case .uint8, .uint16, .uint32: false
+        }
+    }
+
+    /// The number of bits in this integer type.
+    public var bitWidth: Int {
+        switch self {
+        case .int8, .uint8: 8
+        case .int16, .uint16: 16
+        case .int32, .uint32: 32
+        case .int64: 64
+        }
+    }
 
     /// The minimum value representable at this width.
     public var minimumValue: Int64 {
@@ -59,6 +85,7 @@ public enum PredicateIntegerWidth: Int, Sendable, Equatable, Codable {
         case .int16: Int64(Int16.min)
         case .int32: Int64(Int32.min)
         case .int64: Int64.min
+        case .uint8, .uint16, .uint32: 0
         }
     }
 
@@ -69,6 +96,9 @@ public enum PredicateIntegerWidth: Int, Sendable, Equatable, Codable {
         case .int16: Int64(Int16.max)
         case .int32: Int64(Int32.max)
         case .int64: Int64.max
+        case .uint8: Int64(UInt8.max)
+        case .uint16: Int64(UInt16.max)
+        case .uint32: Int64(UInt32.max)
         }
     }
 }

@@ -91,6 +91,21 @@ final class NarrowIntegerPredicateFixture {
     }
 }
 
+@Model
+final class UnsignedIntegerPredicateFixture {
+    var id: Int
+    var small: UInt8
+    var medium: UInt16
+    var wide: UInt32
+
+    init(id: Int, small: UInt8, medium: UInt16, wide: UInt32) {
+        self.id = id
+        self.small = small
+        self.medium = medium
+        self.wide = wide
+    }
+}
+
 struct CodablePayload: Codable, Equatable {
     let label: String
     let count: Int
@@ -671,6 +686,21 @@ final class ContextPersistenceTests: XCTestCase {
             .value(.int(0)))
         XCTAssertFalse(try RuntimePredicateEvaluator.matches(plan, values: ["count": .int(.min)]))
         XCTAssertTrue(try RuntimePredicateEvaluator.matches(plan, values: ["count": .int(-2)]))
+    }
+
+    func testPendingUnsignedArithmeticChecksOverflowAndUnderflow() throws {
+        let addition = PredicatePlan.comparison(
+            .greaterThan,
+            .boundedArithmetic(.add, .property("value"), .value(.int(1)), integerWidth: .uint8),
+            .value(.int(0)))
+        let underflow = PredicatePlan.comparison(
+            .lessThan,
+            .boundedArithmetic(.subtract, .property("value"), .value(.int(1)), integerWidth: .uint8),
+            .value(.int(0)))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(addition, values: ["value": .int(255)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(addition, values: ["value": .int(256)]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(underflow, values: ["value": .int(0)]))
+        XCTAssertTrue(try RuntimePredicateEvaluator.matches(addition, values: ["value": .int(9)]))
     }
 
     @MainActor
@@ -1528,6 +1558,31 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testNegativeInt8CapturePreservesSignedValueInArithmetic() throws {
+        let container = try ModelContainer(
+            for: NarrowIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("negative-int8-capture"))
+        let rows = [
+            NarrowIntegerPredicateFixture(id: 1, small: -1, medium: 0),
+            NarrowIntegerPredicateFixture(id: 2, small: 1, medium: 0),
+        ]
+        for row in rows {
+            container.mainContext.insert(row)
+        }
+        try container.mainContext.save()
+        let capturedNegative: Int8 = -1
+        let predicate = #Predicate<NarrowIntegerPredicateFixture> { $0.small + capturedNegative == -2 }
+        let foundationIDs = try Set(rows.compactMap { row in try predicate.evaluate(row) ? row.id : nil })
+        let descriptor = FetchDescriptor<NarrowIntegerPredicateFixture>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        let sqliteIDs = try Set(container.mainContext.fetch(descriptor).map(\.id))
+        XCTAssertEqual(foundationIDs, [1])
+        XCTAssertEqual(sqliteIDs, foundationIDs)
+    }
+
+    @MainActor
     func testNarrowIntegerArithmeticMatchesFoundationAndDoesNotWrapOverflow() throws {
         let safeSeeds: [(id: Int, small: Int8)] = [
             (1, -10),
@@ -1668,6 +1723,61 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(
             try container.mainContext.fetchIdentifiers(pendingDescriptor),
             pendingMatches.map(\.persistentModelID))
+    }
+
+    @MainActor
+    func testUnsignedNarrowArithmeticMatchesFoundationAndRejectsOverflow() throws {
+        let safeContainer = try ModelContainer(
+            for: UnsignedIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("unsigned-arithmetic-safe"))
+        let safeSeeds: [(id: Int, value: UInt8)] = [(1, 9), (2, 1)]
+        let detachedRows = safeSeeds.map {
+            UnsignedIntegerPredicateFixture(id: $0.id, small: $0.value, medium: 0, wide: 0)
+        }
+        for seed in safeSeeds {
+            safeContainer.mainContext.insert(
+                UnsignedIntegerPredicateFixture(id: seed.id, small: seed.value, medium: 0, wide: 0))
+        }
+        try safeContainer.mainContext.save()
+        let safePredicate = #Predicate<UnsignedIntegerPredicateFixture> { $0.small + 2 > 10 }
+        let foundationIDs = try Set(
+            zip(detachedRows, safeSeeds).compactMap { row, seed in
+                try safePredicate.evaluate(row) ? seed.id : nil
+            })
+        let safeDescriptor = FetchDescriptor<UnsignedIntegerPredicateFixture>(
+            predicate: safePredicate,
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        let safeIDs = try Set(safeContainer.mainContext.fetch(safeDescriptor).map(\.id))
+        XCTAssertEqual(foundationIDs, [1])
+        XCTAssertEqual(safeIDs, foundationIDs)
+
+        let overflowContainer = try ModelContainer(
+            for: UnsignedIntegerPredicateFixture.self,
+            configurations: .sqliteMemory("unsigned-arithmetic-overflow"))
+        for row in [
+            UnsignedIntegerPredicateFixture(id: 1, small: .max, medium: 0, wide: 0),
+            UnsignedIntegerPredicateFixture(id: 2, small: 0, medium: 0, wide: 0),
+            UnsignedIntegerPredicateFixture(id: 3, small: 0, medium: 0, wide: .max),
+        ] {
+            overflowContainer.mainContext.insert(row)
+        }
+        try overflowContainer.mainContext.save()
+        let addition = FetchDescriptor<UnsignedIntegerPredicateFixture>(
+            predicate: #Predicate { $0.small + 1 > 0 },
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertEqual(try overflowContainer.mainContext.fetch(addition).map(\.id), [2, 3])
+        let underflow = FetchDescriptor<UnsignedIntegerPredicateFixture>(
+            predicate: #Predicate { $0.small - 1 < 0 },
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertTrue(try overflowContainer.mainContext.fetch(underflow).isEmpty)
+        let multiplication = FetchDescriptor<UnsignedIntegerPredicateFixture>(
+            predicate: #Predicate { $0.wide * 65536 > 0 },
+            sortBy: [SortDescriptor(\.id)],
+            includePendingChanges: false)
+        XCTAssertTrue(try overflowContainer.mainContext.fetch(multiplication).isEmpty)
     }
 
     @MainActor

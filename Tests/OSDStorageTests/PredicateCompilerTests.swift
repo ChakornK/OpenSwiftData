@@ -371,6 +371,80 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(
             try PredicateIRBuilder.build(typedUnary),
             .unaryNegation(.value(.int(1)), integerWidth: .int8))
+
+        let unsigned = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("smallUnsigned")),
+                ("rhs", .capture(typeName: "Swift.UInt8", description: "1")),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(unsigned, attributeTypes: ["smallUnsigned": "UInt8"]),
+            .boundedArithmetic(.add, .keyPath(["smallUnsigned"]), .value(.int(1)), .uint8))
+
+        let mixedSignedness = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("small")),
+                ("rhs", .capture(typeName: "Swift.UInt8", description: "1")),
+            ])
+        XCTAssertThrowsError(try PredicateIRBuilder.build(mixedSignedness, attributeTypes: ["small": "Int8"]))
+
+        let unsignedNegation = PredicateMirrorWalker.Node.expression(
+            name: "UnaryMinus",
+            children: [("wrapped", .propertyReference("smallUnsigned"))])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(unsignedNegation, attributeTypes: ["smallUnsigned": "UInt8"]))
+
+        let wideUnsigned = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("largeUnsigned")),
+                ("rhs", .capture(typeName: "Swift.UInt64", description: "1")),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(wideUnsigned, attributeTypes: ["largeUnsigned": "UInt64"]))
+
+        let outOfRangeTypedCapture = PredicateMirrorWalker.Node.expression(
+            name: "Arithmetic",
+            children: [
+                ("op", .capture(typeName: "ArithmeticOperator", description: "add")),
+                ("lhs", .propertyReference("smallUnsigned")),
+                (
+                    "rhs",
+                    .expression(
+                        name: "Value",
+                        children: [
+                            (
+                                "value", .typedCapture(.int(256), typeName: "Swift.UInt8")
+                            )
+                        ])
+                ),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(outOfRangeTypedCapture, attributeTypes: ["smallUnsigned": "UInt8"]))
+    }
+
+    func testIntegerCapturesRejectValuesOutsideTheirDeclaredWidth() throws {
+        for (typeName, description) in [
+            ("Swift.Int8", "128"),
+            ("Swift.Int16", "32768"),
+            ("Swift.UInt8", "256"),
+            ("Swift.UInt16", "65536"),
+            ("Swift.UInt32", "4294967296"),
+        ] {
+            let node = PredicateMirrorWalker.Node.expression(
+                name: "Value",
+                children: [("value", .capture(typeName: typeName, description: description))])
+            XCTAssertThrowsError(try PredicateIRBuilder.build(node), "Expected \(typeName)(\(description)) to reject") {
+                guard case SwiftDataError.unsupportedPredicate = $0 else {
+                    return XCTFail("Expected out-of-range \(typeName) capture to fail, got \($0)")
+                }
+            }
+        }
     }
 
     func testOptionalDecimalOrderingKeepsOneBoundOperand() throws {

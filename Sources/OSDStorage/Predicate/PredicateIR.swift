@@ -102,9 +102,12 @@ package enum PredicateIRBuilder {
                 return .negation(try field("wrapped", from: fields))
             case "UnaryMinus":
                 let operand = try field("wrapped", from: fields)
-                if let width = try signedIntegerWidth(
+                if let width = try integerArithmeticWidth(
                     for: fields["wrapped"]!, and: nil, attributeTypes: attributeTypes)
                 {
+                    guard width.isSigned else {
+                        throw SwiftDataError.unsupportedPredicate("Unary minus is unsupported for unsigned integers.")
+                    }
                     return .unaryNegation(operand, integerWidth: width)
                 }
                 guard isDoubleArithmeticOperand(operand, attributeTypes: attributeTypes) else {
@@ -139,7 +142,7 @@ package enum PredicateIRBuilder {
                 let rhs = try field("rhs", from: fields)
                 let integerWidth: PredicateIntegerWidth?
                 do {
-                    integerWidth = try signedIntegerWidth(
+                    integerWidth = try integerArithmeticWidth(
                         for: fields["lhs"]!, and: fields["rhs"]!, attributeTypes: attributeTypes)
                 } catch {
                     if op != .remainder,
@@ -161,7 +164,7 @@ package enum PredicateIRBuilder {
                     isDoubleArithmeticOperand(rhs, attributeTypes: attributeTypes)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Arithmetic requires two signed integer or two Double operands.")
+                        "Arithmetic requires matching supported integer widths or two Double operands.")
                 }
                 return .realArithmetic(op, lhs, rhs)
             case "FloatDivision":
@@ -177,24 +180,22 @@ package enum PredicateIRBuilder {
                 let lhs = try field("lhs", from: fields)
                 let rhs = try field("rhs", from: fields)
                 let width =
-                    try signedIntegerWidth(
+                    try integerArithmeticWidth(
                         for: fields["lhs"]!, and: fields["rhs"]!, attributeTypes: attributeTypes)
-                    ?? ((isIntegerLiteral(lhs) && isIntegerLiteral(rhs)) ? .int64 : nil)
                 guard let width else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Integer division requires signed integer operands.")
+                        "Integer division requires matching supported integer operands.")
                 }
                 return .boundedArithmetic(.divide, lhs, rhs, width)
             case "IntRemainder":
                 let lhs = try field("lhs", from: fields)
                 let rhs = try field("rhs", from: fields)
                 let width =
-                    try signedIntegerWidth(
+                    try integerArithmeticWidth(
                         for: fields["lhs"]!, and: fields["rhs"]!, attributeTypes: attributeTypes)
-                    ?? ((isIntegerLiteral(lhs) && isIntegerLiteral(rhs)) ? .int64 : nil)
                 guard let width else {
                     throw SwiftDataError.unsupportedPredicate(
-                        "Integer remainder requires signed integer operands.")
+                        "Integer remainder requires matching supported integer operands.")
                 }
                 return .boundedArithmetic(.remainder, lhs, rhs, width)
             case "Equal":
@@ -1021,27 +1022,27 @@ package enum PredicateIRBuilder {
         return suffix[0]
     }
 
-    private static func signedIntegerWidth(
+    private static func integerArithmeticWidth(
         for lhs: PredicateMirrorWalker.Node,
         and rhs: PredicateMirrorWalker.Node?,
         attributeTypes: [String: String]
     ) throws -> PredicateIntegerWidth? {
         enum OperandType {
-            case signed(PredicateIntegerWidth)
+            case width(PredicateIntegerWidth)
             case integerLiteral
             case unsupported
         }
         func merge(_ lhs: OperandType, _ rhs: OperandType) throws -> OperandType {
             switch (lhs, rhs) {
-            case let (.signed(lhsWidth), .signed(rhsWidth)):
+            case let (.width(lhsWidth), .width(rhsWidth)):
                 guard lhsWidth == rhsWidth else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Integer arithmetic operands must have matching widths (\(lhsWidth.rawValue), \(rhsWidth.rawValue))."
                     )
                 }
-                return .signed(lhsWidth)
-            case let (.signed(width), .integerLiteral), let (.integerLiteral, .signed(width)):
-                return .signed(width)
+                return .width(lhsWidth)
+            case let (.width(width), .integerLiteral), let (.integerLiteral, .width(width)):
+                return .width(width)
             case (.integerLiteral, .integerLiteral):
                 return .integerLiteral
             default:
@@ -1052,13 +1053,14 @@ package enum PredicateIRBuilder {
             guard let typeName else { return .unsupported }
             let unwrapped = typeName.hasSuffix("?") ? String(typeName.dropLast()) : typeName
             switch unwrapped {
-            case "Int8", "Swift.Int8": return .signed(.int8)
-            case "Int16", "Swift.Int16": return .signed(.int16)
-            case "Int32", "Swift.Int32": return .signed(.int32)
-            case "Int", "Swift.Int", "Int64", "Swift.Int64": return .signed(.int64)
-            case "UInt", "Swift.UInt", "UInt8", "Swift.UInt8", "UInt16", "Swift.UInt16",
-                "UInt32", "Swift.UInt32", "UInt64", "Swift.UInt64":
-                return .unsupported
+            case "Int8", "Swift.Int8": return .width(.int8)
+            case "Int16", "Swift.Int16": return .width(.int16)
+            case "Int32", "Swift.Int32": return .width(.int32)
+            case "Int", "Swift.Int", "Int64", "Swift.Int64": return .width(.int64)
+            case "UInt8", "Swift.UInt8": return .width(.uint8)
+            case "UInt16", "Swift.UInt16": return .width(.uint16)
+            case "UInt32", "Swift.UInt32": return .width(.uint32)
+            case "UInt", "Swift.UInt", "UInt64", "Swift.UInt64": return .unsupported
             default: return .unsupported
             }
         }
@@ -1072,8 +1074,16 @@ package enum PredicateIRBuilder {
             case let .typedValue(value):
                 guard case .int = value else { return .unsupported }
                 return .integerLiteral
-            case let .typedCapture(_, typeName):
-                return width(forTypeName: typeName)
+            case let .typedCapture(value, typeName):
+                let operandType = width(forTypeName: typeName)
+                guard case let .width(width) = operandType else { return operandType }
+                guard case let .int(integer) = value,
+                    integer >= width.minimumValue, integer <= width.maximumValue
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Integer capture is outside its declared \(typeName) range.")
+                }
+                return operandType
             case .persistentIdentifierReference, .identifierCapture:
                 return .unsupported
             case let .expression(name, children):
@@ -1104,16 +1114,11 @@ package enum PredicateIRBuilder {
             resultType = lhsType
         }
         switch resultType {
-        case let .signed(width): return width
-        case .integerLiteral: return nil
+        case let .width(width): return width
+        case .integerLiteral: return .int64
         case .unsupported:
             return nil
         }
-    }
-
-    private static func isIntegerLiteral(_ ir: PredicateIR) -> Bool {
-        if case .value(.int) = ir { return true }
-        return false
     }
 
     private static func isDoubleArithmeticOperand(
@@ -1244,13 +1249,40 @@ package enum PredicateIRBuilder {
         case "Swift.Bool":
             guard let value = Bool(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
             return .value(.int(value ? 1 : 0))
-        case "Swift.Int", "Swift.Int8", "Swift.Int16", "Swift.Int32", "Swift.Int64":
+        case "Swift.Int8":
+            guard let value = Int64(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            guard value >= Int64(Int8.min), value <= Int64(Int8.max) else {
+                throw SwiftDataError.unsupportedPredicate(typeName)
+            }
+            return .value(.int(value))
+        case "Swift.Int16":
+            guard let value = Int64(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            guard value >= Int64(Int16.min), value <= Int64(Int16.max) else {
+                throw SwiftDataError.unsupportedPredicate(typeName)
+            }
+            return .value(.int(value))
+        case "Swift.Int32":
+            guard let value = Int64(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            guard value >= Int64(Int32.min), value <= Int64(Int32.max) else {
+                throw SwiftDataError.unsupportedPredicate(typeName)
+            }
+            return .value(.int(value))
+        case "Swift.Int", "Swift.Int64":
             guard let value = Int64(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
             return .value(.int(value))
         case "Swift.Double", "Swift.Float":
             guard let value = Double(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
             return .value(.double(value))
-        case "Swift.UInt", "Swift.UInt8", "Swift.UInt16", "Swift.UInt32", "Swift.UInt64":
+        case "Swift.UInt8":
+            guard let value = UInt8(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            return .value(.int(Int64(value)))
+        case "Swift.UInt16":
+            guard let value = UInt16(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            return .value(.int(Int64(value)))
+        case "Swift.UInt32":
+            guard let value = UInt32(description) else { throw SwiftDataError.unsupportedPredicate(typeName) }
+            return .value(.int(Int64(value)))
+        case "Swift.UInt", "Swift.UInt64":
             guard let value = UInt64(description), value <= UInt64(Int64.max) else {
                 throw SwiftDataError.unsupportedPredicate(typeName)
             }

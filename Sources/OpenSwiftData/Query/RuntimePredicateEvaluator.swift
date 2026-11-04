@@ -303,7 +303,15 @@ package enum RuntimePredicateEvaluator {
             if lhsValue == .null || rhsValue == .null { return .null }
             throw SwiftDataError.unsupportedPredicate("Integer arithmetic requires signed integer operands")
         }
-        if (operation == .divide || operation == .remainder), left == width.minimumValue, right == -1 {
+        if !width.isSigned,
+            left < width.minimumValue || left > width.maximumValue
+                || right < width.minimumValue || right > width.maximumValue
+        {
+            return .null
+        }
+        if width.isSigned, (operation == .divide || operation == .remainder), left == width.minimumValue,
+            right == -1
+        {
             return .null
         }
         let result: Int64?
@@ -501,6 +509,9 @@ package enum RuntimePredicateEvaluator {
             switch (operand, integerWidth) {
             case (.null, _): return .null
             case let (.int(integer), .some(width)):
+                guard width.isSigned else {
+                    throw SwiftDataError.unsupportedPredicate("Unary minus is unsupported for unsigned integers")
+                }
                 guard integer >= width.minimumValue, integer <= width.maximumValue,
                     integer != width.minimumValue
                 else {

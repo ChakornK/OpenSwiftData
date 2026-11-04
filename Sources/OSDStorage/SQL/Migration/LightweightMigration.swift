@@ -51,10 +51,13 @@ package enum LightweightMigration {
         guard !metadataTable.isEmpty else { return .empty }
         if let row = try connection.rows(
             "SELECT value FROM _osd_meta WHERE key = ?", [.text(pendingMigrationKey)]
-        ).first,
-            case let .blob(bytes)? = row.first,
-            let identifier = String(bytes: bytes, encoding: .utf8)
-        {
+        ).first {
+            guard row.count == 1, case let .blob(bytes) = row[0],
+                let identifier = String(bytes: bytes, encoding: .utf8),
+                !identifier.isEmpty, identifier == identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+            else {
+                throw SwiftDataError.migrationUnsupported("Stored pending migration marker is invalid.")
+            }
             return .pending(destinationIdentifier: identifier)
         }
         guard try storedHash(connection) != nil else {

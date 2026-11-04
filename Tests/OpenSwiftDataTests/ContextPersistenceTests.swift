@@ -1122,6 +1122,38 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testEnumerationAllowsMutationsWhenEscapingIsEnabled() throws {
+        let container = try ModelContainer(
+            for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-escaping-mutations"))
+        let writer = container.mainContext
+        for title in ["first", "second"] {
+            writer.insert(PersistenceTestModel(title: title))
+        }
+        try writer.save()
+
+        let reader = container.makeContext()
+        let descriptor = FetchDescriptor<PersistenceTestModel>(sortBy: [SortDescriptor(\.title)])
+        var visited: [String] = []
+        try reader.enumerate(descriptor, batchSize: 1, allowEscapingMutations: true) { model in
+            visited.append(model.title)
+            model.title += "-updated"
+        }
+
+        XCTAssertEqual(visited, ["first", "second"])
+        XCTAssertEqual(
+            try reader.fetch(descriptor).map(\.title),
+            ["first-updated", "second-updated"])
+        XCTAssertTrue(reader.hasChanges)
+        try reader.save()
+        XCTAssertFalse(reader.hasChanges)
+        XCTAssertEqual(
+            try container.store?.read {
+                try $0.rows("SELECT ZTITLE FROM ZPERSISTENCETESTMODEL ORDER BY ZTITLE", arguments: [])
+            },
+            [[.text("first-updated")], [.text("second-updated")]])
+    }
+
+    @MainActor
     func testEnumerationRejectsAndRestoresRelationshipMutations() throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,

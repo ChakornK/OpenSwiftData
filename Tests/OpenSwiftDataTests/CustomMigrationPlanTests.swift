@@ -34,6 +34,13 @@ private enum MigrationV2: VersionedSchema {
         ], version: versionIdentifier)
 }
 
+private enum LightweightMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
+    static var stages: [MigrationStage] {
+        [.lightweight(fromVersion: MigrationV1.self, toVersion: MigrationV2.self)]
+    }
+}
+
 private enum TestMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] { [MigrationV1.self, MigrationV2.self] }
     static var stages: [MigrationStage] {
@@ -169,6 +176,66 @@ private final class MigrationStageRecorder: @unchecked Sendable {
 }
 
 final class CustomMigrationPlanTests: XCTestCase {
+    @MainActor
+    func testLightweightStagePreservesRowsAndPersistsDestinationVersion() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataLightweightMigrationPlan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("store.sqlite")
+        let source = try ModelContainer(
+            for: [MigrationPlanRecord.self], schema: MigrationV1.schema,
+            configurations: [.sqliteFile("lightweight-migration-plan", url: storeURL)])
+        let original = MigrationPlanRecord(name: "preserved")
+        source.mainContext.insert(original)
+        try source.mainContext.save()
+        let originalID = try XCTUnwrap(original.persistentModelID)
+        let originalRow = try XCTUnwrap(
+            source.store?.read { connection in
+                try connection.rows("SELECT Z_PK FROM ZMIGRATIONPLANRECORD", arguments: []).first?.first
+            } ?? nil)
+        try source.store?.close()
+
+        let migrated = try ModelContainer(
+            for: MigrationPlanRecord.self,
+            migrationPlan: LightweightMigrationPlan.self,
+            configurations: .sqliteFile("lightweight-migration-plan", url: storeURL))
+
+        XCTAssertEqual(migrated.schema.version, MigrationV2.versionIdentifier)
+        XCTAssertEqual(
+            migrated.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name), ["name", "note"])
+        let records = try migrated.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
+        XCTAssertEqual(records.map(\.name), ["preserved"])
+        XCTAssertEqual(records.first?.persistentModelID, originalID)
+        let row = try migrated.store?.read { connection in
+            try connection.rows("SELECT Z_PK, ZNAME, ZNOTE FROM ZMIGRATIONPLANRECORD", arguments: []).first
+        }
+        guard case .int = originalRow else {
+            return XCTFail("Expected the source row to have an integer primary key.")
+        }
+        XCTAssertEqual(row ?? nil, [originalRow, .text("preserved"), .null])
+        let version = try migrated.store?.read { connection in
+            try connection.rows(
+                "SELECT value FROM _osd_meta WHERE key = ?", arguments: [.text("schema.version.v1")]
+            ).first?.first
+        }
+        XCTAssertEqual(version ?? nil, .blob(try MigrationV2.versionIdentifier.encoded()))
+        try migrated.store?.close()
+
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self,
+            migrationPlan: LightweightMigrationPlan.self,
+            configurations: .sqliteFile("lightweight-migration-plan-reopen", url: storeURL))
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name), ["preserved"])
+        XCTAssertEqual(
+            try reopened.store?.read {
+                try $0.rows("SELECT Z_PK, ZNAME, ZNOTE FROM ZMIGRATIONPLANRECORD", arguments: [])
+            },
+            [[originalRow, .text("preserved"), .null]])
+        try reopened.store?.close()
+    }
+
     @MainActor
     func testCustomStageRunsSourceAndDestinationContextsOnce() throws {
         let directory = FileManager.default.temporaryDirectory

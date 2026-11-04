@@ -6569,31 +6569,45 @@ final class SchemaMigrationTests: XCTestCase {
                 attributes: [
                     Schema.Attribute(name: "discarded", type: "Data", options: [.externalStorage]),
                     Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    Schema.Attribute(
+                        name: "optionalRetained", type: "Data", isOptional: true, options: [.externalStorage]),
+                    Schema.Attribute(name: "inlineData", type: "Data"),
                 ])
         ])
         let destination = Schema([
             Schema.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage])])
+                attributes: [
+                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    Schema.Attribute(
+                        name: "optionalRetained", type: "Data", isOptional: true, options: [.externalStorage]),
+                    Schema.Attribute(name: "inlineData", type: "Data"),
+                ])
         ])
-        let sourceColumns: Set<String> = ["ZRECORD.ZDISCARDED", "ZRECORD.ZRETAINED"]
-        let destinationColumns: Set<String> = ["ZRECORD.ZRETAINED"]
+        let sourceColumns: Set<String> = [
+            "ZRECORD.ZDISCARDED", "ZRECORD.ZRETAINED", "ZRECORD.ZOPTIONALRETAINED",
+        ]
+        let destinationColumns: Set<String> = ["ZRECORD.ZRETAINED", "ZRECORD.ZOPTIONALRETAINED"]
         let sharedPayload = Array(repeating: UInt8(0x2A), count: ExternalStorage.threshold + 1)
         let discardedPayload = Array(repeating: UInt8(0x3B), count: ExternalStorage.threshold + 2)
+        let markerLikeInlineBytes = Array("OSD_EXTERNAL_DATA_V1\0data-not-a-sidecar.blob".utf8)
         let initial = try LightweightMigration.openStore(
             location: location, schema: source, externalColumns: sourceColumns)
         let markers = try initial.writeWithExternalData { connection, session -> (StoredValue, StoredValue) in
             let sharedMarker = try session.externalizedValue(sharedPayload)
             let discardedMarker = try session.externalizedValue(discardedPayload)
             try connection.execute(
-                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED) VALUES (1, 2, ?, ?)",
-                [discardedMarker, sharedMarker])
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED, ZOPTIONALRETAINED, ZINLINEDATA) "
+                    + "VALUES (1, 2, ?, ?, NULL, ?)",
+                [discardedMarker, sharedMarker, .blob(markerLikeInlineBytes)])
             try connection.execute(
-                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED) VALUES (1, 2, ?, ?)",
-                [.null, sharedMarker])
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED, ZOPTIONALRETAINED, ZINLINEDATA) "
+                    + "VALUES (1, 2, NULL, ?, NULL, ?)",
+                [sharedMarker, .blob(markerLikeInlineBytes)])
             try connection.execute(
-                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED) VALUES (1, 2, ?, ?)",
-                [discardedMarker, .null])
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZDISCARDED, ZRETAINED, ZOPTIONALRETAINED, ZINLINEDATA) "
+                    + "VALUES (1, 2, ?, NULL, NULL, ?)",
+                [discardedMarker, .blob(markerLikeInlineBytes)])
             return (sharedMarker, discardedMarker)
         }
         guard case let .blob(sharedBytes) = markers.0, case let .blob(discardedBytes) = markers.1,
@@ -6622,12 +6636,26 @@ final class SchemaMigrationTests: XCTestCase {
                     row.count > 1 ? row[1] : nil
                 }
             },
-            [.text("Z_PK"), .text("Z_ENT"), .text("Z_OPT"), .text("ZDISCARDED"), .text("ZRETAINED")])
+            [
+                .text("Z_PK"),
+                .text("Z_ENT"),
+                .text("Z_OPT"),
+                .text("ZDISCARDED"),
+                .text("ZINLINEDATA"),
+                .text("ZOPTIONALRETAINED"),
+                .text("ZRETAINED"),
+            ])
         XCTAssertEqual(
             try initial.read {
-                try $0.rows("SELECT Z_PK, ZDISCARDED, ZRETAINED FROM ZRECORD ORDER BY Z_PK").count
+                try $0.rows(
+                    "SELECT Z_PK, ZDISCARDED, ZRETAINED, ZOPTIONALRETAINED, ZINLINEDATA FROM ZRECORD ORDER BY Z_PK"
+                )
             },
-            3)
+            [
+                [.int(1), .blob(discardedBytes), .blob(sharedBytes), .null, .blob(markerLikeInlineBytes)],
+                [.int(2), .null, .blob(sharedBytes), .null, .blob(markerLikeInlineBytes)],
+                [.int(3), .blob(discardedBytes), .null, .null, .blob(markerLikeInlineBytes)],
+            ])
 
         try initial.close()
         let migrated = try LightweightMigration.openStore(
@@ -6635,11 +6663,13 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: discardedURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sharedURL.path))
         XCTAssertEqual(
-            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED FROM ZRECORD ORDER BY Z_PK") },
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZRETAINED, ZOPTIONALRETAINED, ZINLINEDATA FROM ZRECORD ORDER BY Z_PK")
+            },
             [
-                [.int(1), .int(2), .blob(sharedBytes)],
-                [.int(2), .int(2), .blob(sharedBytes)],
-                [.int(3), .int(2), .null],
+                [.int(1), .int(2), .blob(sharedBytes), .null, .blob(markerLikeInlineBytes)],
+                [.int(2), .int(2), .blob(sharedBytes), .null, .blob(markerLikeInlineBytes)],
+                [.int(3), .int(2), .null, .null, .blob(markerLikeInlineBytes)],
             ])
         XCTAssertEqual(try migrated.read { try $0.resolved(.blob(sharedBytes)) }, .blob(sharedPayload))
         XCTAssertFalse(FileManager.default.fileExists(atPath: discardedURL.path))

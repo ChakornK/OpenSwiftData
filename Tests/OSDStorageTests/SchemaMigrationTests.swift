@@ -13766,6 +13766,71 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
+    func testRemovingRootWithPopulatedInboundToOnePreservesSourceStore() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("inbound-owner-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Target",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "owner", destination: "Owner")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 4, 'owner')")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME, ZOWNER) VALUES (2, 7, 'target', 1)")
+        }
+        let ownerRows = try initial.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZOWNER") }
+        let targetRows = try initial.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZOWNER FROM ZTARGET") }
+        let tables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let indexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let metadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected inbound relationship removal to fail closed, got \(error)")
+            }
+        }
+
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            tables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            indexes)
+        XCTAssertEqual(try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZOWNER") }, ownerRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZOWNER FROM ZTARGET") }, targetRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, metadata)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZOWNER") }, ownerRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZOWNER FROM ZTARGET") }, targetRows)
+        try reopened.close()
+    }
+
     func testIndependentRootRemovalAndAdditionComposeWithoutReusingIDs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

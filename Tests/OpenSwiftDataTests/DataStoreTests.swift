@@ -88,6 +88,27 @@ final class CustomHierarchyOwner {
     }
 }
 
+@Model
+class CustomHierarchyRelationshipOwnerBase {
+    var label: String
+    @Relationship(inverse: nil) var target: CustomHierarchyBase?
+
+    init(label: String, target: CustomHierarchyBase? = nil) {
+        self.label = label
+        self.target = target
+    }
+}
+
+@Model
+final class CustomHierarchyRelationshipOwnerChild: CustomHierarchyRelationshipOwnerBase {
+    var code: Int
+
+    init(label: String, code: Int, target: CustomHierarchyBase? = nil) {
+        self.code = code
+        super.init(label: label, target: target)
+    }
+}
+
 private final class DictionaryDataStore: DataStore, @unchecked Sendable {
     let identifier = "custom.dictionary"
     let supportsInheritance = true
@@ -181,6 +202,12 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return snapshotReadIdentifiers
+    }
+
+    func storedSnapshots() -> [DataStoreSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(snapshots.values)
     }
 }
 
@@ -862,6 +889,62 @@ final class DataStoreTests: XCTestCase {
         XCTAssertTrue(
             try reader.model(for: try XCTUnwrap(owner.target?.persistentModelID)) as CustomHierarchyBase?
                 === owner.target)
+    }
+
+    @MainActor
+    func testDataStoreInheritedHierarchyRelationshipRoundTrips() throws {
+        let store = DictionaryDataStore()
+        let configuration = ModelConfiguration(
+            "custom-store-inherited-hierarchy-relationship",
+            dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(
+            for: CustomHierarchyBase.self, CustomHierarchyChild.self, CustomHierarchyGrandchild.self,
+            CustomHierarchyRelationshipOwnerBase.self, CustomHierarchyRelationshipOwnerChild.self,
+            configurations: configuration)
+        let writer = container.mainContext
+        let firstTarget = CustomHierarchyGrandchild(name: "first", score: 4, rank: 11)
+        let secondTarget = CustomHierarchyGrandchild(name: "second", score: 5, rank: 12)
+        let owner = CustomHierarchyRelationshipOwnerChild(label: "owner", code: 7, target: firstTarget)
+        writer.insert(firstTarget)
+        writer.insert(secondTarget)
+        writer.insert(owner)
+        try writer.save()
+
+        let initialSnapshots = store.storedSnapshots()
+        let initialOwnerSnapshot = try XCTUnwrap(
+            initialSnapshots.first { $0.entityName == "CustomHierarchyRelationshipOwnerChild" })
+        let initialTargetSnapshot = try XCTUnwrap(
+            initialSnapshots.first { $0.persistentIdentifier == firstTarget.persistentModelID })
+        XCTAssertEqual(initialOwnerSnapshot.persistentIdentifier.entityName, "CustomHierarchyRelationshipOwnerChild")
+        XCTAssertEqual(initialTargetSnapshot.persistentIdentifier.entityName, "CustomHierarchyGrandchild")
+        XCTAssertEqual(
+            initialOwnerSnapshot.relationships["target"], [initialTargetSnapshot.persistentIdentifier])
+
+        let reader = container.makeContext()
+        let fetchedOwner = try XCTUnwrap(reader.fetch(FetchDescriptor<CustomHierarchyRelationshipOwnerBase>()).first)
+        XCTAssertTrue(fetchedOwner is CustomHierarchyRelationshipOwnerChild)
+        XCTAssertEqual((fetchedOwner as? CustomHierarchyRelationshipOwnerChild)?.code, 7)
+        XCTAssertTrue(fetchedOwner.target is CustomHierarchyGrandchild)
+        XCTAssertEqual((fetchedOwner.target as? CustomHierarchyGrandchild)?.rank, 11)
+
+        let replacement = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<CustomHierarchyGrandchild>()).first { $0.name == "second" })
+        fetchedOwner.target = replacement
+        try reader.save()
+
+        let updatedSnapshots = store.storedSnapshots()
+        let updatedOwnerSnapshot = try XCTUnwrap(
+            updatedSnapshots.first { $0.entityName == "CustomHierarchyRelationshipOwnerChild" })
+        let updatedTargetSnapshot = try XCTUnwrap(
+            updatedSnapshots.first { $0.persistentIdentifier == replacement.persistentModelID })
+        XCTAssertEqual(
+            updatedOwnerSnapshot.relationships["target"], [updatedTargetSnapshot.persistentIdentifier])
+
+        let verifier = container.makeContext()
+        let updatedOwner = try XCTUnwrap(
+            verifier.fetch(FetchDescriptor<CustomHierarchyRelationshipOwnerBase>()).first)
+        XCTAssertEqual(updatedOwner.target?.name, "second")
+        XCTAssertTrue(updatedOwner.target is CustomHierarchyGrandchild)
     }
 
     @MainActor

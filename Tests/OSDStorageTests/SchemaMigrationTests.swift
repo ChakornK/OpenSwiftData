@@ -7121,6 +7121,99 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testExternalStorageAdditionWithScalarRemovalFailsBeforeChangingSidecars() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("external-add-with-removal.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "obsolete", type: "String"),
+                    Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
+                    Schema.Attribute(
+                        name: "newPayload", type: "Data", isOptional: true, options: [.externalStorage]),
+                ])
+        ])
+        let externalColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
+        let payload = Array(repeating: UInt8(0x29), count: ExternalStorage.threshold + 1)
+        let initial = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: externalColumns)
+        let marker = try initial.writeWithExternalData { connection, session in
+            let value = try session.externalizedValue(payload)
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZOBSOLETE, ZPAYLOAD) VALUES (1, 8, 'retained', ?)", [value])
+            return value
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_OPT, ZOBSOLETE, ZPAYLOAD FROM ZRECORD")
+        }
+        let originalTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        guard case let .blob(markerBytes) = marker,
+            let fileName = ExternalStorage.fileName(in: markerBytes)
+        else { return XCTFail("Expected the retained external payload marker.") }
+        let sidecarDirectory = directory.appendingPathComponent(
+            "external-add-with-removal.sqlite.external", isDirectory: true)
+        let sidecarURL = sidecarDirectory.appendingPathComponent(fileName)
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        try initial.close()
+
+        XCTAssertThrowsError(
+            try LightweightMigration.openStore(
+                location: location,
+                schema: destination,
+                externalColumns: ["ZRECORD.ZPAYLOAD", "ZRECORD.ZNEWPAYLOAD"])
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected migrationUnsupported, got \(error)")
+            }
+        }
+
+        let inspection = try GRDBSQLiteDriver(location: location, externalColumns: externalColumns)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            originalTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_OPT, ZOBSOLETE, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, originalMetadata)
+        XCTAssertEqual(try inspection.read { try $0.resolved(.blob(markerBytes)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(
+            location: location, schema: source, externalColumns: externalColumns)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZOBSOLETE, ZPAYLOAD FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(try reopened.read { try $0.resolved(.blob(markerBytes)) }, .blob(payload))
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), Data(payload))
+        try reopened.close()
+    }
+
     func testExternalStorageRenameComposesWithOptionalScalarAddition() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

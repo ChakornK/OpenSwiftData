@@ -13855,6 +13855,90 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testNumericRebuildRejectsUserTriggerWithoutChangingStore() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("numeric-rebuild-trigger.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [Schema.Index(properties: ["value"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("CREATE TABLE migration_audit (record_id INTEGER NOT NULL)")
+            try connection.execute(
+                "CREATE TRIGGER audit_record_insert AFTER INSERT ON ZRECORD "
+                    + "BEGIN INSERT INTO migration_audit (record_id) VALUES (NEW.Z_PK); END")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 4, 17)")
+        }
+        let originalObjects = try initial.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master "
+                    + "WHERE name IN ('ZRECORD', 'ZRECORD_ZVALUE_INDEX', 'migration_audit', 'audit_record_insert') "
+                    + "ORDER BY type, name")
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK")
+        }
+        let originalAuditRows = try initial.read { try $0.rows("SELECT record_id FROM migration_audit") }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected numeric rebuild with a user trigger to fail closed, got \(error)")
+            }
+        }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master "
+                        + "WHERE name IN ('ZRECORD', 'ZRECORD_ZVALUE_INDEX', 'migration_audit', 'audit_record_insert') "
+                        + "ORDER BY type, name")
+            },
+            originalObjects)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZVALUE FROM ZRECORD ORDER BY Z_PK") },
+            originalRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT record_id FROM migration_audit") },
+            originalAuditRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata)
+        XCTAssertTrue(
+            try inspection.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE name LIKE '%_OSD_REBUILD%'"
+                ).isEmpty
+            })
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        try reopened.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 6, 23)")
+        }
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT record_id FROM migration_audit ORDER BY record_id") },
+            [[.int(1)], [.int(2)]])
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testOpeningStoreWithInconsistentSchemaMetadataFailsClosed() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

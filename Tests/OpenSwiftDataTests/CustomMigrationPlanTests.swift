@@ -715,6 +715,92 @@ final class CustomMigrationPlanTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingVersionHashMismatchFailsWithoutResumingCallbacks() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenSwiftDataMigrationPendingHashMismatch-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("store.sqlite")
+        let initial = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: VersionThreePlan.self,
+            configurations: .sqliteFile("migration-pending-hash-mismatch", url: url))
+        initial.mainContext.insert(MigrationPlanRecord(name: "pending-a"))
+        initial.mainContext.insert(MigrationPlanRecord(name: "pending-b"))
+        try initial.mainContext.save()
+        try initial.store?.close()
+
+        func query(_ sql: String, readOnly: Bool = true) throws -> [String] {
+            var configuration = Configuration()
+            configuration.readonly = readOnly
+            let database = try DatabaseQueue(path: url.path, configuration: configuration)
+            defer { try? database.close() }
+            return try database.read { try String.fetchAll($0, sql: sql) }
+        }
+        let metadataSQL = "SELECT key || ':' || COALESCE(hex(value), 'NULL') FROM _osd_meta ORDER BY key"
+        let rowsSQL =
+            "SELECT CAST(Z_PK AS TEXT) || ':' || ZNAME || ':' || COALESCE(ZNOTE, 'NULL') || ':' || COALESCE(ZDETAIL, 'NULL') FROM ZMIGRATIONPLANRECORD ORDER BY Z_PK"
+        let primaryKeysSQL =
+            "SELECT CAST(Z_ENT AS TEXT) || ':' || Z_NAME || ':' || CAST(Z_SUPER AS TEXT) || ':' || CAST(Z_MAX AS TEXT) FROM Z_PRIMARYKEY ORDER BY Z_ENT"
+        let tablesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        let indexesSQL = "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY name"
+        let originalMetadata = try query(metadataSQL)
+        let originalRows = try query(rowsSQL)
+        let originalPrimaryKeys = try query(primaryKeysSQL)
+        let originalTables = try query(tablesSQL)
+        let originalIndexes = try query(indexesSQL)
+
+        var writable = Configuration()
+        writable.readonly = false
+        let corruptMarker = try DatabaseQueue(path: url.path, configuration: writable)
+        try corruptMarker.write { database in
+            try database.execute(
+                sql:
+                    "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                arguments: ["schema.migration.pending.v1", Data(MigrationV2.versionIdentifier.identifier.utf8)])
+            XCTAssertEqual(database.changesCount, 1)
+        }
+        try corruptMarker.close()
+        let inconsistentMetadata = try query(metadataSQL)
+        MigrationStageRecorder.shared.reset()
+
+        XCTAssertThrowsError(
+            try ModelContainer(
+                for: MigrationPlanRecord.self, migrationPlan: VersionThreePlan.self,
+                configurations: .sqliteFile("migration-pending-hash-mismatch", url: url))
+        ) { error in
+            guard case let SwiftDataError.migrationUnsupported(message) = error else {
+                return XCTFail("Expected pending/schema mismatch to fail closed, got \(error)")
+            }
+            XCTAssertTrue(
+                message.contains("Stored schema does not match pending destination version 'migration-v2'"), message)
+        }
+        XCTAssertEqual(MigrationStageRecorder.shared.values, [])
+        XCTAssertEqual(try query(metadataSQL), inconsistentMetadata)
+        XCTAssertEqual(try query(rowsSQL), originalRows)
+        XCTAssertEqual(try query(primaryKeysSQL), originalPrimaryKeys)
+        XCTAssertEqual(try query(tablesSQL), originalTables)
+        XCTAssertEqual(try query(indexesSQL), originalIndexes)
+
+        let restoreMarker = try DatabaseQueue(path: url.path, configuration: writable)
+        try restoreMarker.write { database in
+            try database.execute(
+                sql: "DELETE FROM _osd_meta WHERE key = ?", arguments: ["schema.migration.pending.v1"])
+            XCTAssertEqual(database.changesCount, 1)
+        }
+        try restoreMarker.close()
+        XCTAssertEqual(try query(metadataSQL), originalMetadata)
+
+        let reopened = try ModelContainer(
+            for: MigrationPlanRecord.self, migrationPlan: VersionThreePlan.self,
+            configurations: .sqliteFile("migration-pending-hash-mismatch-reopen", url: url))
+        XCTAssertEqual(reopened.schema.version, MigrationV3.versionIdentifier)
+        XCTAssertEqual(
+            try reopened.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name).sorted(),
+            ["pending-a", "pending-b"])
+        XCTAssertEqual(try query(rowsSQL), originalRows)
+    }
+
+    @MainActor
     func testLaterStageDidFailureResumesWithoutRepeatingCompletedStage() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataMigrationLaterStageRetry-\(UUID().uuidString)", isDirectory: true)

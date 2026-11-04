@@ -4154,6 +4154,9 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(Set(pendingMatches.map(\.name)), Set(["empty-child", "empty-group", "existential"]))
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
         XCTAssertEqual(try context.fetchIdentifiers(pendingDescriptor), pendingMatches.map(\.persistentModelID))
+        XCTAssertEqual(try context.fetch(descriptor).map(\.persistentModelID), fetched.map(\.persistentModelID))
+        XCTAssertEqual(try context.fetchCount(descriptor), 4)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
     }
 
     @MainActor

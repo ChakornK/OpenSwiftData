@@ -10370,6 +10370,9 @@ final class SchemaMigrationTests: XCTestCase {
                 try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
             }
         ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected a typed migration error for duplicate unique-index values, got \(error)")
+            }
             XCTAssertTrue(String(describing: error).contains("UNIQUE constraint failed"))
         }
         XCTAssertEqual(
@@ -10564,6 +10567,74 @@ final class SchemaMigrationTests: XCTestCase {
         let migratedIndexes = try driver.read { try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index'") }
         XCTAssertTrue(migratedIndexes.contains([.text("ZRECORD_ZEMAIL_UNIQUE_INDEX")]))
         try driver.close()
+    }
+
+    func testOpeningStoreRollsBackUniqueIndexCollisionAndMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("unique-index-rollback.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "email", type: "String")])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "email", type: "String", options: [.unique]),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZEMAIL) VALUES (5, 1, 2, 'duplicate@example.com')")
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_PK, Z_ENT, Z_OPT, ZEMAIL) VALUES (9, 1, 7, 'duplicate@example.com')")
+        }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZEMAIL FROM ZRECORD ORDER BY Z_PK")
+        }
+        let originalTableSQL = try initial.read {
+            try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'").first?.first
+        }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        try initial.close()
+
+        for attempt in 0..<2 {
+            XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unique-index collision on attempt \(attempt + 1), got \(error)")
+                }
+            }
+            let reopened = try LightweightMigration.openStore(location: location, schema: source)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZEMAIL FROM ZRECORD ORDER BY Z_PK") },
+                originalRows)
+            XCTAssertEqual(
+                try reopened.read {
+                    try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ZRECORD'")
+                        .first?.first
+                },
+                originalTableSQL)
+            XCTAssertEqual(
+                try reopened.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+                },
+                originalIndexes)
+            XCTAssertEqual(
+                try reopened.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+                originalMetadata)
+            XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+            try reopened.close()
+        }
     }
 
     func testUniqueAttributeRemovalDropsConstraintAndPreservesRows() throws {

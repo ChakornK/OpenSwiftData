@@ -6180,7 +6180,13 @@ package enum LightweightMigration {
             try connection.execute("DROP INDEX IF EXISTS \(old.name)")
         }
         for (name, new) in newByName where oldByName[name] != new {
-            try connection.execute(new.statement)
+            do {
+                try connection.execute(new.statement)
+            } catch let error as DatabaseError where error.extendedResultCode == .SQLITE_CONSTRAINT_UNIQUE {
+                let detail = error.message ?? "SQLite rejected duplicate index values."
+                throw SwiftDataError.migrationUnsupported(
+                    "Creating generated index \(new.name) violates a uniqueness constraint: \(detail)")
+            }
         }
     }
 

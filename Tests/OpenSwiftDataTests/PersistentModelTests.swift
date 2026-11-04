@@ -5708,6 +5708,60 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingHierarchyDeletionMatchesCommittedOnlyQueries() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-pending-delete-query-parity"))
+        let writer = container.mainContext
+        let child = InheritanceMacroChildFixture(name: "child", age: 2)
+        let grandchild = InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4)
+        writer.insert(child)
+        writer.insert(grandchild)
+        try writer.save()
+
+        let reader = container.makeContext()
+        reader.delete(try XCTUnwrap(reader.fetch(FetchDescriptor<InheritanceMacroChildFixture>()).first))
+
+        let pendingBase = FetchDescriptor<InheritanceMacroBaseFixture>()
+        let committedBase = FetchDescriptor<InheritanceMacroBaseFixture>(includePendingChanges: false)
+        XCTAssertEqual(try reader.fetch(pendingBase).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetchCount(pendingBase), 1)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(pendingBase).map(\.entityName), ["InheritanceMacroGrandchildFixture"])
+        XCTAssertEqual(try reader.fetch(committedBase).map(\.name), ["child", "grandchild"])
+        XCTAssertEqual(try reader.fetchCount(committedBase), 2)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(committedBase).map(\.entityName),
+            ["InheritanceMacroChildFixture", "InheritanceMacroGrandchildFixture"])
+
+        let pendingChildren = FetchDescriptor<InheritanceMacroChildFixture>()
+        let committedChildren = FetchDescriptor<InheritanceMacroChildFixture>(includePendingChanges: false)
+        XCTAssertEqual(try reader.fetch(pendingChildren).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetchCount(pendingChildren), 1)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(pendingChildren).map(\.entityName), ["InheritanceMacroGrandchildFixture"])
+        XCTAssertEqual(try reader.fetch(committedChildren).map(\.name), ["child", "grandchild"])
+        XCTAssertEqual(try reader.fetchCount(committedChildren), 2)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(committedChildren).map(\.entityName),
+            ["InheritanceMacroChildFixture", "InheritanceMacroGrandchildFixture"])
+
+        try reader.save()
+        XCTAssertEqual(try reader.fetch(pendingBase).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetch(committedBase).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetchCount(pendingBase), 1)
+        XCTAssertEqual(try reader.fetchCount(committedBase), 1)
+        XCTAssertEqual(try reader.fetchIdentifiers(pendingBase), try reader.fetchIdentifiers(committedBase))
+        XCTAssertEqual(try reader.fetch(pendingChildren).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetch(committedChildren).map(\.name), ["grandchild"])
+        XCTAssertEqual(try reader.fetchCount(pendingChildren), 1)
+        XCTAssertEqual(try reader.fetchCount(committedChildren), 1)
+        XCTAssertEqual(try reader.fetchIdentifiers(pendingChildren), try reader.fetchIdentifiers(committedChildren))
+    }
+
+    @MainActor
     func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() throws {
         let container = try ModelContainer(
             for: InheritanceIdentifierOwnerFixture.self,

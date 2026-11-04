@@ -5708,6 +5708,34 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testHierarchyEnumerationResolvesConcreteSubtypesAcrossBatches() throws {
+        let container = try ModelContainer(
+            for: InheritanceMacroBaseFixture.self,
+            InheritanceMacroChildFixture.self,
+            InheritanceMacroGrandchildFixture.self,
+            configurations: .sqliteMemory("inheritance-enumeration"))
+        let context = container.mainContext
+        context.insert(InheritanceMacroBaseFixture(name: "base"))
+        context.insert(InheritanceMacroChildFixture(name: "child", age: 2))
+        context.insert(InheritanceMacroGrandchildFixture(name: "grandchild", age: 3, rank: 4))
+        try context.save()
+
+        let descriptor = FetchDescriptor<InheritanceMacroBaseFixture>()
+        let enumeratingContext = container.makeContext()
+        var enumerated: [InheritanceMacroBaseFixture] = []
+        try enumeratingContext.enumerate(descriptor, batchSize: 1) { enumerated.append($0) }
+        let fetched = try container.makeContext().fetch(descriptor)
+
+        XCTAssertEqual(enumerated.count, 3)
+        XCTAssertEqual(enumerated.map(\.persistentModelID), fetched.map(\.persistentModelID))
+        XCTAssertTrue(enumerated[1] is InheritanceMacroChildFixture)
+        XCTAssertTrue(enumerated[2] is InheritanceMacroGrandchildFixture)
+        XCTAssertEqual(enumerated.map(\.name), ["base", "child", "grandchild"])
+        XCTAssertFalse(enumeratingContext.hasChanges)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
     func testPendingHierarchyDeletionMatchesCommittedOnlyQueries() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,

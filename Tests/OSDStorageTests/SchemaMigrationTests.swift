@@ -9017,6 +9017,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMixedPairedInverseAndOwnerJoinRemovalRejectsBeforeDDL() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
         let source = Schema([
             Schema.Entity(
                 name: "AOwner",
@@ -9037,42 +9041,104 @@ final class SchemaMigrationTests: XCTestCase {
             Schema.Entity(name: "Tag"),
             Schema.Entity(name: "ZTarget"),
         ])
-        let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
-        let tagsRelationship = try XCTUnwrap(owner.relationships.first(where: { $0.name == "tags" }))
+        let ownerEntity = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let tagsRelationship = try XCTUnwrap(ownerEntity.relationships.first(where: { $0.name == "tags" }))
         let joinTable = try XCTUnwrap(
-            SchemaBuilder.joinTableName(for: owner, relationship: tagsRelationship, schema: source))
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-pair-and-join-removal"))
-        try bootstrap(source, driver: driver)
-        try driver.write { connection in
-            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (1, 5, 'owner', 1)")
-            try connection.execute("INSERT INTO ZZTARGET (Z_ENT, Z_OPT) VALUES (3, 7)")
+            SchemaBuilder.joinTableName(for: ownerEntity, relationship: tagsRelationship, schema: source))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let sourceIDs = try XCTUnwrap(
+            initial.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) })
+        let ownerID = try XCTUnwrap(sourceIDs["AOwner"])
+        let tagID = try XCTUnwrap(sourceIDs["Tag"])
+        let targetID = try XCTUnwrap(sourceIDs["ZTarget"])
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME, ZTARGET) VALUES (?, 5, 'owner', 1)",
+                [.int(Int64(ownerID))])
+            try connection.execute(
+                "INSERT INTO ZTAG (Z_ENT, Z_OPT) VALUES (?, 9)", [.int(Int64(tagID))])
+            try connection.execute(
+                "INSERT INTO ZZTARGET (Z_ENT, Z_OPT) VALUES (?, 7)", [.int(Int64(targetID))])
             try connection.execute("INSERT INTO \(joinTable) (Z_A, Z_B) VALUES (1, 1)")
         }
-        let originalIndexes = try driver.read {
+        let sourceTables = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let sourceIndexes = try initial.read {
             try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
         }
-        XCTAssertThrowsError(
-            try driver.write {
-                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
-            }
-        ) { error in
+        let sourceMetadata = try initial.read {
+            try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key")
+        }
+        let sourcePrimaryKeys = try initial.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        let sourceOwnerRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZAOWNER ORDER BY Z_PK")
+        }
+        let sourceTagRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTAG ORDER BY Z_PK")
+        }
+        let sourceTargetRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZZTARGET ORDER BY Z_PK")
+        }
+        let sourceJoinRows = try initial.read {
+            try $0.rows("SELECT Z_A, Z_B FROM \(joinTable) ORDER BY Z_A, Z_B")
+        }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
                 return XCTFail("Expected mixed inverse/join removals to fail closed, got \(error)")
             }
         }
-        XCTAssertFalse(
-            try driver.read {
-                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(joinTable)])
-                    .isEmpty
-            })
-        XCTAssertTrue(
-            try driver.read {
-                try $0.rows("PRAGMA table_info(ZAOWNER)").contains(where: { $0.count > 1 && $0[1] == .text("ZTARGET") })
-            })
+        let inspection = try GRDBSQLiteDriver(location: location)
         XCTAssertEqual(
-            try driver.read { try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name") },
-            originalIndexes)
-        try driver.close()
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            },
+            sourceTables)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            sourceIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            sourceMetadata)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+            },
+            sourcePrimaryKeys)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZAOWNER ORDER BY Z_PK") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZTAG ORDER BY Z_PK") },
+            sourceTagRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT FROM ZZTARGET ORDER BY Z_PK") },
+            sourceTargetRows)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable) ORDER BY Z_A, Z_B") },
+            sourceJoinRows)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try inspection.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try LightweightMigration.storedEntityIDs(schema: source, connection: $0) },
+            sourceIDs)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTARGET FROM ZAOWNER ORDER BY Z_PK") },
+            sourceOwnerRows)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_A, Z_B FROM \(joinTable) ORDER BY Z_A, Z_B") },
+            sourceJoinRows)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
     }
 
     func testMultipleToManyRemovalRejectsEntityCaseRenameBeforeDrops() throws {

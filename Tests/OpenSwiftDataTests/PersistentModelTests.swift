@@ -1933,6 +1933,28 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertTrue(fetchedSibling === sibling)
         XCTAssertEqual(sibling.siblingTarget?.title, "sibling")
 
+        let replacementTarget = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<InheritedToOneTargetFixture>()).first { $0.title == "child" })
+        child.target = replacementTarget
+        XCTAssertTrue(child.hasChanges)
+        XCTAssertTrue(child.target === replacementTarget)
+        try reader.save()
+        let reassigned = try container.store?.read {
+            try $0.rows(
+                "SELECT ZINHERITEDTOONEBASEFIXTURE_TARGET FROM ZINHERITEDTOONEBASEFIXTURE WHERE Z_PK = 1",
+                arguments: [])
+        }
+        XCTAssertEqual(reassigned, [[.int(2)]])
+
+        let verifier = container.makeContext()
+        let verifiedChild = try XCTUnwrap(
+            verifier.fetch(FetchDescriptor<InheritedToOneBaseFixture>()).compactMap {
+                $0 as? InheritedToOneChildFixture
+            }.first)
+        let verifiedTarget = try XCTUnwrap(verifiedChild.target)
+        XCTAssertEqual(verifiedTarget.title, "child")
+        XCTAssertTrue(verifiedTarget.modelContext === verifier)
+
         child.setRelationshipValue(
             forKey: \InheritedToOneChildFixture.childTarget,
             to: fetchedChild.childTarget)

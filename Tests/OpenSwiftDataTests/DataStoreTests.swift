@@ -215,6 +215,12 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         return snapshotReadIdentifiers
     }
 
+    func clearFetchedSnapshotIdentifiers() {
+        lock.lock()
+        snapshotReadIdentifiers.removeAll()
+        lock.unlock()
+    }
+
     func storedSnapshots() -> [DataStoreSnapshot] {
         lock.lock()
         defer { lock.unlock() }
@@ -1006,11 +1012,18 @@ final class DataStoreTests: XCTestCase {
             initialOwnerSnapshot.relationships["target"], [initialTargetSnapshot.persistentIdentifier])
 
         let reader = container.makeContext()
-        let fetchedOwner = try XCTUnwrap(reader.fetch(FetchDescriptor<CustomHierarchyRelationshipOwnerBase>()).first)
+        let partialOwners = try reader.fetch(
+            FetchDescriptor<CustomHierarchyRelationshipOwnerBase>(propertiesToFetch: [\.label]))
+        XCTAssertEqual(store.lastFetchedValueKeys, ["label"])
+        let fetchedOwner = try XCTUnwrap(partialOwners.first)
         XCTAssertTrue(fetchedOwner is CustomHierarchyRelationshipOwnerChild)
+        store.clearFetchedSnapshotIdentifiers()
         XCTAssertEqual((fetchedOwner as? CustomHierarchyRelationshipOwnerChild)?.code, 7)
+        XCTAssertEqual(store.fetchedSnapshotIdentifiers, [fetchedOwner.persistentModelID])
         XCTAssertTrue(fetchedOwner.target is CustomHierarchyGrandchild)
-        XCTAssertEqual((fetchedOwner.target as? CustomHierarchyGrandchild)?.rank, 11)
+        let grandchild = try XCTUnwrap(fetchedOwner.target as? CustomHierarchyGrandchild)
+        XCTAssertEqual(grandchild.score, 4)
+        XCTAssertEqual(grandchild.rank, 11)
 
         let replacement = try XCTUnwrap(
             reader.fetch(FetchDescriptor<CustomHierarchyGrandchild>()).first { $0.name == "second" })

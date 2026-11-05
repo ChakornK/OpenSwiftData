@@ -1333,6 +1333,14 @@ final class SchemaMigrationTests: XCTestCase {
                     name: "Record",
                     attributes: [
                         Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "priority", type: "Int16", defaultValue: "70000"),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
                         Schema.Attribute(name: "unique", type: "String", options: [.unique]),
                     ])
             ]),

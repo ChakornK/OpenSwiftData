@@ -657,6 +657,60 @@ final class FourLevelQuantifierLeafFixture {
 }
 
 @Model
+final class MixedSetQuantifierRootFixture {
+    var name: String
+    var groups: Set<MixedSetQuantifierGroupFixture>
+    init(name: String, groups: Set<MixedSetQuantifierGroupFixture>) {
+        self.name = name
+        self.groups = groups
+    }
+}
+
+@Model
+final class MixedSetQuantifierGroupFixture {
+    var children: [MixedSetQuantifierChildFixture]
+    init(children: [MixedSetQuantifierChildFixture]) { self.children = children }
+}
+
+@Model
+final class MixedSetQuantifierChildFixture {
+    var items: Set<MixedSetQuantifierItemFixture>
+    init(items: Set<MixedSetQuantifierItemFixture>) { self.items = items }
+}
+
+@Model
+final class MixedSetQuantifierItemFixture {
+    var leaves: [MixedSetQuantifierLeafFixture]
+    init(leaves: [MixedSetQuantifierLeafFixture]) { self.leaves = leaves }
+}
+
+@Model
+final class MixedSetQuantifierLeafFixture {
+    var value: String
+    init(value: String) { self.value = value }
+}
+
+extension MixedSetQuantifierGroupFixture: Hashable {
+    static func == (lhs: MixedSetQuantifierGroupFixture, rhs: MixedSetQuantifierGroupFixture) -> Bool {
+        lhs === rhs
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
+    }
+}
+
+extension MixedSetQuantifierItemFixture: Hashable {
+    static func == (lhs: MixedSetQuantifierItemFixture, rhs: MixedSetQuantifierItemFixture) -> Bool {
+        lhs === rhs
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
+    }
+}
+
+@Model
 final class InverseNestedQuantifierOwnerFixture {
     var name: String
     @Relationship(inverse: nil) var children: [InverseNestedQuantifierChildFixture] = []
@@ -3661,6 +3715,100 @@ final class PersistentModelTests: XCTestCase {
                 return XCTFail("Expected depth-five collection predicate to fail closed, got \(error)")
             }
         }
+    }
+
+    @MainActor
+    func testNestedFourLevelContainsSupportsMixedSetAndArrayRelationships() throws {
+        let container = try ModelContainer(
+            for: MixedSetQuantifierRootFixture.self,
+            MixedSetQuantifierGroupFixture.self,
+            MixedSetQuantifierChildFixture.self,
+            MixedSetQuantifierItemFixture.self,
+            MixedSetQuantifierLeafFixture.self,
+            configurations: .sqliteMemory("nested-mixed-set-array-quantifiers"))
+        let context = container.mainContext
+        let needle = "match"
+        let matchingLeaf = MixedSetQuantifierLeafFixture(value: needle)
+        let matchingItem = MixedSetQuantifierItemFixture(leaves: [matchingLeaf])
+        let matchingChild = MixedSetQuantifierChildFixture(items: Set([matchingItem]))
+        let matchingGroup = MixedSetQuantifierGroupFixture(children: [matchingChild])
+        let matchingRoot = MixedSetQuantifierRootFixture(name: "matching", groups: Set([matchingGroup]))
+
+        let otherLeaf = MixedSetQuantifierLeafFixture(value: "other")
+        let otherItem = MixedSetQuantifierItemFixture(leaves: [otherLeaf])
+        let otherChild = MixedSetQuantifierChildFixture(items: Set([otherItem]))
+        let otherGroup = MixedSetQuantifierGroupFixture(children: [otherChild])
+        let otherRoot = MixedSetQuantifierRootFixture(name: "other", groups: Set([otherGroup]))
+
+        let nearMissLeaf = MixedSetQuantifierLeafFixture(value: "near miss")
+        let nearMissItem = MixedSetQuantifierItemFixture(leaves: [nearMissLeaf])
+        let nearMissChild = MixedSetQuantifierChildFixture(items: Set([nearMissItem]))
+        let nearMissGroup = MixedSetQuantifierGroupFixture(children: [nearMissChild])
+        let nearMissRoot = MixedSetQuantifierRootFixture(name: "near miss", groups: Set([nearMissGroup]))
+        let emptyRoot = MixedSetQuantifierRootFixture(name: "empty", groups: [])
+
+        context.insert(matchingLeaf)
+        context.insert(otherLeaf)
+        context.insert(nearMissLeaf)
+        context.insert(matchingItem)
+        context.insert(otherItem)
+        context.insert(nearMissItem)
+        context.insert(matchingChild)
+        context.insert(otherChild)
+        context.insert(nearMissChild)
+        context.insert(matchingGroup)
+        context.insert(otherGroup)
+        context.insert(nearMissGroup)
+        context.insert(matchingRoot)
+        context.insert(otherRoot)
+        context.insert(nearMissRoot)
+        context.insert(emptyRoot)
+        try context.save()
+
+        let predicate = #Predicate<MixedSetQuantifierRootFixture> {
+            $0.groups.contains { group in
+                group.children.contains { child in
+                    child.items.contains { item in
+                        item.leaves.contains { $0.value == needle }
+                    }
+                }
+            }
+        }
+        let storedDescriptor = FetchDescriptor<MixedSetQuantifierRootFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(storedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(storedDescriptor), [matchingRoot.persistentModelID])
+
+        otherLeaf.value = needle
+        XCTAssertTrue(context.hasChanges)
+        let pendingDescriptor = FetchDescriptor<MixedSetQuantifierRootFixture>(predicate: predicate)
+        let pendingStoredDescriptor = FetchDescriptor<MixedSetQuantifierRootFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), Set(["matching", "other"]))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID]))
+        XCTAssertEqual(try context.fetch(pendingStoredDescriptor).map(\.name), ["matching"])
+        XCTAssertEqual(try context.fetchCount(pendingStoredDescriptor), 1)
+
+        let pendingLeaf = MixedSetQuantifierLeafFixture(value: needle)
+        let pendingItem = MixedSetQuantifierItemFixture(leaves: [pendingLeaf])
+        let pendingChild = MixedSetQuantifierChildFixture(items: Set([pendingItem]))
+        let pendingGroup = MixedSetQuantifierGroupFixture(children: [pendingChild])
+        let pendingRoot = MixedSetQuantifierRootFixture(name: "pending", groups: Set([pendingGroup]))
+        context.insert(pendingLeaf)
+        context.insert(pendingItem)
+        context.insert(pendingChild)
+        context.insert(pendingGroup)
+        context.insert(pendingRoot)
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID, pendingRoot.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(pendingStoredDescriptor), 1)
     }
 
     @MainActor

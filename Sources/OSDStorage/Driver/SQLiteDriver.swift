@@ -377,26 +377,42 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
     private static func jsonArrayMembership(_ values: [DatabaseValue], all: Bool) -> Int? {
         guard values.count == 3,
             let data = Data.fromDatabaseValue(values[0]),
-            let elementType = String.fromDatabaseValue(values[2]),
-            let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
+            let elementType = String.fromDatabaseValue(values[2])
         else { return nil }
         let normalizedElementType =
             elementType.hasPrefix("Swift.Optional<")
             ? String(elementType.dropFirst("Swift.".count))
             : elementType
+        let optionalElements = normalizedElementType.hasPrefix("Optional<") && normalizedElementType.hasSuffix(">")
         let scalarElementType: String
-        if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
+        if optionalElements {
             guard !all else { return nil }
-            guard normalizedElementType.dropFirst("Optional<".count).dropLast().contains("<") == false else {
-                return nil
-            }
             scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
-            if values[1].isNull {
-                return array.contains(where: { $0 is NSNull }) ? 1 : 0
-            }
         } else {
             scalarElementType = elementType
-            guard !values[1].isNull else { return nil }
+        }
+        let unsignedElementType =
+            scalarElementType.hasPrefix("Unsigned<") && scalarElementType.hasSuffix(">")
+            ? String(scalarElementType.dropFirst("Unsigned<".count).dropLast())
+            : nil
+        if let unsignedElementType {
+            guard !all, ["UInt", "UInt64"].contains(unsignedElementType),
+                let elements = unsignedJSONElements(data)
+            else { return nil }
+            if values[1].isNull {
+                guard optionalElements else { return nil }
+                return elements.contains(where: { $0 == nil }) ? 1 : 0
+            }
+            guard optionalElements || elements.allSatisfy({ $0 != nil }),
+                let needleText = String.fromDatabaseValue(values[1]),
+                let needle = UInt64(needleText)
+            else { return nil }
+            return elements.contains(where: { $0 == needle }) ? 1 : 0
+        }
+        guard let array = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return nil }
+        if values[1].isNull {
+            guard optionalElements else { return nil }
+            return array.contains(where: { $0 is NSNull }) ? 1 : 0
         }
         switch scalarElementType {
         case "String":
@@ -472,5 +488,30 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
         default:
             return nil
         }
+    }
+
+    private static func unsignedJSONElements(_ data: Data) -> [UInt64?]? {
+        guard let rawJSON = String(data: data, encoding: .utf8) else { return nil }
+        let json = rawJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            json.first == "[", json.last == "]"
+        else { return nil }
+        let body = json.dropFirst().dropLast()
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        var values: [UInt64?] = []
+        for token in body.split(separator: ",", omittingEmptySubsequences: false) {
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                values.append(nil)
+                continue
+            }
+            guard !trimmed.isEmpty,
+                trimmed.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                trimmed == "0" || trimmed.first != "0",
+                let value = UInt64(trimmed)
+            else { return nil }
+            values.append(value)
+        }
+        return values
     }
 }

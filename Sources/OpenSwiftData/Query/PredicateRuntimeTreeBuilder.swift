@@ -721,6 +721,30 @@ package enum PredicateRuntimeTreeBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Predicate key path could not be resolved to a model property.")
             }
+            let sequenceKeyPath: AnyKeyPath? =
+                if name == "SequenceContains",
+                    let sequence = children.first(where: { $0.label == "sequence" })?.value
+                { Self.sequenceKeyPath(sequence) } else { nil }
+            let sequencePropertyName = sequenceKeyPath.flatMap { activeModelType.propertyName(forKeyPath: $0) }
+            let sequenceAttribute = sequencePropertyName.flatMap { propertyName in
+                activeEntity.attributes.first(where: { $0.name == propertyName })
+            }
+            let sequenceCollectionElement = sequenceAttribute.flatMap { attribute in
+                attribute.options.contains(.codable)
+                    ? Self.codableScalarCollectionElementBaseType(attribute.type)
+                    : nil
+            }
+            let unsignedSequenceCapturePath: RuntimePredicatePath? =
+                if let sequenceCollectionElement, ["UInt", "UInt64"].contains(sequenceCollectionElement) {
+                    RuntimePredicatePath(
+                        labels: capturePathRewrites.reduce(path + ["element"]) { $1.apply(to: $0) })
+                } else {
+                    nil
+                }
+            if let unsignedSequenceCapturePath { unsignedCollectionBoundPaths.insert(unsignedSequenceCapturePath) }
+            defer {
+                if let unsignedSequenceCapturePath { unsignedCollectionBoundPaths.remove(unsignedSequenceCapturePath) }
+            }
             let converted = try children.compactMap { child -> (String, RuntimePredicateNode)? in
                 guard let label = child.label else { return nil }
                 let childTypeName = String(reflecting: type(of: child.value))
@@ -733,9 +757,9 @@ package enum PredicateRuntimeTreeBuilder {
                     )
                 }
                 if name == "Value" {
+                    let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
+                    let capturePath = RuntimePredicatePath(labels: rewrittenPath)
                     do {
-                        let rewrittenPath = capturePathRewrites.reduce(path) { $1.apply(to: $0) }
-                        let capturePath = RuntimePredicatePath(labels: rewrittenPath)
                         if unsignedCollectionBoundPaths.contains(capturePath),
                             let unsigned = unsignedIntegerValue(child.value)
                         {
@@ -850,6 +874,20 @@ package enum PredicateRuntimeTreeBuilder {
     private static func unsignedIntegerValue(_ value: Any) -> UInt64? {
         if let value = value as? UInt64 { return value }
         if let value = value as? UInt { return UInt64(value) }
+        return nil
+    }
+
+    private static func sequenceKeyPath(_ value: Any, depth: Int = 0) -> AnyKeyPath? {
+        if let keyPath = value as? AnyKeyPath { return keyPath }
+        guard depth < 3 else { return nil }
+        let children = Mirror(reflecting: value).children
+        for label in ["keyPath", "value"] {
+            if let child = children.first(where: { $0.label == label })?.value,
+                let keyPath = sequenceKeyPath(child, depth: depth + 1)
+            {
+                return keyPath
+            }
+        }
         return nil
     }
 
@@ -981,20 +1019,46 @@ package enum PredicateRuntimeTreeBuilder {
     }
 
     private static func codableScalarCollectionElementType(_ typeName: String) -> String? {
+        guard let descriptor = codableScalarCollectionElementDescriptor(typeName), !descriptor.isOptional else {
+            return nil
+        }
+        return descriptor.type
+    }
+
+    private static func codableScalarCollectionElementBaseType(_ typeName: String) -> String? {
+        codableScalarCollectionElementDescriptor(typeName)?.type
+    }
+
+    private static func codableScalarCollectionElementDescriptor(_ typeName: String) -> (
+        type: String, isOptional: Bool
+    )? {
         let unwrapped = typeName.hasSuffix("?") ? String(typeName.dropLast()) : typeName
         guard let opening = unwrapped.firstIndex(of: "<"), unwrapped.last == ">" else { return nil }
         let collectionName = unwrapped[..<opening].split(separator: ".").last.map(String.init) ?? ""
         guard collectionName == "Array" || collectionName == "Set" else { return nil }
         let rawElement = String(
             unwrapped[unwrapped.index(after: opening)..<unwrapped.index(before: unwrapped.endIndex)])
-        let elementName = rawElement.split(separator: ".").last.map(String.init) ?? rawElement
+        let unqualifiedElement =
+            rawElement.hasPrefix("Swift.Optional<")
+            ? String(rawElement.dropFirst("Swift.".count))
+            : rawElement
+        let scalarElement: String
+        let isOptional: Bool
+        if unqualifiedElement.hasPrefix("Optional<"), unqualifiedElement.hasSuffix(">") {
+            scalarElement = String(unqualifiedElement.dropFirst("Optional<".count).dropLast())
+            isOptional = true
+        } else {
+            scalarElement = unqualifiedElement
+            isOptional = false
+        }
+        let elementName = scalarElement.split(separator: ".").last.map(String.init) ?? scalarElement
         guard
             [
                 "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
                 "UInt32", "UInt64",
             ].contains(elementName)
         else { return nil }
-        return elementName
+        return (elementName, isOptional)
     }
 
     private static func propertyReference(

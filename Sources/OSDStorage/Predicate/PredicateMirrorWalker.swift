@@ -83,9 +83,13 @@ package enum PredicateMirrorWalker {
     }
 
     private static func isScalarCapture(_ typeName: String) -> Bool {
-        let name =
-            typeName.split(separator: "<", maxSplits: 1, omittingEmptySubsequences: false)[0]
-            .split(separator: ".").last.map(String.init) ?? typeName
+        let unwrappedType: String
+        if typeName.hasPrefix("Swift.Optional<"), typeName.hasSuffix(">") {
+            unwrappedType = String(typeName.dropFirst("Swift.Optional<".count).dropLast())
+        } else {
+            unwrappedType = typeName
+        }
+        let name = unwrappedType.split(separator: ".").last.map(String.init) ?? unwrappedType
         return [
             "ComparisonOperator", "ArithmeticOperator", "StringComparisonOptions",
             "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",

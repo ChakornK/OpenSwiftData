@@ -740,18 +740,26 @@ package enum SQLCompiler {
                 elementType.hasPrefix("Swift.Optional<")
                 ? String(elementType.dropFirst("Swift.".count))
                 : elementType
-            let scalarElementType: String
+            let elementBody: String
             if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
-                scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
+                elementBody = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
             } else {
-                scalarElementType = elementType
+                elementBody = normalizedElementType
+            }
+            let scalarElementType: String
+            let isUnsigned = elementBody.hasPrefix("Unsigned<") && elementBody.hasSuffix(">")
+            if isUnsigned {
+                scalarElementType = String(elementBody.dropFirst("Unsigned<".count).dropLast())
+            } else {
+                scalarElementType = elementBody
             }
             guard Self.validIdentifier(name),
                 [
                     "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
                     "UInt64",
                 ]
-                .contains(scalarElementType)
+                .contains(scalarElementType),
+                !isUnsigned || ["UInt", "UInt64"].contains(scalarElementType)
             else {
                 throw SwiftDataError.unsupportedPredicate("Unsupported scalar collection membership type")
             }

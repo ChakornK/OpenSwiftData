@@ -425,7 +425,12 @@ package enum RuntimePredicateEvaluator {
             let hasOptionalElements: Bool
             if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
                 scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
-                guard !scalarElementType.contains("<") else {
+                guard
+                    !scalarElementType.contains("<")
+                        || (scalarElementType.hasPrefix("Unsigned<") && scalarElementType.hasSuffix(">")
+                            && ["UInt", "UInt64"].contains(
+                                scalarElementType.dropFirst("Unsigned<".count).dropLast()))
+                else {
                     throw SwiftDataError.unsupportedPredicate("Nested optional collection elements are unsupported")
                 }
                 hasOptionalElements = true
@@ -438,6 +443,28 @@ package enum RuntimePredicateEvaluator {
                 guard elementValue != .null else {
                     throw SwiftDataError.unsupportedPredicate("Nil membership requires optional collection elements")
                 }
+            }
+            let elementBody =
+                scalarElementType.hasPrefix("Unsigned<") && scalarElementType.hasSuffix(">")
+                ? String(scalarElementType.dropFirst("Unsigned<".count).dropLast())
+                : nil
+            if let elementBody {
+                guard ["UInt", "UInt64"].contains(elementBody),
+                    case let .text(decimal) = elementValue,
+                    let expected = UInt64(decimal)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Pending unsigned collection membership received an incompatible element value")
+                }
+                let contains = array.contains { value in
+                    guard !(hasOptionalElements && value is NSNull),
+                        let number = value as? NSNumber,
+                        CFGetTypeID(number) != CFBooleanGetTypeID(),
+                        let actual = UInt64(number.stringValue)
+                    else { return false }
+                    return actual == expected
+                }
+                return .int(contains ? 1 : 0)
             }
             let contains: Bool
             switch (scalarElementType, elementValue) {

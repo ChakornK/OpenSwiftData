@@ -578,6 +578,25 @@ final class PredicateCompilerTests: XCTestCase {
                 node(element: nilValue), attributeTypes: ["values": "Array<Optional<Module.Box<String>>>"]))
     }
 
+    func testUnsignedOptionalCollectionCaptureBuildsExactDecimalValue() throws {
+        let capture = PredicateMirrorWalker.Node.capture(
+            typeName: "Swift.Optional<Swift.UInt64>", description: "Optional(18446744073709551615)")
+        let value = PredicateMirrorWalker.Node.expression(name: "Value", children: [("value", capture)])
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "SequenceContains",
+            children: [
+                ("sequence", .propertyReference("values")),
+                ("element", value),
+            ])
+        XCTAssertEqual(
+            try PredicateIRBuilder.build(node, attributeTypes: ["values": "Set<Optional<UInt64>>"]),
+            .collectionContains("values", "Optional<Unsigned<UInt64>>", .value(.text("18446744073709551615"))))
+        let ir = try PredicateIRBuilder.build(node, attributeTypes: ["values": "Set<Optional<UInt64>>"])
+        let compiled = try SQLCompiler.compile(ir, entity: "UnsignedRow")
+        XCTAssertTrue(compiled.sql.contains("osd_json_array_contains"))
+        XCTAssertEqual(compiled.arguments, [.text("18446744073709551615"), .text("Optional<Unsigned<UInt64>>")])
+    }
+
     func testCollectionStringPredicateRejectsNonStringElementAttribute() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "OSDSequenceContainsWhere",

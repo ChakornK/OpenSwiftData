@@ -863,6 +863,15 @@ final class UInt64CollectionFixture {
 }
 
 @Model
+final class OptionalUInt64CollectionFixture {
+    @Attribute(.codable) var values: Set<UInt64?>
+
+    init(values: Set<UInt64?>) {
+        self.values = values
+    }
+}
+
+@Model
 final class UIntCollectionFixture {
     @Attribute(.codable) var values: [UInt]
     init(values: [UInt]) { self.values = values }
@@ -4845,6 +4854,96 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOptionalUInt64CollectionMembershipSupportsFullRangeAndNil() throws {
+        let container = try ModelContainer(
+            for: OptionalUInt64CollectionFixture.self,
+            configurations: .sqliteMemory("optional-uint64-collection-membership"))
+        let valuesAttribute = try XCTUnwrap(
+            container.schema.entity(forName: "OptionalUInt64CollectionFixture")?.attributes
+                .first(where: { $0.name == "values" }))
+        XCTAssertTrue(valuesAttribute.options.contains(.codable))
+        let context = container.mainContext
+        let store = try XCTUnwrap(container.store)
+        let unsignedJSONCases: [(String, String, RuntimeValue)] = [
+            (" [ 7 , null ] ", "Optional<Unsigned<UInt64>>", .int(1)),
+            ("[]", "Optional<Unsigned<UInt64>>", .int(0)),
+            ("[7,null]", "Unsigned<UInt64>", .null),
+            ("[07]", "Unsigned<UInt64>", .null),
+            ("[[7]]", "Unsigned<UInt64>", .null),
+            ("[\"7\"]", "Unsigned<UInt64>", .null),
+        ]
+        for (json, marker, expected) in unsignedJSONCases {
+            let result = try store.read { connection in
+                try connection.rows(
+                    "SELECT osd_json_array_contains(?, ?, ?)",
+                    arguments: [.blob(Array(json.utf8)), .text("7"), .text(marker)])
+            }
+            XCTAssertEqual(result, [[expected]], "JSON: \(json), marker: \(marker)")
+        }
+        let signedBoundary = UInt64(Int64.max)
+        let firstAboveSigned = signedBoundary + 1
+        let precisionBoundary = (UInt64(1) << 53) + 1
+        let maximum = UInt64.max
+        let rows = [
+            OptionalUInt64CollectionFixture(values: [nil]),
+            OptionalUInt64CollectionFixture(values: [signedBoundary]),
+            OptionalUInt64CollectionFixture(values: [firstAboveSigned, nil]),
+            OptionalUInt64CollectionFixture(values: [precisionBoundary]),
+            OptionalUInt64CollectionFixture(values: [maximum, nil]),
+            OptionalUInt64CollectionFixture(values: []),
+        ]
+        for row in rows { context.insert(row) }
+        try context.save()
+        let maximumPrimaryKey = try XCTUnwrap(rows[4].persistentModelID.primaryKey)
+        let persistedMaximumJSON = try store.read { connection in
+            try connection.rows(
+                "SELECT ZVALUES FROM ZOPTIONALUINT64COLLECTIONFIXTURE WHERE Z_PK = ?",
+                arguments: [.int(maximumPrimaryKey)])
+        }
+        guard case let .blob(persistedBytes)? = persistedMaximumJSON.first?.first else {
+            return XCTFail("Expected a JSON blob for the UInt64 collection")
+        }
+        let persistedJSON = try XCTUnwrap(String(bytes: persistedBytes, encoding: .utf8))
+        XCTAssertTrue(persistedJSON.contains("18446744073709551615"))
+        XCTAssertTrue(persistedJSON.contains("null"))
+
+        let nilDescriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.contains(nil) })
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(nilDescriptor)),
+            Set([rows[0], rows[2], rows[4]].map(\.persistentModelID)))
+
+        for (value, expectedIndex) in [
+            (signedBoundary, 1),
+            (firstAboveSigned, 2),
+            (precisionBoundary, 3),
+            (maximum, 4),
+        ] {
+            let descriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
+                predicate: #Predicate { $0.values.contains(value) })
+            XCTAssertEqual(
+                try context.fetch(descriptor).map(\.persistentModelID), [rows[expectedIndex].persistentModelID])
+            XCTAssertEqual(try context.fetchCount(descriptor), 1)
+            XCTAssertEqual(
+                try context.fetchIdentifiers(descriptor), [rows[expectedIndex].persistentModelID])
+        }
+        let optionalCapture: UInt64? = maximum
+        let optionalCaptureDescriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.contains(optionalCapture) })
+        XCTAssertEqual(
+            try context.fetchIdentifiers(optionalCaptureDescriptor), [rows[4].persistentModelID])
+
+        let pending = OptionalUInt64CollectionFixture(values: [maximum])
+        context.insert(pending)
+        let pendingDescriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
+            predicate: #Predicate { $0.values.contains(maximum) })
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([rows[4].persistentModelID, pending.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+    }
+
+    @MainActor
     func testUIntCollectionAllSatisfyOrderingUsesUnsignedComparison() throws {
         let container = try ModelContainer(
             for: UIntCollectionFixture.self,
@@ -4868,6 +4967,37 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             Set(try context.fetch(pendingDescriptor).map(\.persistentModelID)),
             Set([model.persistentModelID, pending.persistentModelID]))
+    }
+
+    @MainActor
+    func testUIntCollectionMembershipSupportsUnsignedRange() throws {
+        let container = try ModelContainer(
+            for: UIntCollectionFixture.self,
+            configurations: .sqliteMemory("uint-collection-membership-full-range"))
+        let context = container.mainContext
+        let values = [UInt(0), UInt(Int64.max), UInt.max]
+        let models = values.map { UIntCollectionFixture(values: [$0]) }
+        for model in models { context.insert(model) }
+        try context.save()
+
+        for (value, model) in zip(values, models) {
+            let descriptor = FetchDescriptor<UIntCollectionFixture>(
+                predicate: #Predicate { $0.values.contains(value) })
+            XCTAssertEqual(try context.fetch(descriptor).map(\.persistentModelID), [model.persistentModelID])
+            XCTAssertEqual(try context.fetchCount(descriptor), 1)
+            XCTAssertEqual(try context.fetchIdentifiers(descriptor), [model.persistentModelID])
+        }
+
+        let maximum = UInt.max
+
+        let pending = UIntCollectionFixture(values: [maximum])
+        context.insert(pending)
+        let pendingDescriptor = FetchDescriptor<UIntCollectionFixture>(
+            predicate: #Predicate { $0.values.contains(maximum) })
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([models[2].persistentModelID, pending.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
     }
 
     @MainActor

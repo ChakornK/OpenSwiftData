@@ -376,15 +376,32 @@ package enum PredicateIRBuilder {
                 }
             case "SequenceContains":
                 let sequence = try field("sequence", from: fields)
-                let element = try field("element", from: fields)
+                let elementNode = fields["element"]!
                 guard case let .keyPath(path) = sequence, path.count == 1,
                     let collectionElement = scalarCollectionElement(attributeTypes[path[0]])
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "SequenceContains requires a direct Codable collection of supported scalar values.")
                 }
+                let unsignedElementType: String? =
+                    switch collectionElement.type {
+                    case "UInt", "UInt64": collectionElement.type
+                    default: nil
+                    }
+                let element: PredicateIR
+                if let unsignedElementType,
+                    let unsignedValue = unsignedCollectionCapture(elementNode, matching: unsignedElementType)
+                {
+                    element = .value(unsignedValue)
+                } else {
+                    element = try build(
+                        elementNode,
+                        attributeTypes: attributeTypes,
+                        optionalAttributeNames: optionalAttributeNames)
+                }
                 func compatible(_ value: StoredValue) -> Bool {
                     if value == .null { return collectionElement.isOptional }
+                    if unsignedElementType != nil, case .text = value { return true }
                     switch (collectionElement.type, value) {
                     case ("String", .text), ("Bool", .int),
                         ("Int", .int), ("Int8", .int), ("Int16", .int), ("Int32", .int),
@@ -401,8 +418,8 @@ package enum PredicateIRBuilder {
                     throw SwiftDataError.unsupportedPredicate(
                         "SequenceContains requires a compatible scalar element value.")
                 }
-                let elementType =
-                    collectionElement.isOptional ? "Optional<\(collectionElement.type)>" : collectionElement.type
+                let baseElementType = unsignedElementType.map { "Unsigned<\($0)>" } ?? collectionElement.type
+                let elementType = collectionElement.isOptional ? "Optional<\(baseElementType)>" : baseElementType
                 return .collectionContains(path[0], elementType, element)
             case "OSDSequenceContainsWhere":
                 guard case let .keyPath(path) = try field("sequence", from: fields),
@@ -1284,6 +1301,36 @@ package enum PredicateIRBuilder {
             ].contains(element)
         else { return nil }
         return (element, isOptional)
+    }
+
+    private static func unsignedCollectionCapture(
+        _ node: PredicateMirrorWalker.Node,
+        matching collectionType: String
+    ) -> StoredValue? {
+        let capture: PredicateMirrorWalker.Node
+        if case let .expression("Value", children) = node,
+            children.count == 1,
+            children[0].0 == "value"
+        {
+            capture = children[0].1
+        } else {
+            capture = node
+        }
+        guard case let .capture(typeName, description) = capture else { return nil }
+        let decimal: String
+        if typeName == "Swift.\(collectionType)" {
+            decimal = description
+        } else if typeName == "Swift.Optional<Swift.\(collectionType)>",
+            description.hasPrefix("Optional("), description.hasSuffix(")")
+        {
+            decimal = String(description.dropFirst("Optional(".count).dropLast())
+        } else {
+            return nil
+        }
+        guard let value = UInt64(decimal) else {
+            return nil
+        }
+        return .text(String(value))
     }
 
     private static func validateStringOperand(

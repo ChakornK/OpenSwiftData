@@ -2821,14 +2821,34 @@ package enum LightweightMigration {
                 ))
             return
         }
-        if try compatibleIntegerWidening(
+        let hasAddedAttributes = mappings.contains { $0.source == nil }
+        if !hasAddedAttributes,
+            try compatibleIntegerWidening(
+                mappings,
+                source: source,
+                destination: destination,
+                sourceEntities: sourceEntities,
+                destinationEntities: destinationEntities,
+                sourceEntityIDs: sourceEntityIDs,
+                destinationEntityIDs: destinationEntityIDs)
+        {
+            indexTransitions.append(
+                (
+                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                ))
+            return
+        }
+        if try compatibleIntegerWideningWithScalarAdditions(
             mappings,
             source: source,
             destination: destination,
             sourceEntities: sourceEntities,
             destinationEntities: destinationEntities,
             sourceEntityIDs: sourceEntityIDs,
-            destinationEntityIDs: destinationEntityIDs)
+            destinationEntityIDs: destinationEntityIDs,
+            existingColumns: existing,
+            connection: connection)
         {
             indexTransitions.append(
                 (
@@ -3457,7 +3477,8 @@ package enum LightweightMigration {
                         && equivalentUniqueIndexes(sourceEntity.indexes, destinationEntity.indexes)
                 }
                 return sourceEntity.superentityName == destinationEntity.superentityName
-                    && sourceEntity.attributes.count == destinationEntity.attributes.count
+                    && sourceEntity.attributes.count
+                        == destinationEntity.attributes.count
                     && sourceEntity.attributes.allSatisfy({ destinationEntity.attributes.contains($0) })
                     && sourceEntity.relationships == destinationEntity.relationships
                     && sourceEntity.indexes == destinationEntity.indexes
@@ -3469,6 +3490,96 @@ package enum LightweightMigration {
                 "Numeric widening must contain only compatible signed-integer widenings with unchanged storage metadata."
             )
         }
+        return true
+    }
+
+    private static func validateIntegerWideningAdditions(
+        _ attributes: [Schema.Attribute],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        existingColumns: Set<String>
+    ) throws {
+        let sourceNames = Set(source.attributes.map { $0.name.uppercased() })
+        var addedNames = Set<String>()
+        let physicalColumns = Set(existingColumns.map { $0.uppercased() })
+        let retainedNames = Set(
+            destination.attributes.filter { !attributes.contains($0) }.map { $0.name.uppercased() })
+        guard
+            source.indexes.filter(\.isUnique) == destination.indexes.filter(\.isUnique),
+            destination.indexes.allSatisfy({ index in
+                index.properties.allSatisfy { retainedNames.contains($0.uppercased()) }
+            })
+        else {
+            throw SwiftDataError.migrationUnsupported(
+                "Integer widening additions cannot change unique indexes or index new attributes.")
+        }
+        for attribute in attributes {
+            guard addedNames.insert(attribute.name.uppercased()).inserted,
+                !sourceNames.contains(attribute.name.uppercased()),
+                !physicalColumns.contains("Z\(attribute.name.uppercased())"),
+                destination.attributes.contains(attribute),
+                attribute.originalName == nil,
+                attribute.components.isEmpty,
+                !attribute.options.contains(.unique),
+                !attribute.options.contains(.codable),
+                !attribute.options.contains(.flattened),
+                !attribute.options.contains(.externalStorage),
+                !attribute.options.contains(where: { if case .transformable = $0 { true } else { false } }),
+                try SQLColumnType.resolve(
+                    attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
+                    != .blob
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Integer widening additions must be independent plain scalar attributes.")
+            }
+            let defaultLiteral = try migrationDefaultLiteral(for: attribute)
+            guard attribute.isOptional || defaultLiteral != nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Adding required attribute \(destination.name).\(attribute.name) requires a literal default.")
+            }
+        }
+    }
+
+    private static func compatibleIntegerWideningWithScalarAdditions(
+        _ mappings: [AttributeMapping],
+        source: Schema.Entity,
+        destination: Schema.Entity,
+        sourceEntities: [Schema.Entity],
+        destinationEntities: [Schema.Entity],
+        sourceEntityIDs: [String: Int],
+        destinationEntityIDs: [String: Int],
+        existingColumns: Set<String>,
+        connection: SQLConnection
+    ) throws -> Bool {
+        let addedAttributes = mappings.filter { $0.source == nil }.map(\.destination)
+        guard !addedAttributes.isEmpty else { return false }
+        let retainedMappings = mappings.filter { $0.source != nil }
+        let retainedNames = Set(retainedMappings.map { $0.destination.name })
+        let retainedDestination = Schema.Entity(
+            name: destination.name,
+            attributes: retainedMappings.map(\.destination),
+            relationships: destination.relationships,
+            indexes: destination.indexes.filter { index in
+                index.properties.allSatisfy { retainedNames.contains($0) }
+            },
+            superentityName: destination.superentityName)
+        let retainedDestinationEntities = destinationEntities.map { entity in
+            entity.name == destination.name ? retainedDestination : entity
+        }
+        guard
+            try compatibleIntegerWidening(
+                retainedMappings,
+                source: source,
+                destination: retainedDestination,
+                sourceEntities: sourceEntities,
+                destinationEntities: retainedDestinationEntities,
+                sourceEntityIDs: sourceEntityIDs,
+                destinationEntityIDs: destinationEntityIDs)
+        else { return false }
+        try validateIntegerWideningAdditions(
+            addedAttributes, source: source, destination: destination, existingColumns: existingColumns)
+        try addPlannedScalarColumns(
+            addedAttributes, source: source, destination: destination, connection: connection)
         return true
     }
 

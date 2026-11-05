@@ -1173,6 +1173,231 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testIntegerWideningComposesWithOptionalAndDefaultedScalarAdditions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("widen-and-add-scalars.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int32"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int64"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"]), Schema.Index(properties: ["rank"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK, ZRETAINED) VALUES (1, 3, ?, 'keep')",
+                [.int(Int64(Int32.max))])
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK, ZRETAINED) VALUES (1, 5, -9, 'also-keep')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_OPT, typeof(ZRANK), ZRANK, ZRETAINED, ZNOTE, ZPRIORITY FROM ZRECORD ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(3), .text("integer"), .int(Int64(Int32.max)), .text("keep"), .null, .int(7)],
+                [.int(2), .int(5), .text("integer"), .int(-9), .text("also-keep"), .null, .int(7)],
+            ])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
+            },
+            [
+                [.text("CREATE INDEX ZRECORD_ZRANK_INDEX ON ZRECORD (ZRANK)")],
+                [.text("CREATE INDEX ZRECORD_ZRETAINED_INDEX ON ZRECORD (ZRETAINED)")],
+            ])
+        let migratedHash = try migrated.read {
+            try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                .first?.first
+        }
+        XCTAssertEqual(migratedHash, .blob(Array(SchemaHash.hexDigest(destination).utf8)))
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK, ZRETAINED, ZNOTE, ZPRIORITY) VALUES (1, 8, ?, 'wide', NULL, 8)",
+                [.int(Int64(Int32.max) + 1)])
+        }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT ZRANK FROM ZRECORD WHERE Z_PK = 3") },
+            [[.int(Int64(Int32.max) + 1)]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT value FROM _osd_meta WHERE key = ?", [.text(LightweightMigration.schemaHashKey)])
+                    .first?.first
+            },
+            migratedHash)
+        try reopened.close()
+    }
+
+    func testIntegerWideningAndScalarAdditionRollBackOnMetadataFailure() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("widen-add-rollback.sqlite"))
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int32"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                ],
+                indexes: [Schema.Index(properties: ["retained"])])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int64"),
+                    Schema.Attribute(name: "retained", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ],
+                indexes: [Schema.Index(properties: ["rank"])])
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK, ZRETAINED) VALUES (1, 4, 12, 'kept')")
+            try connection.execute(
+                "CREATE TRIGGER fail_schema_description BEFORE UPDATE ON _osd_meta "
+                    + "WHEN NEW.key = '\(LightweightMigration.schemaDescriptionKey)' "
+                    + "BEGIN SELECT RAISE(ABORT, 'schema metadata write failed'); END")
+        }
+        let originalColumns = try initial.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        let originalRows = try initial.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK, ZRETAINED FROM ZRECORD") }
+        let originalIndexes = try initial.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        }
+        let originalMetadata = try initial.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }
+        try initial.close()
+
+        XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
+            XCTAssertTrue(String(describing: error).contains("schema metadata write failed"), "\(error)")
+        }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(try inspection.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK, ZRETAINED FROM ZRECORD") }, originalRows)
+        XCTAssertEqual(
+            try inspection.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            },
+            originalIndexes)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, originalMetadata)
+        try inspection.write { try $0.execute("DROP TRIGGER fail_schema_description") }
+        try inspection.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(1)]])
+        try reopened.close()
+    }
+
+    func testIntegerWideningRejectsRequiredAndUniqueScalarAdditions() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [Schema.Attribute(name: "rank", type: "Int32")])
+        ])
+        let destinations = [
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "required", type: "String"),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "unique", type: "String", options: [.unique]),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    ],
+                    indexes: [Schema.Index(properties: ["rank", "note"])])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "retained", type: "String", options: [.unique]),
+                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "retained", type: "String"),
+                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    ],
+                    indexes: [
+                        Schema.Index(properties: ["retained"], isUnique: true)
+                    ])
+            ]),
+        ]
+        for (index, destination) in destinations.enumerated() {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-reject-addition-\(index)"))
+            try bootstrap(source, driver: driver)
+            try driver.write {
+                try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK) VALUES (1, 5, 17)")
+            }
+            let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+            let originalRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK FROM ZRECORD") }
+            let originalIndexes = try driver.read {
+                try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unsupported widening addition to fail, got \(error)")
+                }
+            }
+            XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+            XCTAssertEqual(try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK FROM ZRECORD") }, originalRows)
+            XCTAssertEqual(
+                try driver.read {
+                    try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name")
+                },
+                originalIndexes)
+            try driver.close()
+        }
+    }
+
     func testMultipleSignedIntegerWideningsRejectUniqueIndexTransitions() throws {
         let source = Schema([
             Schema.Entity(
@@ -1391,6 +1616,7 @@ final class SchemaMigrationTests: XCTestCase {
                 attributes: [
                     Schema.Attribute(name: "wide", type: "Int16"),
                     Schema.Attribute(name: "title", type: "String", originalName: "label"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-widening-plus-rename"))
@@ -1410,6 +1636,211 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZLABEL FROM ZRECORD") },
             [[.int(1), .int(8), .int(13), .text("kept")]])
+        XCTAssertEqual(
+            Set(
+                try driver.read {
+                    try $0.rows("PRAGMA table_info(ZRECORD)").compactMap { row -> String? in
+                        guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                        return name
+                    }
+                }),
+            Set(["Z_PK", "Z_ENT", "Z_OPT", "ZWIDE", "ZLABEL"]))
+        try driver.close()
+    }
+
+    func testIntegerWideningWithScalarAdditionRejectsConcurrentNarrowing() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int8"),
+                    Schema.Attribute(name: "narrow", type: "Int64"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "wide", type: "Int16"),
+                    Schema.Attribute(name: "narrow", type: "Int32"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ])
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-reject-narrowing"))
+        try bootstrap(source, driver: driver)
+        try driver.write {
+            try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZWIDE, ZNARROW) VALUES (1, 7, 12, 2147483648)")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+        let originalRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZNARROW FROM ZRECORD") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected mixed widening/narrowing with addition to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZWIDE, ZNARROW FROM ZRECORD") }, originalRows)
+        try driver.close()
+    }
+
+    func testIntegerWideningWithScalarAdditionRejectsRelationshipChanges() throws {
+        let source = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "rank", type: "Int32")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int64"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ],
+                relationships: [Schema.Relationship(name: "target", destination: "Target", isOptional: true)]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-reject-relationship"))
+        try bootstrap(source, driver: driver)
+        try driver.write { try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK) VALUES (1, 4, 17)") }
+        let originalTables = try driver.read {
+            try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        }
+        let originalRows = try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK FROM ZRECORD") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected relationship edit combined with widening to fail, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name") },
+            originalTables)
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK FROM ZRECORD") }, originalRows)
+        try driver.close()
+    }
+
+    func testIntegerWideningWithScalarAdditionRejectsOtherTypeChangesAndRemovals() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int32"),
+                    Schema.Attribute(name: "other", type: "String"),
+                    Schema.Attribute(name: "obsolete", type: "Bool"),
+                ])
+        ])
+        let destinations = [
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "other", type: "Int"),
+                        Schema.Attribute(name: "obsolete", type: "Bool"),
+                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    ])
+            ]),
+            Schema([
+                Schema.Entity(
+                    name: "Record",
+                    attributes: [
+                        Schema.Attribute(name: "rank", type: "Int64"),
+                        Schema.Attribute(name: "other", type: "String"),
+                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    ])
+            ]),
+        ]
+        for (index, destination) in destinations.enumerated() {
+            let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-reject-other-change-\(index)"))
+            try bootstrap(source, driver: driver)
+            try driver.write {
+                try $0.execute(
+                    "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZRANK, ZOTHER, ZOBSOLETE) VALUES (1, 6, 21, 'keep', 1)")
+            }
+            let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+            let originalRows = try driver.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZRANK, ZOTHER, ZOBSOLETE FROM ZRECORD")
+            }
+            XCTAssertThrowsError(
+                try driver.write {
+                    try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+                }
+            ) { error in
+                guard case SwiftDataError.migrationUnsupported = error else {
+                    return XCTFail("Expected unrelated type/removal changes to fail, got \(error)")
+                }
+            }
+            XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZRECORD)") }, originalColumns)
+            XCTAssertEqual(
+                try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZRANK, ZOTHER, ZOBSOLETE FROM ZRECORD") },
+                originalRows)
+            try driver.close()
+        }
+    }
+
+    func testIntegerWideningAdditionRollsBackWhenLaterEntityAdditionIsInvalid() throws {
+        let source = Schema([
+            Schema.Entity(name: "ARecord", attributes: [Schema.Attribute(name: "rank", type: "Int32")]),
+            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "ARecord",
+                attributes: [
+                    Schema.Attribute(name: "rank", type: "Int64"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ]),
+            Schema.Entity(
+                name: "ZRecord",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "required", type: "Int"),
+                ]),
+        ])
+        XCTAssertLessThan(
+            try XCTUnwrap(destination.entityIDsByName["ARecord"]),
+            try XCTUnwrap(destination.entityIDsByName["ZRecord"]))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-later-invalid-rollback"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZARECORD (Z_ENT, Z_OPT, ZRANK) VALUES (1, 2, 12)")
+            try connection.execute("INSERT INTO ZZRECORD (Z_ENT, Z_OPT, ZNAME) VALUES (2, 3, 'kept')")
+        }
+        let originalObjects = try driver.read {
+            try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+        }
+        let originalMetadata = try driver.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }
+        let originalAColumns = try driver.read { try $0.rows("PRAGMA table_info(ZARECORD)") }
+        let originalZColumns = try driver.read { try $0.rows("PRAGMA table_info(ZZRECORD)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected invalid later addition to fail migration, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name") },
+            originalObjects)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }, originalMetadata)
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZARECORD)") }, originalAColumns)
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZZRECORD)") }, originalZColumns)
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZRANK FROM ZARECORD") }, [[.int(12)]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT ZNAME FROM ZZRECORD") }, [[.text("kept")]])
+        try driver.write { connection in
+            try connection.execute("SAVEPOINT migration_connection_still_usable")
+            try connection.execute("RELEASE SAVEPOINT migration_connection_still_usable")
+        }
         try driver.close()
     }
 

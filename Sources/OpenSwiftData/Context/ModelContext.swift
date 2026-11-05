@@ -2328,6 +2328,8 @@ public final class ModelContext {
                     case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
                         let .collectionAllCompare(_, _, _, value):
                         try collect(value)
+                    case .collectionAllNil:
+                        break
                     case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
                         break
                     }

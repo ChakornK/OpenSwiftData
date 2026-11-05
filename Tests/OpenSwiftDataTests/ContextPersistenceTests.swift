@@ -1516,6 +1516,33 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingScalarIdentifierSortUsesPrimaryKeyTieBreak() throws {
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("pending-identifier-sort-tie-break"))
+        let writer = container.mainContext
+        let first = PredicateAgreementFixture(id: 3, value: 4, optionalValue: nil)
+        let second = PredicateAgreementFixture(id: 1, value: 4, optionalValue: nil)
+        writer.insert(first)
+        writer.insert(second)
+        try writer.save()
+
+        let context = container.makeContext()
+        let pending = PredicateAgreementFixture(id: 2, value: 4, optionalValue: nil)
+        context.insert(pending)
+        let descriptor = FetchDescriptor<PredicateAgreementFixture>(
+            sortBy: [SortDescriptor(\.value)], fetchLimit: 2, fetchOffset: 1)
+        let expectedIDs = [second.persistentModelID, pending.persistentModelID]
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+        let firstRegistered: PredicateAgreementFixture? = context.registeredModel(for: first.persistentModelID)
+        let secondRegistered: PredicateAgreementFixture? = context.registeredModel(for: second.persistentModelID)
+        XCTAssertNil(firstRegistered)
+        XCTAssertNil(secondRegistered)
+        XCTAssertEqual(try context.fetch(descriptor).map(\.persistentModelID), expectedIDs)
+    }
+
+    @MainActor
     func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,

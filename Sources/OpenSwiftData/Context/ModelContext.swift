@@ -1076,10 +1076,11 @@ public final class ModelContext {
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
         assertAffinity()
         try processPendingChanges()
-        if descriptor.includePendingChanges, descriptor.predicate != nil,
+        if descriptor.includePendingChanges,
             !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         {
-            return try fetch(descriptor).count
+            if container?.dataStore != nil { return try fetch(descriptor).count }
+            return try fetchIdentifiers(descriptor).count
         }
         if container?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
@@ -1131,11 +1132,6 @@ public final class ModelContext {
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
         try processPendingChanges()
-        if descriptor.includePendingChanges, descriptor.predicate != nil,
-            !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
-        {
-            return try fetch(descriptor).map(\.persistentModelID)
-        }
         if container?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
         guard let container,
             let store = container.store,
@@ -1204,22 +1200,20 @@ public final class ModelContext {
                 sortValues: Array(row.dropFirst(hasHierarchy ? 2 : 1)))
         }
         if descriptor.includePendingChanges {
-            let pending = (state.insertedModels + state.changedModels).compactMap { $0 as? Model }.filter {
-                !$0.isDeleted
+            guard
+                let pendingRows = try pendingIdentifierRows(
+                    queryRows,
+                    descriptor: descriptor,
+                    entity: entity,
+                    hasHierarchy: hasHierarchy,
+                    sortProperties: sortProperties,
+                    evaluatorPlan: compiled?.evaluatorPlan,
+                    hasPredicate: descriptor.predicate != nil,
+                    container: container)
+            else {
+                return try fetch(descriptor).map(\.persistentModelID)
             }
-            let pendingIDs = Set(pending.map(\.persistentModelID))
-            queryRows.removeAll { pendingIDs.contains($0.identifier) }
-            let deletedIDs = Set(state.deletedModels.map(\.persistentModelID))
-            queryRows.removeAll { deletedIDs.contains($0.identifier) }
-            let propertyNames = Set(sortProperties)
-            for model in pending {
-                if let plan = compiled?.evaluatorPlan, try !pendingModel(model, matches: plan) { continue }
-                let values = try runtimeValues(for: model, selecting: propertyNames)
-                queryRows.append(
-                    IdentifierQueryRow(
-                        identifier: model.persistentModelID,
-                        sortValues: sortProperties.map { values[$0] ?? .null }))
-            }
+            queryRows = pendingRows
         }
         if descriptor.includePendingChanges, !descriptor.sortBy.isEmpty {
             queryRows = queryRows.enumerated().sorted { lhs, rhs in
@@ -1253,6 +1247,71 @@ public final class ModelContext {
             if let limit = descriptor.fetchLimit { identifiers = Array(identifiers.prefix(max(0, limit))) }
         }
         return identifiers
+    }
+
+    private func pendingIdentifierRows<Model: PersistentModel>(
+        _ committedRows: [IdentifierQueryRow],
+        descriptor: FetchDescriptor<Model>,
+        entity: Schema.Entity,
+        hasHierarchy: Bool,
+        sortProperties: [String],
+        evaluatorPlan: PredicatePlan?,
+        hasPredicate: Bool,
+        container: ModelContainer
+    ) throws -> [IdentifierQueryRow]? {
+        guard !hasPredicate || evaluatorPlan != nil else { return nil }
+        if let evaluatorPlan, !RuntimePredicateEvaluator.relationshipProperties(in: evaluatorPlan).isEmpty {
+            return nil
+        }
+
+        let changedModels = state.changedModels
+        let insertedModels = state.insertedModels
+        let deletedModels = state.deletedModels
+        let changedIDs = Set(changedModels.map(\.persistentModelID))
+        let deletedIDs = Set(deletedModels.map(\.persistentModelID))
+        var rows = committedRows.filter {
+            !changedIDs.contains($0.identifier) && !deletedIDs.contains($0.identifier)
+        }
+
+        let candidates = insertedModels + changedModels
+        var seenIDs = Set<PersistentIdentifier>()
+        let deletedObjects = Set(deletedModels.map(ObjectIdentifier.init))
+        for candidate in candidates {
+            guard let model = candidate as? Model,
+                !deletedObjects.contains(ObjectIdentifier(model)),
+                !model.isDeleted,
+                let concreteEntityName = modelEntityName(of: model),
+                container.schema.entity(forName: concreteEntityName) != nil,
+                !hasHierarchy || isEntity(concreteEntityName, descendantOf: entity.name)
+            else { continue }
+
+            let identifier = model.persistentModelID
+            guard seenIDs.insert(identifier).inserted else { continue }
+            if let evaluatorPlan, try !pendingModel(model, matches: evaluatorPlan) { continue }
+            let values = try runtimeValues(for: model, selecting: Set(sortProperties))
+            rows.append(
+                IdentifierQueryRow(
+                    identifier: identifier,
+                    sortValues: sortProperties.map { values[$0] ?? .null }))
+        }
+
+        rows = rows.enumerated().sorted { lhs, rhs in
+            for (index, sortDescriptor) in descriptor.sortBy.enumerated() {
+                let comparison = compareSortValues(
+                    lhs.element.sortValues[index], rhs.element.sortValues[index],
+                    isDecimal: isDecimalAttribute(sortProperties[index], in: entity))
+                if comparison != .orderedSame {
+                    return sortDescriptor.isAscending
+                        ? comparison == .orderedAscending : comparison == .orderedDescending
+                }
+            }
+            let lhsPK = lhs.element.identifier.primaryKey ?? Int64.max
+            let rhsPK = rhs.element.identifier.primaryKey ?? Int64.max
+            if lhsPK != rhsPK { return lhsPK < rhsPK }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+
+        return rows
     }
 
     /// Enumerates models matching a descriptor, which requires a persistent store.

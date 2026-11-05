@@ -1460,6 +1460,62 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingSQLiteCountAndIdentifiersDoNotMaterializeCommittedModels() throws {
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("pending-query-values-without-materialization"))
+        let writer = container.mainContext
+        let initiallyMatching = PredicateAgreementFixture(id: 1, value: 3, optionalValue: nil)
+        let initiallyNonmatching = PredicateAgreementFixture(id: 2, value: 0, optionalValue: nil)
+        let unchanged = PredicateAgreementFixture(id: 3, value: 1, optionalValue: nil)
+        writer.insert(initiallyMatching)
+        writer.insert(initiallyNonmatching)
+        writer.insert(unchanged)
+        try writer.save()
+
+        let committedIDs = try writer.fetchIdentifiers(FetchDescriptor<PredicateAgreementFixture>())
+        let reader = container.makeContext()
+        let predicate = #Predicate<PredicateAgreementFixture> { $0.value >= 2 }
+        let descriptor = FetchDescriptor<PredicateAgreementFixture>(predicate: predicate)
+        let movedIntoMatch: PredicateAgreementFixture = try XCTUnwrap(reader.model(for: committedIDs[1]))
+        let movedOutOfMatch: PredicateAgreementFixture = try XCTUnwrap(reader.model(for: committedIDs[0]))
+        movedIntoMatch.value = 4
+        movedOutOfMatch.value = 1
+        let pendingInsertion = PredicateAgreementFixture(id: 4, value: 5, optionalValue: nil)
+        reader.insert(pendingInsertion)
+
+        let expectedIDs = [movedIntoMatch.persistentModelID, pendingInsertion.persistentModelID]
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try reader.fetchCount(descriptor), expectedIDs.count)
+        XCTAssertEqual(try reader.fetch(descriptor).map(\.persistentModelID), expectedIDs)
+        let unchangedRegistered: PredicateAgreementFixture? = reader.registeredModel(for: unchanged.persistentModelID)
+        let thirdRegistered: PredicateAgreementFixture? = reader.registeredModel(for: committedIDs[2])
+        XCTAssertNil(unchangedRegistered)
+        XCTAssertNil(thirdRegistered)
+
+        let allModelsDescriptor = FetchDescriptor<PredicateAgreementFixture>()
+        let allModelIDs = try reader.fetchIdentifiers(allModelsDescriptor)
+        XCTAssertEqual(allModelIDs.count, 4)
+        XCTAssertEqual(try reader.fetchCount(allModelsDescriptor), 4)
+        let thirdRegisteredWithoutPredicate: PredicateAgreementFixture? = reader.registeredModel(for: committedIDs[2])
+        XCTAssertNil(thirdRegisteredWithoutPredicate)
+
+        let committedOnly = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(try reader.fetchIdentifiers(committedOnly), [committedIDs[0]])
+        XCTAssertEqual(try reader.fetchCount(committedOnly), 1)
+
+        let pagedDescriptor = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.id)],
+            fetchLimit: 1,
+            fetchOffset: 1)
+        let fetchedPage = try reader.fetch(pagedDescriptor)
+        XCTAssertEqual(try reader.fetchIdentifiers(pagedDescriptor), fetchedPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.fetchCount(pagedDescriptor), fetchedPage.count)
+    }
+
+    @MainActor
     func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,

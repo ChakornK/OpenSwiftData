@@ -6635,6 +6635,7 @@ final class PersistentModelTests: XCTestCase {
         writer.insert(grandchild)
         writer.insert(base)
         try writer.save()
+        let committedIdentifiers = try writer.fetchIdentifiers(FetchDescriptor<InheritanceMacroBaseFixture>())
 
         let reader = container.makeContext()
         let fetchedChild = try XCTUnwrap(
@@ -6647,6 +6648,17 @@ final class PersistentModelTests: XCTestCase {
             sortBy: [SortDescriptor(\.name)],
             fetchLimit: 2,
             fetchOffset: 1)
+        let identifierPage = try reader.fetchIdentifiers(descriptor)
+        XCTAssertEqual(try reader.fetchCount(descriptor), identifierPage.count)
+        let unmaterializedBaseID = try XCTUnwrap(
+            committedIdentifiers.first { $0.entityName == "InheritanceMacroBaseFixture" })
+        let unmaterializedGrandchildID = try XCTUnwrap(
+            committedIdentifiers.first { $0.entityName == "InheritanceMacroGrandchildFixture" })
+        let unmaterializedBase: InheritanceMacroBaseFixture? = reader.registeredModel(for: unmaterializedBaseID)
+        let unmaterializedGrandchild: InheritanceMacroBaseFixture? = reader.registeredModel(
+            for: unmaterializedGrandchildID)
+        XCTAssertNil(unmaterializedBase)
+        XCTAssertNil(unmaterializedGrandchild)
         let page = try reader.fetch(descriptor)
         XCTAssertEqual(page.map(\.name), ["c-base", "d-child"])
         XCTAssertFalse(page[0] is InheritanceMacroChildFixture)

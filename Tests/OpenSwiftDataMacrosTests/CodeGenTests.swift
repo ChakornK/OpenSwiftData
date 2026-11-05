@@ -92,6 +92,30 @@ final class CodeGenTests: XCTestCase {
             CodeGen.conflictingPropertyMacro(in: moduleSelectedProperty)?.attributeName.trimmedDescription,
             "OpenSwiftData::Relationship")
 
+        let swiftDataQualified = try parseClass(
+            """
+            class Model {
+                @SwiftData.Attribute(.unique) @SwiftData.Relationship var value: [Item]
+            }
+            """)
+        let swiftDataQualifiedProperty = try XCTUnwrap(
+            swiftDataQualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: swiftDataQualifiedProperty)?.attributeName.trimmedDescription,
+            "SwiftData.Relationship")
+
+        let swiftDataModuleSelected = try parseClass(
+            """
+            class Model {
+                @SwiftData::Attribute(.unique) @SwiftData::Relationship var value: [Item]
+            }
+            """)
+        let swiftDataModuleSelectedProperty = try XCTUnwrap(
+            swiftDataModuleSelected.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: swiftDataModuleSelectedProperty)?.attributeName.trimmedDescription,
+            "SwiftData::Relationship")
+
         let escapedModuleSelected = try parseClass(
             """
             class Model {
@@ -190,6 +214,16 @@ final class CodeGenTests: XCTestCase {
         let unrelatedNestedProperty = try XCTUnwrap(
             unrelatedNestedQualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
         XCTAssertNil(CodeGen.conflictingPropertyMacro(in: unrelatedNestedProperty))
+
+        let swiftDataLikeModule = try parseClass(
+            """
+            class Model {
+                @SwiftDataX.Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let swiftDataLikeProperty = try XCTUnwrap(
+            swiftDataLikeModule.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: swiftDataLikeProperty))
 
         let swiftQualified = try parseClass(
             """

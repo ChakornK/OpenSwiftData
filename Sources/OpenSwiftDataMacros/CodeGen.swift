@@ -990,16 +990,20 @@ enum CodeGen {
             previousColonCanCombine = component == ":" && token.trailingTrivia.isEmpty
         }
         // Match only OpenSwiftData's macros to avoid collisions with other modules.
+        let recognizedModuleQualifiers = ["OpenSwiftData", "SwiftData"]
         switch components {
         case ["Attribute"]: return "Attribute"
         case ["Relationship"]: return "Relationship"
         case ["Transient"]: return "Transient"
-        case ["OpenSwiftData", ".", "Attribute"], ["OpenSwiftData", "::", "Attribute"]:
-            return "Attribute"
-        case ["OpenSwiftData", ".", "Relationship"], ["OpenSwiftData", "::", "Relationship"]:
-            return "Relationship"
-        case ["OpenSwiftData", ".", "Transient"], ["OpenSwiftData", "::", "Transient"]:
-            return "Transient"
+        default: break
+        }
+        guard components.count == 3,
+            recognizedModuleQualifiers.contains(components[0])
+        else { return nil }
+        switch (components[1], components[2]) {
+        case (".", "Attribute"), ("::", "Attribute"): return "Attribute"
+        case (".", "Relationship"), ("::", "Relationship"): return "Relationship"
+        case (".", "Transient"), ("::", "Transient"): return "Transient"
         default: return nil
         }
     }

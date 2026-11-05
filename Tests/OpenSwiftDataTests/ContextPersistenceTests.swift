@@ -1632,6 +1632,56 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingDoubleIdentifierSortOrdersInfinitiesWithStoredRows() throws {
+        let container = try ModelContainer(
+            for: PredicateDoubleFixture.self,
+            configurations: .sqliteMemory("pending-double-identifier-infinity-sort"))
+        let writer = container.mainContext
+        let negativeInfinity = PredicateDoubleFixture(score: -.infinity)
+        let negativeOne = PredicateDoubleFixture(score: -1)
+        let positiveInfinity = PredicateDoubleFixture(score: .infinity)
+        writer.insert(negativeInfinity)
+        writer.insert(negativeOne)
+        writer.insert(positiveInfinity)
+        try writer.save()
+        let storageTypes = try container.store?.read { connection in
+            try connection.rows("SELECT typeof(ZSCORE) FROM ZPREDICATEDOUBLEFIXTURE ORDER BY Z_PK", arguments: [])
+        }
+        XCTAssertEqual(storageTypes, [[.text("real")], [.text("real")], [.text("real")]])
+
+        let context = container.makeContext()
+        let pendingZero = PredicateDoubleFixture(score: 0)
+        context.insert(pendingZero)
+        XCTAssertTrue(context.hasChanges)
+        let ascending = FetchDescriptor<PredicateDoubleFixture>(sortBy: [SortDescriptor(\.score)])
+        let descending = FetchDescriptor<PredicateDoubleFixture>(
+            sortBy: [SortDescriptor(\.score, order: .reverse)])
+        let ascendingIDs = [
+            negativeInfinity.persistentModelID, negativeOne.persistentModelID, pendingZero.persistentModelID,
+            positiveInfinity.persistentModelID,
+        ]
+        let descendingIDs = [
+            positiveInfinity.persistentModelID, pendingZero.persistentModelID, negativeOne.persistentModelID,
+            negativeInfinity.persistentModelID,
+        ]
+
+        XCTAssertEqual(try context.fetchIdentifiers(ascending), ascendingIDs)
+        XCTAssertEqual(try context.fetchCount(ascending), 4)
+        let storedRows: [PersistentIdentifier] = [
+            negativeInfinity.persistentModelID, negativeOne.persistentModelID, positiveInfinity.persistentModelID,
+        ]
+        for identifier in storedRows {
+            let registered: PredicateDoubleFixture? = context.registeredModel(for: identifier)
+            XCTAssertNil(registered)
+        }
+        XCTAssertEqual(try context.fetch(ascending).map(\.persistentModelID), ascendingIDs)
+
+        XCTAssertEqual(try context.fetchIdentifiers(descending), descendingIDs)
+        XCTAssertEqual(try context.fetchCount(descending), 4)
+        XCTAssertEqual(try context.fetch(descending).map(\.persistentModelID), descendingIDs)
+    }
+
+    @MainActor
     func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,

@@ -8,6 +8,29 @@ private protocol MacroProtocolOnlyFixture: AnyObject {}
 private protocol SecondMacroProtocolFixture: AnyObject {}
 
 @Model(protocolConformancesOnly: true)
+final class CodableMacroProtocolConformanceFixture: Codable {
+    var value: Int
+
+    init(value: Int) {
+        self.value = value
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case value
+    }
+
+    required init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        value = try container.decode(Int.self, forKey: .value)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(value, forKey: .value)
+    }
+}
+
+@Model(protocolConformancesOnly: true)
 final class SingleMacroProtocolConformanceFixture: MacroProtocolOnlyFixture {
     var value: Int
 
@@ -1793,6 +1816,51 @@ final class InheritanceChildFixture: InheritanceBaseFixture {
 }
 
 final class PersistentModelTests: XCTestCase {
+    @MainActor
+    func testModelWithManualCodableConformanceCanBeDecodedAndPersisted() throws {
+        let model = CodableMacroProtocolConformanceFixture(value: 17)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(model)
+        XCTAssertEqual(String(decoding: encoded, as: UTF8.self), #"{"value":17}"#)
+        let decoded = try JSONDecoder().decode(CodableMacroProtocolConformanceFixture.self, from: encoded)
+        XCTAssertEqual(decoded.value, 17)
+        XCTAssertNil(decoded.modelContext)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(CodableMacroProtocolConformanceFixture.self, from: Data("{}".utf8))
+        ) { error in
+            guard case DecodingError.keyNotFound(CodableMacroProtocolConformanceFixture.CodingKeys.value, _) = error
+            else {
+                return XCTFail("Expected missing-value keyNotFound, got \(error)")
+            }
+        }
+
+        let container = try ModelContainer(
+            for: CodableMacroProtocolConformanceFixture.self,
+            configurations: .sqliteMemory("model-manual-codable"))
+        let entity = try XCTUnwrap(container.schema.entity(forName: "CodableMacroProtocolConformanceFixture"))
+        XCTAssertEqual(entity.attributes.map(\.name), ["value"])
+        XCTAssertTrue(entity.relationships.isEmpty)
+        let temporaryIdentifier = decoded.persistentModelID
+        XCTAssertTrue(temporaryIdentifier.isTemporary)
+        container.mainContext.insert(decoded)
+        XCTAssertTrue(decoded.modelContext === container.mainContext)
+        try container.mainContext.save()
+        XCTAssertFalse(decoded.persistentModelID.isTemporary)
+        let permanentIdentifier = decoded.persistentModelID
+        XCTAssertNotEqual(permanentIdentifier, temporaryIdentifier)
+
+        let freshContext = container.makeContext()
+        let fetched = try freshContext.fetch(FetchDescriptor<CodableMacroProtocolConformanceFixture>())
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.value, 17)
+        let refetched = try XCTUnwrap(fetched.first)
+        XCTAssertFalse(refetched === decoded)
+        XCTAssertTrue(refetched.modelContext === freshContext)
+        XCTAssertEqual(refetched.persistentModelID, permanentIdentifier)
+        XCTAssertEqual(String(decoding: try encoder.encode(refetched), as: UTF8.self), #"{"value":17}"#)
+    }
+
     @MainActor
     func testModelProtocolConformancesUseRootModelGeneration() throws {
         let container = try ModelContainer(

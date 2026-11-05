@@ -752,7 +752,8 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor(predicate: somePredicate)).map(\.alpha), [2])
     }
 
-    func testExpressionEvaluateIsInlinedIntoRuntimePredicateTreeAndSQL() throws {
+    @MainActor
+    func testExpressionLowersAndExecutesAsSQLiteSQL() throws {
         guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
             throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
         }
@@ -784,6 +785,47 @@ final class ContextPersistenceTests: XCTestCase {
                 attributeTypes: Dictionary(uniqueKeysWithValues: entity.attributes.map { ($0.name, $0.type) })))
         XCTAssertEqual(compiled.sql, "(osd_int_bounded_multiply(t0.ZCOUNT, ?, 64) > ?)")
         XCTAssertEqual(compiled.arguments, [.int(2), .int(10)])
+
+        let writer = container.mainContext
+        let rows = [("below", 3), ("boundary", 6), ("above", 8)].map { title, count in
+            let model = PersistenceTestModel(title: title)
+            model.count = count
+            return model
+        }
+        for row in rows { writer.insert(row) }
+        try writer.save()
+        let query = FetchSQLBuilder.build(
+            FetchSQLInput(
+                table: "ZPERSISTENCETESTMODEL",
+                columns: ["ZCOUNT"],
+                predicateSQL: compiled.sql,
+                predicateArguments: compiled.arguments,
+                orderSQL: "t0.ZCOUNT ASC",
+                limit: nil,
+                offset: nil))
+        let matchingRows: [(Int64, Int64)] = try store.read { connection in
+            try connection.rows(query.sql, arguments: query.arguments).compactMap { row -> (Int64, Int64)? in
+                guard row.count == 3, case let .int(primaryKey) = row[0], case let .int(count) = row[2] else {
+                    return nil
+                }
+                return (primaryKey, count)
+            }
+        }
+        XCTAssertEqual(matchingRows.map(\.1), [6, 8])
+        var foundationMatchingCounts: [Int64] = []
+        for row in rows where try expression.evaluate(row.count) > 10 {
+            foundationMatchingCounts.append(Int64(row.count))
+        }
+        let sqliteMatchingCounts = matchingRows.map { $0.1 }
+        XCTAssertEqual(sqliteMatchingCounts, foundationMatchingCounts)
+        let expectedPrimaryKeys =
+            try rows
+            .filter { $0.count > 5 }
+            .sorted { $0.count < $1.count }
+            .map { model -> Int64 in
+                try XCTUnwrap(model.persistentModelID.primaryKey)
+            }
+        XCTAssertEqual(matchingRows.map(\.0), expectedPrimaryKeys)
     }
 
     func testExpressionEvaluateRebasesCapturedPartialRangeBound() throws {

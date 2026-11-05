@@ -33,13 +33,21 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else { return [] }
+        // Diagnose the declaration kind before arguments so invalid non-classes receive one focused error.
+        guard let classDeclaration = declaration.as(ClassDeclSyntax.self) else {
+            context.diagnose(
+                Diagnostic(
+                    node: Syntax(node),
+                    message: NonClassModelDiagnostic()))
+            return []
+        }
         let parsedProtocolOnlyMode = protocolConformancesOnly(in: node)
         if parsedProtocolOnlyMode == nil {
             context.diagnose(
                 Diagnostic(
                     node: Syntax(node),
-                    message: ModelArgumentDiagnostic(message: "protocolConformancesOnly must be a Boolean literal.")))
+                    message: InvalidModelArgumentDiagnostic(
+                        message: "protocolConformancesOnly must be a Boolean literal.")))
         }
         // Invalid options use root generation so this diagnostic does not cascade into superclass errors.
         let protocolOnlyMode = parsedProtocolOnlyMode ?? true
@@ -152,7 +160,13 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
     }
 }
 
-private struct ModelArgumentDiagnostic: DiagnosticMessage {
+private struct NonClassModelDiagnostic: DiagnosticMessage {
+    let message = "@Model can only be applied to a class."
+    let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "model-requires-class")
+    let severity = DiagnosticSeverity.error
+}
+
+private struct InvalidModelArgumentDiagnostic: DiagnosticMessage {
     let message: String
     let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "invalid-model-argument")
     let severity = DiagnosticSeverity.error

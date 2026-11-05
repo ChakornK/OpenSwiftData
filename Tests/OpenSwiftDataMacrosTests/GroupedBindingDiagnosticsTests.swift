@@ -5,6 +5,38 @@ import SwiftSyntaxMacrosTestSupport
 import XCTest
 
 final class GroupedBindingDiagnosticsTests: XCTestCase {
+    // These assertions cover macro expansion; compiler-specific attachment diagnostics are validated separately.
+    func testModelRejectsNonClassDeclarationsWithOneDiagnostic() {
+        let cases = [
+            ("@Model struct Value { var count: Int }", "struct Value { var count: Int \n}"),
+            (
+                "@Model(protocolConformancesOnly: true) struct Value { var count: Int }",
+                "struct Value { var count: Int \n}"
+            ),
+            (
+                "@Model(protocolConformancesOnly: flag) struct Value { var count: Int }",
+                "struct Value { var count: Int \n}"
+            ),
+            ("@Model enum Value { case item }", "enum Value { case item \n}"),
+            ("@Model actor Value { var count: Int = 0 }", "actor Value { var count: Int = 0 \n}"),
+            ("@Model protocol Value {}", "protocol Value {}"),
+            ("@Model extension Value {}", "extension Value {}"),
+        ]
+        for (source, expandedSource) in cases {
+            assertMacroExpansion(
+                source,
+                expandedSource: expandedSource,
+                diagnostics: [
+                    DiagnosticSpec(
+                        message: "@Model can only be applied to a class.",
+                        line: 1,
+                        column: 1,
+                        severity: .error)
+                ],
+                macros: ["Model": ModelMacro.self])
+        }
+    }
+
     func testModelAccessorMarkerSeparatesScalarAndRelationshipProperties() {
         assertMacroExpansion(
             #"""

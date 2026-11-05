@@ -881,6 +881,13 @@ final class OptionalUInt64ScalarFixture {
 }
 
 @Model
+final class ZUInt64OverflowDefaultFixture {
+    var value: UInt64 = UInt64.max
+
+    init() {}
+}
+
+@Model
 final class OptionalUInt64CollectionFixture {
     @Attribute(.codable) var values: Set<UInt64?>
 
@@ -5154,6 +5161,82 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             Set(try context.fetchIdentifiers(someDescriptor)), Set(savedSomeMatches.map(\.persistentModelID)))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<OptionalUInt64ScalarFixture>()), 3)
+    }
+
+    @MainActor
+    func testUInt64OverflowDefaultFailsSaveWithoutLosingPendingModel() throws {
+        let container = try ModelContainer(
+            for: UInt64ScalarFixture.self, ZUInt64OverflowDefaultFixture.self,
+            configurations: .sqliteMemory("uint64-overflow-default"))
+        let context = container.mainContext
+        let store = try XCTUnwrap(container.store)
+        let orderedEntities = container.schema.entities
+        let firstEntityIndex = try XCTUnwrap(orderedEntities.firstIndex { $0.name == "UInt64ScalarFixture" })
+        let overflowEntityIndex = try XCTUnwrap(
+            orderedEntities.firstIndex { $0.name == "ZUInt64OverflowDefaultFixture" })
+        XCTAssertLessThan(firstEntityIndex, overflowEntityIndex)
+        let first = UInt64ScalarFixture(value: 7)
+        let model = ZUInt64OverflowDefaultFixture()
+        XCTAssertEqual(model.value, UInt64.max)
+        context.insert(first)
+        context.insert(model)
+        let primaryKeyState = try store.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT", arguments: [])
+        }
+
+        XCTAssertThrowsError(try context.save())
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === first }))
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === model }))
+        XCTAssertTrue(first.modelContext === context)
+        XCTAssertTrue(model.modelContext === context)
+        XCTAssertNil(first.persistentModelID.primaryKey)
+        XCTAssertNil(model.persistentModelID.primaryKey)
+        XCTAssertEqual(
+            try store.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT", arguments: [])
+            },
+            primaryKeyState)
+        XCTAssertEqual(
+            try store.read {
+                try $0.rows("SELECT Z_PK FROM ZZUINT64OVERFLOWDEFAULTFIXTURE", arguments: [])
+            },
+            [])
+        XCTAssertEqual(
+            try store.read { try $0.rows("SELECT Z_PK FROM ZUINT64SCALARFIXTURE", arguments: []) }, [])
+
+        XCTAssertThrowsError(try context.save())
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === first }))
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === model }))
+        XCTAssertTrue(first.modelContext === context)
+        XCTAssertNil(first.persistentModelID.primaryKey)
+        XCTAssertTrue(model.modelContext === context)
+        XCTAssertNil(model.persistentModelID.primaryKey)
+        XCTAssertEqual(
+            try store.read {
+                try $0.rows("SELECT Z_ENT, Z_NAME, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT", arguments: [])
+            },
+            primaryKeyState)
+        XCTAssertEqual(
+            try store.read {
+                try $0.rows("SELECT Z_PK FROM ZZUINT64OVERFLOWDEFAULTFIXTURE", arguments: [])
+            },
+            [])
+        XCTAssertEqual(
+            try store.read { try $0.rows("SELECT Z_PK FROM ZUINT64SCALARFIXTURE", arguments: []) }, [])
+
+        model.value = UInt64(Int64.max)
+        try context.save()
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertFalse(context.insertedModels.contains(where: { $0 === first || $0 === model }))
+        XCTAssertFalse(first.persistentModelID.isTemporary)
+        XCTAssertFalse(model.persistentModelID.isTemporary)
+        let freshContext = container.makeContext()
+        XCTAssertEqual(try freshContext.fetch(FetchDescriptor<UInt64ScalarFixture>()).map(\.value), [7])
+        XCTAssertEqual(
+            try freshContext.fetch(FetchDescriptor<ZUInt64OverflowDefaultFixture>()).map(\.value),
+            [UInt64(Int64.max)])
     }
 
     @MainActor

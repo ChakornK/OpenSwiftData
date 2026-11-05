@@ -1516,6 +1516,53 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingSQLiteScalarQueriesApplyDeleteAndZeroLimitAfterMerge() throws {
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("pending-scalar-delete-and-limit"))
+        let writer = container.mainContext
+        let first = PredicateAgreementFixture(id: 1, value: 4, optionalValue: nil)
+        let second = PredicateAgreementFixture(id: 2, value: 3, optionalValue: nil)
+        let third = PredicateAgreementFixture(id: 3, value: 2, optionalValue: nil)
+        let fourth = PredicateAgreementFixture(id: 4, value: 0, optionalValue: nil)
+        let fifth = PredicateAgreementFixture(id: 5, value: 0, optionalValue: nil)
+        for model in [first, second, third, fourth, fifth] { writer.insert(model) }
+        try writer.save()
+        let committedIDs = try writer.fetchIdentifiers(FetchDescriptor<PredicateAgreementFixture>())
+
+        let context = container.makeContext()
+        let deleted: PredicateAgreementFixture = try XCTUnwrap(context.model(for: committedIDs[0]))
+        let changedOut: PredicateAgreementFixture = try XCTUnwrap(context.model(for: committedIDs[1]))
+        let changedInto: PredicateAgreementFixture = try XCTUnwrap(context.model(for: committedIDs[3]))
+        context.delete(deleted)
+        changedOut.value = 0
+        changedInto.value = 5
+        let predicate = #Predicate<PredicateAgreementFixture> { $0.value >= 2 }
+        let descriptor = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate, sortBy: [SortDescriptor(\.id)])
+        let expectedIDs = [third.persistentModelID, changedInto.persistentModelID]
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try context.fetchCount(descriptor), 2)
+
+        let zeroLimit = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchLimit: 0)
+        XCTAssertTrue(try context.fetchIdentifiers(zeroLimit).isEmpty)
+        XCTAssertEqual(try context.fetchCount(zeroLimit), 0)
+
+        let pastEnd = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchOffset: 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pastEnd), [changedInto.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(pastEnd), 1)
+
+        let committedOnly = FetchDescriptor<PredicateAgreementFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(try context.fetchCount(committedOnly), 3)
+        XCTAssertEqual(try context.fetchIdentifiers(committedOnly), Array(committedIDs.prefix(3)))
+        let untouchedRegistered: PredicateAgreementFixture? = context.registeredModel(for: committedIDs[2])
+        XCTAssertNil(untouchedRegistered)
+    }
+
+    @MainActor
     func testPendingScalarIdentifierSortUsesPrimaryKeyTieBreak() throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,

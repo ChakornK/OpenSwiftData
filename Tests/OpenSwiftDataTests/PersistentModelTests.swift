@@ -4176,8 +4176,11 @@ final class PersistentModelTests: XCTestCase {
         let descriptor = FetchDescriptor<NestedToManyMiddleFixture>(
             predicate: #Predicate { $0.items.count == expectedCount },
             includePendingChanges: false)
-        XCTAssertEqual(try context.fetch(descriptor).map(\.name), ["two"])
+        let committedMatches = try context.fetch(descriptor)
+        XCTAssertEqual(committedMatches.map(\.name), ["two"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(descriptor), committedMatches.map(\.persistentModelID))
 
         let minimumCount = 2
         let minimumDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
@@ -4189,8 +4192,14 @@ final class PersistentModelTests: XCTestCase {
         one.items.append(second)
         let pendingDescriptor = FetchDescriptor<NestedToManyMiddleFixture>(
             predicate: #Predicate { $0.items.count == expectedCount })
-        XCTAssertEqual(Set(try context.fetch(pendingDescriptor).map(\.name)), ["one", "two"])
+        let pendingMatches = try context.fetch(pendingDescriptor)
+        XCTAssertEqual(Set(pendingMatches.map(\.name)), ["one", "two"])
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set(pendingMatches.map(\.persistentModelID)))
+        XCTAssertEqual(
+            try context.fetchIdentifiers(descriptor), committedMatches.map(\.persistentModelID))
     }
 
     @MainActor

@@ -2050,6 +2050,42 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCrossModuleOpenInheritancePersistsAndFetchesPolymorphically() throws {
+        let container = try ModelContainer(
+            for: CrossModuleInheritanceBase.self,
+            CrossModuleOpenInheritanceChildFixture.self,
+            CrossModuleOpenInheritanceGrandchildFixture.self,
+            configurations: .sqliteMemory("cross-module-open-inheritance-persistence"))
+        let writer = container.mainContext
+        let inserted = CrossModuleOpenInheritanceGrandchildFixture(name: "persisted", age: 9, rank: 4)
+        let baseOnly = CrossModuleInheritanceBase(name: "base only")
+        writer.insert(inserted)
+        writer.insert(baseOnly)
+        try writer.save()
+        XCTAssertFalse(inserted.persistentModelID.isTemporary)
+
+        let reader = container.makeContext()
+        let baseDescriptor = FetchDescriptor<CrossModuleInheritanceBase>(sortBy: [SortDescriptor(\.name)])
+        let baseModels = try reader.fetch(baseDescriptor)
+        XCTAssertEqual(baseModels.count, 2)
+        let fetchedGrandchild = try XCTUnwrap(
+            baseModels.first(where: { $0.name == "persisted" }) as? CrossModuleOpenInheritanceGrandchildFixture)
+        XCTAssertEqual(fetchedGrandchild.name, "persisted")
+        XCTAssertEqual(fetchedGrandchild.age, 9)
+        XCTAssertEqual(fetchedGrandchild.rank, 4)
+        let fetchedBaseOnly = try XCTUnwrap(baseModels.first(where: { $0.name == "base only" }))
+        XCTAssertTrue(type(of: fetchedBaseOnly) == CrossModuleInheritanceBase.self)
+
+        let concrete = try XCTUnwrap(
+            reader.fetch(FetchDescriptor<CrossModuleOpenInheritanceGrandchildFixture>()).first)
+        XCTAssertEqual(concrete.persistentModelID.entityName, "CrossModuleOpenInheritanceGrandchildFixture")
+        XCTAssertEqual(try reader.fetchCount(baseDescriptor), 2)
+        XCTAssertEqual(
+            try reader.fetchIdentifiers(baseDescriptor),
+            baseModels.map(\.persistentModelID))
+    }
+
+    @MainActor
     func testSubclassInitializerRelationshipSurvivesInsertionPreparation() throws {
         let container = try ModelContainer(
             for: InheritanceRelationshipBaseFixture.self,

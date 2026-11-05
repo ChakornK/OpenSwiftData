@@ -15577,6 +15577,59 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testFlatOptionalToOneRelationshipAdditionPreservesExistingRows() throws {
+        let storeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "migration-optional-to-one-addition-\(UUID().uuidString).sqlite")
+        let location = StoreLocation.file(storeURL)
+        let source = Schema([
+            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Owner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                relationships: [Schema.Relationship(name: "favorite", destination: "Target", isOptional: true)]),
+            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        ])
+        let ownerEntityID = try XCTUnwrap(source.entityIDsByName["Owner"])
+        let targetEntityID = try XCTUnwrap(source.entityIDsByName["Target"])
+        defer {
+            try? FileManager.default.removeItem(at: storeURL)
+            try? FileManager.default.removeItem(atPath: storeURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: storeURL.path + "-shm")
+        }
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        defer { try? initial.close() }
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (\(ownerEntityID), 4, 'owner')")
+            try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (\(targetEntityID), 9, 'target')")
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        defer { try? migrated.close() }
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZFAVORITE FROM ZOWNER") },
+            [[.int(1), .int(4), .text("owner"), .null]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTARGET") },
+            [[.int(1), .int(9), .text("target")]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZFAVORITE_INDEX'")
+            },
+            [[.text("CREATE INDEX ZOWNER_ZFAVORITE_INDEX ON ZOWNER (ZFAVORITE)")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        defer { try? reopened.close() }
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, ZNAME, ZFAVORITE FROM ZOWNER") },
+            [[.int(1), .text("owner"), .null]])
+        try reopened.close()
+    }
+
     func testRelationshipRemovalRejectsRequiredCascadeAndInverseLinks() throws {
         let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
             (

@@ -9357,54 +9357,185 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testMultipleOwnerOnlyToManyAdditionRejectsMixedJoinRemovalBeforeDDL() throws {
+    func testOwnerOnlyToManyReplacementDropsOldJoinAndCreatesEmptyNewJoin() throws {
         let source = Schema([
             Schema.Entity(
                 name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
                 relationships: [Schema.Relationship(name: "existing", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "BOwner"), Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
         ])
         let destination = Schema([
             Schema.Entity(
                 name: "AOwner",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
                 relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
-            Schema.Entity(
-                name: "BOwner",
-                relationships: [Schema.Relationship(name: "other", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
         ])
         let sourceOwner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let sourceRelationship = try XCTUnwrap(sourceOwner.relationships.first)
         let removedTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(for: sourceOwner, relationship: sourceRelationship, schema: source))
-        let destinationTables: [String] = try destination.entities.flatMap { entity in
-            try entity.relationships.map { relationship in
-                try XCTUnwrap(SchemaBuilder.joinTableName(for: entity, relationship: relationship, schema: destination))
-            }
+        let destinationOwner = try XCTUnwrap(destination.entity(forName: "AOwner"))
+        let destinationRelationship = try XCTUnwrap(destinationOwner.relationships.first)
+        let addedTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(
+                for: destinationOwner, relationship: destinationRelationship, schema: destination))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("owner-to-many-replacement.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write { connection in
+            try connection.execute("INSERT INTO ZAOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (1, 2, 'owner')")
+            try connection.execute("INSERT INTO ZFIRST (Z_ENT, Z_OPT, ZNAME) VALUES (2, 3, 'old target')")
+            try connection.execute("INSERT INTO ZSECOND (Z_ENT, Z_OPT, ZNAME) VALUES (3, 4, 'new target')")
+            try connection.execute("INSERT INTO \(removedTable) (Z_A, Z_B) VALUES (1, 1)")
         }
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-join-add-remove"))
+        try initial.close()
+        let driver = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(removedTable)])
+                    .isEmpty
+            })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_A, Z_B FROM \(addedTable)") }, [])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name IN (?, ?) ORDER BY name",
+                    [.text("\(addedTable)_UNIQUE_INDEX"), .text("\(addedTable)_Z_B_INDEX")])
+            },
+            [
+                [
+                    .text("\(addedTable)_UNIQUE_INDEX"),
+                    .text("CREATE UNIQUE INDEX \(addedTable)_UNIQUE_INDEX ON \(addedTable) (Z_A, Z_B)"),
+                ],
+                [
+                    .text("\(addedTable)_Z_B_INDEX"),
+                    .text("CREATE INDEX \(addedTable)_Z_B_INDEX ON \(addedTable) (Z_B)"),
+                ],
+            ])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZAOWNER") },
+            [[.int(1), .int(2), .text("owner")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZFIRST") },
+            [[.int(1), .int(3), .text("old target")]])
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZSECOND") },
+            [[.int(1), .int(4), .text("new target")]])
+        try driver.close()
+    }
+
+    func testOwnerOnlyToManyReplacementRejectsCaseInsensitiveJoinObjectCollisionAtomically() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let sourceOwner = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let removedRelationship = try XCTUnwrap(sourceOwner.relationships.first)
+        let removedTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: sourceOwner, relationship: removedRelationship, schema: source))
+        let destinationOwner = try XCTUnwrap(destination.entity(forName: "AOwner"))
+        let addedRelationship = try XCTUnwrap(destinationOwner.relationships.first)
+        let addedTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: destinationOwner, relationship: addedRelationship, schema: destination))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "owner-to-many-replacement-collision"))
         try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("CREATE VIEW \(addedTable.lowercased()) AS SELECT 1 AS value")
+            try connection.execute("INSERT INTO \(removedTable) (Z_A, Z_B) VALUES (1, 1)")
+        }
+        let originalObjects = try driver.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+            )
+        }
         XCTAssertThrowsError(
             try driver.write {
                 try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
             }
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected mixed join additions and removals to fail closed, got \(error)")
+                return XCTFail("Expected join object name reuse to fail closed, got \(error)")
             }
         }
         XCTAssertEqual(
             try driver.read {
-                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(removedTable)])
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+                )
             },
-            [[.text(removedTable)]])
-        for table in destinationTables {
-            XCTAssertTrue(
-                try driver.read {
-                    try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(table)])
-                        .isEmpty
-                })
+            originalObjects)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_A, Z_B FROM \(removedTable)") },
+            [[.int(1), .int(1)]])
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [.text(addedTable)])
+                    .isEmpty
+            })
+        try driver.close()
+    }
+
+    func testOwnerOnlyToManyReplacementRejectsOriginalNameClaim() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "AOwner",
+                relationships: [
+                    Schema.Relationship(name: "new", destination: "Second", isToMany: true, originalName: "old")
+                ]),
+            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        ])
+        let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
+        let oldRelationship = try XCTUnwrap(owner.relationships.first)
+        let oldTable = try XCTUnwrap(
+            SchemaBuilder.joinTableName(for: owner, relationship: oldRelationship, schema: source))
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "owner-to-many-replacement-original-name"))
+        try bootstrap(source, driver: driver)
+        try driver.write { try $0.execute("INSERT INTO \(oldTable) (Z_A, Z_B) VALUES (1, 1)") }
+        let originalObjects = try driver.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+            )
         }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected an original-name to-many replacement to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_A, Z_B FROM \(oldTable)") },
+            [[.int(1), .int(1)]])
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+                )
+            },
+            originalObjects)
         try driver.close()
     }
 

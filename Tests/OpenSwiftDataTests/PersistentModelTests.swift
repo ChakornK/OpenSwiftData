@@ -1085,7 +1085,8 @@ class InheritedToOneBaseFixture {
     init(target: InheritedToOneTargetFixture?) { self.target = target }
 }
 
-@Model
+// Verify that explicitly selecting the default preserves model-subclass generation.
+@Model(protocolConformancesOnly: false)
 final class InheritedToOneChildFixture: InheritedToOneBaseFixture {
     @Relationship(inverse: nil) var childTarget: InheritedToOneTargetFixture?
     var age: Int

@@ -1568,6 +1568,146 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingInverseToManyQueriesUseAffectedRelationshipModelsOnly() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self,
+            PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("pending-inverse-to-many-identifiers"))
+        let writer = container.mainContext
+        let firstOwner = PersistentRelationshipOwner(title: "first")
+        let secondOwner = PersistentRelationshipOwner(title: "second")
+        let untouchedOwner = PersistentRelationshipOwner(title: "untouched")
+        let reassignedChild = PersistentRelationshipChild(title: "matching")
+        let changedChild = PersistentRelationshipChild(title: "matching")
+        let secondChild = PersistentRelationshipChild(title: "matching")
+        let untouchedChild = PersistentRelationshipChild(title: "matching")
+        firstOwner.children = [reassignedChild, changedChild]
+        secondOwner.children = [secondChild]
+        untouchedOwner.children = [untouchedChild]
+        for model in [firstOwner, secondOwner, untouchedOwner] { writer.insert(model) }
+        for child in [reassignedChild, changedChild, secondChild, untouchedChild] { writer.insert(child) }
+        try writer.save()
+        let ownerDescriptor = FetchDescriptor<PersistentRelationshipOwner>()
+        let committedIDs = try writer.fetchIdentifiers(ownerDescriptor)
+        let childDescriptor = FetchDescriptor<PersistentRelationshipChild>(includePendingChanges: false)
+        let children = try writer.fetch(childDescriptor)
+        XCTAssertEqual(children.count, 4)
+        let reassignedID = try XCTUnwrap(children.first(where: { $0.title == "matching" })?.persistentModelID)
+        let changedID = try XCTUnwrap(
+            children.first(where: { $0.persistentModelID != reassignedID })?.persistentModelID)
+
+        let reader = container.makeContext()
+        let predicate = #Predicate<PersistentRelationshipOwner> { owner in
+            owner.children.contains { $0.title == "matching" }
+        }
+        let descriptor = FetchDescriptor<PersistentRelationshipOwner>(predicate: predicate)
+        let second: PersistentRelationshipOwner = try XCTUnwrap(reader.model(for: committedIDs[1]))
+        let moved: PersistentRelationshipChild = try XCTUnwrap(reader.model(for: reassignedID))
+        let changed: PersistentRelationshipChild = try XCTUnwrap(reader.model(for: changedID))
+        moved.owner = second
+        changed.title = "no longer matching"
+
+        let expectedIDs = [second.persistentModelID, committedIDs[2]]
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        let untouchedAfterIdentifiers: PersistentRelationshipOwner? = reader.registeredModel(for: committedIDs[2])
+        XCTAssertNil(untouchedAfterIdentifiers)
+        XCTAssertEqual(try reader.fetchCount(descriptor), expectedIDs.count)
+        let untouchedAfterCount: PersistentRelationshipOwner? = reader.registeredModel(for: committedIDs[2])
+        XCTAssertNil(untouchedAfterCount)
+        XCTAssertEqual(try reader.fetch(descriptor).map(\.persistentModelID), expectedIDs)
+
+        let page = FetchDescriptor<PersistentRelationshipOwner>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.title)],
+            fetchLimit: 1,
+            fetchOffset: 0)
+        XCTAssertEqual(try reader.fetchIdentifiers(page), Array(expectedIDs.prefix(1)))
+        XCTAssertEqual(try reader.fetchCount(page), 1)
+    }
+
+    @MainActor
+    func testPendingToOneRelationshipQueriesAvoidMaterializingUntouchedOwners() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self,
+            PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("pending-to-one-identifier-query-materialization"))
+        let writer = container.mainContext
+        let changedOwner = PersistentRelationshipOwner(title: "changed")
+        let untouchedOwner = PersistentRelationshipOwner(title: "untouched")
+        let changedFavorite = PersistentRelationshipChild(title: "matching")
+        let untouchedFavorite = PersistentRelationshipChild(title: "matching")
+        changedOwner.favorite = changedFavorite
+        untouchedOwner.favorite = untouchedFavorite
+        writer.insert(changedOwner)
+        writer.insert(untouchedOwner)
+        writer.insert(changedFavorite)
+        writer.insert(untouchedFavorite)
+        try writer.save()
+        let ownerIDs = try writer.fetchIdentifiers(FetchDescriptor<PersistentRelationshipOwner>())
+
+        let reader = container.makeContext()
+        let predicate = #Predicate<PersistentRelationshipOwner> { $0.favorite?.title == "matching" }
+        let descriptor = FetchDescriptor<PersistentRelationshipOwner>(predicate: predicate)
+        let changed: PersistentRelationshipOwner = try XCTUnwrap(reader.model(for: ownerIDs[0]))
+        let changedTarget = try XCTUnwrap(changed.favorite)
+        changedTarget.title = "no longer matching"
+        let newFavorite = PersistentRelationshipChild(title: "matching")
+        let newOwner = PersistentRelationshipOwner(title: "new")
+        newOwner.favorite = newFavorite
+        reader.insert(newOwner)
+        reader.insert(newFavorite)
+
+        let expectedIDs = [ownerIDs[1], newOwner.persistentModelID]
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        let untouchedAfterIdentifiers: PersistentRelationshipOwner? = reader.registeredModel(for: ownerIDs[1])
+        XCTAssertNil(untouchedAfterIdentifiers)
+        XCTAssertEqual(try reader.fetchCount(descriptor), expectedIDs.count)
+        let untouchedAfterCount: PersistentRelationshipOwner? = reader.registeredModel(for: ownerIDs[1])
+        XCTAssertNil(untouchedAfterCount)
+        XCTAssertEqual(try reader.fetch(descriptor).map(\.persistentModelID), expectedIDs)
+    }
+
+    @MainActor
+    func testPendingToManyCountQueriesDoNotMaterializeUntouchedOwners() throws {
+        let container = try ModelContainer(
+            for: PersistentRelationshipOwner.self,
+            PersistentRelationshipChild.self,
+            configurations: .sqliteMemory("pending-to-many-count-identifiers"))
+        let writer = container.mainContext
+        let sourceOwner = PersistentRelationshipOwner(title: "source")
+        let destinationOwner = PersistentRelationshipOwner(title: "destination")
+        let untouchedOwner = PersistentRelationshipOwner(title: "untouched")
+        let movedChild = PersistentRelationshipChild(title: "moved")
+        let untouchedChild = PersistentRelationshipChild(title: "untouched child")
+        sourceOwner.children = [movedChild]
+        untouchedOwner.children = [untouchedChild]
+        for model in [sourceOwner, destinationOwner, untouchedOwner] { writer.insert(model) }
+        for child in [movedChild, untouchedChild] { writer.insert(child) }
+        try writer.save()
+        let ownerIDs = try writer.fetchIdentifiers(FetchDescriptor<PersistentRelationshipOwner>())
+        let childID = try XCTUnwrap(
+            writer.fetchIdentifiers(FetchDescriptor<PersistentRelationshipChild>()).first)
+
+        let reader = container.makeContext()
+        let predicate = #Predicate<PersistentRelationshipOwner> { $0.children.count > 0 }
+        let descriptor = FetchDescriptor<PersistentRelationshipOwner>(predicate: predicate)
+        let untouchedBefore = reader.registeredModel(for: ownerIDs[2]) as PersistentRelationshipOwner?
+        XCTAssertNil(untouchedBefore)
+        let destination: PersistentRelationshipOwner = try XCTUnwrap(reader.model(for: ownerIDs[1]))
+        let moved: PersistentRelationshipChild = try XCTUnwrap(reader.model(for: childID))
+        moved.owner = destination
+
+        let expectedIDs = [ownerIDs[1], ownerIDs[2]]
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        let untouchedAfterIdentifiers: PersistentRelationshipOwner? = reader.registeredModel(for: ownerIDs[2])
+        XCTAssertNil(untouchedAfterIdentifiers)
+        XCTAssertEqual(try reader.fetchCount(descriptor), expectedIDs.count)
+        let untouchedAfterCount: PersistentRelationshipOwner? = reader.registeredModel(for: ownerIDs[2])
+        XCTAssertNil(untouchedAfterCount)
+        XCTAssertEqual(try reader.fetch(descriptor).map(\.persistentModelID), expectedIDs)
+    }
+
+    @MainActor
     func testPendingSQLiteScalarQueriesApplyDeleteAndZeroLimitAfterMerge() throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,

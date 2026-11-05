@@ -3901,6 +3901,54 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingNestedInverseCollectionIdentifiersAvoidMaterializingUntouchedOwners() throws {
+        let container = try ModelContainer(
+            for: InverseNestedQuantifierOwnerFixture.self,
+            InverseNestedQuantifierChildFixture.self,
+            InverseNestedQuantifierItemFixture.self,
+            configurations: .sqliteMemory("pending-nested-inverse-identifiers"))
+        let writer = container.mainContext
+        let firstItem = InverseNestedQuantifierItemFixture(title: "match")
+        let firstChild = InverseNestedQuantifierChildFixture(name: "first child", items: [firstItem])
+        let firstOwner = InverseNestedQuantifierOwnerFixture(name: "first", children: [firstChild])
+        let untouchedItem = InverseNestedQuantifierItemFixture(title: "match")
+        let untouchedChild = InverseNestedQuantifierChildFixture(name: "untouched child", items: [untouchedItem])
+        let untouchedOwner = InverseNestedQuantifierOwnerFixture(name: "untouched", children: [untouchedChild])
+        writer.insert(firstItem)
+        writer.insert(firstChild)
+        writer.insert(firstOwner)
+        writer.insert(untouchedItem)
+        writer.insert(untouchedChild)
+        writer.insert(untouchedOwner)
+        try writer.save()
+        let ownerIDs = try writer.fetchIdentifiers(FetchDescriptor<InverseNestedQuantifierOwnerFixture>())
+        let savedOwners = try writer.fetch(FetchDescriptor<InverseNestedQuantifierOwnerFixture>())
+        let firstID = try XCTUnwrap(savedOwners.first(where: { $0.name == "first" })?.persistentModelID)
+        let untouchedID = try XCTUnwrap(savedOwners.first(where: { $0.name == "untouched" })?.persistentModelID)
+
+        let reader = container.makeContext()
+        let first: InverseNestedQuantifierOwnerFixture = try XCTUnwrap(reader.model(for: firstID))
+        let child = try XCTUnwrap(first.children.first)
+        let pendingItem = InverseNestedQuantifierItemFixture(title: "match")
+        reader.insert(pendingItem)
+        pendingItem.child = child
+        let descriptor = FetchDescriptor<InverseNestedQuantifierOwnerFixture>(
+            predicate: #Predicate {
+                $0.children.contains { child in
+                    child.items.contains { $0.title == "match" }
+                }
+            })
+
+        let expectedIDs = ownerIDs
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        let untouchedAfterIdentifiers: InverseNestedQuantifierOwnerFixture? = reader.registeredModel(for: untouchedID)
+        XCTAssertNil(untouchedAfterIdentifiers)
+        XCTAssertEqual(try reader.fetchCount(descriptor), expectedIDs.count)
+        let untouchedAfterCount: InverseNestedQuantifierOwnerFixture? = reader.registeredModel(for: untouchedID)
+        XCTAssertNil(untouchedAfterCount)
+    }
+
+    @MainActor
     func testNestedContainsTraversesThreeInverseBackedCollectionLevels() throws {
         let container = try ModelContainer(
             for: DeepInverseQuantifierOwnerFixture.self,

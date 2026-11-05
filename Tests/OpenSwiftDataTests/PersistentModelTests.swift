@@ -3645,7 +3645,7 @@ final class PersistentModelTests: XCTestCase {
             configurations: .sqliteMemory("nested-relationship-quantifier-depth-four"))
         let context = container.mainContext
         let needle = "match"
-        let matchingTip = FourLevelQuantifierLeafFixture(value: "deep match")
+        let matchingTip = FourLevelQuantifierLeafFixture(value: needle)
         let matchingLeaf = FourLevelQuantifierLeafFixture(value: needle, descendants: [matchingTip])
         let matchingItem = FourLevelQuantifierItemFixture(value: "matching item", leaves: [matchingLeaf])
         let matchingChild = FourLevelQuantifierChildFixture(items: [matchingItem])
@@ -3743,6 +3743,21 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(pendingStoredDescriptor), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingStoredDescriptor), [matchingRoot.persistentModelID])
 
+        let depthFivePendingTip = FourLevelQuantifierLeafFixture(value: needle)
+        let depthFivePendingLeaf = FourLevelQuantifierLeafFixture(
+            value: "pending parent", descendants: [depthFivePendingTip])
+        let depthFivePendingItem = FourLevelQuantifierItemFixture(
+            value: "pending depth five", leaves: [depthFivePendingLeaf])
+        let depthFivePendingChild = FourLevelQuantifierChildFixture(items: [depthFivePendingItem])
+        let depthFivePendingGroup = FourLevelQuantifierGroupFixture(children: [depthFivePendingChild])
+        let depthFivePendingRoot = FourLevelQuantifierRootFixture(groups: [depthFivePendingGroup])
+        context.insert(depthFivePendingTip)
+        context.insert(depthFivePendingLeaf)
+        context.insert(depthFivePendingItem)
+        context.insert(depthFivePendingChild)
+        context.insert(depthFivePendingGroup)
+        context.insert(depthFivePendingRoot)
+
         let depthFivePredicate = #Predicate<FourLevelQuantifierRootFixture> {
             $0.groups.contains { group in
                 group.children.contains { child in
@@ -3754,17 +3769,50 @@ final class PersistentModelTests: XCTestCase {
                 }
             }
         }
-        let depthFiveDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(predicate: depthFivePredicate)
-        let depthFiveStoredDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+        let depthFiveDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
             predicate: depthFivePredicate, includePendingChanges: false)
-        XCTAssertThrowsError(try context.fetch(depthFiveDescriptor)) { error in
-            guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected depth-five collection predicate to fail closed, got \(error)")
+        let depthFiveMatches = try context.fetch(depthFiveDescriptor)
+        XCTAssertEqual(depthFiveMatches.map(\.persistentModelID), [matchingRoot.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(depthFiveDescriptor), 1)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(depthFiveDescriptor), depthFiveMatches.map(\.persistentModelID))
+
+        let depthFivePendingDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: depthFivePredicate)
+        let depthFivePendingMatches = try context.fetch(depthFivePendingDescriptor)
+        XCTAssertEqual(
+            Set(depthFivePendingMatches.map(\.persistentModelID)),
+            Set([matchingRoot.persistentModelID, depthFivePendingRoot.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(depthFivePendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(depthFivePendingDescriptor)),
+            Set(depthFivePendingMatches.map(\.persistentModelID)))
+        XCTAssertEqual(try context.fetchCount(depthFiveDescriptor), 1)
+
+        let depthSixPredicate = #Predicate<FourLevelQuantifierRootFixture> {
+            $0.groups.contains { group in
+                group.children.contains { child in
+                    child.items.contains { item in
+                        item.leaves.contains { leaf in
+                            leaf.descendants.contains { descendant in
+                                descendant.descendants.contains { $0.value == needle }
+                            }
+                        }
+                    }
+                }
             }
         }
-        XCTAssertThrowsError(try context.fetch(depthFiveStoredDescriptor)) { error in
+        let depthSixDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(predicate: depthSixPredicate)
+        let depthSixStoredDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: depthSixPredicate, includePendingChanges: false)
+        XCTAssertThrowsError(try context.fetch(depthSixDescriptor)) { error in
             guard case SwiftDataError.unsupportedPredicate = error else {
-                return XCTFail("Expected depth-five collection predicate to fail closed, got \(error)")
+                return XCTFail("Expected depth-six collection predicate to fail closed, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try context.fetch(depthSixStoredDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected depth-six collection predicate to fail closed, got \(error)")
             }
         }
     }

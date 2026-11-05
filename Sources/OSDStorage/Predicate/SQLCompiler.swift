@@ -131,6 +131,8 @@ package enum PredicatePlanBuilder {
         case let .collectionAllEqual(name, elementType, element):
             guard let element = build(element) else { return nil }
             return .collectionAllEqual(name, elementType, element)
+        case let .collectionAllNil(name):
+            return .collectionAllNil(name)
         case let .collectionAllCompare(name, elementType, operation, element):
             guard let element = build(element) else { return nil }
             return .collectionAllCompare(name, elementType, runtimeOperator(operation), element)
@@ -357,6 +359,8 @@ package enum SQLCompiler {
                 name, type,
                 resolvePersistentIdentifierComparisons(
                     value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case .collectionAllNil:
+            return ir
         case let .collectionAllCompare(name, type, op, value):
             return .collectionAllCompare(
                 name, type, op,
@@ -775,6 +779,11 @@ package enum SQLCompiler {
                 element, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)
             arguments.append(.text(elementType))
             return "osd_json_array_all_equal(\(tableAlias).Z\(name.uppercased()), \(elementSQL), ?)"
+        case let .collectionAllNil(name):
+            guard Self.validIdentifier(name) else {
+                throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
+            }
+            return "osd_json_array_all_nil(\(tableAlias).Z\(name.uppercased())) = 1"
         case let .collectionAllCompare(name, elementType, operation, element):
             guard Self.validIdentifier(name),
                 ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
@@ -1015,6 +1024,8 @@ package enum SQLCompiler {
             "collectionContains(\(name),\(elementType),\(structure(element)))"
         case let .collectionAllEqual(name, elementType, element):
             "collectionAllEqual(\(name),\(elementType),\(structure(element)))"
+        case let .collectionAllNil(name):
+            "collectionAllNil(\(name))"
         case let .collectionAllCompare(name, elementType, operation, element):
             "collectionAllCompare(\(name),\(elementType),\(operation),\(structure(element)))"
         case let .codableCollectionIsEmpty(name): "codableCollectionIsEmpty(\(name))"

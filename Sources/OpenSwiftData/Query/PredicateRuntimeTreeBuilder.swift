@@ -261,24 +261,12 @@ package enum PredicateRuntimeTreeBuilder {
                     ])
             }
             if name == "SequenceContainsWhere" || name == "SequenceAllSatisfy" {
-                guard let schema,
-                    let sequence = children.first(where: { $0.label == "sequence" })?.value,
+                guard let sequence = children.first(where: { $0.label == "sequence" })?.value,
                     let test = children.first(where: { $0.label == "test" })?.value,
-                    let variable = children.first(where: { $0.label == "variable" })?.value,
-                    let sequenceVariableID = variableIdentifier(variable),
-                    let sequenceRootID = keyPathRootVariableID(sequence)
+                    let variable = children.first(where: { $0.label == "variable" })?.value
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Collection quantifiers require a to-many relationship.")
-                }
-                if collectionVariableScopes.isEmpty {
-                    collectionVariableScopes.append(sequenceRootID)
-                }
-                guard collectionVariableScopes.count <= OSDQueryLimits.maximumNestedCollectionPredicateDepth + 1,
-                    collectionVariableScopes.last == sequenceRootID
-                else {
-                    throw SwiftDataError.unsupportedPredicate(
-                        "Nested collection quantifier depth or variable scope is unsupported.")
                 }
                 let sequenceNode = try visit(
                     sequence, path: path + ["sequence"], bindings: bindings,
@@ -296,9 +284,64 @@ package enum PredicateRuntimeTreeBuilder {
                 let localOwnerParts =
                     ownerParts.starts(with: activePrefix)
                     ? Array(ownerParts.dropFirst(activePrefix.count)) : ownerParts
+                if name == "SequenceAllSatisfy", localOwnerParts.isEmpty,
+                    case .property = sequenceNode,
+                    let sequenceVariableID = variableIdentifier(variable),
+                    let attribute = activeEntity.attributes.first(where: { $0.name == collectionName }),
+                    attribute.options.contains(.codable),
+                    let elementDescriptor = Self.codableScalarCollectionElementDescriptor(attribute.type),
+                    elementDescriptor.isOptional
+                {
+                    let testTypeName = String(reflecting: type(of: test))
+                    guard let comparison = PredicateNodeMetadata.entry(for: testTypeName) else {
+                        throw SwiftDataError.unsupportedPredicate("Unsupported Codable collection allSatisfy body.")
+                    }
+                    let testFields = Dictionary(
+                        uniqueKeysWithValues: Mirror(reflecting: test).children.compactMap { child in
+                            child.label.map { ($0, child.value) }
+                        })
+                    guard let lhs = testFields["lhs"], let rhs = testFields["rhs"] else {
+                        throw SwiftDataError.unsupportedPredicate("Malformed scalar collection allSatisfy body.")
+                    }
+                    guard comparison.name == "Equal",
+                        variableIdentifier(lhs) == sequenceVariableID,
+                        PredicateNodeMetadata.entry(for: String(reflecting: type(of: rhs)))?.name == "NilLiteral"
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Codable scalar collection allSatisfy supports only literal nil equality on optional elements."
+                        )
+                    }
+                    return .expression(
+                        name: "OSDScalarCollectionAllNil",
+                        children: [("sequence", sequenceNode)])
+                }
+                guard let schema,
+                    let sequenceVariableID = variableIdentifier(variable),
+                    let sequenceRootID = keyPathRootVariableID(sequence)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Collection quantifiers require a to-many relationship.")
+                }
+                if collectionVariableScopes.isEmpty {
+                    collectionVariableScopes.append(sequenceRootID)
+                }
+                guard collectionVariableScopes.count <= OSDQueryLimits.maximumNestedCollectionPredicateDepth + 1,
+                    collectionVariableScopes.last == sequenceRootID
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Nested collection quantifier depth or variable scope is unsupported.")
+                }
                 if name == "SequenceAllSatisfy", collectionVariableScopes.count == 1, localOwnerParts.isEmpty,
                     codableCollectionName(sequenceNode, entity: activeEntity) == collectionName
                 {
+                    guard
+                        let attribute = activeEntity.attributes.first(where: { $0.name == collectionName }),
+                        Self.codableScalarCollectionElementDescriptor(attribute.type)?.isOptional == false
+                    else {
+                        throw SwiftDataError.unsupportedPredicate(
+                            "Codable scalar collection allSatisfy supports only literal nil equality on optional elements."
+                        )
+                    }
                     let testTypeName = String(reflecting: type(of: test))
                     guard let comparison = PredicateNodeMetadata.entry(for: testTypeName) else {
                         throw SwiftDataError.unsupportedPredicate("Unsupported Codable collection allSatisfy body.")

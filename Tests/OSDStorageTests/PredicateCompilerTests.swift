@@ -125,6 +125,39 @@ final class PredicateCompilerTests: XCTestCase {
         XCTAssertEqual(compiled.arguments, [.int(1), .text("UInt64"), .text("greaterThan")])
     }
 
+    func testOptionalScalarCollectionAllNilUsesCaptureFreeIRAndSQL() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "OSDScalarCollectionAllNil",
+            children: [("sequence", .propertyReference("values"))])
+
+        let ir = try PredicateIRBuilder.build(node, attributeTypes: ["values": "Array<Optional<String>>"])
+        XCTAssertEqual(ir, .collectionAllNil("values"))
+        let compiled = try SQLCompiler.compile(ir, entity: "Owner")
+        XCTAssertEqual(compiled.sql, "osd_json_array_all_nil(t0.ZVALUES) = 1")
+        XCTAssertTrue(compiled.arguments.isEmpty)
+
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["values": "Array<String>"]))
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["values": "Optional<Array<Optional<String>>>"]))
+    }
+
+    func testOptionalScalarCollectionAllEqualRejectsNullCapture() throws {
+        let node = PredicateMirrorWalker.Node.expression(
+            name: "OSDScalarCollectionAllEqual",
+            children: [
+                ("sequence", .propertyReference("values")),
+                ("value", .typedValue(.null)),
+            ])
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node, attributeTypes: ["values": "Array<String>"])
+        ) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+    }
+
     func testArithmeticSelectsFloatIRForFloatOperands() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "Arithmetic",

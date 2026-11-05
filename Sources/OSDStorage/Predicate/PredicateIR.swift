@@ -25,6 +25,7 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case sequenceContains(PredicateIR, PredicateIR)
     case collectionContains(String, String, PredicateIR)
     case collectionAllEqual(String, String, PredicateIR)
+    case collectionAllNil(String)
     case collectionAllCompare(String, String, ComparisonOperator, PredicateIR)
     case codableCollectionIsEmpty(String)
     case codableCollectionCount(String)
@@ -480,7 +481,21 @@ package enum PredicateIRBuilder {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection allSatisfy requires a direct scalar collection and capture.")
                 }
+                if case .null = value {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable collection allSatisfy nil requires a literal nil comparison.")
+                }
                 return .collectionAllEqual(path[0], collectionElement.type, .value(value))
+            case "OSDScalarCollectionAllNil":
+                guard
+                    case let .keyPath(path) = try field("sequence", from: fields), path.count == 1,
+                    let collectionElement = scalarCollectionElement(attributeTypes[path[0]]),
+                    collectionElement.isOptional
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable collection allSatisfy nil requires a direct optional scalar collection.")
+                }
+                return .collectionAllNil(path[0])
             case "OSDScalarCollectionAllLessThan", "OSDScalarCollectionAllLessThanOrEqual",
                 "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
                 guard
@@ -696,6 +711,12 @@ package enum PredicateIRBuilder {
                     "Scalar collection allSatisfy inside relationship predicates is unsupported.")
             }
             return .collectionAllEqual(name, elementType, element)
+        case let .collectionAllNil(name):
+            guard relationships.isEmpty else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Scalar collection allSatisfy inside relationship predicates is unsupported.")
+            }
+            return .collectionAllNil(name)
         case let .collectionAllCompare(name, elementType, operation, element):
             guard relationships.isEmpty else {
                 throw SwiftDataError.unsupportedPredicate(
@@ -795,6 +816,8 @@ package enum PredicateIRBuilder {
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case let .collectionAllEqual(_, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
+        case .collectionAllNil:
+            return false
         case let .collectionAllCompare(_, _, _, element):
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case .codableCollectionIsEmpty:
@@ -935,6 +958,7 @@ package enum PredicateIRBuilder {
         case .comparison, .decimalComparison, .optionalComparison, .conjunction, .disjunction, .negation,
             .persistentIdentifier, .identifierValue, .persistentIdentifierComparison,
             .relationshipIsPresent, .value, .sequenceContains, .collectionContains, .collectionAllEqual,
+            .collectionAllNil,
             .collectionAllCompare, .codableCollectionIsEmpty, .codableCollectionCount,
             .relationshipContains, .relationshipCount:
             return false
@@ -1377,6 +1401,7 @@ package enum PredicateIRBuilder {
         case "OSDSequenceContainsWhere": ["sequence", "test"]
         case "OSDSequenceAllSatisfy": ["sequence", "test"]
         case "OSDScalarCollectionAllEqual": ["sequence", "value"]
+        case "OSDScalarCollectionAllNil": ["sequence"]
         case "OSDScalarCollectionAllLessThan", "OSDScalarCollectionAllLessThanOrEqual",
             "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
             ["sequence", "value"]

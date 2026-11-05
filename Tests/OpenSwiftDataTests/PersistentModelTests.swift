@@ -5344,6 +5344,9 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             schemaEntity.attributes.first(where: { $0.name == "optionalStrings" })?.type,
             "Array<Optional<String>>")
+        XCTAssertTrue(
+            try XCTUnwrap(schemaEntity.attributes.first(where: { $0.name == "optionalStrings" })).options.contains(
+                .codable))
         let context = container.mainContext
         let empty = OptionalScalarElementsFixture(
             name: "empty", optionalStrings: [], optionalNumbers: [], optionalFlags: [])
@@ -5354,14 +5357,34 @@ final class PersistentModelTests: XCTestCase {
             optionalFlags: [true, nil])
         let other = OptionalScalarElementsFixture(
             name: "other", optionalStrings: ["other"], optionalNumbers: [9], optionalFlags: [false])
-        for model in [empty, nilOnly, mixed, other] { context.insert(model) }
+        let nilStringValues = OptionalScalarElementsFixture(
+            name: "nil-values", optionalStrings: [nil, nil], optionalNumbers: [], optionalFlags: [])
+        for model in [empty, nilOnly, mixed, other, nilStringValues] { context.insert(model) }
         try context.save()
+
+        let allNilStrings = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalStrings.allSatisfy { $0 == nil } },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(allNilStrings).map(\.name), ["empty", "nil-only", "nil-values"])
+        XCTAssertEqual(try context.fetchCount(allNilStrings), 3)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(allNilStrings),
+            try context.fetch(allNilStrings).map(\.persistentModelID))
+        let notAllNilStrings = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { !$0.optionalStrings.allSatisfy { $0 == nil } },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(notAllNilStrings).map(\.name), ["mixed", "other"])
+
+        let allNilNumbers = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalNumbers.allSatisfy { $0 == nil } },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(allNilNumbers).map(\.name), ["empty", "nil-only", "nil-values"])
 
         let containsStringNil = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { $0.optionalStrings.contains(nil) },
             sortBy: [SortDescriptor(\.name)])
-        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only"])
-        XCTAssertEqual(try context.fetchCount(containsStringNil), 2)
+        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only", "nil-values"])
+        XCTAssertEqual(try context.fetchCount(containsStringNil), 3)
         XCTAssertEqual(
             try context.fetchIdentifiers(containsStringNil),
             try context.fetch(containsStringNil).map(\.persistentModelID))
@@ -5423,6 +5446,34 @@ final class PersistentModelTests: XCTestCase {
                 arguments: [.blob(Array("[null]".utf8)), .null, .text("Optional<String>")])
         }
         XCTAssertTrue(optionalAllEqual.isEmpty || optionalAllEqual[0][0] == .null)
+        let allNilResults = try store.read { connection in
+            try connection.rows(
+                "SELECT osd_json_array_all_nil(?), osd_json_array_all_nil(?), "
+                    + "osd_json_array_all_nil(?), osd_json_array_all_nil(?), "
+                    + "osd_json_array_all_nil(?), NOT (osd_json_array_all_nil(?))",
+                arguments: [
+                    .blob(Array("[]".utf8)), .blob(Array("[null,null]".utf8)),
+                    .blob(Array("[null,\"value\"]".utf8)), .blob(Array("[\"null\"]".utf8)),
+                    .null, .null,
+                ])
+        }
+        XCTAssertEqual(allNilResults, [[.int(1), .int(1), .int(0), .int(0), .null, .null]])
+        XCTAssertThrowsError(
+            try store.read {
+                try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.blob(Array("{}".utf8))])
+            })
+        XCTAssertThrowsError(
+            try store.read {
+                try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.blob(Array("\"null\"".utf8))])
+            })
+        XCTAssertThrowsError(
+            try store.read {
+                try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.blob(Array("true".utf8))])
+            })
+        XCTAssertThrowsError(
+            try store.read { try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.text("[]")]) })
+        XCTAssertThrowsError(
+            try store.read { try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.int(0)]) })
 
         let integerValue = 7
         let containsIntegerValue = FetchDescriptor<OptionalScalarElementsFixture>(
@@ -5438,7 +5489,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertThrowsError(
             try context.fetch(
                 FetchDescriptor<OptionalScalarElementsFixture>(
-                    predicate: #Predicate { $0.optionalStrings.allSatisfy { $0 == nil } })))
+                    predicate: #Predicate { $0.optionalStrings.allSatisfy { $0 != nil } })))
         XCTAssertThrowsError(
             try context.fetch(
                 FetchDescriptor<OptionalScalarElementsFixture>(
@@ -5451,7 +5502,11 @@ final class PersistentModelTests: XCTestCase {
         mixed.optionalStrings = [nil]
         mixed.optionalNumbers = [nil]
         mixed.optionalFlags = [nil]
-        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(
+            try context.fetch(allNilStrings).map(\.name), ["empty", "mixed", "nil-only", "nil-values"])
+        XCTAssertEqual(try context.fetch(notAllNilStrings).map(\.name), ["other"])
+        XCTAssertEqual(try context.fetchCount(allNilStrings), 4)
+        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only", "nil-values"])
         XCTAssertEqual(try context.fetch(containsStringValue).map(\.name), [])
         XCTAssertEqual(try context.fetch(containsIntegerNil).map(\.name), ["mixed", "nil-only"])
         XCTAssertEqual(try context.fetch(containsIntegerValue).map(\.name), [])
@@ -5503,6 +5558,28 @@ final class PersistentModelTests: XCTestCase {
         let matches = try RuntimePredicateEvaluator.matches(
             plan, values: ["flags": .blob(Array("[1]".utf8))])
         XCTAssertFalse(matches)
+    }
+
+    func testPendingOptionalScalarCollectionAllNilMatchesNullElements() throws {
+        let plan = PredicatePlan.collectionAllNil("values")
+        XCTAssertTrue(
+            try RuntimePredicateEvaluator.matches(plan, values: ["values": .blob(Array("[]".utf8))]))
+        XCTAssertTrue(
+            try RuntimePredicateEvaluator.matches(plan, values: ["values": .blob(Array("[null,null]".utf8))]))
+        XCTAssertFalse(
+            try RuntimePredicateEvaluator.matches(plan, values: ["values": .blob(Array("[null,\"value\"]".utf8))]))
+        XCTAssertFalse(
+            try RuntimePredicateEvaluator.matches(
+                .negation(plan), values: ["values": .blob(Array("[null,null]".utf8))]))
+        XCTAssertTrue(
+            try RuntimePredicateEvaluator.matches(
+                .negation(plan), values: ["values": .blob(Array("[null,\"value\"]".utf8))]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(plan, values: ["values": .null]))
+        XCTAssertFalse(try RuntimePredicateEvaluator.matches(.negation(plan), values: ["values": .null]))
+        XCTAssertThrowsError(
+            try RuntimePredicateEvaluator.matches(plan, values: ["values": .text("[]")]))
+        XCTAssertThrowsError(
+            try RuntimePredicateEvaluator.matches(plan, values: ["values": .blob(Array("not-json".utf8))]))
     }
 
     @MainActor

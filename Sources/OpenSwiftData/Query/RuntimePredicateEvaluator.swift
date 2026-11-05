@@ -45,6 +45,8 @@ package enum RuntimePredicateEvaluator {
             Set([name]).union(referencedProperties(in: element))
         case let .collectionAllEqual(name, _, element):
             Set([name]).union(referencedProperties(in: element))
+        case let .collectionAllNil(name):
+            [name]
         case let .collectionAllCompare(name, _, _, element):
             Set([name]).union(referencedProperties(in: element))
         case let .codableCollectionIsEmpty(name):
@@ -75,6 +77,8 @@ package enum RuntimePredicateEvaluator {
             return relationshipProperties(in: element)
         case let .collectionAllEqual(_, _, element):
             return relationshipProperties(in: element)
+        case .collectionAllNil:
+            return [:]
         case let .collectionAllCompare(_, _, _, element):
             return relationshipProperties(in: element)
         case .codableCollectionIsEmpty:
@@ -130,6 +134,8 @@ package enum RuntimePredicateEvaluator {
             case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
                 let .collectionAllCompare(_, _, _, value):
                 walk(value, collectionDepth: collectionDepth)
+            case .collectionAllNil:
+                break
             case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
                 break
             }
@@ -156,7 +162,8 @@ package enum RuntimePredicateEvaluator {
         case let .collectionContains(_, _, value), let .collectionAllEqual(_, _, value),
             let .collectionAllCompare(_, _, _, value):
             return containsNestedRelationship(value, depth: depth)
-        case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+        case .collectionAllNil, .property, .value, .collectionCount, .codableCollectionIsEmpty,
+            .codableCollectionCount:
             return false
         }
     }
@@ -228,7 +235,8 @@ package enum RuntimePredicateEvaluator {
                 if try evaluateTruth(body, context: endpointContext) == .yes { return .yes }
             }
             return .no
-        case .collectionContains, .collectionAllEqual, .collectionAllCompare, .codableCollectionIsEmpty:
+        case .collectionContains, .collectionAllEqual, .collectionAllNil, .collectionAllCompare,
+            .codableCollectionIsEmpty:
             let value = try evaluateValue(plan, context: context)
             guard value != .null else { return .unknown }
             guard case let .int(integer) = value else {
@@ -524,6 +532,16 @@ package enum RuntimePredicateEvaluator {
                     "Pending scalar collection allSatisfy received an incompatible element value")
             }
             return .int(allMatch ? 1 : 0)
+        case let .collectionAllNil(name):
+            let collectionValue = try evaluateValue(.property(name), context: context)
+            if collectionValue == .null { return .null }
+            guard case let .blob(bytes) = collectionValue else {
+                throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received invalid storage data")
+            }
+            guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
+                throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received malformed JSON data")
+            }
+            return .int(array.allSatisfy { $0 is NSNull } ? 1 : 0)
         case let .collectionAllCompare(name, elementType, operation, element):
             let collectionValue = try evaluateValue(
                 .property(name), context: context)

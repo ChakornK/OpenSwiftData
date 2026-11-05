@@ -49,6 +49,7 @@ public enum PredicateNodeMetadata {
             Entry(name: "OSDSequenceContainsWhere", requiredChildren: ["sequence", "test"]),
             Entry(name: "OSDSequenceAllSatisfy", requiredChildren: ["sequence", "test"]),
             Entry(name: "OSDScalarCollectionAllEqual", requiredChildren: ["sequence", "value"]),
+            Entry(name: "OSDScalarCollectionAllNil", requiredChildren: ["sequence"]),
             Entry(name: "OSDScalarCollectionAllLessThan", requiredChildren: ["sequence", "value"]),
             Entry(name: "OSDScalarCollectionAllLessThanOrEqual", requiredChildren: ["sequence", "value"]),
             Entry(name: "OSDScalarCollectionAllGreaterThan", requiredChildren: ["sequence", "value"]),

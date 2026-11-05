@@ -172,6 +172,10 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     Self.jsonArrayMembership(values, all: true)
                 })
             database.add(
+                function: DatabaseFunction("osd_json_array_all_nil", argumentCount: 1, pure: true) { values in
+                    try Self.jsonArrayAllNil(values)
+                })
+            database.add(
                 function: DatabaseFunction("osd_json_array_all_compare", argumentCount: 4, pure: true) { values in
                     Self.jsonArrayAllCompare(values)
                 })
@@ -488,6 +492,20 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
         default:
             return nil
         }
+    }
+
+    private static func jsonArrayAllNil(_ values: [DatabaseValue]) throws -> Int? {
+        guard values.count == 1 else {
+            throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received invalid arguments")
+        }
+        guard !values[0].isNull else { return nil }
+        guard case .blob = values[0].storage,
+            let data = Data.fromDatabaseValue(values[0]),
+            let array = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any]
+        else {
+            throw SwiftDataError.unsupportedPredicate("Codable collection allSatisfy received malformed JSON data")
+        }
+        return array.allSatisfy { $0 is NSNull } ? 1 : 0
     }
 
     private static func unsignedJSONElements(_ data: Data) -> [UInt64?]? {

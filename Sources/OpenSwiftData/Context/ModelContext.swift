@@ -2008,7 +2008,7 @@ public final class ModelContext {
             prefix: String,
             depth: Int
         ) {
-            guard depth <= 3,
+            guard depth <= OSDQueryLimits.maximumNestedCollectionPredicateDepth,
                 relationshipPaths.contains(where: {
                     $0.ownerEntityName == ownerEntity.name && $0.propertyName == relationship.name && $0.isToMany
                 }),
@@ -2023,7 +2023,7 @@ public final class ModelContext {
                 attributeTypes[elementPath] = attribute.type
                 if attribute.isOptional { optionalAttributeNames.insert(elementPath) }
             }
-            guard depth < 3 else { return }
+            guard depth < OSDQueryLimits.maximumNestedCollectionPredicateDepth else { return }
             for nestedRelationship in destination.relationships where nestedRelationship.isToMany {
                 addCollectionPath(
                     ownerEntity: destination,
@@ -2240,8 +2240,10 @@ public final class ModelContext {
                 evaluating plan: PredicatePlan,
                 depth: Int
             ) throws -> RuntimePredicateEvaluator.Context {
-                guard depth <= 3 else {
-                    throw SwiftDataError.unsupportedPredicate("Collection predicates support at most three levels.")
+                guard depth <= OSDQueryLimits.maximumNestedCollectionPredicateDepth else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Collection predicates support at most \(OSDQueryLimits.maximumNestedCollectionPredicateDepth) levels."
+                    )
                 }
                 let nestedNames = RuntimePredicateEvaluator.nestedRelationshipNames(in: plan)
                 let allNames = RuntimePredicateEvaluator.referencedProperties(in: plan)

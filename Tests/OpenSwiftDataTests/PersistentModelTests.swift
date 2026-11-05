@@ -649,7 +649,11 @@ final class FourLevelQuantifierItemFixture {
 @Model
 final class FourLevelQuantifierLeafFixture {
     var value: String
-    init(value: String) { self.value = value }
+    @Relationship(inverse: nil) var descendants: [FourLevelQuantifierLeafFixture]
+    init(value: String, descendants: [FourLevelQuantifierLeafFixture] = []) {
+        self.value = value
+        self.descendants = descendants
+    }
 }
 
 @Model
@@ -3525,7 +3529,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedFourLevelContainsRemainsFailClosed() throws {
+    func testNestedFourLevelContainsSupportsStoredAndPendingEvaluation() throws {
         let container = try ModelContainer(
             for: FourLevelQuantifierRootFixture.self,
             FourLevelQuantifierGroupFixture.self,
@@ -3533,18 +3537,130 @@ final class PersistentModelTests: XCTestCase {
             FourLevelQuantifierItemFixture.self,
             FourLevelQuantifierLeafFixture.self,
             configurations: .sqliteMemory("nested-relationship-quantifier-depth-four"))
+        let context = container.mainContext
         let needle = "match"
-        let descriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
-            predicate: #Predicate {
-                $0.groups.contains { group in
-                    group.children.contains { child in
-                        child.items.contains { item in
-                            item.leaves.contains { $0.value == needle }
+        let matchingTip = FourLevelQuantifierLeafFixture(value: "deep match")
+        let matchingLeaf = FourLevelQuantifierLeafFixture(value: needle, descendants: [matchingTip])
+        let matchingItem = FourLevelQuantifierItemFixture(value: "matching item", leaves: [matchingLeaf])
+        let matchingChild = FourLevelQuantifierChildFixture(items: [matchingItem])
+        let matchingGroup = FourLevelQuantifierGroupFixture(children: [matchingChild])
+        let matchingRoot = FourLevelQuantifierRootFixture(groups: [matchingGroup])
+
+        let otherLeaf = FourLevelQuantifierLeafFixture(value: "other")
+        let otherItem = FourLevelQuantifierItemFixture(value: "other item", leaves: [otherLeaf])
+        let otherChild = FourLevelQuantifierChildFixture(items: [otherItem])
+        let otherGroup = FourLevelQuantifierGroupFixture(children: [otherChild])
+        let otherRoot = FourLevelQuantifierRootFixture(groups: [otherGroup])
+
+        let emptyLeavesItem = FourLevelQuantifierItemFixture(value: "empty leaves", leaves: [])
+        let emptyItemsChild = FourLevelQuantifierChildFixture(items: [])
+        let emptyChildrenGroup = FourLevelQuantifierGroupFixture(children: [])
+        let emptyLeavesChild = FourLevelQuantifierChildFixture(items: [emptyLeavesItem])
+        let emptyLeavesGroup = FourLevelQuantifierGroupFixture(children: [emptyLeavesChild])
+        let emptyRoot = FourLevelQuantifierRootFixture(
+            groups: [
+                emptyLeavesGroup,
+                emptyChildrenGroup,
+                FourLevelQuantifierGroupFixture(children: [emptyItemsChild]),
+            ])
+
+        context.insert(matchingTip)
+        context.insert(matchingLeaf)
+        context.insert(otherLeaf)
+        context.insert(matchingItem)
+        context.insert(otherItem)
+        context.insert(emptyLeavesItem)
+        context.insert(matchingChild)
+        context.insert(otherChild)
+        context.insert(emptyLeavesChild)
+        context.insert(emptyItemsChild)
+        for group in emptyRoot.groups {
+            context.insert(group)
+        }
+        context.insert(matchingGroup)
+        context.insert(otherGroup)
+        context.insert(emptyChildrenGroup)
+        context.insert(matchingRoot)
+        context.insert(otherRoot)
+        context.insert(emptyRoot)
+        try context.save()
+
+        let predicate = #Predicate<FourLevelQuantifierRootFixture> {
+            $0.groups.contains { group in
+                group.children.contains { child in
+                    child.items.contains { item in
+                        item.leaves.contains { $0.value == needle }
+                    }
+                }
+            }
+        }
+        let storedDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(try context.fetch(storedDescriptor).map(\.persistentModelID), [matchingRoot.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(storedDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(storedDescriptor), [matchingRoot.persistentModelID])
+        let storedRoots = try context.fetch(FetchDescriptor<FourLevelQuantifierRootFixture>())
+        XCTAssertEqual(
+            Set(storedRoots.map(\.persistentModelID)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID, emptyRoot.persistentModelID]))
+
+        otherLeaf.value = needle
+        let pendingDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(predicate: predicate)
+        let pendingStoredDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: predicate, includePendingChanges: false)
+        XCTAssertEqual(
+            Set(try context.fetch(pendingDescriptor).map(\.persistentModelID)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID]))
+        XCTAssertEqual(
+            try context.fetch(pendingStoredDescriptor).map(\.persistentModelID), [matchingRoot.persistentModelID])
+
+        let pendingTip = FourLevelQuantifierLeafFixture(value: "pending tip")
+        let pendingLeaf = FourLevelQuantifierLeafFixture(value: needle, descendants: [pendingTip])
+        let pendingItem = FourLevelQuantifierItemFixture(value: "pending item", leaves: [pendingLeaf])
+        let pendingChild = FourLevelQuantifierChildFixture(items: [pendingItem])
+        let pendingGroup = FourLevelQuantifierGroupFixture(children: [pendingChild])
+        let pendingRoot = FourLevelQuantifierRootFixture(groups: [pendingGroup])
+        context.insert(pendingTip)
+        context.insert(pendingLeaf)
+        context.insert(pendingItem)
+        context.insert(pendingChild)
+        context.insert(pendingGroup)
+        context.insert(pendingRoot)
+        XCTAssertEqual(try context.fetchCount(pendingDescriptor), 3)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(pendingDescriptor)),
+            Set([matchingRoot.persistentModelID, otherRoot.persistentModelID, pendingRoot.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(pendingStoredDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(pendingStoredDescriptor), [matchingRoot.persistentModelID])
+
+        let depthFivePredicate = #Predicate<FourLevelQuantifierRootFixture> {
+            $0.groups.contains { group in
+                group.children.contains { child in
+                    child.items.contains { item in
+                        item.leaves.contains { leaf in
+                            leaf.descendants.contains { $0.value == needle }
                         }
                     }
                 }
-            })
-        XCTAssertThrowsError(try container.mainContext.fetch(descriptor))
+            }
+        }
+        let depthFiveDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(predicate: depthFivePredicate)
+        let depthFiveStoredDescriptor = FetchDescriptor<FourLevelQuantifierRootFixture>(
+            predicate: depthFivePredicate, includePendingChanges: false)
+        XCTAssertThrowsError(try context.fetch(depthFiveDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected depth-five collection predicate to fail closed, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try context.fetch(depthFiveStoredDescriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected depth-five collection predicate to fail closed, got \(error)")
+            }
+        }
     }
 
     @MainActor

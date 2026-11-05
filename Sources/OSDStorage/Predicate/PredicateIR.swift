@@ -981,8 +981,10 @@ package enum PredicateIRBuilder {
                 throw SwiftDataError.unsupportedPredicate(
                     "Nested collection relationship '\(name)' is not direct from '\(relationship)'.")
             }
-            guard depth < 2 else {
-                throw SwiftDataError.unsupportedPredicate("Nested collection predicates support at most three levels.")
+            guard depth < OSDQueryLimits.maximumNestedCollectionPredicateDepth - 1 else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Nested collection predicates support at most \(OSDQueryLimits.maximumNestedCollectionPredicateDepth) levels."
+                )
             }
             return .relationshipContains(
                 localName,

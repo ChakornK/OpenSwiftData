@@ -4,6 +4,94 @@ import SwiftSyntax
 import XCTest
 
 final class CodeGenTests: XCTestCase {
+    func testConflictingPropertyMacrosDetectEitherOrderAndQualifiedNames() throws {
+        let relationshipLast = try parseClass(
+            """
+            class Model {
+                @Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let relationshipLastProperty = try XCTUnwrap(
+            relationshipLast.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: relationshipLastProperty)?.attributeName.trimmedDescription,
+            "Relationship")
+
+        let attributeRelationshipAttribute = try parseClass(
+            """
+            class Model {
+                @Attribute(.unique) @Relationship @Attribute(.codable) var value: [Item]
+            }
+            """)
+        let attributeRelationshipAttributeProperty = try XCTUnwrap(
+            attributeRelationshipAttribute.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: attributeRelationshipAttributeProperty)?.attributeName
+                .trimmedDescription,
+            "Relationship")
+
+        let attributeLast = try parseClass(
+            """
+            class Model {
+                @Relationship @Attribute(.codable) var value: Item?
+            }
+            """)
+        let attributeLastProperty = try XCTUnwrap(
+            attributeLast.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: attributeLastProperty)?.attributeName.trimmedDescription,
+            "Attribute")
+
+        let relationshipAttributeRelationship = try parseClass(
+            """
+            class Model {
+                @Relationship @Attribute(.codable) @Relationship var value: [Item]
+            }
+            """)
+        let relationshipAttributeRelationshipProperty = try XCTUnwrap(
+            relationshipAttributeRelationship.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: relationshipAttributeRelationshipProperty)?.attributeName
+                .trimmedDescription,
+            "Attribute")
+
+        let qualified = try parseClass(
+            """
+            class Model {
+                @OpenSwiftData.Attribute(.unique) @OpenSwiftData.Relationship var value: [Item]
+            }
+            """)
+        let qualifiedProperty = try XCTUnwrap(qualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: qualifiedProperty)?.attributeName.trimmedDescription,
+            "OpenSwiftData.Relationship")
+
+        let escaped = try parseClass(
+            """
+            class Model {
+                @`Attribute`(.unique) @`Relationship` var value: [Item]
+            }
+            """)
+        let escapedProperty = try XCTUnwrap(escaped.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: escapedProperty)?.attributeName.trimmedDescription,
+            "`Relationship`")
+
+        let unrelatedModule = try parseClass(
+            """
+            class Model {
+                @OtherModels.Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let unrelatedProperty = try XCTUnwrap(
+            unrelatedModule.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: unrelatedProperty))
+
+        let valid = try parseClass("class Model { @Attribute(.unique) var value: String }")
+        let validProperty = try XCTUnwrap(valid.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: validProperty))
+    }
+
     func testInheritedModelKeyPathTablesComposeForConcreteRoots() throws {
         let base = try parseClass(
             """

@@ -936,6 +936,43 @@ enum CodeGen {
             }
         }
     }
+
+    static func conflictingPropertyMacro(in declaration: VariableDeclSyntax) -> AttributeSyntax? {
+        var sawAttribute = false
+        var sawRelationship = false
+        // Conditional attribute clauses require an active build configuration and are not traversed here.
+        for element in declaration.attributes {
+            guard case let .attribute(attribute) = element else { continue }
+            guard let name = propertyMacroName(attribute) else { continue }
+            switch name {
+            case "Attribute":
+                if sawRelationship { return attribute }
+                sawAttribute = true
+            case "Relationship":
+                if sawAttribute { return attribute }
+                sawRelationship = true
+            default: break
+            }
+        }
+        return nil
+    }
+
+    private static func propertyMacroName(_ attribute: AttributeSyntax) -> String? {
+        let name: TokenSyntax
+        switch attribute.attributeName.as(SwiftSyntax.IdentifierTypeSyntax.self) {
+        case let identifier?:
+            name = identifier.name
+        case nil:
+            guard
+                let member = attribute.attributeName.as(SwiftSyntax.MemberTypeSyntax.self),
+                member.moduleSelector == nil,
+                let base = member.baseType.as(SwiftSyntax.IdentifierTypeSyntax.self),
+                base.name.text == "OpenSwiftData"
+            else { return nil }
+            name = member.name
+        }
+        return name.text.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+    }
 }
 
 enum InitializationVariant {

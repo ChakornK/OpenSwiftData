@@ -68,6 +68,7 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             let properties = try CodeGen.schemaDirectiveProperties(directive, kind: kind)
             try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
         }
+        diagnoseConflictingPropertyMacros(in: classDeclaration, context: context)
         let members = CodeGen.memberSources(
             classDeclaration, schemaIndexes: schemaIndexes, superclassName: superclassName)
         return members.map(
@@ -158,6 +159,18 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             context.diagnose(diagnostic)
         }
     }
+
+    private static func diagnoseConflictingPropertyMacros(
+        in declaration: ClassDeclSyntax,
+        context: some MacroExpansionContext
+    ) {
+        for member in declaration.memberBlock.members {
+            guard let variable = member.decl.as(VariableDeclSyntax.self) else { continue }
+            guard let conflictingAttribute = CodeGen.conflictingPropertyMacro(in: variable) else { continue }
+            context.diagnose(
+                Diagnostic(node: Syntax(conflictingAttribute), message: ConflictingPropertyMacrosDiagnostic()))
+        }
+    }
 }
 
 private struct NonClassModelDiagnostic: DiagnosticMessage {
@@ -169,6 +182,12 @@ private struct NonClassModelDiagnostic: DiagnosticMessage {
 private struct InvalidModelArgumentDiagnostic: DiagnosticMessage {
     let message: String
     let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "invalid-model-argument")
+    let severity = DiagnosticSeverity.error
+}
+
+private struct ConflictingPropertyMacrosDiagnostic: DiagnosticMessage {
+    let message = "@Attribute and @Relationship cannot be applied to the same property."
+    let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "conflicting-property-macros")
     let severity = DiagnosticSeverity.error
 }
 

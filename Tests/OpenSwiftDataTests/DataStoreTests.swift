@@ -9,6 +9,15 @@ final class CustomDataStoreFixture {
 }
 
 @Model
+final class CustomDataStoreUInt64Fixture {
+    var value: UInt64?
+
+    init(value: UInt64?) {
+        self.value = value
+    }
+}
+
+@Model
 final class CustomDataStorePartialFixture {
     var name: String
     var value: Int
@@ -1057,6 +1066,35 @@ final class DataStoreTests: XCTestCase {
         XCTAssertThrowsError(try context.save())
         XCTAssertTrue(context.hasChanges)
         XCTAssertTrue(model.persistentModelID.isTemporary)
+    }
+
+    @MainActor
+    func testDataStoreUInt64OverflowDoesNotCommitAndCanRetry() throws {
+        let store = DictionaryDataStore()
+        let configuration = ModelConfiguration(
+            "custom-store-uint64-overflow", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(for: CustomDataStoreUInt64Fixture.self, configurations: configuration)
+        let context = container.mainContext
+        let valid = CustomDataStoreUInt64Fixture(value: UInt64(Int64.max))
+        let overflowing = CustomDataStoreUInt64Fixture(value: UInt64(Int64.max) + 1)
+        context.insert(valid)
+        context.insert(overflowing)
+
+        XCTAssertThrowsError(try context.save())
+        XCTAssertTrue(store.storedSnapshots().isEmpty)
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === valid }))
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === overflowing }))
+        XCTAssertTrue(valid.persistentModelID.isTemporary)
+        XCTAssertTrue(overflowing.persistentModelID.isTemporary)
+
+        overflowing.value = UInt64(Int64.max)
+        try context.save()
+        XCTAssertEqual(store.storedSnapshots().count, 2)
+        XCTAssertFalse(valid.persistentModelID.isTemporary)
+        XCTAssertFalse(overflowing.persistentModelID.isTemporary)
+        XCTAssertEqual(
+            Set(try container.makeContext().fetch(FetchDescriptor<CustomDataStoreUInt64Fixture>()).compactMap(\.value)),
+            Set([UInt64(Int64.max)]))
     }
 
     @MainActor

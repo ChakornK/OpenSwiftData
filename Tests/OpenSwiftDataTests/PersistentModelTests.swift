@@ -2642,12 +2642,28 @@ final class PersistentModelTests: XCTestCase {
 
         selectedTarget.name = "pending-selected"
         let pendingString = "selected"
+        let committedOnlyAfterTargetEdit = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.contains(pendingString) == true },
+            includePendingChanges: false)
+        let committedAfterTargetEdit = try context.fetch(committedOnlyAfterTargetEdit)
+        XCTAssertEqual(committedAfterTargetEdit.map(\.name), ["matched"])
+        XCTAssertEqual(try context.fetchCount(committedOnlyAfterTargetEdit), 1)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(committedOnlyAfterTargetEdit),
+            committedAfterTargetEdit.map(\.persistentModelID))
+        let pendingOnlyString = "pending"
         let pendingContains = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
-            predicate: #Predicate { $0.target?.name.contains(pendingString) == true })
+            predicate: #Predicate { $0.target?.name.contains(pendingOnlyString) == true })
         let pendingContainedOwners = try context.fetch(pendingContains)
         XCTAssertEqual(pendingContainedOwners.map(\.name), ["matched"])
         XCTAssertEqual(try context.fetchCount(pendingContains), 1)
         XCTAssertEqual(try context.fetchIdentifiers(pendingContains), pendingContainedOwners.map(\.persistentModelID))
+        let committedOnlyPendingString = FetchDescriptor<HierarchyToHierarchyOwnerChildFixture>(
+            predicate: #Predicate { $0.target?.name.contains(pendingOnlyString) == true },
+            includePendingChanges: false)
+        XCTAssertTrue(try context.fetch(committedOnlyPendingString).isEmpty)
+        XCTAssertEqual(try context.fetchCount(committedOnlyPendingString), 0)
+        XCTAssertTrue(try context.fetchIdentifiers(committedOnlyPendingString).isEmpty)
 
         let insertedTarget = PlainHierarchyTargetChildFixture(name: "pending-selected", detail: "pending")
         let insertedOwner = HierarchyToHierarchyOwnerChildFixture(name: "pending", target: insertedTarget, rank: 4)

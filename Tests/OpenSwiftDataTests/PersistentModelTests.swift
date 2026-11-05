@@ -872,6 +872,15 @@ final class UInt64ScalarFixture {
 }
 
 @Model
+final class OptionalUInt64ScalarFixture {
+    var value: UInt64?
+
+    init(value: UInt64?) {
+        self.value = value
+    }
+}
+
+@Model
 final class OptionalUInt64CollectionFixture {
     @Attribute(.codable) var values: Set<UInt64?>
 
@@ -5083,6 +5092,62 @@ final class PersistentModelTests: XCTestCase {
             }
         }
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<UInt64ScalarFixture>()), 1)
+    }
+
+    @MainActor
+    func testOptionalUInt64ScalarMatchesNilSomeAndPendingValues() throws {
+        let container = try ModelContainer(
+            for: OptionalUInt64ScalarFixture.self,
+            configurations: .sqliteMemory("optional-uint64-scalar-values"))
+        let context = container.mainContext
+        let nilModel = OptionalUInt64ScalarFixture(value: nil)
+        let boundary = UInt64(Int64.max)
+        let boundaryModel = OptionalUInt64ScalarFixture(value: boundary)
+        context.insert(nilModel)
+        context.insert(boundaryModel)
+        try context.save()
+
+        let nilCapture: UInt64? = nil
+        let literalNilDescriptor = FetchDescriptor<OptionalUInt64ScalarFixture>(
+            predicate: #Predicate { $0.value == nil })
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(literalNilDescriptor)), Set([nilModel.persistentModelID]))
+        let nilDescriptor = FetchDescriptor<OptionalUInt64ScalarFixture>(
+            predicate: #Predicate { $0.value == nilCapture })
+        let nilMatches = try context.fetch(nilDescriptor)
+        XCTAssertEqual(nilMatches.map(\.persistentModelID), [nilModel.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(nilDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(nilDescriptor), nilMatches.map(\.persistentModelID))
+
+        let someCapture: UInt64? = boundary
+        let someDescriptor = FetchDescriptor<OptionalUInt64ScalarFixture>(
+            predicate: #Predicate { $0.value == someCapture })
+        XCTAssertEqual(try context.fetch(someDescriptor).map(\.persistentModelID), [boundaryModel.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(someDescriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(someDescriptor), [boundaryModel.persistentModelID])
+
+        boundaryModel.value = nil
+        XCTAssertEqual(
+            Set(try context.fetch(nilDescriptor).map(\.persistentModelID)),
+            Set([nilModel.persistentModelID, boundaryModel.persistentModelID]))
+        XCTAssertEqual(try context.fetchCount(someDescriptor), 0)
+        boundaryModel.value = boundary
+        XCTAssertEqual(try context.fetchIdentifiers(someDescriptor), [boundaryModel.persistentModelID])
+
+        let overflowing = OptionalUInt64ScalarFixture(value: UInt64(Int64.max) + 1)
+        context.insert(overflowing)
+        XCTAssertThrowsError(try context.save())
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<OptionalUInt64ScalarFixture>()), 3)
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<OptionalUInt64ScalarFixture>(includePendingChanges: false)), 2)
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === overflowing }))
+
+        overflowing.value = boundary
+        try context.save()
+        let savedSomeMatches = try context.fetch(someDescriptor)
+        XCTAssertEqual(
+            Set(savedSomeMatches.map(\.persistentModelID)), Set([boundaryModel, overflowing].map(\.persistentModelID)))
+        XCTAssertEqual(try context.fetchCount(someDescriptor), 2)
     }
 
     @MainActor

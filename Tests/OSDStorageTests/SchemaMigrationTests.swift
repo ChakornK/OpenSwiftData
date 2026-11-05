@@ -5187,6 +5187,116 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
+    func testScalarNameCannotBeRemovedAndReintroducedWithDifferentTypeInOneStage() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "value", type: "String"),
+                ])
+        ])
+        let destination = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                ])
+        ])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("scalar-same-stage-name-reuse.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write {
+            try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNAME, ZVALUE) VALUES (1, 2, 'kept', 'old')")
+        }
+        let originalObjects = try initial.read {
+            try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+        }
+        let originalMetadata = try initial.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") }
+        let originalRows = try initial.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZVALUE FROM ZRECORD")
+        }
+        try initial.close()
+        XCTAssertThrowsError(
+            try LightweightMigration.openStore(location: location, schema: destination)
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected a same-name type change to fail closed, got \(error)")
+            }
+        }
+        let inspection = try GRDBSQLiteDriver(location: location)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name") },
+            originalObjects)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT key, value FROM _osd_meta ORDER BY key") },
+            originalMetadata)
+        XCTAssertEqual(
+            try inspection.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZVALUE FROM ZRECORD") },
+            originalRows)
+        try inspection.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: source)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZVALUE FROM ZRECORD") },
+            originalRows)
+        try reopened.close()
+    }
+
+    func testScalarNameCanBeRemovedAndReintroducedAcrossStages() throws {
+        let source = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "value", type: "String"),
+                ])
+        ])
+        let removed = Schema([
+            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "name", type: "String")])
+        ])
+        let reintroduced = Schema([
+            Schema.Entity(
+                name: "Record",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                ])
+        ])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("scalar-remove-readd-stages.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        try initial.write {
+            try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZNAME, ZVALUE) VALUES (1, 4, 'kept', 'old')")
+        }
+        try initial.close()
+
+        let afterRemoval = try LightweightMigration.openStore(location: location, schema: removed)
+        XCTAssertFalse(
+            try afterRemoval.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZVALUE") }))
+        XCTAssertEqual(
+            try afterRemoval.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZRECORD") },
+            [[.int(1), .int(4), .text("kept")]])
+        try afterRemoval.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: reintroduced)
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZVALUE FROM ZRECORD")
+            },
+            [[.int(1), .int(4), .text("kept"), .null]])
+        XCTAssertTrue(
+            try reopened.read { try $0.rows("PRAGMA table_info(ZRECORD)") }
+                .contains(where: { $0.count > 1 && $0[1] == .text("ZVALUE") }))
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testScalarRemovalAndAdditionRejectsNewUniqueAttributeAtomically() throws {
         let source = Schema([
             Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "obsolete", type: "String")])

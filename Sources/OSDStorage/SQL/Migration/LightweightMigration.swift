@@ -668,39 +668,41 @@ package enum LightweightMigration {
         try validateDestinationIndexNames(destination)
         let pairedInverseRemovals = try planPairedInverseRelationshipRemovals(
             source: source, destination: destination, connection: connection)
-        let toManyAdditionPlan = try planMultipleFlatOwnerOnlyToManyAdditions(
-            source: source,
-            destination: destination,
-            validatedSourceIndexSQL: validatedSourceIndexSQL,
-            excludedEndpoints: Set(
-                pairedInverseRemovals.flatMap {
-                    [
-                        "\($0.ownerEntityName).\($0.ownerRelationshipName)",
-                        "\($0.inverseEntityName).\($0.inverseRelationshipName)",
-                    ]
-                }),
-            connection: connection)
-        let toManyRemovalPlan = try planMultipleFlatOwnerOnlyToManyRemovals(
-            source: source,
-            destination: destination,
-            sourceIndexSQL: validatedSourceIndexSQL,
-            excludedEndpoints: Set(
-                pairedInverseRemovals.flatMap {
-                    [
-                        "\($0.ownerEntityName).\($0.ownerRelationshipName)",
-                        "\($0.inverseEntityName).\($0.inverseRelationshipName)",
-                    ]
-                }),
-            connection: connection)
-        let toManyReplacementPlan: OwnerOnlyToManyReplacementPlan?
-        if toManyAdditionPlan == nil, toManyRemovalPlan == nil {
-            toManyReplacementPlan = try planOwnerOnlyToManyReplacement(
-                source: source, destination: destination, connection: connection)
+        let toManyReplacementPlan = try planOwnerOnlyToManyReplacement(
+            source: source, destination: destination, connection: connection)
+        let toManyAdditionPlan: OwnerOnlyToManyAdditionBatchPlan?
+        let toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?
+        if toManyReplacementPlan == nil {
+            toManyAdditionPlan = try planMultipleFlatOwnerOnlyToManyAdditions(
+                source: source,
+                destination: destination,
+                validatedSourceIndexSQL: validatedSourceIndexSQL,
+                excludedEndpoints: Set(
+                    pairedInverseRemovals.flatMap {
+                        [
+                            "\($0.ownerEntityName).\($0.ownerRelationshipName)",
+                            "\($0.inverseEntityName).\($0.inverseRelationshipName)",
+                        ]
+                    }),
+                connection: connection)
+            toManyRemovalPlan = try planMultipleFlatOwnerOnlyToManyRemovals(
+                source: source,
+                destination: destination,
+                sourceIndexSQL: validatedSourceIndexSQL,
+                excludedEndpoints: Set(
+                    pairedInverseRemovals.flatMap {
+                        [
+                            "\($0.ownerEntityName).\($0.ownerRelationshipName)",
+                            "\($0.inverseEntityName).\($0.inverseRelationshipName)",
+                        ]
+                    }),
+                connection: connection)
         } else {
-            toManyReplacementPlan = nil
+            toManyAdditionPlan = nil
+            toManyRemovalPlan = nil
         }
         guard (toManyAdditionPlan == nil || toManyRemovalPlan == nil),
-            toManyReplacementPlan == nil || (toManyAdditionPlan == nil && toManyRemovalPlan == nil)
+            (toManyReplacementPlan == nil || (toManyAdditionPlan == nil && toManyRemovalPlan == nil))
         else {
             throw SwiftDataError.migrationUnsupported(
                 "Join-table additions cannot be combined with join-table removals in one migration.")
@@ -5829,68 +5831,106 @@ package enum LightweightMigration {
             removedRelationships += removed.map { (sourceEntity, $0) }
             addedRelationships += added.map { (destinationEntity, $0) }
         }
-        guard removedRelationships.count == 1, addedRelationships.count == 1,
-            let (removedOwner, removed) = removedRelationships.first,
-            let (addedOwner, added) = addedRelationships.first,
-            removedOwner.name == addedOwner.name,
-            removed.originalName == nil,
-            added.originalName == nil,
-            removed.name.caseInsensitiveCompare(added.name) != .orderedSame,
-            removed.destination != removedOwner.name,
-            added.destination != addedOwner.name,
-            removed.inverse == nil,
-            added.inverse == nil,
-            removed.minimumModelCount == nil || removed.minimumModelCount == 0,
-            added.minimumModelCount == nil || added.minimumModelCount == 0,
-            removed.maximumModelCount == nil,
-            added.maximumModelCount == nil,
-            removed.deleteRule == .nullify || removed.deleteRule == .noAction,
-            added.deleteRule == .nullify || added.deleteRule == .noAction,
-            let removedTarget = source.entity(forName: removed.destination),
-            let addedTarget = destination.entity(forName: added.destination),
-            removedTarget.superentityName == nil,
-            addedTarget.superentityName == nil,
-            !source.entities.contains(where: { $0.superentityName == removedTarget.name }),
-            !destination.entities.contains(where: { $0.superentityName == addedTarget.name }),
-            !hasReciprocalRelationship(
-                named: removed.name, from: removedOwner.name, to: removed.destination, schema: source),
-            !hasReciprocalRelationship(
-                named: added.name, from: addedOwner.name, to: added.destination, schema: destination)
-        else { return nil }
+        guard !removedRelationships.isEmpty, !addedRelationships.isEmpty else { return nil }
+        let removedByOwner = Dictionary(grouping: removedRelationships, by: { $0.0.name })
+        let addedByOwner = Dictionary(grouping: addedRelationships, by: { $0.0.name })
+        for (ownerName, ownerRemovals) in removedByOwner {
+            let ownerAdditions = addedByOwner[ownerName] ?? []
+            let removedNames = Set(ownerRemovals.map { $0.1.name.uppercased() })
+            guard ownerAdditions.allSatisfy({ !removedNames.contains($0.1.name.uppercased()) }) else {
+                return nil
+            }
+        }
+        for (owner, relationship) in removedRelationships {
+            guard relationship.originalName == nil,
+                relationship.destination != owner.name,
+                relationship.inverse == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                let target = source.entity(forName: relationship.destination),
+                target.superentityName == nil,
+                !source.entities.contains(where: { $0.superentityName == target.name }),
+                !hasReciprocalRelationship(
+                    named: relationship.name, from: owner.name, to: relationship.destination, schema: source)
+            else { return nil }
+        }
+        for (owner, relationship) in addedRelationships {
+            guard relationship.originalName == nil,
+                relationship.destination != owner.name,
+                relationship.inverse == nil,
+                relationship.minimumModelCount == nil || relationship.minimumModelCount == 0,
+                relationship.maximumModelCount == nil,
+                relationship.deleteRule == .nullify || relationship.deleteRule == .noAction,
+                let target = destination.entity(forName: relationship.destination),
+                target.superentityName == nil,
+                !destination.entities.contains(where: { $0.superentityName == target.name }),
+                !hasReciprocalRelationship(
+                    named: relationship.name, from: owner.name, to: relationship.destination, schema: destination)
+            else { return nil }
+        }
 
-        guard
-            let removedPlan = try planOwnerOnlyToManyJoinTableRemoval(
-                removed, owner: removedOwner, schema: source, connection: connection)
-        else {
-            throw SwiftDataError.migrationUnsupported("Removed to-many join table could not be preflighted.")
+        var removalPlans: [OwnerOnlyToManyRemovalPlan] = []
+        var removedRelationshipNamesByOwner: [String: Set<String>] = [:]
+        for (owner, relationship) in removedRelationships.sorted(by: {
+            let left = "\($0.0.name).\($0.1.name)"
+            let right = "\($1.0.name).\($1.1.name)"
+            return left < right
+        }) {
+            guard
+                let plan = try planOwnerOnlyToManyJoinTableRemoval(
+                    relationship, owner: owner, schema: source, connection: connection)
+            else {
+                throw SwiftDataError.migrationUnsupported("Removed to-many join table could not be preflighted.")
+            }
+            removalPlans.append(plan)
+            removedRelationshipNamesByOwner[owner.name, default: []].insert(relationship.name)
         }
         let destinationSQL = try SchemaBuilder.build(destination).statements
-        guard let addedTable = SchemaBuilder.joinTableName(for: addedOwner, relationship: added, schema: destination),
-            let tableStatement = destinationSQL.first(where: { $0.hasPrefix("CREATE TABLE \(addedTable) ") })
-        else {
-            throw SwiftDataError.migrationUnsupported("Added to-many join table DDL is unavailable.")
-        }
-        let uniqueIndexName = "\(addedTable)_UNIQUE_INDEX"
-        let reverseIndexName = "\(addedTable)_Z_B_INDEX"
-        guard
-            let uniqueIndexStatement = destinationSQL.first(where: {
-                $0.hasPrefix("CREATE UNIQUE INDEX \(uniqueIndexName) ")
-            }),
-            let reverseIndexStatement = destinationSQL.first(where: {
-                $0.hasPrefix("CREATE INDEX \(reverseIndexName) ")
-            })
-        else {
-            throw SwiftDataError.migrationUnsupported("Added to-many join indexes are unavailable.")
+        var additionPlans: [OwnerOnlyToManyAdditionPlan] = []
+        var addedRelationshipNamesByOwner: [String: Set<String>] = [:]
+        for (owner, relationship) in addedRelationships.sorted(by: {
+            let left = "\($0.0.name).\($0.1.name)"
+            let right = "\($1.0.name).\($1.1.name)"
+            return left < right
+        }) {
+            guard let table = SchemaBuilder.joinTableName(for: owner, relationship: relationship, schema: destination),
+                let tableStatement = destinationSQL.first(where: { $0.hasPrefix("CREATE TABLE \(table) ") })
+            else {
+                throw SwiftDataError.migrationUnsupported("Added to-many join table DDL is unavailable.")
+            }
+            let uniqueIndexName = "\(table)_UNIQUE_INDEX"
+            let reverseIndexName = "\(table)_Z_B_INDEX"
+            guard
+                let uniqueIndexStatement = destinationSQL.first(where: {
+                    $0.hasPrefix("CREATE UNIQUE INDEX \(uniqueIndexName) ")
+                }),
+                let reverseIndexStatement = destinationSQL.first(where: {
+                    $0.hasPrefix("CREATE INDEX \(reverseIndexName) ")
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported("Added to-many join indexes are unavailable.")
+            }
+            additionPlans.append(
+                OwnerOnlyToManyAdditionPlan(
+                    joinTable: table,
+                    tableStatement: tableStatement,
+                    uniqueIndexStatement: uniqueIndexStatement,
+                    reverseIndexStatement: reverseIndexStatement))
+            addedRelationshipNamesByOwner[owner.name, default: []].insert(relationship.name)
         }
         let removedNames = Set(
-            [
-                removedPlan.joinTable,
-                "\(removedPlan.joinTable)_UNIQUE_INDEX",
-                "\(removedPlan.joinTable)_Z_B_INDEX",
-            ].map { $0.uppercased() })
-        let addedNames = Set([addedTable, uniqueIndexName, reverseIndexName].map { $0.uppercased() })
-        guard removedNames.isDisjoint(with: addedNames) else {
-            throw SwiftDataError.migrationUnsupported("To-many replacement reuses a removed join object name.")
+            removalPlans.flatMap { plan in
+                [plan.joinTable, "\(plan.joinTable)_UNIQUE_INDEX", "\(plan.joinTable)_Z_B_INDEX"]
+            }.map { $0.uppercased() })
+        let addedObjectNames = additionPlans.flatMap { plan in
+            [plan.joinTable, "\(plan.joinTable)_UNIQUE_INDEX", "\(plan.joinTable)_Z_B_INDEX"]
+        }.map { $0.uppercased() }
+        let addedNames = Set(addedObjectNames)
+        guard addedNames.count == addedObjectNames.count,
+            removedNames.isDisjoint(with: addedNames)
+        else {
+            throw SwiftDataError.migrationUnsupported("To-many replacement join object names collide.")
         }
         let existingNames = Set(
             try connection.rows("SELECT name FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger')")
@@ -5901,20 +5941,17 @@ package enum LightweightMigration {
         guard addedNames.isDisjoint(with: existingNames) else {
             throw SwiftDataError.migrationUnsupported("Added join objects collide with physical source objects.")
         }
-        try validateJoinTableNoPhysicalForeignKeys(table: addedTable, checkReferences: false, connection: connection)
-        try validateNoJoinTableDependencies(addedTable, connection: connection)
+        for plan in additionPlans {
+            try validateJoinTableNoPhysicalForeignKeys(
+                table: plan.joinTable, checkReferences: false, connection: connection)
+            try validateNoJoinTableDependencies(plan.joinTable, connection: connection)
+        }
 
         return OwnerOnlyToManyReplacementPlan(
-            removedRelationshipNamesByOwner: [removedOwner.name: [removed.name]],
-            removedJoinTables: [removedPlan.joinTable],
-            additionsByOwner: [addedOwner.name: [added.name]],
-            additions: [
-                OwnerOnlyToManyAdditionPlan(
-                    joinTable: addedTable,
-                    tableStatement: tableStatement,
-                    uniqueIndexStatement: uniqueIndexStatement,
-                    reverseIndexStatement: reverseIndexStatement)
-            ])
+            removedRelationshipNamesByOwner: removedRelationshipNamesByOwner,
+            removedJoinTables: removalPlans.map(\.joinTable).sorted(),
+            additionsByOwner: addedRelationshipNamesByOwner,
+            additions: additionPlans.sorted { $0.joinTable < $1.joinTable })
     }
 
     private static func planMultipleFlatOwnerOnlyToManyAdditions(

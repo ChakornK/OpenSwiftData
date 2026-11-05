@@ -9192,6 +9192,7 @@ final class SchemaMigrationTests: XCTestCase {
             for table in joinTables { try connection.execute("INSERT INTO \(table) (Z_A, Z_B) VALUES (2, 1)") }
         }
         try initial.close()
+
         let migrated = try LightweightMigration.openStore(location: location, schema: destination)
         for table in joinTables {
             XCTAssertTrue(
@@ -13017,6 +13018,138 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyLeafToOneAdditionTargetsExistingHierarchySubtype() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-leaf-subtype-target.sqlite"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+            Schema.Entity(name: "OwnerBase", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+            Schema.Entity(name: "OwnerBase", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            Schema.Entity(
+                name: "OwnerChild",
+                attributes: [Schema.Attribute(name: "label", type: "String")],
+                relationships: [Schema.Relationship(name: "favorite", destination: "Child", isOptional: true)],
+                superentityName: "OwnerBase"),
+        ])
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        defer { try? initial.close() }
+        let sourceIDs = try initial.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: source, connection: $0))
+        }
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME) VALUES (?, 3, 'base')",
+                [.int(Int64(try XCTUnwrap(sourceIDs["Base"])))])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME) VALUES (?, 5, 'child')",
+                [.int(Int64(try XCTUnwrap(sourceIDs["Child"])))])
+            try connection.execute(
+                "INSERT INTO ZOWNERBASE (Z_ENT, Z_OPT, ZLABEL) VALUES (?, 7, 'owner')",
+                [.int(Int64(try XCTUnwrap(sourceIDs["OwnerBase"])))])
+        }
+        let targetPrimaryKey: Int64 = try initial.read {
+            guard
+                let value = try $0.rows(
+                    "SELECT Z_PK FROM ZBASE WHERE Z_ENT = ?", [.int(Int64(try XCTUnwrap(sourceIDs["Child"])))]
+                )
+                .first?.first
+            else { throw SwiftDataError.migrationUnsupported("Seeded hierarchy target row is missing.") }
+            guard case let .int(primaryKey) = value else {
+                throw SwiftDataError.migrationUnsupported("Seeded hierarchy target primary key is invalid.")
+            }
+            return primaryKey
+        }
+        try initial.close()
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        defer { try? migrated.close() }
+        let destinationIDs = try migrated.read {
+            try XCTUnwrap(LightweightMigration.storedEntityIDs(schema: destination, connection: $0))
+        }
+        XCTAssertEqual(destinationIDs["Base"], sourceIDs["Base"])
+        XCTAssertEqual(destinationIDs["Child"], sourceIDs["Child"])
+        XCTAssertNotEqual(destinationIDs["Child"], destinationIDs["Base"])
+        XCTAssertEqual(destinationIDs["OwnerBase"], sourceIDs["OwnerBase"])
+        let ownerChildID = try XCTUnwrap(destinationIDs["OwnerChild"])
+        XCTAssertGreaterThan(ownerChildID, try XCTUnwrap(sourceIDs.values.max()))
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZBASE ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(Int64(try XCTUnwrap(destinationIDs["Base"]))), .int(3), .text("base")],
+                [.int(2), .int(Int64(try XCTUnwrap(destinationIDs["Child"]))), .int(5), .text("child")],
+            ])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZLABEL, ZOWNERCHILD_FAVORITE FROM ZOWNERBASE")
+            },
+            [[.int(1), .int(Int64(try XCTUnwrap(destinationIDs["OwnerBase"]))), .int(7), .text("owner"), .null]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("PRAGMA index_info('ZOWNERBASE_ZOWNERCHILD_FAVORITE_INDEX')")
+            },
+            [[.int(0), .int(4), .text("ZOWNERCHILD_FAVORITE")]])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows("SELECT Z_SUPER FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [.int(Int64(ownerChildID))])
+            },
+            [[.int(Int64(try XCTUnwrap(destinationIDs["OwnerBase"])))]])
+        try migrated.write { connection in
+            try connection.execute(
+                "INSERT INTO ZOWNERBASE (Z_ENT, Z_OPT, ZLABEL, ZOWNERCHILD_FAVORITE) VALUES (?, 1, 'leaf', ?)",
+                [.int(Int64(ownerChildID)), .int(targetPrimaryKey)])
+        }
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT Z_PK, Z_ENT, Z_OPT, ZLABEL, ZOWNERCHILD_FAVORITE FROM ZOWNERBASE ORDER BY Z_PK")
+            },
+            [
+                [.int(1), .int(Int64(try XCTUnwrap(destinationIDs["OwnerBase"]))), .int(7), .text("owner"), .null],
+                [.int(2), .int(Int64(ownerChildID)), .int(1), .text("leaf"), .int(targetPrimaryKey)],
+            ])
+        XCTAssertEqual(
+            try migrated.read {
+                try $0.rows(
+                    "SELECT owner.ZLABEL, target.ZNAME FROM ZOWNERBASE AS owner "
+                        + "JOIN ZBASE AS target ON target.Z_PK = owner.ZOWNERCHILD_FAVORITE "
+                        + "WHERE target.Z_PK = ? AND target.Z_ENT = ?",
+                    [.int(targetPrimaryKey), .int(Int64(try XCTUnwrap(destinationIDs["Child"])))])
+            },
+            [[.text("leaf"), .text("child")]])
+        try migrated.close()
+
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        defer { try? reopened.close() }
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows("SELECT ZOWNERCHILD_FAVORITE FROM ZOWNERBASE ORDER BY Z_PK")
+            },
+            [[.null], [.int(targetPrimaryKey)]])
+        XCTAssertEqual(
+            try reopened.read {
+                try $0.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNERBASE_ZOWNERCHILD_FAVORITE_INDEX'"
+                )
+            }.count,
+            1)
+        XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try reopened.close()
+    }
+
     func testHierarchyLeafInverseAttachesToExistingOptionalOwnerWithoutStorageChanges() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -15600,34 +15733,44 @@ final class SchemaMigrationTests: XCTestCase {
             try? FileManager.default.removeItem(atPath: storeURL.path + "-shm")
         }
         let initial = try LightweightMigration.openStore(location: location, schema: source)
-        defer { try? initial.close() }
+        var shouldCloseInitial = true
+        defer {
+            if shouldCloseInitial { try? initial.close() }
+        }
         try initial.write { connection in
             try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZNAME) VALUES (\(ownerEntityID), 4, 'owner')")
             try connection.execute("INSERT INTO ZTARGET (Z_ENT, Z_OPT, ZNAME) VALUES (\(targetEntityID), 9, 'target')")
         }
         try initial.close()
+        shouldCloseInitial = false
 
         let migrated = try LightweightMigration.openStore(location: location, schema: destination)
-        defer { try? migrated.close() }
-        XCTAssertEqual(
-            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZFAVORITE FROM ZOWNER") },
-            [[.int(1), .int(4), .text("owner"), .null]])
-        XCTAssertEqual(
-            try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTARGET") },
-            [[.int(1), .int(9), .text("target")]])
-        XCTAssertEqual(
-            try migrated.read {
-                try $0.rows("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZFAVORITE_INDEX'")
-            },
-            [[.text("CREATE INDEX ZOWNER_ZFAVORITE_INDEX ON ZOWNER (ZFAVORITE)")]])
-        try migrated.close()
+        var shouldCloseMigrated = true
+        defer {
+            if shouldCloseMigrated { try? migrated.close() }
+        }
+        do {
+            XCTAssertEqual(
+                try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME, ZFAVORITE FROM ZOWNER") },
+                [[.int(1), .int(4), .text("owner"), .null]])
+            XCTAssertEqual(
+                try migrated.read { try $0.rows("SELECT Z_PK, Z_OPT, ZNAME FROM ZTARGET") },
+                [[.int(1), .int(9), .text("target")]])
+            XCTAssertEqual(
+                try migrated.read {
+                    try $0.rows(
+                        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ZOWNER_ZFAVORITE_INDEX'")
+                },
+                [[.text("CREATE INDEX ZOWNER_ZFAVORITE_INDEX ON ZOWNER (ZFAVORITE)")]])
+            try migrated.close()
+            shouldCloseMigrated = false
+        }
 
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
         defer { try? reopened.close() }
         XCTAssertEqual(
             try reopened.read { try $0.rows("SELECT Z_PK, ZNAME, ZFAVORITE FROM ZOWNER") },
             [[.int(1), .text("owner"), .null]])
-        try reopened.close()
     }
 
     func testRelationshipRemovalRejectsRequiredCascadeAndInverseLinks() throws {

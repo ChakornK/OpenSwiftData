@@ -3505,7 +3505,7 @@ package enum LightweightMigration {
         let retainedNames = Set(
             destination.attributes.filter { !attributes.contains($0) }.map { $0.name.uppercased() })
         guard
-            source.indexes.filter(\.isUnique) == destination.indexes.filter(\.isUnique),
+            equivalentUniqueIndexes(source.indexes, destination.indexes),
             destination.indexes.allSatisfy({ index in
                 index.properties.allSatisfy { retainedNames.contains($0.uppercased()) }
             })

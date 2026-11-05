@@ -400,6 +400,36 @@ final class CodableStringCollectionFixture {
 }
 
 @Model
+final class OptionalScalarElementsFixture {
+    var name: String
+    var requiredStrings: [String]
+    @Attribute(.codable)
+    var optionalStrings: [String?]
+    @Attribute(.codable)
+    var optionalNumbers: Set<Int?>
+    @Attribute(.codable)
+    var optionalFlags: [Bool?]
+    @Attribute(.codable)
+    var optionalStringCollection: [String?]?
+
+    init(
+        name: String,
+        requiredStrings: [String] = [],
+        optionalStrings: [String?],
+        optionalNumbers: Set<Int?>,
+        optionalFlags: [Bool?],
+        optionalStringCollection: [String?]? = nil
+    ) {
+        self.name = name
+        self.requiredStrings = requiredStrings
+        self.optionalStrings = optionalStrings
+        self.optionalNumbers = optionalNumbers
+        self.optionalFlags = optionalFlags
+        self.optionalStringCollection = optionalStringCollection
+    }
+}
+
+@Model
 final class QuantifierOwnerFixture {
     var name: String
     @Relationship(inverse: nil) var children: [QuantifierChildFixture]
@@ -4934,6 +4964,138 @@ final class PersistentModelTests: XCTestCase {
             includePendingChanges: false)
         XCTAssertTrue(try reader.fetch(descriptor).isEmpty)
         XCTAssertEqual(try reader.fetchCount(descriptor), 0)
+    }
+
+    @MainActor
+    func testOptionalElementCollectionsSupportContainsNilAndValue() throws {
+        let container = try ModelContainer(
+            for: OptionalScalarElementsFixture.self,
+            configurations: .sqliteMemory("optional-element-collection-membership"))
+        let schemaEntity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarElementsFixture"))
+        XCTAssertEqual(
+            schemaEntity.attributes.first(where: { $0.name == "optionalStrings" })?.type,
+            "Array<Optional<String>>")
+        let context = container.mainContext
+        let empty = OptionalScalarElementsFixture(
+            name: "empty", optionalStrings: [], optionalNumbers: [], optionalFlags: [])
+        let nilOnly = OptionalScalarElementsFixture(
+            name: "nil-only", optionalStrings: [nil], optionalNumbers: [nil], optionalFlags: [nil])
+        let mixed = OptionalScalarElementsFixture(
+            name: "mixed", requiredStrings: ["needle"], optionalStrings: ["needle", nil], optionalNumbers: [7, nil],
+            optionalFlags: [true, nil])
+        let other = OptionalScalarElementsFixture(
+            name: "other", optionalStrings: ["other"], optionalNumbers: [9], optionalFlags: [false])
+        for model in [empty, nilOnly, mixed, other] { context.insert(model) }
+        try context.save()
+
+        let containsStringNil = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalStrings.contains(nil) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetchCount(containsStringNil), 2)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(containsStringNil),
+            try context.fetch(containsStringNil).map(\.persistentModelID))
+        let requiredString = "needle"
+        let requiredContains = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.requiredStrings.contains(requiredString) })
+        XCTAssertEqual(try context.fetch(requiredContains).map(\.name), ["mixed"])
+
+        let stringValue = "needle"
+        let containsStringValue = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalStrings.contains(stringValue) },
+            sortBy: [SortDescriptor(\.name)])
+        let stringValueMatches = try context.fetch(containsStringValue)
+        XCTAssertEqual(stringValueMatches.map(\.name), ["mixed"])
+        XCTAssertEqual(try context.fetchCount(containsStringValue), 1)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(containsStringValue), stringValueMatches.map(\.persistentModelID))
+        let optionalStringValue: String? = "needle"
+        let containsOptionalStringValue = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalStrings.contains(optionalStringValue) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsOptionalStringValue).map(\.name), ["mixed"])
+
+        let containsIntegerNil = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalNumbers.contains(nil) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsIntegerNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetchCount(containsIntegerNil), 2)
+        XCTAssertEqual(
+            try context.fetchIdentifiers(containsIntegerNil),
+            try context.fetch(containsIntegerNil).map(\.persistentModelID))
+
+        let containsFlagNil = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalFlags.contains(nil) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsFlagNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetchCount(containsFlagNil), 2)
+        let flagValue = true
+        let containsFlagValue = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalFlags.contains(flagValue) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsFlagValue).map(\.name), ["mixed"])
+        let store = try XCTUnwrap(container.store)
+        let numericOne = try store.read { connection in
+            try connection.rows(
+                "SELECT osd_json_array_contains(?, ?, ?)",
+                arguments: [.blob(Array("[1]".utf8)), .int(1), .text("Optional<Bool>")])
+        }
+        XCTAssertEqual(numericOne, [[.int(0)]])
+        let booleanTrue = try store.read { connection in
+            try connection.rows(
+                "SELECT osd_json_array_contains(?, ?, ?)",
+                arguments: [.blob(Array("[true]".utf8)), .int(1), .text("Optional<Int>")])
+        }
+        XCTAssertEqual(booleanTrue, [[.int(0)]])
+        let optionalAllEqual = try store.read { connection in
+            try connection.rows(
+                "SELECT osd_json_array_all_equal(?, ?, ?)",
+                arguments: [.blob(Array("[null]".utf8)), .null, .text("Optional<String>")])
+        }
+        XCTAssertTrue(optionalAllEqual.isEmpty || optionalAllEqual[0][0] == .null)
+
+        let integerValue = 7
+        let containsIntegerValue = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalNumbers.contains(integerValue) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsIntegerValue).map(\.name), ["mixed"])
+        let optionalIntegerValue: Int? = 7
+        let containsOptionalIntegerValue = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalNumbers.contains(optionalIntegerValue) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(containsOptionalIntegerValue).map(\.name), ["mixed"])
+
+        XCTAssertThrowsError(
+            try context.fetch(
+                FetchDescriptor<OptionalScalarElementsFixture>(
+                    predicate: #Predicate { $0.optionalStrings.allSatisfy { $0 == nil } })))
+        XCTAssertThrowsError(
+            try context.fetch(
+                FetchDescriptor<OptionalScalarElementsFixture>(
+                    predicate: #Predicate { $0.optionalStrings.isEmpty })))
+        XCTAssertThrowsError(
+            try context.fetch(
+                FetchDescriptor<OptionalScalarElementsFixture>(
+                    predicate: #Predicate { $0.optionalStringCollection?.contains(nil) ?? false })))
+
+        mixed.optionalStrings = [nil]
+        mixed.optionalNumbers = [nil]
+        mixed.optionalFlags = [nil]
+        XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetch(containsStringValue).map(\.name), [])
+        XCTAssertEqual(try context.fetch(containsIntegerNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetch(containsIntegerValue).map(\.name), [])
+        XCTAssertEqual(try context.fetch(containsFlagNil).map(\.name), ["mixed", "nil-only"])
+        XCTAssertEqual(try context.fetch(containsFlagValue).map(\.name), [])
+        XCTAssertEqual(try context.fetchCount(containsStringValue), 0)
+        XCTAssertTrue(try context.fetchIdentifiers(containsStringValue).isEmpty)
+
+        let optionalIntegerNil: Int? = nil
+        let capturedNil = FetchDescriptor<OptionalScalarElementsFixture>(
+            predicate: #Predicate { $0.optionalNumbers.contains(optionalIntegerNil) },
+            sortBy: [SortDescriptor(\.name)])
+        XCTAssertEqual(try context.fetch(capturedNil).map(\.name), ["mixed", "nil-only"])
     }
 
     @MainActor

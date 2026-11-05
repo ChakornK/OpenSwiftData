@@ -537,6 +537,47 @@ final class PredicateCompilerTests: XCTestCase {
         }
     }
 
+    func testOptionalScalarCollectionContainsPreservesElementNullability() throws {
+        func node(element: PredicateMirrorWalker.Node) -> PredicateMirrorWalker.Node {
+            .expression(
+                name: "SequenceContains",
+                children: [
+                    ("sequence", .propertyReference("values")),
+                    ("element", element),
+                ])
+        }
+
+        let nilValue = PredicateMirrorWalker.Node.expression(name: "NilLiteral", children: [])
+        let optionalNil = try PredicateIRBuilder.build(
+            node(element: nilValue), attributeTypes: ["values": "Array<Optional<Swift.String>>"])
+        XCTAssertEqual(optionalNil, .collectionContains("values", "Optional<String>", .value(.null)))
+
+        let stringValue = PredicateMirrorWalker.Node.expression(
+            name: "Value", children: [("value", .typedValue(.text("value")))])
+        let optionalValue = try PredicateIRBuilder.build(
+            node(element: stringValue), attributeTypes: ["values": "Set<Optional<String>>"])
+        XCTAssertEqual(optionalValue, .collectionContains("values", "Optional<String>", .value(.text("value"))))
+
+        let requiredValue = try PredicateIRBuilder.build(
+            node(element: stringValue), attributeTypes: ["values": "Array<Swift.String>"])
+        XCTAssertEqual(requiredValue, .collectionContains("values", "String", .value(.text("value"))))
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(node(element: nilValue), attributeTypes: ["values": "Array<String>"]))
+
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(
+                node(element: nilValue), attributeTypes: ["values": "Optional<Array<Optional<String>>>"]))
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(
+                node(element: nilValue), attributeTypes: ["values": "Array<Optional<Optional<String>>>"]))
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(
+                node(element: nilValue), attributeTypes: ["values": "Array<Optional<Module.String>>"]))
+        XCTAssertThrowsError(
+            try PredicateIRBuilder.build(
+                node(element: nilValue), attributeTypes: ["values": "Array<Optional<Module.Box<String>>>"]))
+    }
+
     func testCollectionStringPredicateRejectsNonStringElementAttribute() throws {
         let node = PredicateMirrorWalker.Node.expression(
             name: "OSDSequenceContainsWhere",

@@ -417,12 +417,37 @@ package enum RuntimePredicateEvaluator {
             guard let array = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [Any] else {
                 throw SwiftDataError.unsupportedPredicate("Codable collection contains malformed JSON data")
             }
+            let normalizedElementType =
+                elementType.hasPrefix("Swift.Optional<")
+                ? String(elementType.dropFirst("Swift.".count))
+                : elementType
+            let scalarElementType: String
+            let hasOptionalElements: Bool
+            if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
+                scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
+                guard !scalarElementType.contains("<") else {
+                    throw SwiftDataError.unsupportedPredicate("Nested optional collection elements are unsupported")
+                }
+                hasOptionalElements = true
+                if elementValue == .null {
+                    return .int(array.contains(where: { $0 is NSNull }) ? 1 : 0)
+                }
+            } else {
+                scalarElementType = elementType
+                hasOptionalElements = false
+                guard elementValue != .null else {
+                    throw SwiftDataError.unsupportedPredicate("Nil membership requires optional collection elements")
+                }
+            }
             let contains: Bool
-            switch (elementType, elementValue) {
+            switch (scalarElementType, elementValue) {
             case ("String", let .text(needle)):
-                contains = array.contains { ($0 as? String) == needle }
+                contains = array.contains { value in
+                    !(hasOptionalElements && value is NSNull) && (value as? String) == needle
+                }
             case ("Bool", let .int(needle)):
                 contains = array.contains { value in
+                    guard !(hasOptionalElements && value is NSNull) else { return false }
                     guard let number = value as? NSNumber,
                         CFGetTypeID(number) == CFBooleanGetTypeID()
                     else { return false }
@@ -430,6 +455,7 @@ package enum RuntimePredicateEvaluator {
                 }
             case (_, let .int(needle)):
                 contains = array.contains { value in
+                    guard !(hasOptionalElements && value is NSNull) else { return false }
                     guard let number = value as? NSNumber,
                         CFGetTypeID(number) != CFBooleanGetTypeID()
                     else { return false }

@@ -736,12 +736,22 @@ package enum SQLCompiler {
             return
                 "osd_string_starts_with(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .collectionContains(name, elementType, element):
+            let normalizedElementType =
+                elementType.hasPrefix("Swift.Optional<")
+                ? String(elementType.dropFirst("Swift.".count))
+                : elementType
+            let scalarElementType: String
+            if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
+                scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
+            } else {
+                scalarElementType = elementType
+            }
             guard Self.validIdentifier(name),
                 [
                     "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
                     "UInt64",
                 ]
-                .contains(elementType)
+                .contains(scalarElementType)
             else {
                 throw SwiftDataError.unsupportedPredicate("Unsupported scalar collection membership type")
             }

@@ -380,7 +380,25 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
             let elementType = String.fromDatabaseValue(values[2]),
             let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
         else { return nil }
-        switch elementType {
+        let normalizedElementType =
+            elementType.hasPrefix("Swift.Optional<")
+            ? String(elementType.dropFirst("Swift.".count))
+            : elementType
+        let scalarElementType: String
+        if normalizedElementType.hasPrefix("Optional<"), normalizedElementType.hasSuffix(">") {
+            guard !all else { return nil }
+            guard normalizedElementType.dropFirst("Optional<".count).dropLast().contains("<") == false else {
+                return nil
+            }
+            scalarElementType = String(normalizedElementType.dropFirst("Optional<".count).dropLast())
+            if values[1].isNull {
+                return array.contains(where: { $0 is NSNull }) ? 1 : 0
+            }
+        } else {
+            scalarElementType = elementType
+            guard !values[1].isNull else { return nil }
+        }
+        switch scalarElementType {
         case "String":
             guard let needle = String.fromDatabaseValue(values[1]) else { return nil }
             let matches = array.map { ($0 as? String) == needle }

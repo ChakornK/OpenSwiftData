@@ -285,9 +285,10 @@ package enum PredicateIRBuilder {
                 let wrapped = try field("wrapped", from: fields)
                 let transform = try field("transform", from: fields)
                 if case let .keyPath(path) = wrapped, path.count == 1,
-                    let collectionElement = scalarCollectionElementType(attributeTypes[path[0]]),
+                    let collectionElement = scalarCollectionElement(attributeTypes[path[0]]),
+                    !collectionElement.isOptional,
                     case let .collectionContains(name, elementType, element) = transform,
-                    name == path[0], elementType == collectionElement
+                    name == path[0], elementType == collectionElement.type
                 {
                     return .collectionContains(name, elementType, element)
                 }
@@ -377,15 +378,31 @@ package enum PredicateIRBuilder {
                 let sequence = try field("sequence", from: fields)
                 let element = try field("element", from: fields)
                 guard case let .keyPath(path) = sequence, path.count == 1,
-                    let elementType = scalarCollectionElementType(attributeTypes[path[0]])
+                    let collectionElement = scalarCollectionElement(attributeTypes[path[0]])
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "SequenceContains requires a direct Codable collection of supported scalar values.")
                 }
-                guard case .value = element else {
-                    throw SwiftDataError.unsupportedPredicate(
-                        "SequenceContains requires a captured scalar element value.")
+                func compatible(_ value: StoredValue) -> Bool {
+                    if value == .null { return collectionElement.isOptional }
+                    switch (collectionElement.type, value) {
+                    case ("String", .text), ("Bool", .int),
+                        ("Int", .int), ("Int8", .int), ("Int16", .int), ("Int32", .int),
+                        ("Int64", .int), ("UInt", .int), ("UInt8", .int), ("UInt16", .int),
+                        ("UInt32", .int), ("UInt64", .int):
+                        return true
+                    default:
+                        return false
+                    }
                 }
+                guard case let .value(value) = element,
+                    compatible(value)
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "SequenceContains requires a compatible scalar element value.")
+                }
+                let elementType =
+                    collectionElement.isOptional ? "Optional<\(collectionElement.type)>" : collectionElement.type
                 return .collectionContains(path[0], elementType, element)
             case "OSDSequenceContainsWhere":
                 guard case let .keyPath(path) = try field("sequence", from: fields),
@@ -439,21 +456,23 @@ package enum PredicateIRBuilder {
                 guard
                     case let .keyPath(path) = try field(
                         "sequence", from: fields), path.count == 1,
-                    let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
+                    let collectionElement = scalarCollectionElement(attributeTypes[path[0]]),
+                    !collectionElement.isOptional,
                     case let .value(value) = try field("value", from: fields)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection allSatisfy requires a direct scalar collection and capture.")
                 }
-                return .collectionAllEqual(path[0], elementType, .value(value))
+                return .collectionAllEqual(path[0], collectionElement.type, .value(value))
             case "OSDScalarCollectionAllLessThan", "OSDScalarCollectionAllLessThanOrEqual",
                 "OSDScalarCollectionAllGreaterThan", "OSDScalarCollectionAllGreaterThanOrEqual":
                 guard
                     case let .keyPath(path) = try field(
                         "sequence", from: fields), path.count == 1,
-                    let elementType = scalarCollectionElementType(attributeTypes[path[0]]),
+                    let collectionElement = scalarCollectionElement(attributeTypes[path[0]]),
+                    !collectionElement.isOptional,
                     ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt64"]
-                        .contains(elementType),
+                        .contains(collectionElement.type),
                     case let .value(value) = try field("value", from: fields)
                 else {
                     throw SwiftDataError.unsupportedPredicate(
@@ -466,12 +485,12 @@ package enum PredicateIRBuilder {
                 case "OSDScalarCollectionAllGreaterThan": operation = .greaterThan
                 default: operation = .greaterThanOrEqual
                 }
-                return .collectionAllCompare(path[0], elementType, operation, .value(value))
+                return .collectionAllCompare(path[0], collectionElement.type, operation, .value(value))
             case "OSDCodableCollectionIsEmpty":
                 guard
                     case let .keyPath(path) = try field(
                         "collection", from: fields), path.count == 1,
-                    scalarCollectionElementType(attributeTypes[path[0]]) != nil
+                    scalarCollectionElement(attributeTypes[path[0]])?.isOptional == false
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection isEmpty requires a direct scalar collection attribute.")
@@ -481,7 +500,7 @@ package enum PredicateIRBuilder {
                 guard
                     case let .keyPath(path) = try field(
                         "collection", from: fields), path.count == 1,
-                    scalarCollectionElementType(attributeTypes[path[0]]) != nil
+                    scalarCollectionElement(attributeTypes[path[0]])?.isOptional == false
                 else {
                     throw SwiftDataError.unsupportedPredicate(
                         "Codable collection count requires a direct scalar collection attribute.")
@@ -1230,21 +1249,41 @@ package enum PredicateIRBuilder {
         }
     }
 
-    private static func scalarCollectionElementType(_ typeName: String?) -> String? {
+    private static func scalarCollectionElement(_ typeName: String?) -> (type: String, isOptional: Bool)? {
         guard let typeName,
             let opening = typeName.firstIndex(of: "<"), typeName.last == ">"
         else { return nil }
         let collectionName = typeName[..<opening].split(separator: ".").last.map(String.init) ?? ""
         guard collectionName == "Array" || collectionName == "Set" else { return nil }
         let rawElement = String(typeName[typeName.index(after: opening)..<typeName.index(before: typeName.endIndex)])
-        let element = rawElement.split(separator: ".").last.map(String.init) ?? rawElement
+        let element: String
+        let isOptional: Bool
+        let unqualifiedElement =
+            rawElement.hasPrefix("Swift.")
+            ? String(rawElement.dropFirst("Swift.".count))
+            : rawElement
+        if unqualifiedElement.hasPrefix("Optional<"), unqualifiedElement.hasSuffix(">"),
+            let opening = unqualifiedElement.firstIndex(of: "<")
+        {
+            let wrapped = String(
+                unqualifiedElement[
+                    unqualifiedElement.index(
+                        after: opening)..<unqualifiedElement.index(before: unqualifiedElement.endIndex)
+                ])
+            guard !wrapped.contains("<"), !wrapped.contains(">") else { return nil }
+            element = wrapped.hasPrefix("Swift.") ? String(wrapped.dropFirst("Swift.".count)) : wrapped
+            isOptional = true
+        } else {
+            element = unqualifiedElement
+            isOptional = false
+        }
         guard
             [
                 "String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
                 "UInt32", "UInt64",
             ].contains(element)
         else { return nil }
-        return element
+        return (element, isOptional)
     }
 
     private static func validateStringOperand(

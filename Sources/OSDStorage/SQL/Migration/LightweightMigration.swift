@@ -128,6 +128,14 @@ package enum LightweightMigration {
         let additions: [OwnerOnlyToManyAdditionPlan]
     }
 
+    private struct HierarchyLeafAttributeRemovalPlan {
+        let entityName: String
+        let attributeName: String
+        let column: String
+        let entityID: Int64
+        let table: String
+    }
+
     private struct PairedInverseRelationshipRemoval {
         let ownerEntityName: String
         let ownerRelationshipName: String
@@ -1342,7 +1350,7 @@ package enum LightweightMigration {
         connection: SQLConnection,
         destinationHasInheritance: Bool
     ) throws {
-        if try applyHierarchyLeafOptionalAttributeRemoval(
+        if try applyHierarchyLeafOptionalAttributeRemovals(
             source: source, destination: destination, connection: connection)
         {
             return
@@ -1887,7 +1895,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func applyHierarchyLeafOptionalAttributeRemoval(
+    private static func applyHierarchyLeafOptionalAttributeRemovals(
         source: Schema,
         destination: Schema,
         connection: SQLConnection
@@ -1897,7 +1905,8 @@ package enum LightweightMigration {
             Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name))
         else { return false }
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        var removedAttributes: [(Schema.Entity, Schema.Attribute)] = []
+        var removals: [(Schema.Entity, Schema.Attribute)] = []
+        var hasOtherChanges = false
         for sourceEntity in source.entities {
             guard let destinationEntity = destinationByName[sourceEntity.name],
                 sourceEntity.superentityName == destinationEntity.superentityName,
@@ -1910,9 +1919,15 @@ package enum LightweightMigration {
             let addedOrChanged = destinationEntity.attributes.filter { attribute in
                 !sourceEntity.attributes.contains(where: { $0 == attribute })
             }
-            guard addedOrChanged.isEmpty else { return false }
-            removedAttributes += removed.map { (sourceEntity, $0) }
+            hasOtherChanges = hasOtherChanges || !addedOrChanged.isEmpty
+            removals += removed.map { (sourceEntity, $0) }
         }
+        guard !removals.isEmpty else { return false }
+        guard !hasOtherChanges else {
+            throw SwiftDataError.migrationUnsupported(
+                "Hierarchy leaf attribute removal cannot be combined with other schema changes.")
+        }
+
         func hasDescendant(of entityName: String, in schema: Schema) -> Bool {
             schema.entities.contains { candidate in
                 var current = candidate.superentityName.flatMap(schema.entity(forName:))
@@ -1924,39 +1939,118 @@ package enum LightweightMigration {
                 return false
             }
         }
-        guard removedAttributes.count == 1,
-            let (entity, attribute) = removedAttributes.first,
-            entity.superentityName != nil,
-            !hasDescendant(of: entity.name, in: source),
-            !hasDescendant(of: entity.name, in: destination),
-            attribute.isOptional,
-            attribute.defaultValue == nil,
-            attribute.originalName == nil,
-            attribute.components.isEmpty,
-            attribute.options.isEmpty,
-            source.entities.allSatisfy({ candidate in
-                candidate.name == entity.name
-                    || !candidate.attributes.contains(where: {
-                        $0.name.caseInsensitiveCompare(attribute.name) == .orderedSame
-                    })
-            })
-        else { return false }
-
-        _ = try SQLColumnType.resolve(attribute.type, property: "\(entity.name).\(attribute.name)")
-        try validatePhysicalSchema(source, connection: connection)
-        var root = entity
-        var visited = Set<String>()
-        while let parentName = root.superentityName {
-            guard visited.insert(root.name).inserted, let parent = source.entity(forName: parentName) else {
-                throw SwiftDataError.migrationUnsupported("Hierarchy leaf has an invalid parent mapping.")
+        func rootEntity(for entity: Schema.Entity) throws -> Schema.Entity {
+            var current = entity
+            var visited = Set<String>()
+            while let parentName = current.superentityName {
+                guard visited.insert(current.name).inserted,
+                    let parent = source.entity(forName: parentName)
+                else {
+                    throw SwiftDataError.migrationUnsupported("Hierarchy leaf has an invalid parent mapping.")
+                }
+                current = parent
             }
-            root = parent
+            return current
         }
-        let rootName = root.name
-        let table = "Z\(rootName.uppercased())"
-        let column = "Z\(attribute.name.uppercased())"
+
+        var plans: [HierarchyLeafAttributeRemovalPlan] = []
+        for (entity, attribute) in removals {
+            guard entity.superentityName != nil,
+                !hasDescendant(of: entity.name, in: source),
+                !hasDescendant(of: entity.name, in: destination),
+                attribute.isOptional,
+                attribute.defaultValue == nil,
+                attribute.originalName == nil,
+                attribute.components.isEmpty,
+                attribute.options.isEmpty,
+                source.entities.allSatisfy({ candidate in
+                    candidate.name == entity.name
+                        || !candidate.attributes.contains(where: {
+                            $0.name.caseInsensitiveCompare(attribute.name) == .orderedSame
+                        })
+                })
+            else {
+                let isSharedColumn = source.entities.contains { candidate in
+                    candidate.name != entity.name
+                        && candidate.attributes.contains(where: {
+                            $0.name.caseInsensitiveCompare(attribute.name) == .orderedSame
+                        })
+                }
+                if !attribute.isOptional || hasDescendant(of: entity.name, in: source) || isSharedColumn {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy migration cannot remove persisted attributes from \(entity.name).")
+                }
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy attribute removal is limited to optional plain scalar leaf properties.")
+            }
+            _ = try SQLColumnType.resolve(attribute.type, property: "\(entity.name).\(attribute.name)")
+            guard let rawID = source.entityIDsByName[entity.name], let entityID = Int64(exactly: rawID) else {
+                throw SwiftDataError.migrationUnsupported("Hierarchy leaf entity identifier is unavailable.")
+            }
+            let root = try rootEntity(for: entity)
+            plans.append(
+                HierarchyLeafAttributeRemovalPlan(
+                    entityName: entity.name,
+                    attributeName: attribute.name,
+                    column: "Z\(attribute.name.uppercased())",
+                    entityID: entityID,
+                    table: "Z\(root.name.uppercased())"))
+        }
+        let normalizedTargets = plans.map { "\($0.table):\($0.column)".uppercased() }
+        guard Set(normalizedTargets).count == normalizedTargets.count else {
+            throw SwiftDataError.migrationUnsupported("Hierarchy attribute removals target the same physical column.")
+        }
+        for plan in plans {
+            var retainedColumns: [String] = []
+            for candidate in source.entities {
+                let candidateRoot = try rootEntity(for: candidate)
+                guard candidateRoot.name.caseInsensitiveCompare(String(plan.table.dropFirst())) == .orderedSame else {
+                    continue
+                }
+                let attributes = candidate.attributes.filter { attribute in
+                    candidate.name != plan.entityName || attribute.name != plan.attributeName
+                }.flatMap { attribute in
+                    attribute.options.contains(.flattened)
+                        ? attribute.components.map { "Z\($0.columnName.uppercased())" }
+                        : ["Z\(attribute.name)"]
+                }
+                let relationships = candidate.relationships.compactMap { relationship -> String? in
+                    guard !relationship.isToMany,
+                        !SchemaBuilder.isNonOwner(candidate, relationship, schema: source),
+                        let mapping = source.relationshipStorageMapping(
+                            modelEntityName: candidate.name, relationshipName: relationship.name)
+                    else { return nil }
+                    return "Z\(mapping.storageColumnName)"
+                }
+                retainedColumns += attributes + relationships + ["Z_PK", "Z_ENT", "Z_OPT"]
+            }
+            guard
+                !retainedColumns.contains(where: {
+                    $0.caseInsensitiveCompare(plan.column) == .orderedSame
+                })
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy leaf attribute removal collides with retained physical column \(plan.column).")
+            }
+        }
+
+        try validatePhysicalSchema(source, connection: connection)
         guard Database.sqliteLibVersionNumber >= 3_035_005 else {
             throw SwiftDataError.migrationUnsupported("SQLite does not support dropping table columns.")
+        }
+
+        return try preflightAndApplyHierarchyLeafAttributeRemovals(
+            plans, source: source, destination: destination, connection: connection)
+    }
+
+    private static func preflightAndApplyHierarchyLeafAttributeRemovals(
+        _ plans: [HierarchyLeafAttributeRemovalPlan],
+        source: Schema,
+        destination: Schema,
+        connection: SQLConnection
+    ) throws -> Bool {
+        func quotedIdentifier(_ identifier: String) -> String {
+            "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
         }
         let sourceIndexStatements = try SchemaBuilder.build(source).statements.filter {
             $0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")
@@ -1975,92 +2069,115 @@ package enum LightweightMigration {
             definitionsByName: sourceIndexDefinitions,
             connection: connection,
             allowsPartialIndexes: true)
-        let attributeIndexes = source.entities.flatMap { candidate in
-            indexDefinitions(for: candidate, schema: source)
-        }
-        guard !attributeIndexes.contains(where: { $0.columns.contains(where: { $0.uppercased() == column }) }),
-            source.entities.allSatisfy({ candidate in
-                candidate.indexes.allSatisfy({ index in
-                    !index.properties.contains(where: { $0.caseInsensitiveCompare(attribute.name) == .orderedSame })
+        let attributeIndexes = source.entities.flatMap { indexDefinitions(for: $0, schema: source) }
+        for plan in plans {
+            guard !attributeIndexes.contains(where: { $0.columns.contains(plan.column) }),
+                source.entities.allSatisfy({ candidate in
+                    candidate.indexes.allSatisfy({ index in
+                        !index.properties.contains(where: {
+                            $0.caseInsensitiveCompare(String(plan.column.dropFirst())) == .orderedSame
+                        })
+                    })
                 })
-            })
-        else {
-            throw SwiftDataError.migrationUnsupported(
-                "Hierarchy leaf attribute removal cannot change indexes or unique constraints.")
+            else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy leaf attribute removal cannot change indexes or unique constraints.")
+            }
+            try validateIndexesForAttributeRemoval(
+                table: plan.table,
+                column: plan.column,
+                removableIndexNames: [],
+                knownIndexNames: Set(sourceIndexDefinitions.keys),
+                connection: connection)
         }
-        try validateIndexesForAttributeRemoval(
-            table: table,
-            column: column,
-            removableIndexNames: [],
-            knownIndexNames: Set(sourceIndexDefinitions.keys),
-            connection: connection)
         let sideObjects = try connection.rows("SELECT 1 FROM sqlite_master WHERE type IN ('trigger', 'view') LIMIT 1")
         guard sideObjects.isEmpty else {
             throw SwiftDataError.migrationUnsupported(
                 "Hierarchy attribute removal is unsupported with triggers or views.")
         }
-        let tableSQL = try connection.rows(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
-        guard tableSQL.count == 1, case let .text(createSQL)? = tableSQL.first?.first else {
-            throw SwiftDataError.migrationUnsupported("Hierarchy attribute removal requires a tracked root table.")
-        }
-        let extendedColumns = try connection.rows("PRAGMA table_xinfo(\(table))")
-        guard extendedColumns.allSatisfy({ row in row.count > 6 && row[6] == .int(0) }) else {
-            throw SwiftDataError.migrationUnsupported(
-                "Hierarchy attribute removal is unsupported with generated or hidden columns.")
-        }
-        let normalizedSQL = createSQL.uppercased()
-        let checkConstraintPattern = try NSRegularExpression(pattern: #"(?i)\bCHECK\s*\("#)
-        let sqlRange = NSRange(normalizedSQL.startIndex..<normalizedSQL.endIndex, in: normalizedSQL)
-        guard checkConstraintPattern.firstMatch(in: normalizedSQL, range: sqlRange) == nil else {
-            throw SwiftDataError.migrationUnsupported(
-                "Hierarchy attribute removal is unsupported with CHECK constraints.")
-        }
+
         let tables = try connection.rows(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-        for row in tables {
-            guard case let .text(name)? = row.first else { continue }
-            let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
-            let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
-            guard
-                !foreignKeys.contains(where: { foreignKey in
-                    guard foreignKey.count > 4,
-                        case let .text(referencedTable) = foreignKey[2],
-                        case let .text(referencingColumn) = foreignKey[3]
-                    else { return false }
-                    if name.caseInsensitiveCompare(table) == .orderedSame {
-                        return referencingColumn.caseInsensitiveCompare(column) == .orderedSame
-                    }
-                    guard referencedTable.caseInsensitiveCompare(table) == .orderedSame,
-                        case let .text(referencedColumn) = foreignKey[4]
-                    else { return false }
-                    return referencedColumn.caseInsensitiveCompare(column) == .orderedSame
+        for table in Set(plans.map(\.table)) {
+            let quotedTable = quotedIdentifier(table)
+            let tableSQL = try connection.rows(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", [.text(table)])
+            guard tableSQL.count == 1, case let .text(createSQL)? = tableSQL.first?.first else {
+                throw SwiftDataError.migrationUnsupported("Hierarchy attribute removal requires a tracked root table.")
+            }
+            let extendedColumns = try connection.rows("PRAGMA table_xinfo(\(quotedTable))")
+            guard extendedColumns.allSatisfy({ row in row.count > 6 && row[6] == .int(0) }) else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy attribute removal is unsupported with generated or hidden columns.")
+            }
+            let physicalColumnNames = extendedColumns.compactMap { row -> String? in
+                guard row.count > 1, case let .text(name) = row[1] else { return nil }
+                return name
+            }
+            for plan in plans where plan.table == table {
+                guard physicalColumnNames.filter({ $0.caseInsensitiveCompare(plan.column) == .orderedSame }).count == 1
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy leaf attribute removal requires one physical column named \(plan.column).")
+                }
+            }
+            let normalizedSQL = createSQL.uppercased()
+            let checkConstraintPattern = try NSRegularExpression(pattern: #"(?i)\bCHECK\s*\("#)
+            let sqlRange = NSRange(normalizedSQL.startIndex..<normalizedSQL.endIndex, in: normalizedSQL)
+            guard checkConstraintPattern.firstMatch(in: normalizedSQL, range: sqlRange) == nil else {
+                throw SwiftDataError.migrationUnsupported(
+                    "Hierarchy attribute removal is unsupported with CHECK constraints.")
+            }
+            for row in tables {
+                guard case let .text(name)? = row.first else { continue }
+                let quotedName = "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+                let foreignKeys = try connection.rows("PRAGMA foreign_key_list(\(quotedName))")
+                guard
+                    !foreignKeys.contains(where: { foreignKey in
+                        guard foreignKey.count > 4,
+                            case let .text(referencedTable) = foreignKey[2],
+                            case let .text(referencingColumn) = foreignKey[3]
+                        else { return false }
+                        return plans.contains(where: { plan in
+                            guard plan.table == table else { return false }
+                            if name.caseInsensitiveCompare(plan.table) == .orderedSame {
+                                return referencingColumn.caseInsensitiveCompare(plan.column) == .orderedSame
+                            }
+                            guard referencedTable.caseInsensitiveCompare(plan.table) == .orderedSame,
+                                case let .text(referencedColumn) = foreignKey[4]
+                            else { return false }
+                            return referencedColumn.caseInsensitiveCompare(plan.column) == .orderedSame
+                        })
+                    })
+                else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy attribute removal cannot change a column referenced by a foreign key.")
+                }
+            }
+            let sourceEntityIDs = Set(source.entityIDsByName.values.compactMap(Int64.init(exactly:)))
+            let discriminatorRows = try connection.rows("SELECT DISTINCT Z_ENT FROM \(quotedTable)")
+            guard !sourceEntityIDs.isEmpty,
+                discriminatorRows.allSatisfy({ row in
+                    guard case let .int(identifier)? = row.first else { return false }
+                    return sourceEntityIDs.contains(identifier)
                 })
             else {
-                throw SwiftDataError.migrationUnsupported(
-                    "Hierarchy attribute removal cannot change a column referenced by a foreign key.")
+                throw SwiftDataError.migrationUnsupported("Hierarchy rows contain an unknown entity discriminator.")
+            }
+            for plan in plans where plan.table == table {
+                let otherValues = try connection.rows(
+                    "SELECT 1 FROM \(quotedTable) WHERE Z_ENT != ? AND \(quotedIdentifier(plan.column)) IS NOT NULL LIMIT 1",
+                    [.int(plan.entityID)])
+                guard otherValues.isEmpty else {
+                    throw SwiftDataError.migrationUnsupported(
+                        "Hierarchy leaf column contains values for other entity discriminators.")
+                }
             }
         }
-        guard let entityID = source.entityIDsByName[entity.name], let entityID64 = Int64(exactly: entityID) else {
-            throw SwiftDataError.migrationUnsupported("Hierarchy leaf entity identifier is unavailable.")
+        for plan in plans.sorted(by: { ($0.table, $0.column) < ($1.table, $1.column) }) {
+            try connection.execute(
+                "ALTER TABLE \(quotedIdentifier(plan.table)) DROP COLUMN \(quotedIdentifier(plan.column))")
         }
-        let sourceEntityIDs = Set(source.entityIDsByName.values.compactMap(Int64.init(exactly:)))
-        let discriminatorRows = try connection.rows("SELECT DISTINCT Z_ENT FROM \(table)")
-        guard !sourceEntityIDs.isEmpty,
-            discriminatorRows.allSatisfy({ row in
-                guard case let .int(identifier)? = row.first else { return false }
-                return sourceEntityIDs.contains(identifier)
-            })
-        else {
-            throw SwiftDataError.migrationUnsupported("Hierarchy rows contain an unknown entity discriminator.")
-        }
-        let otherDiscriminatorValues = try connection.rows(
-            "SELECT 1 FROM \(table) WHERE Z_ENT != ? AND \(column) IS NOT NULL LIMIT 1", [.int(entityID64)])
-        guard otherDiscriminatorValues.isEmpty else {
-            throw SwiftDataError.migrationUnsupported(
-                "Hierarchy leaf column contains values for other entity discriminators.")
-        }
-        try connection.execute("ALTER TABLE \(table) DROP COLUMN \(column)")
         try validatePhysicalSchema(destination, connection: connection)
         return true
     }

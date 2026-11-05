@@ -11712,6 +11712,271 @@ final class SchemaMigrationTests: XCTestCase {
         try reopened.close()
     }
 
+    func testHierarchyMultipleLeafAttributeRemovalsComposeAcrossRoots() throws {
+        let source = Schema([
+            Schema.Entity(name: "FirstRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                    Schema.Attribute(name: "secondValue", type: "String", isOptional: true),
+                ],
+                superentityName: "FirstRoot"),
+            Schema.Entity(name: "SecondRoot", attributes: [Schema.Attribute(name: "title", type: "String")]),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [
+                    Schema.Attribute(name: "title", type: "String"),
+                    Schema.Attribute(name: "thirdValue", type: "Bool", isOptional: true),
+                ],
+                superentityName: "SecondRoot"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "FirstRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "FirstRoot"),
+            Schema.Entity(name: "SecondRoot", attributes: [Schema.Attribute(name: "title", type: "String")]),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [Schema.Attribute(name: "title", type: "String")],
+                superentityName: "SecondRoot"),
+        ])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-multiple-leaf-removals.sqlite"))
+        let initial = try LightweightMigration.openStore(location: location, schema: source)
+        let firstID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["FirstLeaf"])))
+        let secondID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["SecondLeaf"])))
+        try initial.write { connection in
+            try connection.execute(
+                "INSERT INTO ZFIRSTROOT (Z_ENT, Z_OPT, ZNAME, ZFIRSTVALUE, ZSECONDVALUE) VALUES (?, 2, 'first', 7, 'remove')",
+                [.int(firstID)])
+            try connection.execute(
+                "INSERT INTO ZSECONDROOT (Z_ENT, Z_OPT, ZTITLE, ZTHIRDVALUE) VALUES (?, 3, 'second', 1)",
+                [.int(secondID)])
+        }
+        try initial.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertFalse(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZFIRSTROOT)") }.contains {
+                $0[1] == .text("ZFIRSTVALUE")
+            })
+        XCTAssertFalse(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZFIRSTROOT)") }.contains {
+                $0[1] == .text("ZSECONDVALUE")
+            })
+        XCTAssertFalse(
+            try migrated.read { try $0.rows("PRAGMA table_info(ZSECONDROOT)") }.contains {
+                $0[1] == .text("ZTHIRDVALUE")
+            })
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZFIRSTROOT") },
+            [[.int(1), .int(firstID), .int(2), .text("first")]])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZTITLE FROM ZSECONDROOT") },
+            [[.int(1), .int(secondID), .int(3), .text("second")]])
+        try migrated.close()
+    }
+
+    func testHierarchyMultipleLeafAttributeRemovalsComposeOnOneRoot() throws {
+        let source = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Root"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-multiple-leaf-removals-one-root"))
+        try bootstrap(source, driver: driver)
+        let firstID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["FirstLeaf"])))
+        let secondID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["SecondLeaf"])))
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME, ZFIRSTVALUE) VALUES (?, 2, 'first', 11)", [.int(firstID)])
+            try connection.execute(
+                "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME, ZSECONDVALUE) VALUES (?, 3, 'second', 22)",
+                [.int(secondID)])
+        }
+        try driver.write { try LightweightMigration.migrate(source: source, destination: destination, connection: $0) }
+        let columns = try driver.read { try $0.rows("PRAGMA table_info(ZROOT)") }
+        XCTAssertFalse(columns.contains { $0[1] == .text("ZFIRSTVALUE") })
+        XCTAssertFalse(columns.contains { $0[1] == .text("ZSECONDVALUE") })
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZROOT ORDER BY Z_PK") },
+            [
+                [.int(1), .int(firstID), .int(2), .text("first")],
+                [.int(2), .int(secondID), .int(3), .text("second")],
+            ])
+        try driver.close()
+    }
+
+    func testHierarchyMultipleLeafAttributeRemovalPreflightsEntireBatchBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true, options: [.encrypt]),
+                ],
+                superentityName: "Root"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Root"
+            ),
+            Schema.Entity(
+                name: "SecondLeaf", attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Root"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-multiple-leaf-removal-preflight"))
+        try bootstrap(source, driver: driver)
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZROOT)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unsupported second removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZROOT)") }, originalColumns)
+        try driver.close()
+    }
+
+    func testHierarchyMultipleLeafAttributeRemovalRejectsLateDiscriminatorFailureBeforeAnyDrop() throws {
+        let source = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "FirstLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "SecondLeaf",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Root"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-late-discriminator-preflight"))
+        try bootstrap(source, driver: driver)
+        let firstID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["FirstLeaf"])))
+        let rootID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["Root"])))
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME, ZFIRSTVALUE) VALUES (?, 2, 'first', 1)", [.int(firstID)])
+            try connection.execute(
+                "INSERT INTO ZROOT (Z_ENT, Z_OPT, ZNAME, ZSECONDVALUE) VALUES (?, 3, 'invalid', 2)", [.int(rootID)])
+        }
+        let originalObjects = try driver.read {
+            try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZROOT)") }
+        let originalRows = try driver.read {
+            try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZFIRSTVALUE, ZSECONDVALUE FROM ZROOT ORDER BY Z_PK")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected late discriminator preflight failure, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT type, name, sql FROM sqlite_master ORDER BY type, name") },
+            originalObjects)
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZROOT)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZFIRSTVALUE, ZSECONDVALUE FROM ZROOT ORDER BY Z_PK")
+            },
+            originalRows)
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsRetainedFlattenedColumnCollision() throws {
+        let source = Schema([
+            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "RemovingLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                ],
+                superentityName: "Root"),
+            Schema.Entity(
+                name: "RetainedLeaf",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(
+                        name: "record",
+                        type: "Record",
+                        options: [.flattened],
+                        components: [Schema.Attribute.Component(name: "value", columnName: "value", type: "Int")]),
+                ],
+                superentityName: "Root"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-flattened-column-collision"))
+        XCTAssertThrowsError(try bootstrap(source, driver: driver)) { error in
+            guard case SwiftDataError.unsupportedSchemaProperty = error else {
+                return XCTFail("Expected source schema to reject its duplicate physical column, got \(error)")
+            }
+        }
+        try driver.close()
+    }
+
     func testHierarchyRequiredLeafAttributeRemovalFailsBeforeWrites() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-remove-required-attribute"))
         let source = Schema([
@@ -11887,6 +12152,53 @@ final class SchemaMigrationTests: XCTestCase {
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
                 return XCTFail("Expected non-leaf hierarchy attribute removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+                )
+            },
+            originalObjects)
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsCombinedAdditionBeforeDDL() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "oldValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "newValue", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-mixed-change"))
+        try bootstrap(source, driver: driver)
+        let originalObjects = try driver.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+            )
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected combined hierarchy removal/addition to fail closed, got \(error)")
             }
         }
         XCTAssertEqual(

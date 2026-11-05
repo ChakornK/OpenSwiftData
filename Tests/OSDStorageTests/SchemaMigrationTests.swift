@@ -11643,15 +11643,83 @@ final class SchemaMigrationTests: XCTestCase {
         }
     }
 
-    func testHierarchyAttributeRemovalFailsBeforeWrites() throws {
-        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-remove-attribute"))
+    func testHierarchyLeafOptionalAttributeRemovalPreservesRowsAndReopens() throws {
         let source = Schema([
             Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
             Schema.Entity(
                 name: "Child",
                 attributes: [
                     Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
+                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-leaf-attribute-removal.sqlite"))
+        let sourceStore = try LightweightMigration.openStore(location: location, schema: source)
+        let baseID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["Base"])))
+        let childID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["Child"])))
+        let siblingID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["Sibling"])))
+        try sourceStore.write { connection in
+            try connection.execute("INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME) VALUES (?, 2, 'base')", [.int(baseID)])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME, ZAGE) VALUES (?, 3, 'child', 12)", [.int(childID)])
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME) VALUES (?, 4, 'sibling')", [.int(siblingID)])
+        }
+        let originalEntityRows = try sourceStore.read {
+            try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT")
+        }
+        try sourceStore.close()
+
+        let migrated = try LightweightMigration.openStore(location: location, schema: destination)
+        let migratedColumns = try migrated.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        XCTAssertFalse(migratedColumns.contains(where: { $0.count > 1 && $0[1] == .text("ZAGE") }))
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZBASE ORDER BY Z_PK") },
+            [
+                [.int(1), .int(baseID), .int(2), .text("base")],
+                [.int(2), .int(childID), .int(3), .text("child")],
+                [.int(3), .int(siblingID), .int(4), .text("sibling")],
+            ])
+        XCTAssertEqual(
+            try migrated.read { try $0.rows("SELECT Z_ENT, Z_NAME, Z_SUPER, Z_MAX FROM Z_PRIMARYKEY ORDER BY Z_ENT") },
+            originalEntityRows)
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA foreign_key_check") }, [])
+        XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
+        try migrated.close()
+        let reopened = try LightweightMigration.openStore(location: location, schema: destination)
+        XCTAssertEqual(
+            try reopened.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZBASE ORDER BY Z_PK") }.count,
+            3)
+        try reopened.close()
+    }
+
+    func testHierarchyRequiredLeafAttributeRemovalFailsBeforeWrites() throws {
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-remove-required-attribute"))
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"), Schema.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Base"),
         ])
@@ -11662,20 +11730,263 @@ final class SchemaMigrationTests: XCTestCase {
                 attributes: [Schema.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
-
         XCTAssertThrowsError(
             try driver.write { connection in
                 try LightweightMigration.migrate(source: source, destination: destination, connection: connection)
             }
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
-                return XCTFail("Expected migrationUnsupported, got \(error)")
+                return XCTFail("Expected required hierarchy attribute removal to fail closed, got \(error)")
             }
         }
-        let tables = try driver.read {
-            try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        XCTAssertTrue(
+            try driver.read {
+                try $0.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").isEmpty
+            })
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsValuesOnOtherDiscriminators() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Sibling",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-shared-data"))
+        try bootstrap(source, driver: driver)
+        let baseID = try XCTUnwrap(Int64(exactly: XCTUnwrap(source.entityIDsByName["Base"])))
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME, ZAGE) VALUES (?, 2, 'invalid', 7)", [.int(baseID)])
         }
-        XCTAssertTrue(tables.isEmpty)
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        let originalRows = try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZAGE FROM ZBASE") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected cross-discriminator leaf data to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZAGE FROM ZBASE") },
+            originalRows)
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsSemanticAttributeOptions() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "token", type: "String", isOptional: true, options: [.encrypt]),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-option-removal"))
+        try bootstrap(source, driver: driver)
+        let childID = try XCTUnwrap(source.entityIDsByName["Child"])
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME, ZTOKEN) VALUES (?, 2, 'child', 'secret')",
+                [.int(Int64(childID))])
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected semantic attribute options to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZTOKEN FROM ZBASE") },
+            [[.int(1), .int(Int64(childID)), .int(2), .text("child"), .text("secret")]])
+        try driver.close()
+    }
+
+    func testHierarchyNonLeafAttributeRemovalFailsClosed() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                ],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                superentityName: "Child"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+            Schema.Entity(
+                name: "Grandchild",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "rank", type: "Int"),
+                ],
+                superentityName: "Child"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-nonleaf-attribute-removal"))
+        try bootstrap(source, driver: driver)
+        let originalObjects = try driver.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+            )
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected non-leaf hierarchy attribute removal to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+                )
+            },
+            originalObjects)
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsUnknownDiscriminator() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-unknown-discriminator"))
+        try bootstrap(source, driver: driver)
+        try driver.write { connection in
+            try connection.execute("INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME) VALUES (999, 2, 'unknown')")
+        }
+        let originalColumns = try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected unknown entity discriminator to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try driver.read { try $0.rows("PRAGMA table_info(ZBASE)") }, originalColumns)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME FROM ZBASE") },
+            [[.int(1), .int(999), .int(2), .text("unknown")]])
+        try driver.close()
+    }
+
+    func testHierarchyLeafAttributeRemovalRejectsUntrackedPartialIndexDependency() throws {
+        let source = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [
+                    Schema.Attribute(name: "name", type: "String"),
+                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                ],
+                superentityName: "Base"),
+        ])
+        let destination = Schema([
+            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            Schema.Entity(
+                name: "Child",
+                attributes: [Schema.Attribute(name: "name", type: "String")],
+                superentityName: "Base"),
+        ])
+        let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-partial-index"))
+        try bootstrap(source, driver: driver)
+        let childID = try XCTUnwrap(source.entityIDsByName["Child"])
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO ZBASE (Z_ENT, Z_OPT, ZNAME, ZAGE) VALUES (?, 2, 'child', 8)", [.int(Int64(childID))])
+            try connection.execute("CREATE INDEX USER_AGE_PARTIAL ON ZBASE (Z_PK) WHERE ZAGE > 0")
+        }
+        let originalObjects = try driver.read {
+            try $0.rows(
+                "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY type, name")
+        }
+        XCTAssertThrowsError(
+            try driver.write {
+                try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
+            }
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected partial index dependency to fail closed, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try driver.read {
+                try $0.rows(
+                    "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY type, name")
+            },
+            originalObjects)
+        XCTAssertEqual(
+            try driver.read { try $0.rows("SELECT Z_PK, Z_ENT, Z_OPT, ZNAME, ZAGE FROM ZBASE") },
+            [[.int(1), .int(Int64(childID)), .int(2), .text("child"), .int(8)]])
         try driver.close()
     }
 

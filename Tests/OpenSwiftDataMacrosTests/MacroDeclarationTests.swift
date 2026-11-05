@@ -33,6 +33,31 @@ final class MacroDeclarationTests: XCTestCase {
         XCTAssertNil(ExampleModel.propertySlot(forKeyPath: \OtherModel.value))
     }
 
+    func testQualifiedPropertyMacrosGenerateMatchingMetadata() {
+        XCTAssertEqual(QualifiedPropertyMacroFixture.propertyDescriptors.map(\.name), ["key"])
+        XCTAssertEqual(QualifiedPropertyMacroFixture.propertyDescriptors.map(\.options), [["unique"]])
+        XCTAssertEqual(QualifiedPropertyMacroFixture.schemaMetadata().map(\.name), ["key"])
+    }
+
+    @MainActor
+    func testQualifiedRelationshipMacroGeneratesRelationshipMetadata() throws {
+        let container = try ModelContainer(for: QualifiedRelationshipMacroFixture.self, OtherModel.self)
+        let relationship = try XCTUnwrap(
+            container.schema.entity(forName: "QualifiedRelationshipMacroFixture")?.relationships.first)
+        XCTAssertEqual(relationship.name, "target")
+        XCTAssertEqual(relationship.destination, "OtherModel")
+        XCTAssertEqual(relationship.deleteRule, .cascade)
+        XCTAssertNil(relationship.inverse)
+        XCTAssertTrue(
+            QualifiedRelationshipMacroFixture.relationshipAdapterCandidates().contains { $0.name == "target" })
+    }
+
+    func testModuleSelectedPropertyMacroGeneratesUniqueMetadata() {
+        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.name), ["key"])
+        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.options), [["unique"]])
+        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.schemaMetadata().map(\.name), ["key"])
+    }
+
     func testGeneratedSlotAccessWorksWithDetachedBackingSnapshots() {
         let model = ExampleModel(title: "before")
         model.count = 7
@@ -58,4 +83,32 @@ final class MacroDeclarationTests: XCTestCase {
 @Model
 final class OtherModel {
     var value: Int
+}
+
+@Model
+final class QualifiedRelationshipMacroFixture {
+    @OpenSwiftData.Relationship(deleteRule: .cascade, inverse: nil) var target: OtherModel?
+
+    init(target: OtherModel?) {
+        self.target = target
+    }
+}
+
+@Model
+final class ModuleSelectedPropertyMacroFixture {
+    @OpenSwiftData::Attribute(.unique) var key: String
+
+    init(key: String) {
+        self.key = key
+    }
+}
+
+@Model
+final class QualifiedPropertyMacroFixture {
+    @OpenSwiftData.Attribute(.unique) var key: String
+    @OpenSwiftData.Transient var cache: String = "cached"
+
+    init(key: String) {
+        self.key = key
+    }
 }

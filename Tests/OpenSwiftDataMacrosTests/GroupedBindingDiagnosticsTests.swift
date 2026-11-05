@@ -113,9 +113,91 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                 """,
             diagnostics: [
                 DiagnosticSpec(
-                    message: "@Attribute and @Relationship cannot be applied to the same property.",
+                    message: "Conflicting property macros cannot be applied to the same property.",
                     line: 3,
                     column: 5,
+                    severity: .error)
+            ],
+            macros: ["Model": ModelMacro.self])
+    }
+
+    func testTransientAttributeConflictStillGeneratesNonpersistedModelProperty() {
+        assertMacroExpansion(
+            """
+            @Model final class Conflict {
+                @Transient @Attribute(.unique) var value: Int = 0
+            }
+            """,
+            expandedSource: """
+                final class Conflict {
+                    @Transient @Attribute(.unique) var value: Int = 0
+
+                    @Transient
+                    private var _$backingData: any BackingData<Conflict> = Conflict.createBackingData()
+
+                    public var persistentBackingData: any BackingData<Conflict> {
+                        get {
+                            _$backingData
+                        }
+                        set {
+                            _$backingData = newValue
+                        }
+                    }
+
+                    public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+                        return []
+                    }
+
+                    public static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
+                        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+                    }
+
+                    public static func relationshipAdapterCandidatesForMutation() -> [any AnyRelationshipAdapterBox] {
+                        relationshipAdapterCandidates() + inferredRelationshipAdapterCandidates()
+                    }
+
+                    public init(backingData: any BackingData<Conflict>) {
+                        _$backingData = backingData
+                    }
+
+                    @Transient
+                    private let _$observationRegistrar = Observation.ObservationRegistrar()
+
+                    internal nonisolated func access<Root: Conflict, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return
+                        }
+                        _$observationRegistrar.access(subject, keyPath: keyPath)
+                    }
+
+                    internal nonisolated func withMutation<Root: Conflict, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
+                        guard let subject = self as? Root else {
+                            return try mutation()
+                        }
+                        return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
+                    }
+
+                    struct _SwiftDataNoType {
+                    }
+                }
+
+                extension Conflict: PersistentModel {
+                }
+
+                extension Conflict: RelationshipModel {
+                }
+
+                extension Conflict: Observation.Observable {
+                }
+
+                extension Conflict: @unchecked Sendable {
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "Conflicting property macros cannot be applied to the same property.",
+                    line: 2,
+                    column: 16,
                     severity: .error)
             ],
             macros: ["Model": ModelMacro.self])

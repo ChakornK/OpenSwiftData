@@ -89,7 +89,7 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             !variable.modifiers.contains(where: { ["static", "class", "lazy"].contains($0.name.text) }),
             !variable.attributes.contains(where: { element in
                 guard case let .attribute(attribute) = element else { return false }
-                return attribute.attributeName.trimmedDescription == "Transient"
+                return CodeGen.propertyMacroName(attribute) == "Transient"
             })
         else { return [] }
         let rawPropertyName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""
@@ -102,7 +102,7 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         else { return [] }
         let hasExplicitRelationship = variable.attributes.contains { element in
             guard case let .attribute(attribute) = element else { return false }
-            return attribute.attributeName.trimmedDescription == "Relationship"
+            return CodeGen.propertyMacroName(attribute) == "Relationship"
         }
         let isInferredRelationship =
             !property.hasExplicitAttribute && !property.isFlattened
@@ -186,7 +186,7 @@ private struct InvalidModelArgumentDiagnostic: DiagnosticMessage {
 }
 
 private struct ConflictingPropertyMacrosDiagnostic: DiagnosticMessage {
-    let message = "@Attribute and @Relationship cannot be applied to the same property."
+    let message = "Conflicting property macros cannot be applied to the same property."
     let diagnosticID = MessageID(domain: "OpenSwiftDataMacros", id: "conflicting-property-macros")
     let severity = DiagnosticSeverity.error
 }

@@ -172,14 +172,14 @@ enum CodeGen {
             var attributeOptionNames: [String] = []
             for element in attributes {
                 guard case let .attribute(attribute) = element else { continue }
-                let attributeName = attribute.attributeName.trimmedDescription
+                guard let attributeName = CodeGen.propertyMacroName(attribute) else { continue }
                 if attributeName == "Attribute" {
                     explicitAttribute = true
                 } else if attributeName == "Relationship" {
                     explicitRelationship = true
                 }
-                guard attributeName == "Attribute" || attributeName == "Relationship" else {
-                    if attributeName == "Transient" { transient = true }
+                if attributeName == "Transient" {
+                    transient = true
                     continue
                 }
                 let argumentList: LabeledExprListSyntax
@@ -938,40 +938,70 @@ enum CodeGen {
     }
 
     static func conflictingPropertyMacro(in declaration: VariableDeclSyntax) -> AttributeSyntax? {
-        var sawAttribute = false
-        var sawRelationship = false
-        // Conditional attribute clauses require an active build configuration and are not traversed here.
+        var seenMacros: Set<String> = []
+        // Unqualified names are accepted by convention; conditional clauses need active configuration and are skipped.
         for element in declaration.attributes {
             guard case let .attribute(attribute) = element else { continue }
             guard let name = propertyMacroName(attribute) else { continue }
             switch name {
             case "Attribute":
-                if sawRelationship { return attribute }
-                sawAttribute = true
+                if seenMacros.contains("Attribute") || seenMacros.contains("Relationship")
+                    || seenMacros.contains("Transient")
+                {
+                    return attribute
+                }
+                seenMacros.insert("Attribute")
             case "Relationship":
-                if sawAttribute { return attribute }
-                sawRelationship = true
+                if seenMacros.contains("Attribute") || seenMacros.contains("Relationship")
+                    || seenMacros.contains("Transient")
+                {
+                    return attribute
+                }
+                seenMacros.insert("Relationship")
+            case "Transient":
+                if seenMacros.contains("Attribute") || seenMacros.contains("Relationship") { return attribute }
+                seenMacros.insert("Transient")
             default: break
             }
         }
         return nil
     }
 
-    private static func propertyMacroName(_ attribute: AttributeSyntax) -> String? {
-        let name: TokenSyntax
-        switch attribute.attributeName.as(SwiftSyntax.IdentifierTypeSyntax.self) {
-        case let identifier?:
-            name = identifier.name
-        case nil:
-            guard
-                let member = attribute.attributeName.as(SwiftSyntax.MemberTypeSyntax.self),
-                member.moduleSelector == nil,
-                let base = member.baseType.as(SwiftSyntax.IdentifierTypeSyntax.self),
-                base.name.text == "OpenSwiftData"
-            else { return nil }
-            name = member.name
+    static func propertyMacroName(_ attribute: AttributeSyntax) -> String? {
+        var components: [String] = []
+        var previousColonCanCombine = false
+        for token in attribute.attributeName.tokens(viewMode: .sourceAccurate) {
+            let component: String
+            switch token.tokenKind {
+            case .identifier:
+                component = token.text.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+            case .period: component = "."
+            case .colonColon: component = "::"
+            case .colon: component = ":"
+            default: component = token.text
+            }
+            if component == ":", components.last == ":", previousColonCanCombine,
+                token.leadingTrivia.isEmpty
+            {
+                components[components.count - 1] = "::"
+            } else {
+                components.append(component)
+            }
+            previousColonCanCombine = component == ":" && token.trailingTrivia.isEmpty
         }
-        return name.text.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+        // Match only OpenSwiftData's macros to avoid collisions with other modules.
+        switch components {
+        case ["Attribute"]: return "Attribute"
+        case ["Relationship"]: return "Relationship"
+        case ["Transient"]: return "Transient"
+        case ["OpenSwiftData", ".", "Attribute"], ["OpenSwiftData", "::", "Attribute"]:
+            return "Attribute"
+        case ["OpenSwiftData", ".", "Relationship"], ["OpenSwiftData", "::", "Relationship"]:
+            return "Relationship"
+        case ["OpenSwiftData", ".", "Transient"], ["OpenSwiftData", "::", "Transient"]:
+            return "Transient"
+        default: return nil
+        }
     }
 }
 

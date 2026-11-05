@@ -25,10 +25,17 @@ final class CodeGenTests: XCTestCase {
             """)
         let attributeRelationshipAttributeProperty = try XCTUnwrap(
             attributeRelationshipAttribute.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        let attributeRelationshipAttributeMacros = attributeRelationshipAttributeProperty.attributes.compactMap {
+            $0.as(AttributeSyntax.self)
+        }
         XCTAssertEqual(
             CodeGen.conflictingPropertyMacro(in: attributeRelationshipAttributeProperty)?.attributeName
                 .trimmedDescription,
             "Relationship")
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: attributeRelationshipAttributeProperty)?
+                .positionAfterSkippingLeadingTrivia,
+            attributeRelationshipAttributeMacros[1].positionAfterSkippingLeadingTrivia)
 
         let attributeLast = try parseClass(
             """
@@ -50,10 +57,17 @@ final class CodeGenTests: XCTestCase {
             """)
         let relationshipAttributeRelationshipProperty = try XCTUnwrap(
             relationshipAttributeRelationship.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        let relationshipAttributeRelationshipMacros = relationshipAttributeRelationshipProperty.attributes.compactMap {
+            $0.as(AttributeSyntax.self)
+        }
         XCTAssertEqual(
             CodeGen.conflictingPropertyMacro(in: relationshipAttributeRelationshipProperty)?.attributeName
                 .trimmedDescription,
             "Attribute")
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: relationshipAttributeRelationshipProperty)?
+                .positionAfterSkippingLeadingTrivia,
+            relationshipAttributeRelationshipMacros[1].positionAfterSkippingLeadingTrivia)
 
         let qualified = try parseClass(
             """
@@ -65,6 +79,42 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.conflictingPropertyMacro(in: qualifiedProperty)?.attributeName.trimmedDescription,
             "OpenSwiftData.Relationship")
+
+        let moduleSelected = try parseClass(
+            """
+            class Model {
+                @OpenSwiftData::Attribute(.unique) @OpenSwiftData::Relationship var value: [Item]
+            }
+            """)
+        let moduleSelectedProperty = try XCTUnwrap(
+            moduleSelected.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: moduleSelectedProperty)?.attributeName.trimmedDescription,
+            "OpenSwiftData::Relationship")
+
+        let escapedModuleSelected = try parseClass(
+            """
+            class Model {
+                @`OpenSwiftData` /* module */ :: `Attribute`(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let escapedModuleSelectedProperty = try XCTUnwrap(
+            escapedModuleSelected.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: escapedModuleSelectedProperty)?.attributeName.trimmedDescription,
+            "Relationship")
+
+        let spacedQualified = try parseClass(
+            """
+            class Model {
+                @OpenSwiftData /* qualifier */ . `Attribute`(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let spacedQualifiedProperty = try XCTUnwrap(
+            spacedQualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: spacedQualifiedProperty)?.attributeName.trimmedDescription,
+            "Relationship")
 
         let escaped = try parseClass(
             """
@@ -87,9 +137,126 @@ final class CodeGenTests: XCTestCase {
             unrelatedModule.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
         XCTAssertNil(CodeGen.conflictingPropertyMacro(in: unrelatedProperty))
 
+        let unrelatedModuleSelected = try parseClass(
+            """
+            class Model {
+                @OtherModels::Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let unrelatedModuleSelectedProperty = try XCTUnwrap(
+            unrelatedModuleSelected.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(
+            CodeGen.conflictingPropertyMacro(in: unrelatedModuleSelectedProperty),
+            "Attribute syntax: \(unrelatedModuleSelectedProperty.attributes.first?.trimmedDescription ?? "missing")")
+
+        let separatedColons = try parseClass(
+            """
+            class Model {
+                @OpenSwiftData: :Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let separatedColonsProperty = try XCTUnwrap(
+            separatedColons.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: separatedColonsProperty))
+
+        let conditional = try parseClass(
+            """
+            class Model {
+                #if DEBUG
+                @Attribute(.unique)
+                #endif
+                @Relationship var value: [Item]
+            }
+            """)
+        let conditionalProperty = try XCTUnwrap(conditional.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: conditionalProperty))
+
+        let genericMacroName = try parseClass(
+            """
+            class Model {
+                @Attribute<Int>(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let genericMacroProperty = try XCTUnwrap(
+            genericMacroName.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: genericMacroProperty))
+
+        let unrelatedNestedQualified = try parseClass(
+            """
+            class Model {
+                @OtherModels.OpenSwiftData.Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let unrelatedNestedProperty = try XCTUnwrap(
+            unrelatedNestedQualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: unrelatedNestedProperty))
+
+        let swiftQualified = try parseClass(
+            """
+            class Model {
+                @Swift.Attribute(.unique) @Relationship var value: [Item]
+            }
+            """)
+        let swiftQualifiedProperty = try XCTUnwrap(
+            swiftQualified.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: swiftQualifiedProperty))
+
         let valid = try parseClass("class Model { @Attribute(.unique) var value: String }")
         let validProperty = try XCTUnwrap(valid.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
         XCTAssertNil(CodeGen.conflictingPropertyMacro(in: validProperty))
+
+        let grouped = try parseClass(
+            "class Model { @Attribute(.unique) @Relationship var first, second: [Item] }")
+        let groupedProperty = try XCTUnwrap(grouped.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertEqual(
+            CodeGen.conflictingPropertyMacro(in: groupedProperty)?.attributeName.trimmedDescription,
+            "Relationship")
+
+        let conflictingPairs = [
+            ("@Attribute(.unique) @Transient", "Transient"),
+            ("@Transient @Attribute(.unique)", "Attribute"),
+            ("@Relationship @Transient", "Transient"),
+            ("@Transient @Relationship", "Relationship"),
+            ("@Attribute(.unique) @Attribute(.externalStorage)", "Attribute"),
+            ("@Relationship(inverse: nil) @Relationship(deleteRule: .cascade)", "Relationship"),
+        ]
+        for (attributes, expectedConflict) in conflictingPairs {
+            let source = "class Model { \(attributes) var value: [Item] }"
+            let declaration = try parseClass(source)
+            let property = try XCTUnwrap(declaration.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+            XCTAssertEqual(
+                CodeGen.conflictingPropertyMacro(in: property)?.attributeName.trimmedDescription
+                    .split(separator: ".").last.map(String.init)?.trimmingCharacters(
+                        in: CharacterSet(charactersIn: "`")),
+                expectedConflict,
+                source)
+        }
+
+        let repeatedTransient = try parseClass("class Model { @Transient @Transient var value: String }")
+        let repeatedTransientProperty = try XCTUnwrap(
+            repeatedTransient.memberBlock.members.first?.decl.as(VariableDeclSyntax.self))
+        XCTAssertNil(CodeGen.conflictingPropertyMacro(in: repeatedTransientProperty))
+    }
+
+    func testQualifiedPropertyMacroNamesGenerateMatchingMetadata() throws {
+        let qualifiedAttribute = try parseClass(
+            """
+            final class QualifiedAttributeModel {
+                @OpenSwiftData.Attribute(.unique) var value: String
+            }
+            """)
+        let attributeSources = CodeGen.memberSources(qualifiedAttribute).joined(separator: "\n")
+        XCTAssertTrue(attributeSources.contains("metadata: Schema.Attribute(.unique)"), attributeSources)
+
+        let qualifiedTransient = try parseClass(
+            """
+            final class QualifiedTransientModel {
+                @OpenSwiftData.Transient var value: String
+            }
+            """)
+        XCTAssertTrue(CodeGen.persistedProperties(in: qualifiedTransient).isEmpty)
+        let transientSources = CodeGen.memberSources(qualifiedTransient).joined(separator: "\n")
+        XCTAssertFalse(transientSources.contains("name: \"value\""), transientSources)
     }
 
     func testInheritedModelKeyPathTablesComposeForConcreteRoots() throws {

@@ -1543,6 +1543,48 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingScalarIdentifierSortPreservesNilOrdering() throws {
+        let container = try ModelContainer(
+            for: PredicateAgreementFixture.self,
+            configurations: .sqliteMemory("pending-identifier-nil-sort"))
+        let writer = container.mainContext
+        let nilRow = PredicateAgreementFixture(id: 1, value: 1, optionalValue: nil)
+        let valuedRow = PredicateAgreementFixture(id: 2, value: 2, optionalValue: 2)
+        writer.insert(nilRow)
+        writer.insert(valuedRow)
+        try writer.save()
+
+        let context = container.makeContext()
+        let pendingNilRow = PredicateAgreementFixture(id: 3, value: 3, optionalValue: nil)
+        context.insert(pendingNilRow)
+        let ascending = FetchDescriptor<PredicateAgreementFixture>(
+            sortBy: [SortDescriptor(\.optionalValue)], fetchLimit: 2, fetchOffset: 0)
+        let descending = FetchDescriptor<PredicateAgreementFixture>(
+            sortBy: [SortDescriptor(\.optionalValue, order: .reverse)], fetchLimit: 2)
+
+        let ascendingIDs = try context.fetchIdentifiers(ascending)
+        XCTAssertEqual(ascendingIDs, [nilRow.persistentModelID, pendingNilRow.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(ascending), 2)
+        let valuedRegisteredAfterAscending: PredicateAgreementFixture? = context.registeredModel(
+            for: valuedRow.persistentModelID)
+        XCTAssertNil(valuedRegisteredAfterAscending)
+        XCTAssertEqual(try context.fetch(ascending).map(\.persistentModelID), ascendingIDs)
+
+        let ascendingAfterNil = FetchDescriptor<PredicateAgreementFixture>(
+            sortBy: [SortDescriptor(\.optionalValue)], fetchLimit: 2, fetchOffset: 1)
+        let ascendingAfterNilIDs = try context.fetchIdentifiers(ascendingAfterNil)
+        XCTAssertEqual(ascendingAfterNilIDs, [pendingNilRow.persistentModelID, valuedRow.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(ascendingAfterNil), 2)
+
+        let descendingIDs = try context.fetchIdentifiers(descending)
+        XCTAssertEqual(descendingIDs, [valuedRow.persistentModelID, nilRow.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(descending), 2)
+        XCTAssertEqual(try context.fetch(descending).map(\.persistentModelID), descendingIDs)
+        let valuedRegistered: PredicateAgreementFixture? = context.registeredModel(for: valuedRow.persistentModelID)
+        XCTAssertNil(valuedRegistered)
+    }
+
+    @MainActor
     func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,

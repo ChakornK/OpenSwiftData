@@ -863,6 +863,15 @@ final class UInt64CollectionFixture {
 }
 
 @Model
+final class UInt64ScalarFixture {
+    var value: UInt64
+
+    init(value: UInt64) {
+        self.value = value
+    }
+}
+
+@Model
 final class OptionalUInt64CollectionFixture {
     @Attribute(.codable) var values: Set<UInt64?>
 
@@ -4998,6 +5007,82 @@ final class PersistentModelTests: XCTestCase {
             Set(try context.fetchIdentifiers(pendingDescriptor)),
             Set([models[2].persistentModelID, pending.persistentModelID]))
         XCTAssertEqual(try context.fetchCount(pendingDescriptor), 2)
+    }
+
+    @MainActor
+    func testUInt64ScalarPersistsAtSQLiteSignedBoundary() throws {
+        let container = try ModelContainer(
+            for: UInt64ScalarFixture.self,
+            configurations: .sqliteMemory("uint64-scalar-signed-boundary"))
+        let context = container.mainContext
+        let boundary = UInt64(Int64.max)
+        let model = UInt64ScalarFixture(value: boundary)
+        context.insert(model)
+        try context.save()
+
+        let descriptor = FetchDescriptor<UInt64ScalarFixture>(predicate: #Predicate { $0.value == boundary })
+        XCTAssertEqual(try context.fetch(descriptor).map(\.value), [boundary])
+        XCTAssertEqual(try context.fetchCount(descriptor), 1)
+        XCTAssertEqual(try context.fetchIdentifiers(descriptor), [model.persistentModelID])
+        XCTAssertEqual(
+            try container.makeContext().fetch(FetchDescriptor<UInt64ScalarFixture>()).map(\.value), [boundary])
+    }
+
+    @MainActor
+    func testUInt64ScalarOverflowSaveRollsBackAndRetainsPendingModels() throws {
+        let container = try ModelContainer(
+            for: UInt64ScalarFixture.self,
+            configurations: .sqliteMemory("uint64-scalar-overflow-atomicity"))
+        let context = container.mainContext
+        let store = try XCTUnwrap(container.store)
+        let first = UInt64ScalarFixture(value: 7)
+        let overflowing = UInt64ScalarFixture(value: UInt64(Int64.max) + 1)
+        context.insert(first)
+        context.insert(overflowing)
+
+        XCTAssertThrowsError(try context.save())
+        XCTAssertEqual(
+            try store.read { try $0.rows("SELECT Z_PK FROM ZUINT64SCALARFIXTURE", arguments: []) }, [])
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === first }))
+        XCTAssertTrue(context.insertedModels.contains(where: { $0 === overflowing }))
+        XCTAssertTrue(first.modelContext === context)
+        XCTAssertTrue(overflowing.modelContext === context)
+        XCTAssertNil(first.persistentModelID.primaryKey)
+        XCTAssertNil(overflowing.persistentModelID.primaryKey)
+
+        overflowing.value = UInt64(Int64.max)
+        try context.save()
+        XCTAssertEqual(
+            try store.read {
+                try $0.rows("SELECT ZVALUE FROM ZUINT64SCALARFIXTURE ORDER BY Z_PK", arguments: [])
+            },
+            [[.int(7)], [.int(Int64.max)]])
+        XCTAssertNotNil(first.persistentModelID.primaryKey)
+        XCTAssertNotNil(overflowing.persistentModelID.primaryKey)
+        let reopened = container.makeContext()
+        XCTAssertEqual(
+            Set(try reopened.fetch(FetchDescriptor<UInt64ScalarFixture>()).map(\.value)),
+            Set([UInt64(7), UInt64(Int64.max)]))
+    }
+
+    @MainActor
+    func testUInt64ScalarPredicateCaptureOutsideSQLiteIntegerRangeFailsClosed() throws {
+        let container = try ModelContainer(
+            for: UInt64ScalarFixture.self,
+            configurations: .sqliteMemory("uint64-scalar-capture-overflow"))
+        let context = container.mainContext
+        context.insert(UInt64ScalarFixture(value: UInt64(Int64.max)))
+        try context.save()
+
+        let beyondSQLiteIntegerRange = UInt64(Int64.max) + 1
+        let descriptor = FetchDescriptor<UInt64ScalarFixture>(
+            predicate: #Predicate { $0.value == beyondSQLiteIntegerRange })
+        XCTAssertThrowsError(try context.fetch(descriptor)) { error in
+            guard case SwiftDataError.unsupportedPredicate = error else {
+                return XCTFail("Expected unsupportedPredicate, got \(error)")
+            }
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<UInt64ScalarFixture>()), 1)
     }
 
     @MainActor

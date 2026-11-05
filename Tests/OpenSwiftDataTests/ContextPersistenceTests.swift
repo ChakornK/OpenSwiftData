@@ -1585,6 +1585,53 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingDecimalIdentifierSortUsesNumericCollation() throws {
+        let container = try ModelContainer(
+            for: QualifiedOptionalScalarFixture.self,
+            configurations: .sqliteMemory("pending-decimal-identifier-sort"))
+        let writer = container.mainContext
+        let nilAmount = QualifiedOptionalScalarFixture(id: nil, link: nil, amount: nil)
+        let lowerAmount = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "2")))
+        let unitAmount = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "1.00")))
+        let largerAmount = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "10")))
+        writer.insert(nilAmount)
+        writer.insert(lowerAmount)
+        writer.insert(unitAmount)
+        writer.insert(largerAmount)
+        try writer.save()
+
+        let reader = container.makeContext()
+        let pendingEquivalent = QualifiedOptionalScalarFixture(
+            id: nil, link: nil, amount: try XCTUnwrap(Decimal(string: "1.0")))
+        reader.insert(pendingEquivalent)
+        let descriptor = FetchDescriptor<QualifiedOptionalScalarFixture>(
+            sortBy: [SortDescriptor(\.amount)], fetchLimit: 2, fetchOffset: 3)
+        let expectedIDs = [lowerAmount.persistentModelID, largerAmount.persistentModelID]
+
+        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try reader.fetchCount(descriptor), 2)
+        let nilRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(for: nilAmount.persistentModelID)
+        let storedUnitRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
+            for: unitAmount.persistentModelID)
+        let largerRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
+            for: largerAmount.persistentModelID)
+        XCTAssertNil(nilRegistered)
+        XCTAssertNil(storedUnitRegistered)
+        XCTAssertNil(largerRegistered)
+        let fetched = try reader.fetch(descriptor)
+        XCTAssertEqual(fetched.map(\.persistentModelID), expectedIDs)
+        XCTAssertEqual(fetched.map(\.amount), [lowerAmount.amount, largerAmount.amount])
+
+        let equivalentTie = FetchDescriptor<QualifiedOptionalScalarFixture>(sortBy: [SortDescriptor(\.amount)])
+        let tiedIDs = try reader.fetchIdentifiers(equivalentTie)
+        XCTAssertEqual(
+            Array(tiedIDs[1...2]), [unitAmount.persistentModelID, pendingEquivalent.persistentModelID])
+    }
+
+    @MainActor
     func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,

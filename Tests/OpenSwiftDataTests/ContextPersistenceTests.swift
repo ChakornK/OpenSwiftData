@@ -753,7 +753,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testExpressionLowersAndExecutesAsSQLiteSQL() throws {
+    func testExpressionLowersAndExecutesAsSQLiteSQLAndEvaluator() throws {
         guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
             throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
         }
@@ -813,11 +813,21 @@ final class ContextPersistenceTests: XCTestCase {
         }
         XCTAssertEqual(matchingRows.map(\.1), [6, 8])
         var foundationMatchingCounts: [Int64] = []
+        var runtimeMatchingCounts: [Int64] = []
+        let evaluatorPlan = try XCTUnwrap(compiled.evaluatorPlan)
         for row in rows where try expression.evaluate(row.count) > 10 {
             foundationMatchingCounts.append(Int64(row.count))
         }
+        for row in rows {
+            if try RuntimePredicateEvaluator.matches(
+                evaluatorPlan, values: ["count": .int(Int64(row.count))])
+            {
+                runtimeMatchingCounts.append(Int64(row.count))
+            }
+        }
         let sqliteMatchingCounts = matchingRows.map { $0.1 }
         XCTAssertEqual(sqliteMatchingCounts, foundationMatchingCounts)
+        XCTAssertEqual(runtimeMatchingCounts, foundationMatchingCounts)
         let expectedPrimaryKeys =
             try rows
             .filter { $0.count > 5 }

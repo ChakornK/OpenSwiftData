@@ -5110,8 +5110,11 @@ final class PersistentModelTests: XCTestCase {
         let nilCapture: UInt64? = nil
         let literalNilDescriptor = FetchDescriptor<OptionalUInt64ScalarFixture>(
             predicate: #Predicate { $0.value == nil })
+        let literalNilMatches = try context.fetch(literalNilDescriptor)
+        XCTAssertEqual(literalNilMatches.map(\.persistentModelID), [nilModel.persistentModelID])
+        XCTAssertEqual(try context.fetchCount(literalNilDescriptor), 1)
         XCTAssertEqual(
-            Set(try context.fetchIdentifiers(literalNilDescriptor)), Set([nilModel.persistentModelID]))
+            try context.fetchIdentifiers(literalNilDescriptor), literalNilMatches.map(\.persistentModelID))
         let nilDescriptor = FetchDescriptor<OptionalUInt64ScalarFixture>(
             predicate: #Predicate { $0.value == nilCapture })
         let nilMatches = try context.fetch(nilDescriptor)
@@ -5148,6 +5151,9 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             Set(savedSomeMatches.map(\.persistentModelID)), Set([boundaryModel, overflowing].map(\.persistentModelID)))
         XCTAssertEqual(try context.fetchCount(someDescriptor), 2)
+        XCTAssertEqual(
+            Set(try context.fetchIdentifiers(someDescriptor)), Set(savedSomeMatches.map(\.persistentModelID)))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<OptionalUInt64ScalarFixture>()), 3)
     }
 
     @MainActor

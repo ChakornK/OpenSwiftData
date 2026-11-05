@@ -1203,7 +1203,7 @@ public final class ModelContext {
             guard
                 let pendingRows = try pendingIdentifierRows(
                     queryRows,
-                    descriptor: descriptor,
+                    modelType: Model.self,
                     entity: entity,
                     hasHierarchy: hasHierarchy,
                     sortProperties: sortProperties,
@@ -1251,7 +1251,7 @@ public final class ModelContext {
 
     private func pendingIdentifierRows<Model: PersistentModel>(
         _ committedRows: [IdentifierQueryRow],
-        descriptor: FetchDescriptor<Model>,
+        modelType: Model.Type,
         entity: Schema.Entity,
         hasHierarchy: Bool,
         sortProperties: [String],
@@ -1294,22 +1294,6 @@ public final class ModelContext {
                     identifier: identifier,
                     sortValues: sortProperties.map { values[$0] ?? .null }))
         }
-
-        rows = rows.enumerated().sorted { lhs, rhs in
-            for (index, sortDescriptor) in descriptor.sortBy.enumerated() {
-                let comparison = compareSortValues(
-                    lhs.element.sortValues[index], rhs.element.sortValues[index],
-                    isDecimal: isDecimalAttribute(sortProperties[index], in: entity))
-                if comparison != .orderedSame {
-                    return sortDescriptor.isAscending
-                        ? comparison == .orderedAscending : comparison == .orderedDescending
-                }
-            }
-            let lhsPK = lhs.element.identifier.primaryKey ?? Int64.max
-            let rhsPK = rhs.element.identifier.primaryKey ?? Int64.max
-            if lhsPK != rhsPK { return lhsPK < rhsPK }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
 
         return rows
     }

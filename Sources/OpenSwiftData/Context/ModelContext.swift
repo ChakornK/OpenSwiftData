@@ -1342,7 +1342,8 @@ public final class ModelContext {
                 for (index, descriptor) in descriptor.sortBy.enumerated() {
                     let comparison = compareSortValues(
                         lhs.element.sortValues[index], rhs.element.sortValues[index],
-                        isDecimal: isDecimalAttribute(sortProperties[index], in: entity))
+                        isDecimal: isDecimalAttribute(sortProperties[index], in: entity),
+                        stringCollation: descriptor.stringCollation)
                     if comparison != .orderedSame {
                         return descriptor.isAscending
                             ? comparison == .orderedAscending : comparison == .orderedDescending
@@ -2351,9 +2352,10 @@ public final class ModelContext {
         type: Model.Type
     ) throws -> String {
         let columns = try descriptors.map { descriptor -> String in
+            guard let keyPath = descriptor.keyPath else { throw SwiftDataError.unsupportedSortDescriptor }
             guard
                 let property = resolvedPropertyName(
-                    keyPath: descriptor.keyPath, fallback: descriptor.propertyName, entity: entity, type: type),
+                    keyPath: keyPath, fallback: descriptor.propertyName, entity: entity, type: type),
                 !isBlobFlattenedColumn(property, in: entity),
                 property.utf8.allSatisfy({
                     ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
@@ -2371,7 +2373,10 @@ public final class ModelContext {
             } else {
                 throw SwiftDataError.unsupportedPredicate("Sort key is not a persisted attribute")
             }
-            let collationSQL = collation.map { " COLLATE \($0)" } ?? ""
+            let resolvedCollation =
+                collation == StringSortCollation.localizedStandard.sqlCollation
+                ? descriptor.stringCollation.sqlCollation : collation
+            let collationSQL = resolvedCollation.map { " COLLATE \($0)" } ?? ""
             return "t0.Z\(property.uppercased())\(collationSQL) \(descriptor.isAscending ? "ASC" : "DESC")"
         }
         return columns.isEmpty ? "t0.Z_PK ASC" : columns.joined(separator: ", ")
@@ -2422,7 +2427,8 @@ public final class ModelContext {
                     let result = compareSortValues(
                         sortValues[ObjectIdentifier(lhs.element)]?[index] ?? .null,
                         sortValues[ObjectIdentifier(rhs.element)]?[index] ?? .null,
-                        isDecimal: isDecimalAttribute(sortNames[index], in: entity))
+                        isDecimal: isDecimalAttribute(sortNames[index], in: entity),
+                        stringCollation: descriptor.stringCollation)
                     if result != .orderedSame {
                         return descriptor.isAscending ? result == .orderedAscending : result == .orderedDescending
                     }
@@ -2767,9 +2773,10 @@ public final class ModelContext {
         type: Model.Type
     ) throws -> [String] {
         try descriptors.map { descriptor in
+            guard let keyPath = descriptor.keyPath else { throw SwiftDataError.unsupportedSortDescriptor }
             guard
                 let property = resolvedPropertyName(
-                    keyPath: descriptor.keyPath, fallback: descriptor.propertyName, entity: entity, type: type),
+                    keyPath: keyPath, fallback: descriptor.propertyName, entity: entity, type: type),
                 !isBlobFlattenedColumn(property, in: entity)
             else {
                 throw SwiftDataError.unsupportedPredicate("Sort key must be a direct persisted attribute")
@@ -2799,7 +2806,8 @@ public final class ModelContext {
     package func compareSortValues(
         _ lhs: RuntimeValue,
         _ rhs: RuntimeValue,
-        isDecimal: Bool = false
+        isDecimal: Bool = false,
+        stringCollation: StringSortCollation = .localizedStandard
     ) -> ComparisonResult {
         assertAffinity()
         if case let .double(value) = lhs, value.isNaN {
@@ -2829,7 +2837,7 @@ public final class ModelContext {
             return ordering(lhs, rhs)
         case let (.text(lhs), .text(rhs)):
             if isDecimal { return DecimalText.compare(lhs, rhs) }
-            return lhs.localizedStandardCompare(rhs)
+            return stringCollation.compare(lhs, rhs)
         case let (.blob(lhs), .blob(rhs)):
             if lhs == rhs { return .orderedSame }
             return lhs.lexicographicallyPrecedes(rhs) ? .orderedAscending : .orderedDescending

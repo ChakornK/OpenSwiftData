@@ -390,6 +390,14 @@ public final class ModelContext {
             state.willMutate(model, snapshot: snapshot)
             markDeletedTyped(model)
             state.markDeleted(model)
+            // SwiftData marks cascade destinations deleted immediately, recursively.
+            for (adapter, endpoints) in state.relationships(ownedBy: model)
+            where adapter.metadata?.deleteRule == .cascade {
+                for endpoint in endpoints where endpoint.modelContext === self && !endpoint.isDeleted {
+                    func cascade<Endpoint: PersistentModel>(_ endpoint: Endpoint) { delete(endpoint) }
+                    cascade(endpoint)
+                }
+            }
         }
     }
 
@@ -405,7 +413,6 @@ public final class ModelContext {
         var scheduled = roots
         var scheduledIDs = Set(scheduled.map(ObjectIdentifier.init))
         var cascadeScheduled: [any PersistentModel] = []
-        var denyEdges = Set<String>()
         while let source = scheduled.first {
             scheduled.removeFirst()
             let outgoing = relationshipSnapshots[ObjectIdentifier(source)] ?? state.relationships(ownedBy: source)
@@ -416,20 +423,14 @@ public final class ModelContext {
                         "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
                 }
                 switch metadata.deleteRule {
-                case .deny:
-                    for endpoint in endpoints where !scheduledIDs.contains(ObjectIdentifier(endpoint)) {
-                        let edge = "\(ObjectIdentifier(source)):\(adapter.name):\(ObjectIdentifier(endpoint))"
-                        guard denyEdges.insert(edge).inserted else { continue }
-                        throw SwiftDataError.relationshipGraphConflict(
-                            "Cannot delete model while relationship '\(adapter.name)' has related models.")
-                    }
                 case .cascade:
                     for endpoint in endpoints where scheduledIDs.insert(ObjectIdentifier(endpoint)).inserted {
                         cascadeScheduled.append(endpoint)
                         scheduled.append(endpoint)
                         relationshipSnapshots[ObjectIdentifier(endpoint)] = state.relationships(ownedBy: endpoint)
                     }
-                case .nullify, .noAction:
+                case .nullify, .noAction, .deny:
+                    // SwiftData does not enforce `deny`; related models are nullified like `nullify`.
                     break
                 }
             }
@@ -440,15 +441,9 @@ public final class ModelContext {
     }
 
     private func validateDeleteRules(for model: any PersistentModel) throws {
-        for (adapter, endpoints) in state.relationships(ownedBy: model) {
-            guard let metadata = adapter.metadata else {
-                throw SwiftDataError.unsupportedSchemaProperty(
-                    "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
-            }
-            if metadata.deleteRule == .deny, !endpoints.isEmpty {
-                throw SwiftDataError.relationshipGraphConflict(
-                    "Cannot delete model while relationship '\(adapter.name)' has related models.")
-            }
+        for (adapter, _) in state.relationships(ownedBy: model) where adapter.metadata == nil {
+            throw SwiftDataError.unsupportedSchemaProperty(
+                "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
         }
         let owners = identityMap.liveModels().map(\.1) + state.insertedModels + state.changedModels
         var visited = Set<ObjectIdentifier>()
@@ -550,7 +545,8 @@ public final class ModelContext {
                     throw SwiftDataError.unsupportedSchemaProperty(
                         "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
                 }
-                guard metadata.deleteRule == .nullify, let inverseName = metadata.inverse else { continue }
+                guard metadata.deleteRule == .nullify || metadata.deleteRule == .deny, let inverseName = metadata.inverse
+                else { continue }
                 for endpoint in endpoints {
                     guard let inverse = state.relationshipAdapter(for: endpoint, property: inverseName) else {
                         throw SwiftDataError.unsupportedSchemaProperty(

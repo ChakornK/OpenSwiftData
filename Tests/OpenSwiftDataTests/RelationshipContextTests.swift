@@ -54,27 +54,6 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteDenyLeavesOwnerUntouchedAndProcessingIsIdempotent() throws {
-        let owner = ContextDenyOwner(name: "Ada")
-        let pet = ContextPet(name: "Milo")
-        let container = try ModelContainer(for: [ContextDenyOwner.self, ContextPet.self], configurations: [])
-        let context = ModelContext(testSave: {}, container: container)
-        context.insert(owner)
-        context.insert(pet)
-        try context.save()
-        let adapter = try XCTUnwrap(container.relationshipAdapters(for: ContextDenyOwner.self).first)
-        try adapter.write([pet], to: owner)
-
-        context.delete(owner)
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        XCTAssertEqual(adapter.read(owner)?.map(ObjectIdentifier.init), [ObjectIdentifier(pet)])
-        let eventCount = context.state.relationshipMutations.count
-        try context.processPendingChangesThrowing()
-        XCTAssertEqual(context.state.relationshipMutations.count, eventCount)
-    }
-
-    @MainActor
     func testCascadeAndNullifyDeleteRulesApplySynchronously() throws {
         let cascadeOwner = ContextCascadeOwner(name: "A")
         let cascadePet = ContextPet(name: "Cascade")

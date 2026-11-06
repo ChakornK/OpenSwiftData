@@ -696,64 +696,6 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteDenyIsRecoverableAndLeavesModelManaged() throws {
-        let owner = DeleteRuleOwner(name: "A")
-        let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: [DeleteRuleOwner.self, DeleteRuleChild.self], configurations: [])
-        let context = ModelContext(testSave: {}, container: container)
-        context.insert(owner)
-        context.insert(child)
-        try context.save()
-        let adapter = try XCTUnwrap(container.relationshipAdapters(for: DeleteRuleOwner.self).first)
-        XCTAssertEqual(adapter.metadata?.deleteRule, .deny)
-        XCTAssertTrue(owner.modelContext === context)
-        XCTAssertTrue(child.modelContext === context)
-        XCTAssertEqual(context.state.relationshipAdapters(for: DeleteRuleOwner.self).map(\.name), ["children"])
-        try adapter.write([child], to: owner)
-        XCTAssertEqual(adapter.read(owner)?.count, 1)
-        XCTAssertEqual(owner.children.count, 1)
-        XCTAssertTrue(child.modelContext === context)
-        XCTAssertFalse(child.isDeleted)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === child })
-        XCTAssertFalse(context.insertedModelsArray.contains { $0 === owner })
-        XCTAssertFalse(context.insertedModelsArray.contains { $0 === child })
-
-        context.delete(owner)
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        try context.processPendingChangesThrowing()
-        XCTAssertTrue(owner.modelContext === context)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertEqual(
-            context.state.relationshipMutations.last?.newEndpoints.map(ObjectIdentifier.init), [ObjectIdentifier(child)]
-        )
-        XCTAssertEqual(adapter.read(owner)?.map(ObjectIdentifier.init), [ObjectIdentifier(child)])
-    }
-
-    @MainActor
-    func testNonthrowingDeleteLeavesDeniedOwnerUntouched() throws {
-        let owner = DeleteRuleOwner(name: "A")
-        let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: [DeleteRuleOwner.self, DeleteRuleChild.self], configurations: [])
-        let context = ModelContext(testSave: {}, container: container)
-        context.insert(owner)
-        context.insert(child)
-        try context.save()
-        let adapter = try XCTUnwrap(container.relationshipAdapters(for: DeleteRuleOwner.self).first)
-        try adapter.write([child], to: owner)
-
-        context.delete(owner)
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        try context.processPendingChangesThrowing()
-
-        XCTAssertTrue(owner.modelContext === context)
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertEqual(adapter.read(owner)?.map(ObjectIdentifier.init), [ObjectIdentifier(child)])
-    }
-
-    @MainActor
     func testDeleteCascadeSchedulesRelatedModel() throws {
         let owner = CascadeOwner(name: "A")
         let child = DeleteRuleChild(name: "B")

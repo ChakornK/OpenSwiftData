@@ -2376,9 +2376,10 @@ final class PersistentModelTests: XCTestCase {
         denyContext.insert(denyOwner)
         try denyContext.save()
         denyContext.delete(denyOwner)
-        XCTAssertFalse(denyOwner.isDeleted)
-        XCTAssertFalse(denyContext.hasChanges)
-        XCTAssertEqual(try denyContext.fetch(FetchDescriptor<DenyHierarchyOwnerBaseFixture>()).count, 1)
+        // SwiftData does not enforce `deny`; the delete proceeds.
+        XCTAssertTrue(denyOwner.isDeleted)
+        XCTAssertTrue(denyContext.hasChanges)
+        XCTAssertEqual(try denyContext.fetch(FetchDescriptor<DenyHierarchyOwnerBaseFixture>()).count, 0)
     }
 
     @MainActor
@@ -3076,7 +3077,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedRelationshipDoesNotMutateContextOwnedEndpoint() throws {
+    func testDetachedRelationshipToManagedEndpointInsertsTheModel() throws {
         let container = try ModelContainer(
             for: DetachedManyToManyLeftFixture.self,
             DetachedManyToManyRightFixture.self,
@@ -3088,8 +3089,9 @@ final class PersistentModelTests: XCTestCase {
         let detachedLeft = DetachedManyToManyLeftFixture(name: "detached")
         detachedLeft.rights = [managedRight]
         XCTAssertEqual(detachedLeft.rights.map(\.name), ["managed"])
-        XCTAssertTrue(managedRight.lefts.isEmpty)
-        XCTAssertTrue(container.mainContext.hasChanges == false)
+        XCTAssertTrue(detachedLeft.modelContext === container.mainContext)
+        XCTAssertEqual(managedRight.lefts.map(\.name), ["detached"])
+        XCTAssertTrue(container.mainContext.hasChanges)
     }
 
     @MainActor
@@ -6448,9 +6450,10 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(denyAdapter.metadata?.deleteRule, .deny)
         XCTAssertEqual(denyAdapter.read(denyOwner)?.count, 1)
         denyContext.delete(denyOwner)
-        XCTAssertFalse(denyOwner.isDeleted)
-        XCTAssertFalse(denyContext.hasChanges)
-        XCTAssertEqual(try denyContext.fetch(FetchDescriptor<InheritedDenyJoinBaseFixture>()).count, 1)
+        // SwiftData does not enforce `deny`; the delete proceeds.
+        XCTAssertTrue(denyOwner.isDeleted)
+        XCTAssertTrue(denyContext.hasChanges)
+        XCTAssertEqual(try denyContext.fetch(FetchDescriptor<InheritedDenyJoinBaseFixture>()).count, 0)
     }
 
     @MainActor
@@ -6697,8 +6700,9 @@ final class PersistentModelTests: XCTestCase {
         let denyReader = denyContainer.makeContext()
         let persistedDenyTarget = try XCTUnwrap(denyReader.fetch(FetchDescriptor<InheritedDenyTargetFixture>()).first)
         denyReader.delete(persistedDenyTarget)
-        XCTAssertFalse(persistedDenyTarget.isDeleted)
-        XCTAssertFalse(denyReader.hasChanges)
+        // SwiftData does not enforce `deny`; the delete proceeds and the owner remains.
+        XCTAssertTrue(persistedDenyTarget.isDeleted)
+        XCTAssertTrue(denyReader.hasChanges)
         XCTAssertEqual(try denyReader.fetch(FetchDescriptor<InheritedDenyBaseFixture>()).count, 1)
     }
 
@@ -6746,7 +6750,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubtypeInverseDenyRulePreventsConcreteTargetDeletion() throws {
+    func testSubtypeInverseDenyRuleDoesNotPreventConcreteTargetDeletion() throws {
         let container = try ModelContainer(
             for: [
                 HierarchySubtypeOwnerChildFixture.self,
@@ -6765,15 +6769,16 @@ final class PersistentModelTests: XCTestCase {
                 as? DeniedHierarchyTargetChildFixture)
         deleteContext.delete(targetForDelete)
 
-        XCTAssertFalse(targetForDelete.isDeleted)
-        XCTAssertFalse(deleteContext.hasChanges)
+        // SwiftData does not enforce `deny`; the delete proceeds and the owner remains.
+        XCTAssertTrue(targetForDelete.isDeleted)
+        XCTAssertTrue(deleteContext.hasChanges)
         XCTAssertEqual(try deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerBaseFixture>()).count, 1)
 
         let ownerForDelete = try XCTUnwrap(
             deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerChildFixture>()).first)
         deleteContext.delete(ownerForDelete)
         try deleteContext.save()
-        XCTAssertEqual(try deleteContext.fetch(FetchDescriptor<DeniedHierarchyTargetBaseFixture>()).count, 1)
+        XCTAssertEqual(try deleteContext.fetch(FetchDescriptor<DeniedHierarchyTargetBaseFixture>()).count, 0)
         XCTAssertTrue(try deleteContext.fetch(FetchDescriptor<HierarchySubtypeOwnerBaseFixture>()).isEmpty)
     }
 
@@ -7697,7 +7702,11 @@ final class PersistentModelTests: XCTestCase {
             container.schema.entityIDsByName["InheritedToOneMigrationTargetFixture"],
             sourceIDs["InheritedToOneMigrationTargetFixture"])
 
-        let newRoot = IndependentRelationshipRootFixture(name: "new root", target: target)
+        // Relate the new root to the target as managed by this container; relating it to the closed container's
+        // instance would insert the root into that container's context instead.
+        let managedTarget: InheritedToOneMigrationTargetFixture = try XCTUnwrap(
+            container.mainContext.model(for: target.persistentModelID))
+        let newRoot = IndependentRelationshipRootFixture(name: "new root", target: managedTarget)
         container.mainContext.insert(newRoot)
         try container.mainContext.save()
         let reader = container.makeContext()
@@ -7760,7 +7769,9 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
-        let root = IndependentToManyRootFixture(name: "root", items: [first, second])
+        let managedFirst = try XCTUnwrap(container.mainContext.model(for: first.persistentModelID) as? ToManyHierarchyTargetChildFixture)
+        let managedSecond = try XCTUnwrap(container.mainContext.model(for: second.persistentModelID) as? ToManyHierarchyTargetGrandchildFixture)
+        let root = IndependentToManyRootFixture(name: "root", items: [managedFirst, managedSecond])
         container.mainContext.insert(root)
         try container.mainContext.save()
 

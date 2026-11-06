@@ -179,11 +179,11 @@ final class ManagedBackingDataTests: XCTestCase {
 
         model.value = 2
         context.rollback()
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
 
         undoManager.undo()
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
     }
 
@@ -364,7 +364,7 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertTrue(result.1)
         XCTAssertTrue(result.2)
 
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 12)
         XCTAssertFalse(model.hasChanges)
     }
 }

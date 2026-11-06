@@ -1771,7 +1771,11 @@ public final class ModelContext {
         ]
     }
 
-    /// Discards pending changes and restores values to their prior saved state.
+    /// Discards pending changes.
+    ///
+    /// Pending insertions detach and pending deletions are restored. Changed models stop reporting changes but
+    /// keep their current in-memory values, including relationships, until a later fetch refreshes them from
+    /// the store; nothing reverts in the store.
     public func rollback() {
         assertAffinity()
         detachDeletedInsertions()
@@ -1781,8 +1785,16 @@ public final class ModelContext {
             for (model, snapshot) in pendingState.snapshots.values {
                 if state.contains(model, in: pendingInsertions) {
                     model.restoreValuesAndDetachLifecycle(snapshot)
-                } else {
+                } else if state.contains(model, in: pendingState.deleted) {
                     model.restoreLifecycle(snapshot)
+                } else {
+                    let current = model.snapshotLifecycle()
+                    model.restoreLifecycle(
+                        BackingDataSnapshot(
+                            values: current.values, context: snapshot.context, identifier: snapshot.identifier,
+                            isDeleted: snapshot.isDeleted, hasChanges: false, savedValues: snapshot.savedValues,
+                            primaryKey: snapshot.primaryKey, entityID: snapshot.entityID,
+                            optimisticLockVersion: snapshot.optimisticLockVersion))
                 }
             }
             for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
@@ -1790,6 +1802,7 @@ public final class ModelContext {
             }
             for model in pendingInsertions { clearDataStoreTemporaryIdentifiers(for: model) }
             state.clearPending()
+            state.clearRelationshipMutationEvents()
             autosaveTrigger.cancel()
             for (model, snapshot) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
                 state.setBaseline(model, snapshot: snapshot)

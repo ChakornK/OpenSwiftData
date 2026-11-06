@@ -3923,7 +3923,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFreshContextUpdateAndRollbackRestoreStoreValue() throws {
+    func testRollbackKeepsInMemoryValueUntilRefetch() throws {
         let container = try ModelContainer(for: PersistenceTestModel.self, configurations: .sqliteMemory("update-test"))
         let first = container.mainContext
         let model = PersistenceTestModel(title: "before")
@@ -3936,8 +3936,11 @@ final class ContextPersistenceTests: XCTestCase {
         try second.save()
         fetched.title = "discarded"
         second.rollback()
-        XCTAssertEqual(fetched.title, "after")
+        // Rollback stops tracking the change but leaves the in-memory value until a fetch refreshes it.
+        XCTAssertEqual(fetched.title, "discarded")
         XCTAssertFalse(second.hasChanges)
+        _ = try second.fetch(FetchDescriptor<PersistenceTestModel>())
+        XCTAssertEqual(fetched.title, "after")
     }
 
     @MainActor
@@ -3951,12 +3954,16 @@ final class ContextPersistenceTests: XCTestCase {
 
         model.title = "B"
         context.rollback()
+        XCTAssertEqual(model.title, "B")
+        _ = try context.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertEqual(model.title, "A")
 
         model.title = "C"
         context.rollback()
-        XCTAssertEqual(model.title, "A")
+        XCTAssertEqual(model.title, "C")
         XCTAssertFalse(context.hasChanges)
+        _ = try context.fetch(FetchDescriptor<PersistenceTestModel>())
+        XCTAssertEqual(model.title, "A")
     }
 
     @MainActor

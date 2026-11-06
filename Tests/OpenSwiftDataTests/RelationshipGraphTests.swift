@@ -513,7 +513,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testRelationshipEventsAndAttributeChangesContributeToHasChanges() throws {
+    func testRollbackDiscardsRelationshipEventsAndAttributeChanges() throws {
         let person = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -522,13 +522,13 @@ final class RelationshipGraphTests: XCTestCase {
         let adapter = try XCTUnwrap(
             container.relationshipAdapters(for: RetentionPerson.self).first { $0.name == "pets" })
         try adapter.write([pet], to: person)
-        let pendingCount = container.mainContext.state.relationshipMutations.count
+        XCTAssertFalse(container.mainContext.state.relationshipMutations.isEmpty)
         person.name = "Ada Lovelace"
         XCTAssertTrue(container.mainContext.hasChanges)
         container.mainContext.rollback()
 
-        XCTAssertEqual(container.mainContext.state.relationshipMutations.count, pendingCount)
-        XCTAssertTrue(container.mainContext.hasChanges)
+        XCTAssertTrue(container.mainContext.state.relationshipMutations.isEmpty)
+        XCTAssertFalse(container.mainContext.hasChanges)
     }
 
     @MainActor

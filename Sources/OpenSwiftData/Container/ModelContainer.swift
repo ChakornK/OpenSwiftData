@@ -14,7 +14,9 @@ public final class ModelContainer: Sendable {
     }
     private let mainContextStorage = MainContextStorage()
     /// The configurations used by the container.
-    public let configurations: [ModelConfiguration]
+    public var configurations: Set<ModelConfiguration> { Set(configurationList) }
+    /// The configurations in the order the container received them.
+    package let configurationList: [ModelConfiguration]
     /// The migration plan the container ran when it opened, if any.
     public var migrationPlan: (any SchemaMigrationPlan.Type)? { migrationPlanStorage.plan }
     private let migrationPlanStorage = MigrationPlanStorage()
@@ -432,7 +434,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -493,7 +495,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = [:]
@@ -546,7 +548,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -853,20 +855,29 @@ public final class ModelContainer: Sendable {
         ModelContext(container: self, autosaveEnabled: false)
     }
 
-    /// Deletes all persistent data owned by this container.
-    public func deleteAllData() throws {
-        guard store != nil else {
-            throw SwiftDataError.unsupportedStore("Deleting all data is unavailable without a persistent store.")
-        }
-        throw SwiftDataError.unsupportedStore("Deleting all data is not implemented.")
+    /// Deletes all persistent data owned by this container, ignoring failures.
+    @available(*, deprecated, renamed: "erase", message: "deleteAllData has been replaced by `erase`.")
+    public func deleteAllData() {
+        try? erase()
     }
 
-    /// Erases this container's store.
+    /// Removes every model, relationship, and history record from the container's store.
+    ///
+    /// The store file remains and stays open, and contexts keep their pending changes. Primary keys continue
+    /// from where they were, so identifiers held from before the erase never match new models.
     public func erase() throws {
-        guard store != nil else {
+        guard let store else {
             throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
         }
-        throw SwiftDataError.unsupportedStore("Erasing the store is not implemented.")
+        let preserved: Set<String> = ["_osd_meta", "_osd_primary_keys"]
+        try store.write { connection in
+            let tables = try connection.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'", arguments: [])
+            for row in tables {
+                guard case let .text(name)? = row.first, !preserved.contains(name) else { continue }
+                try connection.execute("DELETE FROM \"\(name)\"", arguments: [])
+            }
+        }
     }
 
     private static func openStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any RuntimeStore)? {
@@ -1227,4 +1238,9 @@ private final class MainContextStorage {
 /// Holds a container's migration plan, written once while the container initializes.
 private final class MigrationPlanStorage: @unchecked Sendable {
     var plan: (any SchemaMigrationPlan.Type)?
+}
+
+extension ModelContainer: Equatable {
+    /// Returns whether both operands are the same container instance.
+    public static func == (lhs: ModelContainer, rhs: ModelContainer) -> Bool { lhs === rhs }
 }

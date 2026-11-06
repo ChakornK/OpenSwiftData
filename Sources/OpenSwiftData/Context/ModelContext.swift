@@ -221,12 +221,12 @@ public final class ModelContext {
         }
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
+            storeIdentifier: container?.dataStore?.identifier ?? container?.configurationList.first?.name ?? "default",
             entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }),
             onLocalChange: { [autosaveHandle] in autosaveHandle.changed() })
         autosaveEnabledStorage = autosaveEnabled
-        allowsSave = container?.configurations.first?.allowsSave ?? true
+        allowsSave = container?.configurationList.first?.allowsSave ?? true
         testSaveHook = nil
         autosaveContextReference.set(self)
         subscribeToStoreChanges()
@@ -241,7 +241,7 @@ public final class ModelContext {
         autosaveHandle = AutosaveHandle(trigger: autosaveTrigger, enabled: false, schedule: {})
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.dataStore?.identifier ?? container?.configurations.first?.name ?? "default",
+            storeIdentifier: container?.dataStore?.identifier ?? container?.configurationList.first?.name ?? "default",
             entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }))
         autosaveEnabledStorage = false
@@ -2061,7 +2061,7 @@ public final class ModelContext {
     }
 
     private var storeIdentifier: String {
-        optionalContainer?.dataStore?.identifier ?? optionalContainer?.configurations.first?.name ?? "default"
+        optionalContainer?.dataStore?.identifier ?? optionalContainer?.configurationList.first?.name ?? "default"
     }
 
     private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {

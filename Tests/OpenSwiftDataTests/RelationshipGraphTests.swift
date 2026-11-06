@@ -721,7 +721,7 @@ final class RelationshipGraphTests: XCTestCase {
         context.delete(owner)
         XCTAssertFalse(owner.isDeleted)
         XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        try context.processPendingChanges()
+        try context.processPendingChangesThrowing()
         XCTAssertTrue(owner.modelContext === context)
         XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
         XCTAssertFalse(owner.isDeleted)
@@ -746,7 +746,7 @@ final class RelationshipGraphTests: XCTestCase {
         context.delete(owner)
         XCTAssertFalse(owner.isDeleted)
         XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        try context.processPendingChanges()
+        try context.processPendingChangesThrowing()
 
         XCTAssertTrue(owner.modelContext === context)
         XCTAssertFalse(owner.isDeleted)
@@ -771,7 +771,7 @@ final class RelationshipGraphTests: XCTestCase {
         context.delete(owner)
         XCTAssertTrue(context.deletedModelsArray.contains { $0 === owner })
         XCTAssertTrue(owner.isDeleted)
-        try context.processPendingChanges()
+        try context.processPendingChangesThrowing()
 
         XCTAssertTrue(context.deletedModelsArray.contains { $0 === owner })
         XCTAssertTrue(context.deletedModelsArray.contains { $0 === child })
@@ -794,7 +794,7 @@ final class RelationshipGraphTests: XCTestCase {
         XCTAssertTrue(context.deletedModelsArray.contains { $0 === owner })
         let deletedIDs = context.deletedModelsArray.map(ObjectIdentifier.init)
         let eventsBefore = context.state.relationshipMutations.count
-        try context.processPendingChanges()
+        try context.processPendingChangesThrowing()
 
         XCTAssertEqual(context.deletedModelsArray.map(ObjectIdentifier.init), deletedIDs)
         XCTAssertEqual(context.state.relationshipMutations.count, eventsBefore)

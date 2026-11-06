@@ -455,7 +455,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         fixture.dimensions = FlattenedDimensions(width: 12, label: "updated")
         try context.save()
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertEqual(fetched.dimensions, FlattenedDimensions(width: 12, label: "updated"))
         XCTAssertEqual(try reader.fetchCount(FetchDescriptor<FlattenedCompositeFixture>()), 1)
         let updatedWidth = 12
@@ -2855,7 +2855,7 @@ final class ContextPersistenceTests: XCTestCase {
         first.title = "updated"
         try writer.save()
 
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertEqual(readerFirst.title, "updated")
         XCTAssertEqual(readerSecond.title, "second")
         XCTAssertFalse(reader.hasChanges)
@@ -2876,7 +2876,7 @@ final class ContextPersistenceTests: XCTestCase {
         model.title = "remote"
         try writer.save()
 
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertEqual(fetched.title, "local")
         XCTAssertTrue(fetched.hasChanges)
     }
@@ -2896,7 +2896,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         writer.delete(inserted)
         try writer.save()
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertNil(try reader.model(for: fetchedInserted.persistentModelID) as PersistenceTestModel?)
         XCTAssertNil(fetchedInserted.modelContext)
     }
@@ -2916,7 +2916,7 @@ final class ContextPersistenceTests: XCTestCase {
         writer.delete(model)
         try writer.save()
 
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertTrue(held.isDeleted)
         XCTAssertNil(try reader.model(for: identifier) as PersistenceTestModel?)
         XCTAssertNil(held.modelContext)
@@ -2939,7 +2939,7 @@ final class ContextPersistenceTests: XCTestCase {
         let fetched = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistenceTestModel>()).first)
         second.title = "changed elsewhere"
         try secondContainer.mainContext.save()
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
 
         XCTAssertEqual(fetched.title, "first")
     }
@@ -2969,7 +2969,7 @@ final class ContextPersistenceTests: XCTestCase {
         writerChild.owner = secondOwner
         try writer.save()
 
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertEqual(fetchedChild.owner?.title, "second")
         XCTAssertTrue(fetchedOwners.first?.children.isEmpty == true)
         XCTAssertEqual(fetchedOwners.last?.children.map(\.title), ["child"])
@@ -2989,7 +2989,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         writer.insert(PersistenceTestModel(title: "rejected"))
         XCTAssertThrowsError(try writer.save())
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertTrue(writer.hasChanges)
         XCTAssertTrue(try reader.fetch(FetchDescriptor<PersistenceTestModel>()).isEmpty)
         try container.store?.write { connection in
@@ -3250,7 +3250,7 @@ final class ContextPersistenceTests: XCTestCase {
         let fetchedChild = try XCTUnwrap(reader.fetch(FetchDescriptor<PersistentRelationshipChild>()).first)
         XCTAssertEqual(fetchedChild.owner?.persistentModelID, fetchedOwner.persistentModelID)
         reader.delete(fetchedOwner)
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
         XCTAssertNil(fetchedChild.owner)
     }
 
@@ -3268,7 +3268,7 @@ final class ContextPersistenceTests: XCTestCase {
         let reader = container.makeContext()
         let fetchedOwner = try XCTUnwrap(reader.fetch(FetchDescriptor<LazyCascadeOwnerFixture>()).first)
         reader.delete(fetchedOwner)
-        try reader.processPendingChanges()
+        try reader.processPendingChangesThrowing()
 
         XCTAssertTrue(reader.deletedModelsArray.contains { $0 === fetchedOwner })
         let remainingChildren = try reader.fetch(FetchDescriptor<LazyCascadeChildFixture>())

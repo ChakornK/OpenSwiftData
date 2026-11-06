@@ -553,7 +553,16 @@ public final class ModelContext {
     }
 
     /// Processes pending relationship ownership and delete rules synchronously.
-    public func processPendingChanges() throws {
+    public func processPendingChanges() {
+        do {
+            try processPendingChangesThrowing()
+        } catch {
+            OSDLog.debug("Processing pending changes failed: \(error)")
+        }
+    }
+
+    /// Applies pending relationship and lifecycle bookkeeping, reporting failures.
+    package func processPendingChangesThrowing() throws {
         assertAffinity()
         try state.withExclusiveOperation { try processPendingChangesLocked() }
     }
@@ -629,7 +638,7 @@ public final class ModelContext {
             sourceSubscription: UUID(),
             allEntitiesChanged: true,
             inserted: [], updated: [], deleted: [])
-        try processPendingChanges()
+        try processPendingChangesThrowing()
     }
 
     private func invalidateRelationships(
@@ -738,7 +747,7 @@ public final class ModelContext {
     /// Fetches models matching a descriptor, which requires a persistent store.
     public func fetch<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
         assertAffinity()
-        try processPendingChanges()
+        try processPendingChangesThrowing()
         guard let container = containerStorage else { throw unsupportedStore("Fetch") }
         guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return [] }
         let hasHierarchy =
@@ -1090,7 +1099,7 @@ public final class ModelContext {
     /// Counts models matching a descriptor, which requires a persistent store.
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
         assertAffinity()
-        try processPendingChanges()
+        try processPendingChangesThrowing()
         if descriptor.includePendingChanges,
             !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         {
@@ -1146,7 +1155,7 @@ public final class ModelContext {
         _ descriptor: FetchDescriptor<Model>
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
-        try processPendingChanges()
+        try processPendingChangesThrowing()
         if optionalContainer?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
         guard let container = optionalContainer,
             let store = container.store,
@@ -1374,6 +1383,22 @@ public final class ModelContext {
             return deleted
         }
         return try model(for: identifier)
+    }
+
+    /// Returns the model for an identifier, loading it from the store when it is not registered.
+    ///
+    /// When no row exists for the identifier, returns an unattached placeholder of the identifier's model type;
+    /// reading its unassigned properties traps. Traps when the container has no model type for the entity.
+    public func model(for persistentModelID: PersistentIdentifier) -> any PersistentModel {
+        assertAffinity()
+        guard let modelType = optionalContainer?.modelType(forEntityName: persistentModelID.entityName) else {
+            preconditionFailure("No model type named '\(persistentModelID.entityName)' exists in the container.")
+        }
+        func resolve<Model: PersistentModel>(_: Model.Type) -> any PersistentModel {
+            if let model = try? model(for: persistentModelID) as Model? { return model }
+            return Model(backingData: Model.createBackingData())
+        }
+        return resolve(modelType)
     }
 
     /// Finds a model by its persistent identifier, which requires a persistent store.

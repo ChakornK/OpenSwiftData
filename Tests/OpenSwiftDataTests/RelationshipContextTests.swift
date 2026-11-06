@@ -70,7 +70,7 @@ final class RelationshipContextTests: XCTestCase {
         XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
         XCTAssertEqual(adapter.read(owner)?.map(ObjectIdentifier.init), [ObjectIdentifier(pet)])
         let eventCount = context.state.relationshipMutations.count
-        try context.processPendingChanges()
+        try context.processPendingChangesThrowing()
         XCTAssertEqual(context.state.relationshipMutations.count, eventCount)
     }
 
@@ -87,7 +87,7 @@ final class RelationshipContextTests: XCTestCase {
             .write([cascadePet], to: cascadeOwner)
         cascadeContext.delete(cascadeOwner)
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadeOwner })
-        try cascadeContext.processPendingChanges()
+        try cascadeContext.processPendingChangesThrowing()
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadeOwner })
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadePet })
 
@@ -102,7 +102,7 @@ final class RelationshipContextTests: XCTestCase {
             .write([nullifyPet], to: nullifyOwner)
         nullifyContext.delete(nullifyOwner)
         XCTAssertTrue(nullifyContext.deletedModelsArray.contains { $0 === nullifyOwner })
-        try nullifyContext.processPendingChanges()
+        try nullifyContext.processPendingChangesThrowing()
         XCTAssertNil(nullifyPet.owner)
     }
 

@@ -133,6 +133,60 @@ package enum PredicateRuntimeTreeBuilder {
                 return nil
             }
         }
+        /// Rewrites `capturedArray.contains(element)` as `element == a || element == b || …`, or `false` when the
+        /// array is empty, giving each array element its own capture. Returns `nil` for other sequences.
+        func capturedMembership(
+            _ mirror: Mirror,
+            path: [String],
+            bindings: [UInt: ExpressionBinding],
+            capturePathRewrites: [CapturePathRewrite]
+        ) throws -> RuntimePredicateNode? {
+            let fields = Dictionary(
+                mirror.children.compactMap { child in child.label.map { ($0, child.value) } },
+                uniquingKeysWith: { first, _ in first })
+            guard let sequence = fields["sequence"], let elementValue = fields["element"],
+                PredicateNodeMetadata.entry(for: String(reflecting: type(of: sequence)))?.name == "Value",
+                let captured = Mirror(reflecting: sequence).children.first(where: { $0.label == "value" })?.value,
+                let items = captured as? [Any]
+            else { return nil }
+            func capturedValue(_ item: Any, at nodePath: [String]) throws -> RuntimePredicateNode {
+                let rewrittenPath = capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) }
+                do {
+                    captures[RuntimePredicatePath(labels: rewrittenPath)] = try StoredValue(
+                        predicateScalar: item, type: type(of: item))
+                } catch {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Unsupported predicate capture \(String(reflecting: type(of: item)))")
+                }
+                return .expression(
+                    name: "Value",
+                    children: [
+                        ("value", .capture(typeName: String(reflecting: type(of: item)), description: "\(item)"))
+                    ])
+            }
+            guard !items.isEmpty else { return try capturedValue(false, at: path) }
+            // Builds Disjunction(lhs: Equal(element, item₀), rhs: Disjunction(…)) so each node's path is known.
+            func disjunction(from index: Int, at nodePath: [String]) throws -> RuntimePredicateNode {
+                let equalPath = index == items.count - 1 ? nodePath : nodePath + ["lhs"]
+                let equal = RuntimePredicateNode.expression(
+                    name: "Equal",
+                    children: [
+                        (
+                            "lhs",
+                            try visit(
+                                elementValue, path: equalPath + ["lhs"], bindings: bindings,
+                                capturePathRewrites: capturePathRewrites)
+                        ),
+                        ("rhs", try capturedValue(items[index], at: equalPath + ["rhs"])),
+                    ])
+                guard index < items.count - 1 else { return equal }
+                return .expression(
+                    name: "Disjunction",
+                    children: [("lhs", equal), ("rhs", try disjunction(from: index + 1, at: nodePath + ["rhs"]))])
+            }
+            return try disjunction(from: 0, at: path)
+        }
+
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -152,6 +206,12 @@ package enum PredicateRuntimeTreeBuilder {
             if outerTypeName == "FoundationEssentials.Expression" || outerTypeName == "Foundation.Expression" {
                 throw SwiftDataError.unsupportedPredicate(
                     "Expression values are only supported inside ExpressionEvaluate")
+            }
+            if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "SequenceContains",
+                let membership = try capturedMembership(
+                    mirror, path: path, bindings: bindings, capturePathRewrites: capturePathRewrites)
+            {
+                return membership
             }
             if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "UnaryMinus" {
                 let children = Array(mirror.children)

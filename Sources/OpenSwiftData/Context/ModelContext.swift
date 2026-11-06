@@ -4427,21 +4427,18 @@ public final class ModelContext {
                             mergedIntoExistingRow: replaced.map { type(of: $0) == Model.self } ?? true))
                     return
                 }
-                let names = ((preservedPrimaryKey == nil ? [] : ["Z_PK"]) + ["Z_ENT", "Z_OPT"] + columns)
-                    .joined(separator: ", ")
-                let placeholders = Array(repeating: "?", count: columns.count + (preservedPrimaryKey == nil ? 2 : 3))
-                    .joined(separator: ", ")
-                var identityValues: [RuntimeValue] = [
-                    .int(Int64(entityIDs[entity.name] ?? 1)), .int(1),
+                let primaryKey = try preservedPrimaryKey ?? Self.allocatePrimaryKey(table: table, connection: connection)
+                let names = (["Z_PK", "Z_ENT", "Z_OPT"] + columns).joined(separator: ", ")
+                let placeholders = Array(repeating: "?", count: columns.count + 3).joined(separator: ", ")
+                let identityValues: [RuntimeValue] = [
+                    .int(primaryKey), .int(Int64(entityIDs[entity.name] ?? 1)), .int(1),
                 ]
-                if let preservedPrimaryKey { identityValues.insert(.int(preservedPrimaryKey), at: 0) }
                 try connection.execute(
                     "INSERT INTO \(table) (\(names)) VALUES (\(placeholders))",
                     arguments: identityValues + values)
                 append.append(
                     PersistedModel(
-                        model: model, entityName: entity.name,
-                        primaryKey: preservedPrimaryKey ?? connection.lastInsertRowID(), version: 1,
+                        model: model, entityName: entity.name, primaryKey: primaryKey, version: 1,
                         replacedModel: nil))
             } else if let pk = model.persistentModelID.primaryKey {
                 let expectedVersion = snapshot.optimisticLockVersion
@@ -4564,6 +4561,28 @@ public final class ModelContext {
             }
         }
         return match
+    }
+
+    /// Returns a primary key for a new row that no earlier row of the table has used.
+    ///
+    /// Keys only increase, even after rows are deleted, so identifiers of deleted models never match new ones.
+    /// The high-water mark lives in `_osd_primary_keys`, which is created on first use.
+    private static func allocatePrimaryKey(table: String, connection: any RuntimeConnection) throws -> Int64 {
+        try connection.execute(
+            "CREATE TABLE IF NOT EXISTS _osd_primary_keys (table_name TEXT PRIMARY KEY, last_key INTEGER NOT NULL)",
+            arguments: [])
+        let stored = try connection.rows(
+            "SELECT last_key FROM _osd_primary_keys WHERE table_name = ?", arguments: [.text(table)])
+        let existing = try connection.rows("SELECT MAX(Z_PK) FROM \(table)", arguments: [])
+        var last: Int64 = 0
+        if case let .int(value)? = stored.first?.first { last = value }
+        if case let .int(value)? = existing.first?.first { last = max(last, value) }
+        let next = last + 1
+        try connection.execute(
+            "INSERT INTO _osd_primary_keys (table_name, last_key) VALUES (?, ?) "
+                + "ON CONFLICT(table_name) DO UPDATE SET last_key = excluded.last_key",
+            arguments: [.text(table), .int(next)])
+        return next
     }
 
     private static func persistenceValuesEqual(_ lhs: Any, _ rhs: Any) -> Bool {

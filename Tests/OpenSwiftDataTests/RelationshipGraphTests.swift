@@ -435,7 +435,7 @@ final class RelationshipGraphTests: XCTestCase {
         XCTAssertThrowsError(
             try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema, configurations: [])
         ) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
             XCTAssertTrue(message.contains("GraphPerson.pet"))
@@ -480,7 +480,7 @@ final class RelationshipGraphTests: XCTestCase {
         XCTAssertThrowsError(
             try ModelContainer(for: [MissingCandidateOwner.self, InferredTarget.self], configurations: [])
         ) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
             XCTAssertTrue(message.contains("MissingCandidateOwner.targets"))
@@ -493,7 +493,7 @@ final class RelationshipGraphTests: XCTestCase {
         XCTAssertThrowsError(
             try ModelContainer(for: [DuplicateCandidateOwner.self, InferredTarget.self], configurations: [])
         ) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
             XCTAssertTrue(message.contains("multiple compatible typed adapters exist"))
@@ -601,7 +601,8 @@ final class RelationshipGraphTests: XCTestCase {
         let countBeforeInvalid = container.mainContext.state.relationshipMutations.count
         let oldValue = person.pets
         XCTAssertThrowsError(try adapter.write("not pets" as Any, to: person)) { error in
-            guard case SwiftDataError.relationshipValueTypeMismatch(property: "pets", expected: _, actual: _) = error
+            guard let dataError = error as? SwiftDataError, dataError == .relationshipValueTypeMismatch,
+                dataError.explanation?.contains("'pets'") == true
             else { return XCTFail("Unexpected error: \(error)") }
         }
         XCTAssertEqual(person.pets.map(ObjectIdentifier.init), oldValue.map(ObjectIdentifier.init))

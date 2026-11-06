@@ -833,7 +833,7 @@ final class RuntimeAPITests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertThrowsError(try container(), file: file, line: line) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected descriptive schema error, got \\(error)", file: file, line: line)
             }
             XCTAssertFalse(message.isEmpty, file: file, line: line)
@@ -845,7 +845,7 @@ final class RuntimeAPITests: XCTestCase {
         XCTAssertThrowsError(
             try ModelContainer(for: [MissingDestinationWithoutInverseFixture.self], configurations: [])
         ) { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected descriptive schema error, got \\(error)")
             }
             XCTAssertTrue(message.contains("MissingDestinationWithoutInverseFixture.destination"))
@@ -857,7 +857,7 @@ final class RuntimeAPITests: XCTestCase {
     func testContainerRejectsMissingExplicitRelationshipDestination() {
         XCTAssertThrowsError(try ModelContainer(for: [MissingRelationshipDestinationFixture.self], configurations: []))
         { error in
-            guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty, let message = dataError.explanation else {
                 return XCTFail("Expected descriptive schema error, got \\(error)")
             }
             XCTAssertTrue(message.contains("MissingRelationshipDestinationFixture.destination"))
@@ -885,7 +885,7 @@ final class RuntimeAPITests: XCTestCase {
             file: file,
             line: line
         ) { error in
-            guard case SwiftDataError.unsupportedRelationshipElement(let message) = error else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedRelationshipElement, let message = dataError.explanation else {
                 return XCTFail("Expected unsupportedRelationshipElement, got \\(error)", file: file, line: line)
             }
             XCTAssertEqual(

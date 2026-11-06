@@ -556,7 +556,7 @@ final class SQLiteCompositionTests: XCTestCase {
 
         for configuration in configurations {
             XCTAssertThrowsError(try ModelContainer(for: schema, configurations: [configuration])) { error in
-                guard case SwiftDataError.unsupportedStore(let message) = error else {
+                guard let dataError = error as? SwiftDataError, dataError == .unsupportedStore, let message = dataError.explanation else {
                     return XCTFail("Expected unsupportedStore, got \\(error)")
                 }
                 XCTAssertTrue(message.contains("backend/provider"))

@@ -545,23 +545,20 @@ final class SQLiteCompositionTests: XCTestCase {
         XCTAssertEqual(held.value, "external")
     }
 
-    func testConfigurationWithoutSelectedProviderThrowsUnsupportedStore() {
+    func testPublicConfigurationsDefaultToTheSQLiteProvider() throws {
         let schema = Schema([Schema.Entity(name: "Person")])
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("osd-unsupported-\(UUID().uuidString).sqlite")
+            .appendingPathComponent("osd-default-provider-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
         let configurations = [
             ModelConfiguration("url", schema: schema, url: url),
             ModelConfiguration("memory", schema: schema, isStoredInMemoryOnly: true),
         ]
 
         for configuration in configurations {
-            XCTAssertThrowsError(try ModelContainer(for: schema, configurations: [configuration])) { error in
-                guard let dataError = error as? SwiftDataError, dataError == .unsupportedStore, let message = dataError.explanation else {
-                    return XCTFail("Expected unsupportedStore, got \\(error)")
-                }
-                XCTAssertTrue(message.contains("backend/provider"))
-                XCTAssertTrue(message.contains("unavailable"))
-            }
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            XCTAssertNotNil(container.store)
+            try container.store?.close()
         }
     }
 

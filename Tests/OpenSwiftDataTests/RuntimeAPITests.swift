@@ -409,24 +409,6 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testDestructiveContainerOperationsFailWithoutAStore() throws {
-        let configurations = [
-            ModelConfiguration("memory", isStoredInMemoryOnly: true),
-            ModelConfiguration("file", url: URL(fileURLWithPath: "/tmp/osd-test.sqlite")),
-        ]
-
-        for configuration in configurations {
-            XCTAssertThrowsError(
-                try ModelContainer(for: [TransactionFixture.self], configurations: [configuration])
-            ) { error in
-                guard case SwiftDataError.unsupportedStore = error else {
-                    return XCTFail("Expected unsupportedStore, got \\(error)")
-                }
-            }
-        }
-    }
-
-    @MainActor
     func testMainContextsAreSpecificToTheirContainers() throws {
         let firstContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])
         let secondContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])

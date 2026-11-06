@@ -632,3 +632,16 @@ public struct Schema: Sendable {
         return nil
     }
 }
+
+extension Schema: Hashable {
+    /// Returns whether both schemas have equal entities and versions.
+    public static func == (lhs: Schema, rhs: Schema) -> Bool {
+        lhs.entities == rhs.entities && lhs.version == rhs.version
+    }
+
+    /// Hashes the schema's entities and version.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(entities)
+        hasher.combine(version)
+    }
+}

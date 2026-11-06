@@ -687,11 +687,7 @@ public final class ModelContainer: Sendable {
     }
 
     private static func storeLocation(for configuration: ModelConfiguration) -> RuntimeStoreLocation {
-        if configuration.isStoredInMemoryOnly { return .memory(name: configuration.name) }
-        if let url = configuration.url { return .file(url) }
-        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("\(configuration.name).sqlite")
-        return .file(url)
+        configuration.isStoredInMemoryOnly ? .memory(name: configuration.name) : .file(configuration.url)
     }
 
     /// Returns the resolved relationship adapters registered for a model type.
@@ -838,30 +834,19 @@ public final class ModelContainer: Sendable {
         guard configurations.count == 1, let configuration = configurations.first else {
             throw SwiftDataError.unsupportedStore("Exactly one store configuration is supported.")
         }
-        guard configuration.cloudKitDatabase == .none else {
+        try configuration.validate()
+        guard configuration.cloudKitDatabase.privateDatabaseName == nil else {
             throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
         }
         if configuration.dataStoreConfiguration != nil { return nil }
-        guard case .none = configuration.groupContainer else {
-            throw SwiftDataError.unsupportedStore("App-group store locations are not supported.")
-        }
         guard let factory = configuration.storeFactory else {
             throw SwiftDataError.unsupportedStore("The configured store backend/provider is unavailable.")
         }
-        let location: RuntimeStoreLocation
-        if configuration.isStoredInMemoryOnly {
-            location = .memory(name: configuration.name)
-        } else if let url = configuration.url {
-            location = .file(url)
-        } else {
-            guard Self.isSafeStoreName(configuration.name) else {
-                throw SwiftDataError.unsupportedStore("The store name must be a single safe path component.")
-            }
-            let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("\(configuration.name).sqlite")
-            location = .file(url)
+        if !configuration.isStoredInMemoryOnly {
+            try FileManager.default.createDirectory(
+                at: configuration.url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        return try factory(location, schema)
+        return try factory(storeLocation(for: configuration), schema)
     }
 
     private static func validateDataStoreInheritanceSupport(
@@ -892,9 +877,9 @@ public final class ModelContainer: Sendable {
             throw SwiftDataError.unsupportedStore("Exactly one custom DataStore configuration is supported.")
         }
         guard let dataStoreConfiguration = configuration.dataStoreConfiguration else { return nil }
-        guard configuration.cloudKitDatabase == .none, case .none = configuration.groupContainer,
+        guard configuration.cloudKitDatabase.privateDatabaseName == nil,
             configuration.storeFactory == nil, configuration.schemaVersionReader == nil,
-            configuration.url == nil, !configuration.isStoredInMemoryOnly
+            !configuration.isStoredInMemoryOnly
         else {
             throw SwiftDataError.unsupportedStore(
                 "Custom DataStore configurations cannot be combined with another backend.")

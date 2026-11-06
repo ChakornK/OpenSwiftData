@@ -2152,9 +2152,11 @@ final class PersistentModelTests: XCTestCase {
     @MainActor
     func testSubclassInitializerRelationshipSurvivesInsertionPreparation() throws {
         let container = try ModelContainer(
-            for: InheritanceRelationshipBaseFixture.self,
-            InheritanceRelationshipChildFixture.self,
-            InheritanceRelationshipItemFixture.self)
+            for: [
+                InheritanceRelationshipBaseFixture.self,
+                InheritanceRelationshipChildFixture.self,
+                InheritanceRelationshipItemFixture.self,
+            ], configurations: [])
         let context = container.mainContext
         let item = InheritanceRelationshipItemFixture(title: "item")
         let child = InheritanceRelationshipChildFixture(items: [item], age: 4)
@@ -2169,9 +2171,11 @@ final class PersistentModelTests: XCTestCase {
     @MainActor
     func testInheritedRelationshipStorageMappingRetainsLogicalOwner() throws {
         let container = try ModelContainer(
-            for: InheritanceRelationshipBaseFixture.self,
-            InheritanceRelationshipChildFixture.self,
-            InheritanceRelationshipItemFixture.self)
+            for: [
+                InheritanceRelationshipBaseFixture.self,
+                InheritanceRelationshipChildFixture.self,
+                InheritanceRelationshipItemFixture.self,
+            ], configurations: [])
 
         let mapping = try XCTUnwrap(
             container.schema.relationshipStorageMapping(
@@ -6748,19 +6752,20 @@ final class PersistentModelTests: XCTestCase {
     @MainActor
     func testContainerAutomaticallyIncludesModelAncestors() throws {
         let implicit = try ModelContainer(
-            for: [InheritanceRelationshipChildFixture.self, InheritanceRelationshipItemFixture.self])
+            for: [InheritanceRelationshipChildFixture.self, InheritanceRelationshipItemFixture.self], configurations: []
+        )
         let explicit = try ModelContainer(
             for: [
                 InheritanceRelationshipBaseFixture.self,
                 InheritanceRelationshipChildFixture.self,
                 InheritanceRelationshipItemFixture.self,
-            ])
+            ], configurations: [])
         let reversed = try ModelContainer(
             for: [
                 InheritanceRelationshipItemFixture.self,
                 InheritanceRelationshipChildFixture.self,
                 InheritanceRelationshipBaseFixture.self,
-            ])
+            ], configurations: [])
 
         XCTAssertEqual(implicit.schema.entities, explicit.schema.entities)
         XCTAssertEqual(reversed.schema.entityIDsByName, explicit.schema.entityIDsByName)
@@ -6808,8 +6813,10 @@ final class PersistentModelTests: XCTestCase {
     @MainActor
     func testModelContainerInfersInheritanceMetadata() throws {
         let container = try ModelContainer(
-            for: InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
-            InheritanceMacroGrandchildFixture.self)
+            for: [
+                InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
+                InheritanceMacroGrandchildFixture.self,
+            ], configurations: [])
         let base = try XCTUnwrap(container.schema.entity(forName: "InheritanceMacroBaseFixture"))
         let child = try XCTUnwrap(container.schema.entity(forName: "InheritanceMacroChildFixture"))
         let grandchild = try XCTUnwrap(container.schema.entity(forName: "InheritanceMacroGrandchildFixture"))

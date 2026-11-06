@@ -35,12 +35,24 @@ public final class ModelContainer: Sendable {
     }
 
     /// Creates a container for the schema inferred from model types.
+    ///
+    /// Omitting `configurations` opens the implicit default store, a SQLite file named
+    /// `default.store` in the Application Support directory.
     public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
-        try self.init(for: types, configurations: configurations)
+        try self.init(for: types, configurations: Self.configurationsOrDefault(configurations))
+    }
+
+    /// Creates a container for the schema inferred from model types, backed by the implicit default store.
+    ///
+    /// The default store is a SQLite file named `default.store` in the Application Support directory.
+    public convenience init(for types: [any PersistentModel.Type]) throws {
+        try self.init(for: types, configurations: [ModelConfiguration.implicitDefault()])
     }
 
     /// Creates a container for the schema inferred from model types and configurations.
-    public init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration] = []) throws {
+    ///
+    /// An empty `configurations` array creates a schema-only container without a persistent store.
+    public init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
         let types = Self.modelTypesIncludingAncestors(of: types)
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         var uniqueEntityNames = Set<String>()
@@ -399,8 +411,17 @@ public final class ModelContainer: Sendable {
         relationshipAdapterTable = adaptersByModel
     }
 
+    /// Creates a container for an existing schema, backed by the implicit default store.
+    ///
+    /// The default store is a SQLite file named `default.store` in the Application Support directory.
+    public convenience init(for schema: Schema) throws {
+        try self.init(for: schema, configurations: [ModelConfiguration.implicitDefault()])
+    }
+
     /// Creates a container for an existing schema.
-    public init(for schema: Schema, configurations: [ModelConfiguration] = []) throws {
+    ///
+    /// An empty `configurations` array creates a schema-only container without a persistent store.
+    public init(for schema: Schema, configurations: [ModelConfiguration]) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
@@ -423,10 +444,12 @@ public final class ModelContainer: Sendable {
     }
 
     /// Creates a container for a manually supplied schema and typed model implementations.
+    ///
+    /// An empty `configurations` array creates a schema-only container without a persistent store.
     package init(
         for types: [any PersistentModel.Type],
         schema: Schema,
-        configurations: [ModelConfiguration] = []
+        configurations: [ModelConfiguration]
     ) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
@@ -474,11 +497,14 @@ public final class ModelContainer: Sendable {
     }
 
     /// Creates a container using a migration plan.
+    ///
+    /// Omitting `configurations` migrates and opens the implicit default store.
     public convenience init<Plan: SchemaMigrationPlan>(
         for types: any PersistentModel.Type...,
         migrationPlan: Plan.Type,
         configurations: ModelConfiguration...
     ) throws {
+        let configurations = try Self.configurationsOrDefault(configurations)
         let descriptor = try MigrationPlanDescriptor(migrationPlan)
         guard let destination = descriptor.schemas.last else {
             throw SwiftDataError.migrationUnsupported("Migration plan contains no schemas.")
@@ -494,6 +520,13 @@ public final class ModelContainer: Sendable {
         if pendingMigration != nil {
             try Self.setPendingMigration(nil, store: self.store)
         }
+    }
+
+    /// Returns `configurations`, or the implicit default configuration when it is empty.
+    private static func configurationsOrDefault(
+        _ configurations: [ModelConfiguration]
+    ) throws -> [ModelConfiguration] {
+        configurations.isEmpty ? [try ModelConfiguration.implicitDefault()] : configurations
     }
 
     private static func runMigrationPlan(

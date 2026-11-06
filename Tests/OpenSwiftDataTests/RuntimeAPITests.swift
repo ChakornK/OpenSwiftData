@@ -313,7 +313,7 @@ final class RuntimeAPITests: XCTestCase {
     @MainActor
     func testContainerPreservesOptionalCollectionRelationships() throws {
         let container = try ModelContainer(
-            for: OptionalDestinationFixture.self, SupportedOptionalCollectionFixture.self)
+            for: [OptionalDestinationFixture.self, SupportedOptionalCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "SupportedOptionalCollectionFixture"))
         XCTAssertEqual(
             entity,
@@ -353,7 +353,7 @@ final class RuntimeAPITests: XCTestCase {
 
     @MainActor
     func testContainerSupportsOptionalScalarCollectionAttributes() throws {
-        let container = try ModelContainer(for: OptionalScalarCollectionFixture.self)
+        let container = try ModelContainer(for: [OptionalScalarCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarCollectionFixture"))
         XCTAssertEqual(entity.attributes.map(\.name), ["strings", "integers"])
         XCTAssertTrue(entity.relationships.isEmpty)
@@ -428,8 +428,8 @@ final class RuntimeAPITests: XCTestCase {
 
     @MainActor
     func testMainContextsAreSpecificToTheirContainers() throws {
-        let firstContainer = try ModelContainer(for: TransactionFixture.self)
-        let secondContainer = try ModelContainer(for: TransactionFixture.self)
+        let firstContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])
+        let secondContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])
 
         XCTAssertFalse(firstContainer.mainContext === secondContainer.mainContext)
         XCTAssertTrue(firstContainer.mainContext.container === firstContainer)
@@ -439,7 +439,8 @@ final class RuntimeAPITests: XCTestCase {
     @MainActor
     func testContainerRejectsDuplicateEntityNames() {
         XCTAssertThrowsError(
-            try ModelContainer(for: FirstNamespace.SharedName.self, SecondNamespace.SharedName.self)
+            try ModelContainer(
+                for: [FirstNamespace.SharedName.self, SecondNamespace.SharedName.self], configurations: [])
         ) { error in
             guard case SwiftDataError.duplicateEntityName = error else {
                 return XCTFail("Expected duplicateEntityName, got \\(error)")
@@ -795,7 +796,7 @@ final class RuntimeAPITests: XCTestCase {
 
     @MainActor
     func testPlainStringPropertyIsAnAttribute() throws {
-        let container = try ModelContainer(for: ExplicitInverseNonRelationshipFixture.self)
+        let container = try ModelContainer(for: [ExplicitInverseNonRelationshipFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "ExplicitInverseNonRelationshipFixture"))
 
         XCTAssertEqual(entity.attributes.map(\.name), ["title"])
@@ -805,19 +806,24 @@ final class RuntimeAPITests: XCTestCase {
     @MainActor
     func testContainerAcceptsValidExplicitInverse() throws {
         let container = try ModelContainer(
-            for: ExplicitInverseSourceFixture.self, ExplicitInverseDestinationFixture.self)
+            for: [ExplicitInverseSourceFixture.self, ExplicitInverseDestinationFixture.self], configurations: [])
         let source = try XCTUnwrap(container.schema.entity(forName: "ExplicitInverseSourceFixture"))
         XCTAssertEqual(source.relationships.first?.inverse, "source")
     }
 
     @MainActor
     func testContainerRejectsInvalidExplicitInverseNamesAndTypes() {
-        assertSchemaError(try ModelContainer(for: OptionalDestinationFixture.self, InvalidInverseNameFixture.self))
-        assertSchemaError(
-            try ModelContainer(for: InvalidInverseAttributeFixture.self, ExplicitInverseNonRelationshipFixture.self))
         assertSchemaError(
             try ModelContainer(
-                for: InvalidInverseBackReferenceFixture.self, ExplicitInverseWrongDestinationFixture.self))
+                for: [OptionalDestinationFixture.self, InvalidInverseNameFixture.self], configurations: []))
+        assertSchemaError(
+            try ModelContainer(
+                for: [InvalidInverseAttributeFixture.self, ExplicitInverseNonRelationshipFixture.self],
+                configurations: []))
+        assertSchemaError(
+            try ModelContainer(
+                for: [InvalidInverseBackReferenceFixture.self, ExplicitInverseWrongDestinationFixture.self],
+                configurations: []))
     }
 
     @MainActor
@@ -836,7 +842,9 @@ final class RuntimeAPITests: XCTestCase {
 
     @MainActor
     func testContainerRejectsTypedRelationshipWithoutDestinationOrInverse() {
-        XCTAssertThrowsError(try ModelContainer(for: MissingDestinationWithoutInverseFixture.self)) { error in
+        XCTAssertThrowsError(
+            try ModelContainer(for: [MissingDestinationWithoutInverseFixture.self], configurations: [])
+        ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
                 return XCTFail("Expected descriptive schema error, got \\(error)")
             }
@@ -847,7 +855,8 @@ final class RuntimeAPITests: XCTestCase {
 
     @MainActor
     func testContainerRejectsMissingExplicitRelationshipDestination() {
-        XCTAssertThrowsError(try ModelContainer(for: MissingRelationshipDestinationFixture.self)) { error in
+        XCTAssertThrowsError(try ModelContainer(for: [MissingRelationshipDestinationFixture.self], configurations: []))
+        { error in
             guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
                 return XCTFail("Expected descriptive schema error, got \\(error)")
             }
@@ -872,7 +881,7 @@ final class RuntimeAPITests: XCTestCase {
     ) {
         let entityName = String(describing: modelType).split(separator: ".").last.map(String.init) ?? ""
         XCTAssertThrowsError(
-            try ModelContainer(for: OptionalDestinationFixture.self, modelType),
+            try ModelContainer(for: [OptionalDestinationFixture.self, modelType], configurations: []),
             file: file,
             line: line
         ) { error in

@@ -7,7 +7,7 @@ final class RelationshipGraphTests: XCTestCase {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let second = GraphPet(name: "Luna")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(first)
         container.mainContext.insert(second)
@@ -42,7 +42,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testGeneratedRelationshipSetterSynchronouslyPropagatesInverse() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         XCTAssertEqual(
             container.schema.entity(forName: "GraphPerson")?.relationships.first { $0.name == "pets" }?.inverse,
             "owner")
@@ -63,7 +63,7 @@ final class RelationshipGraphTests: XCTestCase {
         let personA = GraphPerson(name: "A")
         let personB = GraphPerson(name: "B")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(personA)
         container.mainContext.insert(personB)
         container.mainContext.insert(pet)
@@ -87,7 +87,7 @@ final class RelationshipGraphTests: XCTestCase {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "First")
         let second = GraphPet(name: "Second")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(first)
         container.mainContext.insert(second)
@@ -106,7 +106,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testNilRemovalBothDirections() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(pet)
         let pets = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
@@ -127,7 +127,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDuplicateAndRepeatedAssignmentIsIdempotent() throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(first)
         let pets = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
@@ -146,8 +146,8 @@ final class RelationshipGraphTests: XCTestCase {
     func testDuplicateRelationshipAssignmentRejectsCrossContextEndpoint() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let first = try ModelContainer(for: GraphPerson.self, GraphPet.self)
-        let second = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let first = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
+        let second = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let otherContextPet = GraphPet(name: "Luna")
         first.mainContext.insert(person)
         first.mainContext.insert(pet)
@@ -165,8 +165,8 @@ final class RelationshipGraphTests: XCTestCase {
     @MainActor
     func testDuplicateNoOpAssignmentStillRejectsCrossContextEndpoint() throws {
         let pet = GraphPet(name: "Milo")
-        let first = try ModelContainer(for: GraphPerson.self, GraphPet.self)
-        let second = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let first = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
+        let second = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let person = GraphPerson(name: "Ada")
         first.mainContext.insert(person)
         second.mainContext.insert(pet)
@@ -183,7 +183,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testSelfReferentialCycle() throws {
         let a = GraphNode(name: "A")
         let b = GraphNode(name: "B")
-        let container = try ModelContainer(for: GraphNode.self)
+        let container = try ModelContainer(for: [GraphNode.self], configurations: [])
         container.mainContext.insert(a)
         container.mainContext.insert(b)
         let parent = try XCTUnwrap(container.relationshipAdapters(for: GraphNode.self).first { $0.name == "parent" })
@@ -204,7 +204,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testNonoptionalToOneCannotBeCleared() throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
-        let container = try ModelContainer(for: GraphHolder.self, GraphBadge.self)
+        let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
         container.mainContext.insert(holder)
         container.mainContext.insert(badge)
         let badges = try XCTUnwrap(container.relationshipAdapters(for: GraphHolder.self).first { $0.name == "badges" })
@@ -233,7 +233,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testGeneratedSetterRejectsNonoptionalInverseConflictWithoutMutation() throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
-        let container = try ModelContainer(for: GraphHolder.self, GraphBadge.self)
+        let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
         container.mainContext.insert(holder)
         container.mainContext.insert(badge)
         let badges = try XCTUnwrap(container.relationshipAdapters(for: GraphHolder.self).first { $0.name == "badges" })
@@ -251,7 +251,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testCrossContextEndpointRejectedWithoutMutation() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let otherContext = container.makeContext()
         container.mainContext.insert(person)
         otherContext.insert(pet)
@@ -274,7 +274,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDetachedOwnerWritesOnlyOwner() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let pets = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
 
         try pets.write([pet], to: person)
@@ -289,7 +289,7 @@ final class RelationshipGraphTests: XCTestCase {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "First")
         let second = GraphPet(name: "Second")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(first)
         container.mainContext.insert(second)
@@ -314,7 +314,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testFailedWriteRestoresStateAndJournal() throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
-        let container = try ModelContainer(for: GraphHolder.self, GraphBadge.self)
+        let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
         container.mainContext.insert(holder)
         container.mainContext.insert(badge)
         let badges = try XCTUnwrap(container.relationshipAdapters(for: GraphHolder.self).first { $0.name == "badges" })
@@ -333,7 +333,7 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testInverseConsistencyAcrossFixedSequences() throws {
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let people = [GraphPerson(name: "P1"), GraphPerson(name: "P2")]
         let pets = [GraphPet(name: "E1"), GraphPet(name: "E2"), GraphPet(name: "E3")]
         for person in people { container.mainContext.insert(person) }
@@ -373,7 +373,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testInverseAssignmentUpdatesToManyAndJournalsOnlyChangedProperties() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(pet)
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPet.self).first { $0.name == "owner" })
@@ -393,7 +393,7 @@ final class RelationshipGraphTests: XCTestCase {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let second = GraphPet(name: "Luna")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pet" })
 
@@ -413,7 +413,7 @@ final class RelationshipGraphTests: XCTestCase {
             Schema.Entity(name: "GraphPet"),
         ])
 
-        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema, configurations: [])
         XCTAssertEqual(container.relationshipAdapters(for: GraphPerson.self).map(\.name), ["pets"])
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
@@ -432,7 +432,9 @@ final class RelationshipGraphTests: XCTestCase {
             Schema.Entity(name: "GraphPet"),
         ])
 
-        XCTAssertThrowsError(try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema)) { error in
+        XCTAssertThrowsError(
+            try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema, configurations: [])
+        ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
@@ -444,7 +446,7 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testAdapterBoxRejectsMismatchedOwnerType() throws {
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
         let wrongOwner = GraphPet(name: "Milo")
 
@@ -454,7 +456,8 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testManualModelExplicitInverseCandidateBinds() throws {
-        let container = try ModelContainer(for: ManualInverseSource.self, ManualInverseDestination.self)
+        let container = try ModelContainer(
+            for: [ManualInverseSource.self, ManualInverseDestination.self], configurations: [])
         XCTAssertEqual(container.relationshipAdapters(for: ManualInverseSource.self).map(\.name), ["destination"])
     }
 
@@ -468,13 +471,15 @@ final class RelationshipGraphTests: XCTestCase {
     @MainActor
     func testLegacyPersistentModelWithoutRefinementUsesEmptyCandidates() throws {
         let modelType: any PersistentModel.Type = LegacyPersistentOwner.self
-        let container = try ModelContainer(for: modelType, InferredTarget.self)
+        let container = try ModelContainer(for: [modelType, InferredTarget.self], configurations: [])
         XCTAssertTrue(container.relationshipAdapters(for: LegacyPersistentOwner.self).isEmpty)
     }
 
     @MainActor
     func testManualModelRelationshipWithoutCandidateThrows() {
-        XCTAssertThrowsError(try ModelContainer(for: MissingCandidateOwner.self, InferredTarget.self)) { error in
+        XCTAssertThrowsError(
+            try ModelContainer(for: [MissingCandidateOwner.self, InferredTarget.self], configurations: [])
+        ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
@@ -485,7 +490,9 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testManualModelDuplicateCandidatesThrow() {
-        XCTAssertThrowsError(try ModelContainer(for: DuplicateCandidateOwner.self, InferredTarget.self)) { error in
+        XCTAssertThrowsError(
+            try ModelContainer(for: [DuplicateCandidateOwner.self, InferredTarget.self], configurations: [])
+        ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty(let message) = error else {
                 return XCTFail("Expected actionable schema error, got \\(error)")
             }
@@ -495,7 +502,8 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testInferredRelationshipCollectionsBindAndScalarCollectionsDoNot() throws {
-        let container = try ModelContainer(for: InferredOwner.self, InferredTarget.self, ScalarCollections.self)
+        let container = try ModelContainer(
+            for: [InferredOwner.self, InferredTarget.self, ScalarCollections.self], configurations: [])
         XCTAssertEqual(container.relationshipAdapters(for: InferredOwner.self).map(\.name), ["targets"])
         XCTAssertTrue(container.relationshipAdapters(for: ScalarCollections.self).isEmpty)
         let owner = InferredOwner(backingData: InferredOwner.createBackingData())
@@ -508,7 +516,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testRelationshipEventsAndAttributeChangesContributeToHasChanges() throws {
         let person = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
-        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+        let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(pet)
         let adapter = try XCTUnwrap(
@@ -528,7 +536,7 @@ final class RelationshipGraphTests: XCTestCase {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let friend = GraphPet(name: "Luna")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(pet)
         container.mainContext.insert(friend)
@@ -551,7 +559,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testRollbackRestoresRelationshipEventSnapshot() throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(pet)
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
@@ -574,7 +582,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testOptionalNilClearsAndInvalidValueDoesNotMutateOrJournal() throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         container.mainContext.insert(person)
         container.mainContext.insert(first)
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
@@ -604,7 +612,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testAttachedRelationshipSetterAutoInsertsDetachedDestination() throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
-        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+        let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
         container.mainContext.insert(owner)
 
         owner.pets = [pet]
@@ -618,7 +626,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDetachedOwnerAssignmentDoesNotAutoInsertDestination() throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
-        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+        let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: RetentionPerson.self).first)
 
         try adapter.write([pet], to: owner)
@@ -633,7 +641,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDetachedGeneratedRelationshipAssignmentSurvivesInsertion() throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
-        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+        let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
 
         owner.pets = [pet]
 
@@ -653,7 +661,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testAutoInsertedRelationshipDestinationRollsBackWithTransaction() throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
-        let container = try ModelContainer(for: RetentionPerson.self, RetentionPet.self)
+        let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
         container.mainContext.insert(owner)
 
         XCTAssertThrowsError(
@@ -673,7 +681,7 @@ final class RelationshipGraphTests: XCTestCase {
         let owner = GraphPerson(name: "Ada")
         let attachedPet = GraphPet(name: "Attached")
         let foreignPet = GraphPet(name: "Foreign")
-        let container = try ModelContainer(for: GraphPerson.self, GraphPet.self)
+        let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let otherContext = container.makeContext()
         container.mainContext.insert(owner)
         container.mainContext.insert(attachedPet)
@@ -690,7 +698,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteDenyIsRecoverableAndLeavesModelManaged() throws {
         let owner = DeleteRuleOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: DeleteRuleOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [DeleteRuleOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -726,7 +734,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testNonthrowingDeleteLeavesDeniedOwnerUntouched() throws {
         let owner = DeleteRuleOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: DeleteRuleOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [DeleteRuleOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -748,7 +756,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteCascadeSchedulesRelatedModel() throws {
         let owner = CascadeOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: CascadeOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [CascadeOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -774,7 +782,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteRuleProcessingIsIdempotent() throws {
         let owner = NoActionOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: NoActionOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [NoActionOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -795,7 +803,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testCascadeDeleteRollsBackAllEndpointsInFailedTransaction() throws {
         let owner = CascadeOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: CascadeOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [CascadeOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -822,7 +830,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteNullifyClearsInverseBeforeReturn() throws {
         let owner = NullifyOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: NullifyOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [NullifyOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)
@@ -838,7 +846,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteNullifyWriteFailureLeavesDeleteAndRelationshipUntouched() throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
-        let container = try ModelContainer(for: GraphHolder.self, GraphBadge.self)
+        let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
         container.mainContext.insert(holder)
         container.mainContext.insert(badge)
         let badges = try XCTUnwrap(container.relationshipAdapters(for: GraphHolder.self).first)
@@ -855,7 +863,7 @@ final class RelationshipGraphTests: XCTestCase {
     func testDeleteNoActionLeavesRelationshipUntouched() throws {
         let owner = NoActionOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
-        let container = try ModelContainer(for: NoActionOwner.self, DeleteRuleChild.self)
+        let container = try ModelContainer(for: [NoActionOwner.self, DeleteRuleChild.self], configurations: [])
         let context = ModelContext(testSave: {}, container: container)
         context.insert(owner)
         context.insert(child)

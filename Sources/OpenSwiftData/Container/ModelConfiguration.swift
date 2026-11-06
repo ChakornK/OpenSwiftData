@@ -153,3 +153,36 @@ public struct ModelConfiguration: Sendable {
         case automatic
     }
 }
+
+extension ModelConfiguration {
+    /// The configuration name and file name stem of the implicit default store.
+    package static let defaultStoreName = "default"
+
+    /// Overrides the directory that holds the implicit default store for the current task.
+    ///
+    /// When `nil`, the default store lives in the user-domain Application Support directory.
+    @TaskLocal package static var defaultStoreDirectoryOverride: URL?
+
+    /// Returns the SQLite file configuration used when a container is created without configurations.
+    ///
+    /// The store is `default.store` inside the user-domain Application Support directory, or inside
+    /// ``defaultStoreDirectoryOverride`` when one is set. Creates the directory when it is missing
+    /// and throws when the directory cannot be resolved or created.
+    package static func implicitDefault() throws -> ModelConfiguration {
+        let fileManager = FileManager.default
+        let directory: URL
+        if let override = defaultStoreDirectoryOverride {
+            try fileManager.createDirectory(at: override, withIntermediateDirectories: true)
+            directory = override
+        } else {
+            directory = try fileManager.url(
+                for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        }
+        return ModelConfiguration(
+            defaultStoreName,
+            url: directory.appendingPathComponent("\(defaultStoreName).store"),
+            storeFactory: SQLiteStoreProvider.factory,
+            schemaVersionReader: SQLiteStoreProvider.versionReader,
+            schemaCompatibilityReader: SQLiteStoreProvider.schemaCompatibilityReader)
+    }
+}

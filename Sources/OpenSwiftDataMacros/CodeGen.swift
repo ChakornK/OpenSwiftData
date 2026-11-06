@@ -548,7 +548,7 @@ enum CodeGen {
             guard isSubclass || !isFinal else { return nil }
             let inherited =
                 superclassIdentifier.map {
-                    "var descriptors = \($0).__\($0.replacingOccurrences(of: "`", with: ""))PropertyDescriptors(Root.self)\n"
+                    "var descriptors = \($0).__\($0.replacingOccurrences(of: "`", with: ""))PropertyDescriptors(_OSDRoot.self)\n"
                 } ?? "var descriptors: [AnyKeyPath: PropertyDescriptor] = [:]\n"
             let additions = properties.enumerated().map { slot, property in
                 let typeName = propertyType(property.name, in: declaration)?.trimmedDescription ?? "Any"
@@ -566,10 +566,10 @@ enum CodeGen {
                     superclassIdentifier.map { "\($0).propertyDescriptors.count + \(slot)" }
                     ?? String(slot)
                 return
-                    "        descriptors[\\Root.\(property.escapedName) as AnyKeyPath] = PropertyDescriptor(slot: \(slotExpression), name: \"\(escapeSwiftString(property.name))\", keyPath: \\Root.\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
+                    "        descriptors[\\_OSDRoot.\(property.escapedName) as AnyKeyPath] = PropertyDescriptor(slot: \(slotExpression), name: \"\(escapeSwiftString(property.name))\", keyPath: \\_OSDRoot.\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
             }.joined(separator: "\n")
             return
-                "\(tableAccess)static func \(keyPathTableName)<Root: \(modelName)>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor] {\n    \(inherited)\(additions)\n        return descriptors\n    }"
+                "\(tableAccess)static func \(keyPathTableName)<_OSDRoot: \(modelName)>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor] {\n    \(inherited)\(additions)\n        return descriptors\n    }"
         }()
         let keyPathNameResolver =
             isSubclass
@@ -619,8 +619,8 @@ enum CodeGen {
                 : "\(instanceMemberAccess) func prepareForPersistence() {}",
             backingInitializer,
             "@Transient\n\(registrarAccess) let _$observationRegistrar = Observation.ObservationRegistrar()",
-            "\(isPublic ? "public " : "internal ")nonisolated func access<Root: \(modelName), _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
-            "\(isPublic ? "public " : "internal ")nonisolated func withMutation<Root: \(modelName), _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
+            "\(isPublic ? "public " : "internal ")nonisolated func access<_OSDRoot: \(modelName), _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+            "\(isPublic ? "public " : "internal ")nonisolated func withMutation<_OSDRoot: \(modelName), _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
             "struct _SwiftDataNoType {}",
         ].compactMap { $0 }
     }

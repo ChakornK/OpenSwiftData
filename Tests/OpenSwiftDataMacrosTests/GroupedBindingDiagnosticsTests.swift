@@ -81,15 +81,15 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<Root: Conflict, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func access<_OSDRoot: Conflict, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return
                         }
                         _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<Root: Conflict, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func withMutation<_OSDRoot: Conflict, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return try mutation()
                         }
                         return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
@@ -163,15 +163,15 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<Root: Conflict, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func access<_OSDRoot: Conflict, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return
                         }
                         _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<Root: Conflict, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func withMutation<_OSDRoot: Conflict, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return try mutation()
                         }
                         return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
@@ -321,15 +321,15 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<Root: Example, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func access<_OSDRoot: Example, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return
                         }
                         _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<Root: Example, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func withMutation<_OSDRoot: Example, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return try mutation()
                         }
                         return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)
@@ -394,15 +394,15 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                     @Transient
                     private let _$observationRegistrar = Observation.ObservationRegistrar()
 
-                    internal nonisolated func access<Root: Grouped, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func access<_OSDRoot: Grouped, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return
                         }
                         _$observationRegistrar.access(subject, keyPath: keyPath)
                     }
 
-                    internal nonisolated func withMutation<Root: Grouped, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {
-                        guard let subject = self as? Root else {
+                    internal nonisolated func withMutation<_OSDRoot: Grouped, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {
+                        guard let subject = self as? _OSDRoot else {
                             return try mutation()
                         }
                         return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)

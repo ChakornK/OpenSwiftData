@@ -311,19 +311,19 @@ final class CodeGenTests: XCTestCase {
 
         XCTAssertTrue(
             baseSources.contains(
-                "static func __BasePropertyDescriptors<Root: Base>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __BasePropertyDescriptors<_OSDRoot: Base>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"),
             baseSources)
         XCTAssertTrue(
-            baseSources.contains("descriptors[\\Root.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
+            baseSources.contains("descriptors[\\_OSDRoot.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
             baseSources)
         XCTAssertTrue(
             childSources.contains(
-                "static func __ChildPropertyDescriptors<Root: Child>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __ChildPropertyDescriptors<_OSDRoot: Child>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"),
             childSources)
-        XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(Root.self)"), childSources)
+        XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(_OSDRoot.self)"), childSources)
         XCTAssertTrue(
             childSources.contains(
-                "descriptors[\\Root.age as AnyKeyPath] = PropertyDescriptor(slot: Base.propertyDescriptors.count"),
+                "descriptors[\\_OSDRoot.age as AnyKeyPath] = PropertyDescriptor(slot: Base.propertyDescriptors.count"),
             childSources)
         XCTAssertTrue(
             childSources.contains(
@@ -438,8 +438,8 @@ final class CodeGenTests: XCTestCase {
                 "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
-                "internal nonisolated func access<Root: Trip, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
-                "internal nonisolated func withMutation<Root: Trip, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
+                "internal nonisolated func access<_OSDRoot: Trip, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+                "internal nonisolated func withMutation<_OSDRoot: Trip, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
                 "struct _SwiftDataNoType {}",
             ])
     }

@@ -6,7 +6,7 @@ import SwiftDiagnostics
 enum CodeGen {
     static func modelActorMemberSources(actorName: String) -> [String] {
         return [
-            "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+            "nonisolated let modelExecutor: any ModelExecutor",
             "nonisolated let modelContainer: ModelContainer",
             "init(modelContainer: ModelContainer) {\n    self.modelContainer = modelContainer\n    self.modelExecutor = DefaultSerialModelExecutor.make(container: modelContainer)\n}",
         ]

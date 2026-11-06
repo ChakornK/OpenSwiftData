@@ -335,7 +335,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.modelActorMemberSources(actorName: "StoreActor"),
             [
-                "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+                "nonisolated let modelExecutor: any ModelExecutor",
                 "nonisolated let modelContainer: ModelContainer",
                 "init(modelContainer: ModelContainer) {\n"
                     + "    self.modelContainer = modelContainer\n"

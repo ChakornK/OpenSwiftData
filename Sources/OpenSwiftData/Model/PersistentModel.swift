@@ -258,7 +258,7 @@ public extension PersistentModel {
     }
     static func persistenceAdapters() -> [any PersistencePropertyAdapter<Model>] { [] }
     static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
-        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+        persistenceAdapters().map { ErasedPersistencePropertyAdapter($0) }
     }
     static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] { [] }
     static func hasFlattenedKeyPath(_ keyPath: AnyKeyPath) -> Bool {

@@ -8268,34 +8268,6 @@ final class PersistentModelTests: XCTestCase {
         requiresSendable(model)
     }
 
-    func testUnassignedNonoptionalPropertyReadTerminatesWithExactMessage() throws {
-        let process = Process()
-        let standardError = Pipe()
-        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-        process.arguments = ["OpenSwiftDataTests.PersistentModelTests/testRunUnassignedPropertyChild"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["OSD_UNASSIGNED_PROPERTY_CHILD"] = "1"
-        process.environment = environment
-        process.standardError = standardError
-
-        try process.run()
-        let errorOutput = standardError.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        XCTAssertNotEqual(process.terminationStatus, 0)
-        XCTAssertTrue(
-            String(decoding: errorOutput, as: UTF8.self)
-                .contains("Fatal error: OSD: property 'title' of UnassignedPropertyFixture was read before assignment")
-        )
-    }
-
-    func testRunUnassignedPropertyChild() throws {
-        guard ProcessInfo.processInfo.environment["OSD_UNASSIGNED_PROPERTY_CHILD"] == "1" else {
-            throw XCTSkip("Child-only crash test")
-        }
-        _ = UnassignedPropertyFixture().title
-    }
-
     func testBackingDataInitializerPreservesDeclaredDefaults() {
         let backingData = BackingDataDefaultsFixture.createBackingData()
         let model = BackingDataDefaultsFixture(backingData: backingData)

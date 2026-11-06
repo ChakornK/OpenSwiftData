@@ -11,7 +11,7 @@ final class MigrationPlanRecord {
 }
 
 private enum MigrationV1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(version: [1, 0, 0], identifier: "migration-v1")
+    static let versionIdentifier = Schema.Version(1, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
     static let schema = Schema(
         [
@@ -22,7 +22,7 @@ private enum MigrationV1: VersionedSchema {
 }
 
 private enum MigrationV2: VersionedSchema {
-    static let versionIdentifier = Schema.Version(version: [2, 0, 0], identifier: "migration-v2")
+    static let versionIdentifier = Schema.Version(2, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
     static let schema = Schema(
         [
@@ -36,7 +36,7 @@ private enum MigrationV2: VersionedSchema {
 }
 
 private enum MigrationV2_1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(version: [2, 1, 0], identifier: "migration-v2.1")
+    static let versionIdentifier = Schema.Version(2, 1, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
     static let schema = Schema(
         [
@@ -50,7 +50,7 @@ private enum MigrationV2_1: VersionedSchema {
 }
 
 private enum MigrationV3: VersionedSchema {
-    static let versionIdentifier = Schema.Version(version: [3, 0, 0], identifier: "migration-v3")
+    static let versionIdentifier = Schema.Version(3, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
     static let schema = Schema(
         [
@@ -468,7 +468,7 @@ final class CustomMigrationPlanTests: XCTestCase {
 
     func testMigrationPlanRejectsSchemaVersionMismatch() {
         enum InvalidVersionedSchema: VersionedSchema {
-            static let versionIdentifier = Schema.Version(version: [8], identifier: "declared-v8")
+            static let versionIdentifier = Schema.Version(8, 0, 0)
             static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
             static let schema = MigrationV1.schema
         }

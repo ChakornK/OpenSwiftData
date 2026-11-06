@@ -259,18 +259,33 @@ public struct Schema: Sendable {
         }
     }
 
-    /// Identifies a schema version for migration planning.
-    public struct Version: Sendable, Hashable, Codable {
-        /// The version's components.
-        public let version: [Int]
-        /// A stable identifier for the version.
-        public let identifier: String
+    /// A semantic schema version.
+    ///
+    /// Versions order by major, then minor, then patch component.
+    public struct Version: Sendable, Hashable, Codable, Comparable, CustomStringConvertible {
+        /// The major version component.
+        public let major: Int
+        /// The minor version component.
+        public let minor: Int
+        /// The patch version component.
+        public let patch: Int
 
-        /// Creates version metadata.
-        public init(version: [Int], identifier: String) {
-            self.version = version
-            self.identifier = identifier
+        /// Creates a version from its components.
+        public init(_ major: Int, _ minor: Int, _ patch: Int) {
+            self.major = major
+            self.minor = minor
+            self.patch = patch
         }
+
+        public static func < (lhs: Version, rhs: Version) -> Bool {
+            (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+        }
+
+        /// The version formatted as `major.minor.patch`.
+        public var description: String { "\(major).\(minor).\(patch)" }
+
+        /// The string that identifies this version in store metadata and migration bookkeeping.
+        package var identifier: String { description }
 
         package func encoded() throws -> [UInt8] {
             let encoder = JSONEncoder()
@@ -278,15 +293,19 @@ public struct Schema: Sendable {
             return Array(try encoder.encode(self))
         }
 
+        /// Decodes a stored version written as `{"major":…,"minor":…,"patch":…}` or in the legacy
+        /// `{"version":[…],"identifier":…}` form, whose missing components default to zero.
         package static func decode(_ identifier: String) throws -> Self {
             guard let data = identifier.data(using: .utf8) else {
                 throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
             }
-            do {
-                return try JSONDecoder().decode(Self.self, from: data)
-            } catch {
+            if let version = try? JSONDecoder().decode(Self.self, from: data) { return version }
+            struct Legacy: Decodable { let version: [Int] }
+            guard let legacy = try? JSONDecoder().decode(Legacy.self, from: data) else {
                 throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
             }
+            let components = legacy.version + [0, 0, 0]
+            return Self(components[0], components[1], components[2])
         }
     }
 

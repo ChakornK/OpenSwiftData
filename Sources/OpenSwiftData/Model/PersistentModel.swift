@@ -378,6 +378,12 @@ public extension PersistentModel {
             }
             do {
                 let endpoints = try adapter.endpoints(in: value)
+                // Relating a detached model to a managed one inserts it into the managed model's context.
+                if let managedContext = endpoints.lazy.compactMap(\.modelContext).first {
+                    managedContext.insert(self)
+                    setRelationshipValue(forKey: keyPath, to: value)
+                    return
+                }
                 try DetachedRelationshipGraph.assign(
                     endpoints: endpoints, owner: self, ownerType: modelType, adapter: adapter)
             } catch {

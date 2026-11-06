@@ -154,9 +154,8 @@ import Testing
         try context.save()
         let leaf = PendingFetchLeaf(flag: true)
         leaf.root = root
-        withKnownIssue("Detached-to-managed assignments do not yet maintain the managed inverse.") {
-            #expect(root.hasChanges)
-            #expect(root.leaves.count == 1)
-        }
+        #expect(leaf.modelContext === context)
+        #expect(root.hasChanges)
+        #expect(root.leaves.count == 1)
     }
 }

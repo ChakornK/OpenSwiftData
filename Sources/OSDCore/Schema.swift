@@ -133,15 +133,18 @@ public struct Schema: Sendable {
         public let originalName: String?
         /// Flattened scalar components, when `.flattened` is enabled.
         public let components: [Component]
+        /// A value that changes the schema's version hash without changing the stored representation.
+        public var hashModifier: String?
 
         /// Creates metadata describing attribute options without property details.
-        public init(_ options: Option...) {
+        public init(_ options: Option..., originalName: String? = nil, hashModifier: String? = nil) {
             self.name = ""
             self.type = ""
             self.isOptional = false
             self.defaultValue = nil
             self.options = Set(options)
-            self.originalName = nil
+            self.originalName = originalName
+            self.hashModifier = hashModifier
             components = []
         }
 
@@ -161,6 +164,7 @@ public struct Schema: Sendable {
             self.defaultValue = defaultValue
             self.options = options
             self.originalName = originalName
+            self.hashModifier = nil
             self.components = components.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         }
     }
@@ -168,7 +172,7 @@ public struct Schema: Sendable {
     /// Describes a persisted model relationship.
     public struct Relationship: Hashable, Sendable {
         /// Describes relationship delete behavior.
-        public enum DeleteRule: Sendable, Hashable {
+        public enum DeleteRule: String, Codable, Sendable, Hashable {
             /// Removes the relationship reference when its destination is deleted.
             case nullify
             /// Deletes related models with the source model.
@@ -199,16 +203,37 @@ public struct Schema: Sendable {
         public let originalName: String?
         /// The model entity that originally declares this relationship.
         package let declaringEntityName: String?
+        /// Options applied to this relationship.
+        public var options: [Option] = []
+        /// A value that changes the schema's version hash without changing the stored representation.
+        public var hashModifier: String?
+
+        /// Describes a relationship option.
+        public struct Option: Codable, Hashable, Sendable, CustomDebugStringConvertible {
+            private let name: String
+
+            /// Requires each destination to be unique across owners.
+            public static var unique: Option { Option(name: "unique") }
+
+            public var debugDescription: String { name }
+        }
 
         /// Creates metadata describing relationship options without property details.
+        ///
+        /// Parameters follow the `@Relationship` macro's order; `inverseName` names the inverse property when
+        /// `inverse` is unavailable.
         public init(
+            _ options: Option...,
             deleteRule: DeleteRule = .nullify,
             minimumModelCount: Int? = nil,
             maximumModelCount: Int? = nil,
+            originalName: String? = nil,
             inverse: AnyKeyPath? = nil,
-            inverseName: String? = nil,
-            originalName: String? = nil
+            hashModifier: String? = nil,
+            inverseName: String? = nil
         ) {
+            self.options = options
+            self.hashModifier = hashModifier
             self.name = ""
             self.destination = ""
             self.isToMany = false
@@ -645,3 +670,12 @@ extension Schema: Hashable {
         hasher.combine(version)
     }
 }
+
+#if canImport(ObjectiveC)
+    extension Schema.Attribute.Option {
+        /// Stores values using the given value transformer class, identified by its registered class name.
+        public static func transformable(by transformerType: ValueTransformer.Type) -> Self {
+            .transformable(by: NSStringFromClass(transformerType))
+        }
+    }
+#endif

@@ -198,21 +198,44 @@ public struct RuntimeHistoryChange: Sendable, Hashable {
     public let entityName: String
     /// The changed row's primary key.
     public let primaryKey: Int64
+    /// For updates, the names of the properties whose values changed.
+    public let updatedAttributes: [String]
+    /// For deletions, the stored values of properties marked `.preserveValueOnDeletion`, keyed by name.
+    public let tombstone: [String: StoredValue]
 
     /// Creates a store-neutral row change.
-    public init(type: HistoryChangeType, entityName: String, primaryKey: Int64) {
+    public init(
+        type: HistoryChangeType, entityName: String, primaryKey: Int64, updatedAttributes: [String] = [],
+        tombstone: [String: StoredValue] = [:]
+    ) {
         self.type = type
         self.entityName = entityName
         self.primaryKey = primaryKey
+        self.updatedAttributes = updatedAttributes
+        self.tombstone = tombstone
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.type == rhs.type && lhs.entityName == rhs.entityName && lhs.primaryKey == rhs.primaryKey
+            && lhs.updatedAttributes == rhs.updatedAttributes && lhs.tombstone == rhs.tombstone
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(type)
+        hasher.combine(entityName)
+        hasher.combine(primaryKey)
+        hasher.combine(updatedAttributes)
     }
 }
 
 /// A runtime store that supports durable history queries and pruning.
-public protocol RuntimeHistoryStore: RuntimeStore {
-    /// Fetches durable history transactions matching a descriptor.
-    func fetchHistory(_ descriptor: HistoryDescriptor) throws -> [HistoryTransaction]
-    /// Deletes history transactions through a token and returns the number of transactions removed.
-    func deleteHistory(before token: HistoryToken) throws -> Int
+package protocol RuntimeHistoryStore: RuntimeStore {
+    /// Fetches every stored history transaction in commit order.
+    func fetchHistory() throws -> [StoredHistoryTransaction]
+    /// Deletes the history transactions with the given identifiers.
+    func deleteHistory(transactionIDs: [Int64]) throws
+    /// The largest transaction identifier the store has ever issued, or zero when none.
+    func latestIssuedHistoryTransactionID() throws -> Int64
 }
 
 /// SQL values exchanged across the runtime-store boundary.

@@ -1691,23 +1691,70 @@ public final class ModelContext {
         }
     }
 
-    /// Fetches committed store history after the requested token.
-    public func fetchHistory(_ descriptor: HistoryDescriptor = HistoryDescriptor()) throws -> [HistoryTransaction] {
+    /// Fetches history transactions matching a descriptor.
+    ///
+    /// Throws `historyTokenExpired` when the predicate refers to a token for a transaction that was deleted, and
+    /// `invalidTransactionFetchRequest` for transaction types other than `DefaultHistoryTransaction`.
+    public func fetchHistory<T: HistoryTransaction>(_ descriptor: HistoryDescriptor<T>) throws -> [T] {
         assertAffinity()
-        guard let store = optionalContainer?.store as? any RuntimeHistoryStore else {
-            throw unsupportedStore("History is unavailable for the configured store.")
-        }
-        return try store.fetchHistory(descriptor)
+        var transactions = try matchingHistory(descriptor)
+        if !descriptor.sortBy.isEmpty { transactions.sort(using: descriptor.sortBy) }
+        if descriptor.fetchLimit > 0 { transactions = Array(transactions.prefix(Int(clamping: descriptor.fetchLimit))) }
+        return transactions
     }
 
-    /// Deletes history transactions through the supplied token and returns the number deleted.
-    @discardableResult
-    public func deleteHistory(before token: HistoryToken) throws -> Int {
+    /// Deletes the history transactions matching a descriptor's predicate.
+    public func deleteHistory<T: HistoryTransaction>(_ descriptor: HistoryDescriptor<T>) throws {
         assertAffinity()
         guard let store = optionalContainer?.store as? any RuntimeHistoryStore else {
             throw unsupportedStore("History is unavailable for the configured store.")
         }
-        return try store.deleteHistory(before: token)
+        let identifiers = try matchingHistory(descriptor).compactMap { ($0 as? DefaultHistoryTransaction)?.id }
+        try store.deleteHistory(transactionIDs: identifiers)
+    }
+
+    private func matchingHistory<T: HistoryTransaction>(_ descriptor: HistoryDescriptor<T>) throws -> [T] {
+        guard T.self == DefaultHistoryTransaction.self else {
+            throw SwiftDataError.invalidTransactionFetchRequest
+        }
+        guard let container = optionalContainer, let store = container.store as? any RuntimeHistoryStore else {
+            throw unsupportedStore("History is unavailable for the configured store.")
+        }
+        let stored = try store.fetchHistory()
+        if let predicate = descriptor.predicate {
+            let existing = Set(stored.map(\.id))
+            let latestIssued = try store.latestIssuedHistoryTransactionID()
+            for token in Self.historyTokens(in: predicate) {
+                guard let value = token.tokenValue?[storeIdentifier] else { continue }
+                if value <= latestIssued, !existing.contains(value) { throw SwiftDataError.historyTokenExpired }
+            }
+        }
+        let transactions = stored.map { transaction in
+            DefaultHistoryTransaction(
+                timestamp: transaction.timestamp,
+                changes: transaction.changes.enumerated().compactMap { ordinal, change in
+                    guard let modelType = container.modelType(forEntityName: change.entityName) else { return nil }
+                    func make<Model: PersistentModel>(_ type: Model.Type) -> HistoryChange {
+                        HistoryChange.make(
+                            change, modelType: type, transactionIdentifier: transaction.id, ordinal: ordinal,
+                            storeIdentifier: storeIdentifier)
+                    }
+                    return make(modelType)
+                },
+                token: DefaultHistoryToken(storeTokens: [storeIdentifier: transaction.id]),
+                transactionIdentifier: transaction.id, storeIdentifier: storeIdentifier,
+                bundleIdentifier: transaction.bundleIdentifier, processIdentifier: transaction.processIdentifier,
+                author: transaction.author)
+        }
+        let typed = transactions.compactMap { $0 as? T }
+        guard let predicate = descriptor.predicate else { return typed }
+        return try typed.filter { try predicate.evaluate($0) }
+    }
+
+    /// Returns the history tokens captured as constants in a predicate's expression tree.
+    private static func historyTokens(in value: Any) -> [DefaultHistoryToken] {
+        if let token = value as? DefaultHistoryToken { return [token] }
+        return Mirror(reflecting: value).children.flatMap { historyTokens(in: $0.value) }
     }
 
     /// Posts `willSave` without user info, then commits pending changes and posts `didSave` when any existed.
@@ -3767,6 +3814,20 @@ public final class ModelContext {
         return identityKey(for: entity, primaryKey: primaryKey)
     }
 
+    /// Returns the names of a model's properties whose current values differ from their saved values.
+    private static func changedPropertyNames(of model: any PersistentModel) -> Set<String> {
+        let snapshot = model.snapshotLifecycle()
+        guard let saved = snapshot.savedValues else { return [] }
+        var names = Set<String>()
+        for (keyPath, current) in snapshot.values {
+            guard let previous = saved[keyPath], !persistenceValuesEqual(current, previous),
+                let name = type(of: model).propertyName(forKeyPath: keyPath)
+            else { continue }
+            names.insert(name)
+        }
+        return names
+    }
+
     private static func historyKeyLess(_ lhs: StoreEntityKey, _ rhs: StoreEntityKey) -> Bool {
         if lhs.entityName != rhs.entityName { return lhs.entityName < rhs.entityName }
         return lhs.primaryKey < rhs.primaryKey
@@ -3807,6 +3868,41 @@ public final class ModelContext {
                 return StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
             })
         updatedKeys.subtract(deletedKeys)
+        var historyAttributes: [StoreEntityKey: Set<String>] = [:]
+        for model in pending.changed {
+            guard let primaryKey = model.persistentModelID.primaryKey else { continue }
+            let key = StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
+            historyAttributes[key, default: []].formUnion(Self.changedPropertyNames(of: model))
+        }
+        for event in pending.relationshipMutationEvents {
+            if let primaryKey = event.owner.persistentModelID.primaryKey {
+                let key = StoreEntityKey(entityName: event.owner.persistentModelID.entityName, primaryKey: primaryKey)
+                historyAttributes[key, default: []].insert(event.property)
+            }
+            guard let inverse = event.relationship.inverse else { continue }
+            for endpoint in event.oldEndpoints + event.newEndpoints {
+                guard let primaryKey = endpoint.persistentModelID.primaryKey else { continue }
+                let key = StoreEntityKey(entityName: endpoint.persistentModelID.entityName, primaryKey: primaryKey)
+                historyAttributes[key, default: []].insert(inverse)
+            }
+        }
+        // Assigning a property its current value is not a change, so it records no history.
+        updatedKeys = updatedKeys.filter { !(historyAttributes[$0]?.isEmpty ?? true) }
+        var tombstones: [StoreEntityKey: [String: StoredValue]] = [:]
+        for model in pending.deleted {
+            guard let primaryKey = model.persistentModelID.primaryKey,
+                let entity = container.schema.entity(forName: model.persistentModelID.entityName)
+            else { continue }
+            let preserved = Set(
+                entity.attributes.filter { $0.options.contains(.preserveValueOnDeletion) }.map(\.name))
+            guard !preserved.isEmpty else { continue }
+            var values: [String: StoredValue] = [:]
+            for adapter in type(of: model).erasedPersistenceAdapters() where preserved.contains(adapter.name) {
+                values[adapter.name] = try adapter.encoded(model)
+            }
+            tombstones[StoreEntityKey(entityName: model.persistentModelID.entityName, primaryKey: primaryKey)] =
+                values
+        }
         let orderedModels = relationshipOrderedEntities(models)
         let externalDataColumns = Self.externalDataColumns(in: container.schema)
         let persisted: [PersistedModel] = try store.writeWithExternalData { connection, externalDataSession in
@@ -3895,7 +3991,10 @@ public final class ModelContext {
             for key in historyTypesByKey.keys.sorted(by: Self.historyKeyLess) {
                 guard let type = historyTypesByKey[key] else { continue }
                 historyChanges.append(
-                    RuntimeHistoryChange(type: type, entityName: key.entityName, primaryKey: key.primaryKey))
+                    RuntimeHistoryChange(
+                        type: type, entityName: key.entityName, primaryKey: key.primaryKey,
+                        updatedAttributes: type == .update ? (historyAttributes[key] ?? []).sorted() : [],
+                        tombstone: type == .delete ? tombstones[key] ?? [:] : [:]))
             }
             if !historyChanges.isEmpty {
                 try connection.recordHistory(historyChanges, timestamp: Date(), author: historyAuthorStorage)

@@ -276,6 +276,17 @@ package enum LightweightMigration {
         try connection.execute(
             "CREATE INDEX IF NOT EXISTS _osd_history_changes_transaction "
                 + "ON _osd_history_changes (transaction_id)")
+        // Columns added after the tables' first release; stores created earlier gain them on open.
+        let additions = [
+            ("_osd_history_transactions", "bundle_identifier", "TEXT"),
+            ("_osd_history_transactions", "process_identifier", "TEXT"),
+            ("_osd_history_changes", "details", "BLOB"),
+        ]
+        for (table, column, type) in additions {
+            let existing = try connection.rows("PRAGMA table_info(\(table))", [])
+            guard !existing.contains(where: { $0.count > 1 && $0[1] == .text(column) }) else { continue }
+            try connection.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(type)")
+        }
     }
 
     package static func migrate(

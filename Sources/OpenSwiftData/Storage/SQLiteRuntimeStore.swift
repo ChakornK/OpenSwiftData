@@ -41,58 +41,64 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
         }
     }
 
-    func fetchHistory(_ descriptor: HistoryDescriptor) throws -> [HistoryTransaction] {
-        if descriptor.fetchLimit == 0 { return [] }
-        return try driver.read { connection in
-            var sql = "SELECT id, timestamp, author FROM _osd_history_transactions"
-            var arguments: [StoredValue] = []
-            if let after = descriptor.after {
-                sql += " WHERE id > ?"
-                arguments.append(.int(after.rawValue))
-            }
-            sql += " ORDER BY id ASC"
-            if let fetchLimit = descriptor.fetchLimit {
-                sql += " LIMIT ?"
-                arguments.append(.int(Int64(fetchLimit)))
-            }
-            let transactionRows = try connection.rows(sql, arguments)
+    func fetchHistory() throws -> [StoredHistoryTransaction] {
+        try driver.read { connection in
+            let transactionRows = try connection.rows(
+                "SELECT id, timestamp, author, bundle_identifier, process_identifier "
+                    + "FROM _osd_history_transactions ORDER BY id ASC", [])
             return try transactionRows.map { row in
-                guard row.count >= 3, case let .int(id) = row[0], case let .double(timestamp) = row[1] else {
+                guard row.count >= 5, case let .int(id) = row[0], case let .double(timestamp) = row[1] else {
                     throw SwiftDataError.unsupportedStore("Malformed history transaction row.")
                 }
-                let author: String?
-                if case let .text(value) = row[2] { author = value } else { author = nil }
+                func text(_ value: StoredValue) -> String? {
+                    if case let .text(string) = value { return string }
+                    return nil
+                }
                 let changes = try connection.rows(
-                    "SELECT ordinal, type, entity, primary_key FROM _osd_history_changes "
+                    "SELECT type, entity, primary_key, details FROM _osd_history_changes "
                         + "WHERE transaction_id = ? ORDER BY ordinal ASC",
                     [.int(id)]
-                ).map { changeRow -> HistoryChange in
+                ).map { changeRow -> StoredHistoryChange in
                     guard changeRow.count >= 4,
-                        case let .int(ordinal) = changeRow[0],
-                        case let .text(rawType) = changeRow[1],
+                        case let .text(rawType) = changeRow[0],
                         let type = HistoryChangeType(rawValue: rawType),
-                        case let .text(entityName) = changeRow[2],
-                        case let .int(primaryKey) = changeRow[3]
+                        case let .text(entityName) = changeRow[1],
+                        case let .int(primaryKey) = changeRow[2]
                     else {
                         throw SwiftDataError.unsupportedStore("Malformed history change row.")
                     }
-                    return HistoryChange(
-                        type: type, entityName: entityName, primaryKey: primaryKey, ordinal: Int(ordinal))
+                    var details = StoredHistoryChangeDetails()
+                    if case let .blob(bytes) = changeRow[3] {
+                        details = try JSONDecoder().decode(StoredHistoryChangeDetails.self, from: Data(bytes))
+                    }
+                    return StoredHistoryChange(
+                        type: type, entityName: entityName, primaryKey: primaryKey,
+                        updatedAttributes: details.updatedAttributes, tombstone: details.tombstone)
                 }
-                return HistoryTransaction(
-                    token: HistoryToken(rawValue: id), timestamp: Date(timeIntervalSince1970: timestamp),
-                    author: author, changes: changes)
+                return StoredHistoryTransaction(
+                    id: id, timestamp: Date(timeIntervalSince1970: timestamp), author: text(row[2]),
+                    bundleIdentifier: text(row[3]) ?? "", processIdentifier: text(row[4]) ?? "", changes: changes)
             }
         }
     }
 
-    func deleteHistory(before token: HistoryToken) throws -> Int {
+    func deleteHistory(transactionIDs: [Int64]) throws {
+        guard !transactionIDs.isEmpty else { return }
+        let placeholders = Array(repeating: "?", count: transactionIDs.count).joined(separator: ", ")
+        let arguments = transactionIDs.map(StoredValue.int)
         try driver.write { connection in
             try connection.execute(
-                "DELETE FROM _osd_history_changes WHERE transaction_id <= ?", [.int(token.rawValue)])
-            try connection.execute(
-                "DELETE FROM _osd_history_transactions WHERE id <= ?", [.int(token.rawValue)])
-            return connection.changesCount()
+                "DELETE FROM _osd_history_changes WHERE transaction_id IN (\(placeholders))", arguments)
+            try connection.execute("DELETE FROM _osd_history_transactions WHERE id IN (\(placeholders))", arguments)
+        }
+    }
+
+    func latestIssuedHistoryTransactionID() throws -> Int64 {
+        try driver.read { connection in
+            let rows = try connection.rows(
+                "SELECT seq FROM sqlite_sequence WHERE name = '_osd_history_transactions'", [])
+            if case let .int(value)? = rows.first?.first { return value }
+            return 0
         }
     }
 
@@ -269,16 +275,22 @@ private struct SQLiteRuntimeConnection: RuntimeConnection {
     func recordHistory(_ changes: [RuntimeHistoryChange], timestamp: Date, author: String?) throws {
         guard !changes.isEmpty else { return }
         try connection.execute(
-            "INSERT INTO _osd_history_transactions (timestamp, author) VALUES (?, ?)",
-            [.double(timestamp.timeIntervalSince1970), author.map(StoredValue.text) ?? .null])
+            "INSERT INTO _osd_history_transactions "
+                + "(timestamp, author, bundle_identifier, process_identifier) VALUES (?, ?, ?, ?)",
+            [
+                .double(timestamp.timeIntervalSince1970), author.map(StoredValue.text) ?? .null,
+                .text(HistoryWriter.bundleIdentifier), .text(HistoryWriter.processIdentifier),
+            ])
         let transactionID = connection.lastInsertRowID()
         for (ordinal, change) in changes.enumerated() {
+            let details = try JSONEncoder().encode(
+                StoredHistoryChangeDetails(updatedAttributes: change.updatedAttributes, tombstone: change.tombstone))
             try connection.execute(
                 "INSERT INTO _osd_history_changes "
-                    + "(transaction_id, ordinal, type, entity, primary_key) VALUES (?, ?, ?, ?, ?)",
+                    + "(transaction_id, ordinal, type, entity, primary_key, details) VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     .int(transactionID), .int(Int64(ordinal)), .text(change.type.rawValue),
-                    .text(change.entityName), .int(change.primaryKey),
+                    .text(change.entityName), .int(change.primaryKey), .blob(Array(details)),
                 ])
         }
     }

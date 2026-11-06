@@ -2145,7 +2145,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(concrete.persistentModelID.entityName, "CrossModuleOpenInheritanceGrandchildFixture")
         XCTAssertEqual(try reader.fetchCount(baseDescriptor), 2)
         XCTAssertEqual(
-            try reader.fetchIdentifiers(baseDescriptor),
+            try reader.mergedIdentifiers(baseDescriptor),
             baseModels.map(\.persistentModelID))
     }
 
@@ -5374,7 +5374,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(allNilStrings).map(\.name), ["empty", "nil-only", "nil-values"])
         XCTAssertEqual(try context.fetchCount(allNilStrings), 3)
         XCTAssertEqual(
-            try context.fetchIdentifiers(allNilStrings),
+            try context.mergedIdentifiers(allNilStrings),
             try context.fetch(allNilStrings).map(\.persistentModelID))
         let notAllNilStrings = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { !$0.optionalStrings.allSatisfy { $0 == nil } },
@@ -5392,7 +5392,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(containsStringNil).map(\.name), ["mixed", "nil-only", "nil-values"])
         XCTAssertEqual(try context.fetchCount(containsStringNil), 3)
         XCTAssertEqual(
-            try context.fetchIdentifiers(containsStringNil),
+            try context.mergedIdentifiers(containsStringNil),
             try context.fetch(containsStringNil).map(\.persistentModelID))
         let requiredString = "needle"
         let requiredContains = FetchDescriptor<OptionalScalarElementsFixture>(
@@ -5407,7 +5407,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(stringValueMatches.map(\.name), ["mixed"])
         XCTAssertEqual(try context.fetchCount(containsStringValue), 1)
         XCTAssertEqual(
-            try context.fetchIdentifiers(containsStringValue), stringValueMatches.map(\.persistentModelID))
+            try context.mergedIdentifiers(containsStringValue), stringValueMatches.map(\.persistentModelID))
         let optionalStringValue: String? = "needle"
         let containsOptionalStringValue = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { $0.optionalStrings.contains(optionalStringValue) },
@@ -5420,7 +5420,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(containsIntegerNil).map(\.name), ["mixed", "nil-only"])
         XCTAssertEqual(try context.fetchCount(containsIntegerNil), 2)
         XCTAssertEqual(
-            try context.fetchIdentifiers(containsIntegerNil),
+            try context.mergedIdentifiers(containsIntegerNil),
             try context.fetch(containsIntegerNil).map(\.persistentModelID))
 
         let containsFlagNil = FetchDescriptor<OptionalScalarElementsFixture>(
@@ -5519,7 +5519,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(try context.fetch(containsFlagNil).map(\.name), ["mixed", "nil-only"])
         XCTAssertEqual(try context.fetch(containsFlagValue).map(\.name), [])
         XCTAssertEqual(try context.fetchCount(containsStringValue), 0)
-        XCTAssertTrue(try context.fetchIdentifiers(containsStringValue).isEmpty)
+        XCTAssertTrue(try context.mergedIdentifiers(containsStringValue).isEmpty)
 
         let optionalIntegerNil: Int? = nil
         let capturedNil = FetchDescriptor<OptionalScalarElementsFixture>(
@@ -7058,7 +7058,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertFalse(pendingHierarchy[2] is InheritanceMacroChildFixture)
         XCTAssertTrue(pendingHierarchy[3] is InheritanceMacroGrandchildFixture)
         XCTAssertEqual(
-            try reader.fetchIdentifiers(pendingHierarchyDescriptor), pendingHierarchy.map(\.persistentModelID))
+            try reader.mergedIdentifiers(pendingHierarchyDescriptor), pendingHierarchy.map(\.persistentModelID))
         XCTAssertEqual(try reader.fetchCount(pendingHierarchyDescriptor), pendingHierarchy.count)
 
         try reader.save()
@@ -7425,7 +7425,7 @@ final class PersistentModelTests: XCTestCase {
             sortBy: [SortDescriptor(\.name)],
             fetchLimit: 2,
             fetchOffset: 1)
-        let identifierPage = try reader.fetchIdentifiers(descriptor)
+        let identifierPage = try reader.mergedIdentifiers(descriptor)
         XCTAssertEqual(try reader.fetchCount(descriptor), identifierPage.count)
         let unmaterializedBaseID = try XCTUnwrap(
             committedIdentifiers.first { $0.entityName == "InheritanceMacroBaseFixture" })
@@ -7440,7 +7440,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(page.map(\.name), ["c-base", "d-child"])
         XCTAssertFalse(page[0] is InheritanceMacroChildFixture)
         XCTAssertTrue(page[1] is InheritanceMacroChildFixture)
-        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), page.map(\.persistentModelID))
+        XCTAssertEqual(try reader.mergedIdentifiers(descriptor), page.map(\.persistentModelID))
         XCTAssertEqual(try reader.fetchCount(descriptor), 2)
     }
 
@@ -7465,7 +7465,7 @@ final class PersistentModelTests: XCTestCase {
         let firstStoredPage = try reader.fetch(descriptor)
         XCTAssertTrue(try XCTUnwrap(firstStoredPage.first) is InheritanceMacroGrandchildFixture)
         XCTAssertEqual(firstStoredPage.first?.age, 10)
-        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), firstStoredPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.mergedIdentifiers(descriptor), firstStoredPage.map(\.persistentModelID))
         XCTAssertEqual(try reader.fetchCount(descriptor), 1)
 
         let fetchedChild = try XCTUnwrap(
@@ -7474,7 +7474,7 @@ final class PersistentModelTests: XCTestCase {
         let updatedPage = try reader.fetch(descriptor)
         XCTAssertEqual(updatedPage.map(\.name), ["child"])
         XCTAssertEqual(updatedPage.first?.age, 5)
-        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), updatedPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.mergedIdentifiers(descriptor), updatedPage.map(\.persistentModelID))
         XCTAssertEqual(try reader.fetchCount(descriptor), 1)
 
         try reader.save()

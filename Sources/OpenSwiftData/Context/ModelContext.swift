@@ -1141,7 +1141,7 @@ public final class ModelContext {
             !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         {
             if optionalContainer?.dataStore != nil { return try fetch(descriptor).count }
-            return try fetchIdentifiers(descriptor).count
+            return try mergedIdentifiers(descriptor).count
         }
         if optionalContainer?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
@@ -1184,11 +1184,55 @@ public final class ModelContext {
             let remaining = total - offset
             return min(remaining, descriptor.fetchLimit ?? Int.max)
         }
-        return try fetchIdentifiers(descriptor).count
+        return try mergedIdentifiers(descriptor).count
+    }
+
+    /// Fetches saved models in batches.
+    ///
+    /// Throws `includePendingChangesWithBatchSize` unless the descriptor excludes pending changes.
+    public func fetch<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>, batchSize: Int
+    ) throws -> FetchResultsCollection<Model> {
+        assertAffinity()
+        guard !descriptor.includePendingChanges else { throw SwiftDataError.includePendingChangesWithBatchSize }
+        let identifiers = try mergedIdentifiers(descriptor)
+        return FetchResultsCollection(count: identifiers.count, batchSize: batchSize) { [self] range in
+            identifiers[range].map { identifier in
+                guard let model = model(for: identifier) as? Model else {
+                    preconditionFailure("The model for \(identifier) is not a \(Model.self).")
+                }
+                return model
+            }
+        }
+    }
+
+    /// Fetches the identifiers of saved models in batches.
+    ///
+    /// Throws `includePendingChangesWithBatchSize` unless the descriptor excludes pending changes.
+    public func fetchIdentifiers<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>, batchSize: Int
+    ) throws -> FetchResultsCollection<PersistentIdentifier> {
+        assertAffinity()
+        guard !descriptor.includePendingChanges else { throw SwiftDataError.includePendingChangesWithBatchSize }
+        let identifiers = try mergedIdentifiers(descriptor)
+        return FetchResultsCollection(count: identifiers.count, batchSize: batchSize) { Array(identifiers[$0]) }
     }
 
     /// Fetches identifiers matching a descriptor, which requires a persistent store.
+    ///
+    /// Throws `sortingPendingChangesWithIdentifiers` when the descriptor both sorts and includes pending changes.
     public func fetchIdentifiers<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>
+    ) throws -> [PersistentIdentifier] {
+        assertAffinity()
+        if descriptor.includePendingChanges, !descriptor.sortBy.isEmpty {
+            throw SwiftDataError.sortingPendingChangesWithIdentifiers
+        }
+        return try mergedIdentifiers(descriptor)
+    }
+
+    /// Fetches identifiers matching a descriptor, merging and sorting pending changes when requested.
+    package func mergedIdentifiers<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
@@ -1368,7 +1412,7 @@ public final class ModelContext {
     ) throws {
         assertAffinity()
         guard batchSize > 0 else { throw SwiftDataError.unsupportedPredicate("Batch size must be positive") }
-        let identifiers = try fetchIdentifiers(descriptor)
+        let identifiers = try mergedIdentifiers(descriptor)
         for start in stride(from: 0, to: identifiers.count, by: batchSize) {
             let end = min(start + batchSize, identifiers.count)
             for identifier in identifiers[start..<end] {

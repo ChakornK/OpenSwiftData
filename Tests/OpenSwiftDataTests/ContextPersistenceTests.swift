@@ -483,7 +483,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         let descriptor = FetchDescriptor<FlattenedCompositeFixture>(sortBy: [SortDescriptor(\.dimensions.width)])
         XCTAssertEqual(try context.fetch(descriptor).map(\.dimensions.width), [2, 3, 10, 20])
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 4)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor).count, 4)
         XCTAssertEqual(try context.fetchCount(descriptor), 4)
     }
 
@@ -1185,7 +1185,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         XCTAssertEqual(fetched.map(\.title), ["b"])
         XCTAssertEqual(try context.fetchCount(descriptor), 1)
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor), fetched.map(\.persistentModelID))
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor), fetched.map(\.persistentModelID))
         let countDescriptor = FetchDescriptor<PersistenceTestModel>(includePendingChanges: false)
         XCTAssertEqual(try context.fetchCount(countDescriptor), 3)
         XCTAssertEqual(try context.fetchIdentifiers(countDescriptor).count, 3)
@@ -1569,7 +1569,7 @@ final class ContextPersistenceTests: XCTestCase {
             fetchLimit: 1,
             fetchOffset: 1)
         let fetchedPage = try reader.fetch(pagedDescriptor)
-        XCTAssertEqual(try reader.fetchIdentifiers(pagedDescriptor), fetchedPage.map(\.persistentModelID))
+        XCTAssertEqual(try reader.mergedIdentifiers(pagedDescriptor), fetchedPage.map(\.persistentModelID))
         XCTAssertEqual(try reader.fetchCount(pagedDescriptor), fetchedPage.count)
     }
 
@@ -1627,7 +1627,7 @@ final class ContextPersistenceTests: XCTestCase {
             sortBy: [SortDescriptor(\.title)],
             fetchLimit: 1,
             fetchOffset: 0)
-        XCTAssertEqual(try reader.fetchIdentifiers(page), Array(expectedIDs.prefix(1)))
+        XCTAssertEqual(try reader.mergedIdentifiers(page), Array(expectedIDs.prefix(1)))
         XCTAssertEqual(try reader.fetchCount(page), 1)
     }
 
@@ -1739,17 +1739,17 @@ final class ContextPersistenceTests: XCTestCase {
         let descriptor = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, sortBy: [SortDescriptor(\.id)])
         let expectedIDs = [third.persistentModelID, changedInto.persistentModelID]
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor), expectedIDs)
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
 
         let zeroLimit = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchLimit: 0)
-        XCTAssertTrue(try context.fetchIdentifiers(zeroLimit).isEmpty)
+        XCTAssertTrue(try context.mergedIdentifiers(zeroLimit).isEmpty)
         XCTAssertEqual(try context.fetchCount(zeroLimit), 0)
 
         let pastEnd = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchOffset: 1)
-        XCTAssertEqual(try context.fetchIdentifiers(pastEnd), [changedInto.persistentModelID])
+        XCTAssertEqual(try context.mergedIdentifiers(pastEnd), [changedInto.persistentModelID])
         XCTAssertEqual(try context.fetchCount(pastEnd), 1)
 
         let committedOnly = FetchDescriptor<PredicateAgreementFixture>(
@@ -1778,7 +1778,7 @@ final class ContextPersistenceTests: XCTestCase {
         let descriptor = FetchDescriptor<PredicateAgreementFixture>(
             sortBy: [SortDescriptor(\.value)], fetchLimit: 2, fetchOffset: 1)
         let expectedIDs = [second.persistentModelID, pending.persistentModelID]
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor), expectedIDs)
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
         let firstRegistered: PredicateAgreementFixture? = context.registeredModel(for: first.persistentModelID)
         let secondRegistered: PredicateAgreementFixture? = context.registeredModel(for: second.persistentModelID)
@@ -1807,7 +1807,7 @@ final class ContextPersistenceTests: XCTestCase {
         let descending = FetchDescriptor<PredicateAgreementFixture>(
             sortBy: [SortDescriptor(\.optionalValue, order: .reverse)], fetchLimit: 2)
 
-        let ascendingIDs = try context.fetchIdentifiers(ascending)
+        let ascendingIDs = try context.mergedIdentifiers(ascending)
         XCTAssertEqual(ascendingIDs, [nilRow.persistentModelID, pendingNilRow.persistentModelID])
         XCTAssertEqual(try context.fetchCount(ascending), 2)
         let valuedRegisteredAfterAscending: PredicateAgreementFixture? = context.registeredModel(
@@ -1817,11 +1817,11 @@ final class ContextPersistenceTests: XCTestCase {
 
         let ascendingAfterNil = FetchDescriptor<PredicateAgreementFixture>(
             sortBy: [SortDescriptor(\.optionalValue)], fetchLimit: 2, fetchOffset: 1)
-        let ascendingAfterNilIDs = try context.fetchIdentifiers(ascendingAfterNil)
+        let ascendingAfterNilIDs = try context.mergedIdentifiers(ascendingAfterNil)
         XCTAssertEqual(ascendingAfterNilIDs, [pendingNilRow.persistentModelID, valuedRow.persistentModelID])
         XCTAssertEqual(try context.fetchCount(ascendingAfterNil), 2)
 
-        let descendingIDs = try context.fetchIdentifiers(descending)
+        let descendingIDs = try context.mergedIdentifiers(descending)
         XCTAssertEqual(descendingIDs, [valuedRow.persistentModelID, nilRow.persistentModelID])
         XCTAssertEqual(try context.fetchCount(descending), 2)
         XCTAssertEqual(try context.fetch(descending).map(\.persistentModelID), descendingIDs)
@@ -1856,7 +1856,7 @@ final class ContextPersistenceTests: XCTestCase {
             sortBy: [SortDescriptor(\.amount)], fetchLimit: 2, fetchOffset: 3)
         let expectedIDs = [lowerAmount.persistentModelID, largerAmount.persistentModelID]
 
-        XCTAssertEqual(try reader.fetchIdentifiers(descriptor), expectedIDs)
+        XCTAssertEqual(try reader.mergedIdentifiers(descriptor), expectedIDs)
         XCTAssertEqual(try reader.fetchCount(descriptor), 2)
         let nilRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(for: nilAmount.persistentModelID)
         let storedUnitRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
@@ -1871,7 +1871,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(fetched.map(\.amount), [lowerAmount.amount, largerAmount.amount])
 
         let equivalentTie = FetchDescriptor<QualifiedOptionalScalarFixture>(sortBy: [SortDescriptor(\.amount)])
-        let tiedIDs = try reader.fetchIdentifiers(equivalentTie)
+        let tiedIDs = try reader.mergedIdentifiers(equivalentTie)
         XCTAssertEqual(
             Array(tiedIDs[1...2]), [unitAmount.persistentModelID, pendingEquivalent.persistentModelID])
     }
@@ -1910,7 +1910,7 @@ final class ContextPersistenceTests: XCTestCase {
             negativeInfinity.persistentModelID,
         ]
 
-        XCTAssertEqual(try context.fetchIdentifiers(ascending), ascendingIDs)
+        XCTAssertEqual(try context.mergedIdentifiers(ascending), ascendingIDs)
         XCTAssertEqual(try context.fetchCount(ascending), 4)
         let storedRows: [PersistentIdentifier] = [
             negativeInfinity.persistentModelID, negativeOne.persistentModelID, positiveInfinity.persistentModelID,
@@ -1921,7 +1921,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         XCTAssertEqual(try context.fetch(ascending).map(\.persistentModelID), ascendingIDs)
 
-        XCTAssertEqual(try context.fetchIdentifiers(descending), descendingIDs)
+        XCTAssertEqual(try context.mergedIdentifiers(descending), descendingIDs)
         XCTAssertEqual(try context.fetchCount(descending), 4)
         XCTAssertEqual(try context.fetch(descending).map(\.persistentModelID), descendingIDs)
     }
@@ -2278,7 +2278,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(pendingMatches.map(\.id), [1, 2, 3, 5])
         XCTAssertEqual(try container.mainContext.fetchCount(pendingDescriptor), 4)
         XCTAssertEqual(
-            try container.mainContext.fetchIdentifiers(pendingDescriptor),
+            try container.mainContext.mergedIdentifiers(pendingDescriptor),
             pendingMatches.map(\.persistentModelID))
     }
 
@@ -2473,7 +2473,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         XCTAssertEqual(try context.fetch(descriptor).map(\.alpha), [2, 4])
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 2)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor).count, 2)
 
         let includeNil = FetchDescriptor<OptionalComparisonFixture>(
             predicate: #Predicate<OptionalComparisonFixture> {
@@ -2482,7 +2482,7 @@ final class ContextPersistenceTests: XCTestCase {
             sortBy: [SortDescriptor(\.alpha)])
         XCTAssertEqual(try context.fetch(includeNil).map(\.alpha), [1, 2, 4])
         XCTAssertEqual(try context.fetchCount(includeNil), 3)
-        XCTAssertEqual(try context.fetchIdentifiers(includeNil).count, 3)
+        XCTAssertEqual(try context.mergedIdentifiers(includeNil).count, 3)
 
         let compareToTrue = FetchDescriptor<OptionalComparisonFixture>(
             predicate: #Predicate<OptionalComparisonFixture> {
@@ -2498,7 +2498,7 @@ final class ContextPersistenceTests: XCTestCase {
             },
             sortBy: [SortDescriptor(\.alpha)])
         XCTAssertEqual(try context.fetch(negated).map(\.alpha), [1, 3])
-        XCTAssertEqual(try context.fetchIdentifiers(negated).count, 2)
+        XCTAssertEqual(try context.mergedIdentifiers(negated).count, 2)
 
         let prefix = "pending"
         let startsWith = FetchDescriptor<OptionalComparisonFixture>(
@@ -2828,7 +2828,7 @@ final class ContextPersistenceTests: XCTestCase {
             }, sortBy: [SortDescriptor(\.count)])
 
         XCTAssertEqual(try context.fetch(descriptor).map(\.title), ["no", "yes", "yes"])
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 3)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor).count, 3)
         XCTAssertEqual(try context.fetchCount(descriptor), 3)
     }
 
@@ -3019,7 +3019,7 @@ final class ContextPersistenceTests: XCTestCase {
         let descriptor = FetchDescriptor<PersistenceTestModel>(
             predicate: #Predicate { (2...7).contains($0.count) }, sortBy: [SortDescriptor(\.count)])
         XCTAssertEqual(try context.fetch(descriptor).map(\.count), [4, 7])
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 2)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor).count, 2)
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
 
         let reversedBounds = FetchDescriptor<PersistenceTestModel>(
@@ -3045,7 +3045,7 @@ final class ContextPersistenceTests: XCTestCase {
             predicate: #Predicate { (2..<7).contains($0.count) }, sortBy: [SortDescriptor(\.count)])
 
         XCTAssertEqual(try context.fetch(descriptor).map(\.count), [2, 6, 6])
-        XCTAssertEqual(try context.fetchIdentifiers(descriptor).count, 3)
+        XCTAssertEqual(try context.mergedIdentifiers(descriptor).count, 3)
         XCTAssertEqual(try context.fetchCount(descriptor), 3)
     }
 
@@ -3083,7 +3083,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(throughDescriptor).map(\.count), [1, 3, 5, 7])
         XCTAssertEqual(try context.fetch(upToDescriptor).map(\.count), [1, 3, 5])
         XCTAssertEqual(try context.fetchCount(upToDescriptor), 3)
-        XCTAssertEqual(try context.fetchIdentifiers(upToDescriptor).count, 3)
+        XCTAssertEqual(try context.mergedIdentifiers(upToDescriptor).count, 3)
     }
 
     @MainActor
@@ -3366,7 +3366,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         context.delete(storedHigh)
         XCTAssertFalse(try context.fetch(limited).contains(where: { $0 === storedHigh }))
-        XCTAssertFalse(try context.fetchIdentifiers(limited).contains(storedHigh.persistentModelID))
+        XCTAssertFalse(try context.mergedIdentifiers(limited).contains(storedHigh.persistentModelID))
         XCTAssertEqual(try context.fetch(descriptor).map(\.title), ["stored-low", "pending-match"])
         XCTAssertEqual(try context.fetchCount(descriptor), 2)
         var invalidOffset = descriptor
@@ -3485,7 +3485,7 @@ final class ContextPersistenceTests: XCTestCase {
             sortBy: [SortDescriptor(\.alpha)])
         XCTAssertEqual(try context.fetch(negatedOrdering).map(\.alpha), [1, 2, 3, 4, 5, 7])
         XCTAssertEqual(try context.fetchCount(negatedOrdering), 6)
-        XCTAssertEqual(try context.fetchIdentifiers(negatedOrdering).count, 6)
+        XCTAssertEqual(try context.mergedIdentifiers(negatedOrdering).count, 6)
     }
 
     @MainActor
@@ -3550,7 +3550,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(ascendingRows.map(\.persistentModelID), expectedAscending.map(\.persistentModelID))
         XCTAssertEqual(try context.fetch(descending).map(\.alpha), [5, 2, 1, 4, 3])
         XCTAssertEqual(try context.fetch(persistedDescending).map(\.alpha), [2, 1, 4])
-        XCTAssertEqual(try context.fetchIdentifiers(ascending), ascendingRows.map(\.persistentModelID))
+        XCTAssertEqual(try context.mergedIdentifiers(ascending), ascendingRows.map(\.persistentModelID))
         XCTAssertEqual(try context.fetch(persistedStringOrder).map(\.alpha), [2, 4, 1])
         let pendingStringOrder = FetchDescriptor<ReverseOrderPersistenceFixture>(
             sortBy: [SortDescriptor(\.zebra)])
@@ -3619,7 +3619,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(descriptor).map(\.alpha), [1, 3, 4, 2])
         XCTAssertEqual(try context.fetch(persistedDescriptor).map(\.alpha), [1, 3, 2])
         XCTAssertEqual(
-            try context.fetchIdentifiers(descriptor),
+            try context.mergedIdentifiers(descriptor),
             try context.fetch(descriptor).map(\.persistentModelID))
     }
 
@@ -3679,7 +3679,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(mergedRows.map(\.title), ["first", "second", "third"])
         XCTAssertEqual(
             mergedRows.map(\.persistentModelID),
-            try pendingReader.fetchIdentifiers(mergedDescriptor))
+            try pendingReader.mergedIdentifiers(mergedDescriptor))
         XCTAssertEqual(try pendingReader.fetchCount(mergedDescriptor), 3)
     }
 

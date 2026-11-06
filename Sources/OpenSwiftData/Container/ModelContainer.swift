@@ -4,10 +4,15 @@ import Foundation
 public final class ModelContainer: Sendable {
     /// The schema managed by this container.
     public let schema: Schema
-    /// The main context associated with this container.
+    /// The main context associated with this container, created on first access.
     @MainActor
-    public lazy var mainContext = ModelContext(
-        container: self, autosaveEnabled: true, affinity: .mainActor)
+    public var mainContext: ModelContext {
+        if let context = mainContextStorage.context { return context }
+        let context = ModelContext(container: self, autosaveEnabled: true, affinity: .mainActor)
+        mainContextStorage.context = context
+        return context
+    }
+    private let mainContextStorage = MainContextStorage()
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
     package let store: (any RuntimeStore)?
@@ -1124,4 +1129,12 @@ public final class ModelContainer: Sendable {
         }
     }
 
+}
+
+/// Holds a container's lazily created main context on the main actor.
+@MainActor
+private final class MainContextStorage {
+    var context: ModelContext?
+
+    nonisolated init() {}
 }

@@ -398,7 +398,7 @@ final class RuntimeAPITests: XCTestCase {
             }
         }
 
-        let integerValue = 1
+        let integerValue: Int? = 1
         let integerDescriptor = FetchDescriptor<OptionalScalarCollectionFixture>(
             predicate: #Predicate { $0.integers.contains(integerValue) })
         XCTAssertThrowsError(try container.mainContext.fetch(integerDescriptor)) { error in

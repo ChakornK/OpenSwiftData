@@ -4944,8 +4944,9 @@ final class PersistentModelTests: XCTestCase {
             (precisionBoundary, 3),
             (maximum, 4),
         ] {
+            let capture: UInt64? = value
             let descriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
-                predicate: #Predicate { $0.values.contains(value) })
+                predicate: #Predicate { $0.values.contains(capture) })
             XCTAssertEqual(
                 try context.fetch(descriptor).map(\.persistentModelID), [rows[expectedIndex].persistentModelID])
             XCTAssertEqual(try context.fetchCount(descriptor), 1)
@@ -4960,8 +4961,9 @@ final class PersistentModelTests: XCTestCase {
 
         let pending = OptionalUInt64CollectionFixture(values: [maximum])
         context.insert(pending)
+        let pendingCapture: UInt64? = maximum
         let pendingDescriptor = FetchDescriptor<OptionalUInt64CollectionFixture>(
-            predicate: #Predicate { $0.values.contains(maximum) })
+            predicate: #Predicate { $0.values.contains(pendingCapture) })
         XCTAssertEqual(
             Set(try context.fetchIdentifiers(pendingDescriptor)),
             Set([rows[4].persistentModelID, pending.persistentModelID]))
@@ -5393,7 +5395,7 @@ final class PersistentModelTests: XCTestCase {
             predicate: #Predicate { $0.requiredStrings.contains(requiredString) })
         XCTAssertEqual(try context.fetch(requiredContains).map(\.name), ["mixed"])
 
-        let stringValue = "needle"
+        let stringValue: String? = "needle"
         let containsStringValue = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { $0.optionalStrings.contains(stringValue) },
             sortBy: [SortDescriptor(\.name)])
@@ -5422,7 +5424,7 @@ final class PersistentModelTests: XCTestCase {
             sortBy: [SortDescriptor(\.name)])
         XCTAssertEqual(try context.fetch(containsFlagNil).map(\.name), ["mixed", "nil-only"])
         XCTAssertEqual(try context.fetchCount(containsFlagNil), 2)
-        let flagValue = true
+        let flagValue: Bool? = true
         let containsFlagValue = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { $0.optionalFlags.contains(flagValue) },
             sortBy: [SortDescriptor(\.name)])
@@ -5475,7 +5477,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertThrowsError(
             try store.read { try $0.rows("SELECT osd_json_array_all_nil(?)", arguments: [.int(0)]) })
 
-        let integerValue = 7
+        let integerValue: Int? = 7
         let containsIntegerValue = FetchDescriptor<OptionalScalarElementsFixture>(
             predicate: #Predicate { $0.optionalNumbers.contains(integerValue) },
             sortBy: [SortDescriptor(\.name)])

@@ -3981,19 +3981,24 @@ package enum LightweightMigration {
             change.destination.type,
             property: "\(destination.name).\(change.destination.name)",
             options: change.destination.options)
-        let changedAttributeIsCompatible =
+        let changedTypeIsCompatible =
             (old.type == "Float" || old.type == "Double")
             && signedIntegerWidth(change.destination.type) != nil
-            && old.name == change.destination.name
-            && old.isOptional == change.destination.isOptional
-            && old.defaultValue == nil
-            && change.destination.defaultValue == nil
-            && old.options.subtracting([.unique]) == change.destination.options.subtracting([.unique])
-            && old.originalName == change.destination.originalName
-            && old.components.isEmpty
-            && change.destination.components.isEmpty
             && sourceColumnType == .float
             && destinationColumnType == .integer
+        let changedIdentityIsCompatible =
+            old.name == change.destination.name
+            && old.isOptional == change.destination.isOptional
+            && old.originalName == change.destination.originalName
+        let changedOptions = change.destination.options.subtracting([.unique])
+        let changedMetadataIsCompatible =
+            old.defaultValue == nil
+            && change.destination.defaultValue == nil
+            && old.options.subtracting([.unique]) == changedOptions
+            && old.components.isEmpty
+            && change.destination.components.isEmpty
+        let changedAttributeIsCompatible =
+            changedTypeIsCompatible && changedIdentityIsCompatible && changedMetadataIsCompatible
         guard changedAttributeIsCompatible else {
             throw SwiftDataError.migrationUnsupported(
                 "Floating-to-integer conversion changed unsupported attribute metadata.")
@@ -6052,22 +6057,27 @@ package enum LightweightMigration {
             destination.entities.allSatisfy({ $0.superentityName == nil }),
             source.entities.allSatisfy({ entity in
                 guard let next = destinationByName[entity.name] else { return false }
-                let hasScalarAdditions = addedAttributesByOwner[entity.name] != nil
-                return
-                    (hasScalarAdditions
-                    ? (entity.attributes.allSatisfy(next.attributes.contains)
-                        && next.attributes.count == entity.attributes.count
-                            + (addedAttributesByOwner[entity.name]?.count ?? 0)
-                        && addedAttributesByOwner[entity.name]?.allSatisfy(next.attributes.contains) == true)
-                    : entity.attributes == next.attributes)
+                let attributesMatch: Bool
+                if let added = addedAttributesByOwner[entity.name] {
+                    let retainsAttributes = entity.attributes.allSatisfy(next.attributes.contains)
+                    let countMatches = next.attributes.count == entity.attributes.count + added.count
+                    attributesMatch =
+                        retainsAttributes && countMatches && added.allSatisfy(next.attributes.contains)
+                } else {
+                    attributesMatch = entity.attributes == next.attributes
+                }
+                let relationshipsMatch: Bool
+                if changedMetadataOwners.contains(entity.name) {
+                    let removed = removedByOwner[entity.name]
+                    let retained = entity.relationships.filter { !(removed?.contains($0) ?? false) }
+                    relationshipsMatch = next.relationships == retained
+                } else {
+                    relationshipsMatch = entity.relationships == next.relationships
+                }
+                return attributesMatch
+                    && relationshipsMatch
                     && entity.indexes == next.indexes
                     && entity.superentityName == next.superentityName
-                    && (changedMetadataOwners.contains(entity.name)
-                        ? next.relationships
-                            == entity.relationships.filter {
-                                !(removedByOwner[entity.name]?.contains($0) ?? false)
-                            }
-                        : entity.relationships == next.relationships)
             })
         else {
             throw SwiftDataError.migrationUnsupported(

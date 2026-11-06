@@ -155,6 +155,11 @@ public final class ModelContext {
         let sortValues: [RuntimeValue]
     }
 
+    /// Creates a context for a model container with autosave enabled.
+    public convenience init(_ container: ModelContainer) {
+        self.init(container: container, autosaveEnabled: true)
+    }
+
     /// Creates a context not associated with a model container.
     public convenience init() {
         self.init(container: nil, autosaveEnabled: false)

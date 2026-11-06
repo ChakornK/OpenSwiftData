@@ -184,7 +184,7 @@ public struct FlattenedPropertyAdapter<Model: PersistentModel, Composite: Flatte
 }
 
 /// A model whose properties are stored in OpenSwiftData backing data.
-public protocol PersistentModel: AnyObject {
+public protocol PersistentModel: AnyObject, Observable, Hashable, Identifiable {
     associatedtype Model: PersistentModel = Self
     /// Type-erased backing used by subclass properties whose key paths are rooted at a derived model type.
     var anyBackingData: any AnyBackingData { get }
@@ -228,6 +228,21 @@ public protocol PersistentModel: AnyObject {
 }
 
 public extension PersistentModel {
+    /// The model's persistent identifier.
+    var id: PersistentIdentifier { persistentModelID }
+
+    /// Returns whether both operands are the same model instance.
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs === rhs }
+
+    /// Hashes the model's current persistent identifier.
+    ///
+    /// The hash changes when saving replaces a temporary identifier with a permanent one, and instances
+    /// of the same row in different contexts hash equally while comparing unequal.
+    func hash(into hasher: inout Hasher) { hasher.combine(persistentModelID) }
+
+    // An explicit witness avoids a synthesized one that fails to link for non-final model classes.
+    var hashValue: Int { persistentModelID.hashValue }
+
     static var parentModel: (any PersistentModel.Type)? { nil }
     func prepareForPersistence() {}
     var anyBackingData: any AnyBackingData {

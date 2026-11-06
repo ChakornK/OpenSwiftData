@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 
 package struct StoreEntityKey: Hashable, Sendable {
     package let entityName: String

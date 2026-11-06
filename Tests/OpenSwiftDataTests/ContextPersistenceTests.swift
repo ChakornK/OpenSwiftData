@@ -10,6 +10,12 @@ final class PersistenceTestModel {
 }
 
 @Model
+final class IdentityMapTypeMismatchFixture {
+    var title: String
+    init(title: String) { self.title = title }
+}
+
+@Model
 final class PredicateDoubleFixture {
     var score: Double
     init(score: Double) { self.score = score }
@@ -4597,6 +4603,16 @@ final class IdentityMapConcurrencyTests: XCTestCase {
         }
 
         XCTAssertEqual(Set(handles.values.map { ObjectIdentifier($0.model) }).count, 1)
+    }
+
+    func testTypeMismatchDoesNotRemoveLiveCanonicalModel() {
+        let map = IdentityMap()
+        let key = EntityPrimaryKey(entityName: "PersistenceTestModel", primaryKey: 42)
+        let model = PersistenceTestModel(title: "canonical")
+        map.register(model, for: key)
+
+        XCTAssertNil(map.model(for: key, as: IdentityMapTypeMismatchFixture.self))
+        XCTAssertTrue(map.model(for: key, as: PersistenceTestModel.self) === model)
     }
 }
 

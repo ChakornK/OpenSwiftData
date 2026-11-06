@@ -104,3 +104,15 @@ final class UndoGroupOperation {
             optimisticLockVersion: snapshot.optimisticLockVersion)
     }
 }
+
+final class UndoOperationHandle: @unchecked Sendable {
+    private let operation: UndoGroupOperation
+
+    init(_ operation: UndoGroupOperation) {
+        self.operation = operation
+    }
+
+    func perform() {
+        operation.perform()
+    }
+}

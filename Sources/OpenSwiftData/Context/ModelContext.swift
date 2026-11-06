@@ -1757,7 +1757,16 @@ public final class ModelContext {
 
     func registerUndoOperation(_ operation: UndoGroupOperation) {
         guard let manager = undoManagerStorage else { return }
-        manager.registerUndo(withTarget: operation) { $0.perform() }
+        #if canImport(ObjectiveC)
+            let handle = UndoOperationHandle(operation)
+            MainActor.assumeIsolated {
+                manager.registerUndo(withTarget: handle) { target in
+                    MainActor.assumeIsolated { target.perform() }
+                }
+            }
+        #else
+            manager.registerUndo(withTarget: operation) { $0.perform() }
+        #endif
     }
 
     func endCurrentUndoGroup() {

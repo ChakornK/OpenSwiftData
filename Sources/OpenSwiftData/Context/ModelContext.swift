@@ -1760,8 +1760,9 @@ public final class ModelContext {
         #if canImport(ObjectiveC)
             let handle = UndoOperationHandle(operation)
             MainActor.assumeIsolated {
-                manager.registerUndo(withTarget: handle) { target in
-                    MainActor.assumeIsolated { target.perform() }
+                // UndoManager does not retain its target, so the handler keeps the handle alive.
+                manager.registerUndo(withTarget: manager) { [handle] _ in
+                    MainActor.assumeIsolated { handle.perform() }
                 }
             }
         #else

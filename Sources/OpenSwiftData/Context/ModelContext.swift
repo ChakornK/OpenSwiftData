@@ -83,6 +83,7 @@ public final class ModelContext {
     private var undoManagerStorage: UndoManager?
     private var undoRegisteredModels = Set<ObjectIdentifier>()
     private var currentUndoGroup: UndoGroupOperation?
+    private var isApplyingUndoGroup = false
     package private(set) var undoManagerGeneration: UInt64 = 0
 
     package nonisolated let state: ContextState
@@ -1702,7 +1703,7 @@ public final class ModelContext {
         _ model: any PersistentModel, snapshot: BackingDataSnapshot,
         retainModel: Bool = false, restoresDeletedRow: Bool = false
     ) {
-        guard undoManagerStorage != nil else { return }
+        guard undoManagerStorage != nil, !isApplyingUndoGroup else { return }
         assertAffinity()
         guard !state.hasTransaction else { return }
         guard
@@ -1791,6 +1792,9 @@ public final class ModelContext {
 
     func applyUndoGroup(_ members: [UndoGroupMember]) -> [UndoGroupMember] {
         assertAffinity()
+        // The calling operation registers its own inverse, so writes made while restoring must not.
+        isApplyingUndoGroup = true
+        defer { isApplyingUndoGroup = false }
         var inverse: [UndoGroupMember] = []
         for member in members {
             guard let model = member.resolvedModel else { continue }

@@ -1397,8 +1397,8 @@ class SubtypeUniqueChildFixture: SubtypeUniqueBaseFixture {
         super.init(token: token)
     }
 
-    #Unique(\SubtypeUniqueChildFixture.tenant, \SubtypeUniqueChildFixture.score)
-    #Index(\SubtypeUniqueChildFixture.score)
+    #Unique<SubtypeUniqueChildFixture>([\.tenant, \.score])
+    #Index<SubtypeUniqueChildFixture>([\.score])
 }
 
 @Model

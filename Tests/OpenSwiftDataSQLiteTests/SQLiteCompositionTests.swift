@@ -11,10 +11,10 @@ private final class IndexedPredicateFixture {
     @Attribute(.unique) var identity: String
     var label: String
 
-    #Index(\IndexedPredicateFixture.rank)
-    #Index(\IndexedPredicateFixture.rank)
-    #Unique(\IndexedPredicateFixture.label)
-    #Unique(\IndexedPredicateFixture.identity)
+    #Index<IndexedPredicateFixture>([\.rank])
+    #Index<IndexedPredicateFixture>([\.rank])
+    #Unique<IndexedPredicateFixture>([\.label])
+    #Unique<IndexedPredicateFixture>([\.identity])
 
     init(rank: Int, identity: String, label: String = "default") {
         self.rank = rank
@@ -27,7 +27,7 @@ private final class IndexedPredicateFixture {
 private final class OptionalIndexedPredicateFixture {
     var value: String?
 
-    #Index(\OptionalIndexedPredicateFixture.value)
+    #Index<OptionalIndexedPredicateFixture>([\.value])
 
     init(value: String?) { self.value = value }
 }

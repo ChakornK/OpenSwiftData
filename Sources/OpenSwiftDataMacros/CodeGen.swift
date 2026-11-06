@@ -35,28 +35,33 @@ enum CodeGen {
         }
     }
 
+    /// Returns one property-name group per directive argument; each argument is an array of key paths.
     static func schemaDirectiveProperties(
         _ node: some FreestandingMacroExpansionSyntax,
         kind: SchemaDirectiveKind
-    ) throws -> [String] {
+    ) throws -> [[String]] {
         let arguments = node.arguments
         guard !arguments.isEmpty else {
-            throw SchemaDirectiveDiagnostic("#\(kind.name) requires at least one direct property key path.")
+            throw SchemaDirectiveDiagnostic("#\(kind.name) requires at least one array of property key paths.")
         }
-        var properties: [String] = []
-        for argument in arguments {
-            guard let keyPath = argument.expression.as(KeyPathExprSyntax.self),
-                keyPath.components.count == 1,
-                let component = keyPath.components.first?.component.as(KeyPathPropertyComponentSyntax.self)
-            else {
-                throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be direct property key paths.")
+        return try arguments.map { argument in
+            guard let array = argument.expression.as(ArrayExprSyntax.self), !array.elements.isEmpty else {
+                throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be non-empty arrays of property key paths.")
             }
-            properties.append(component.declName.baseName.text.trimmingCharacters(in: CharacterSet(charactersIn: "`")))
+            let properties = try array.elements.map { element -> String in
+                guard let keyPath = element.expression.as(KeyPathExprSyntax.self),
+                    keyPath.components.count == 1,
+                    let component = keyPath.components.first?.component.as(KeyPathPropertyComponentSyntax.self)
+                else {
+                    throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be direct property key paths.")
+                }
+                return component.declName.baseName.text.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+            }
+            guard Set(properties).count == properties.count else {
+                throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path in one group.")
+            }
+            return properties
         }
-        guard Set(properties).count == properties.count else {
-            throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path.")
-        }
-        return properties
     }
 
     static func validateSchemaDirectiveTargets(
@@ -83,13 +88,14 @@ enum CodeGen {
             case "Unique": kind = .unique
             default: continue
             }
-            let properties = try schemaDirectiveProperties(directive, kind: kind)
-            try validateSchemaDirectiveTargets(properties, kind: kind, in: declaration)
-            let key = properties.joined(separator: "\u{0}")
-            if kind.isUnique {
-                if seenUnique.insert(key).inserted { uniqueIndexes.append(properties) }
-            } else if seenIndexes.insert(key).inserted {
-                indexes.append(properties)
+            for properties in try schemaDirectiveProperties(directive, kind: kind) {
+                try validateSchemaDirectiveTargets(properties, kind: kind, in: declaration)
+                let key = properties.joined(separator: "\u{0}")
+                if kind.isUnique {
+                    if seenUnique.insert(key).inserted { uniqueIndexes.append(properties) }
+                } else if seenIndexes.insert(key).inserted {
+                    indexes.append(properties)
+                }
             }
         }
         let rows = (uniqueIndexes.map { ($0, true) } + indexes.map { ($0, false) }).map { properties, unique in

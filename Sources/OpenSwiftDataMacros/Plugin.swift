@@ -65,8 +65,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             case "Unique": kind = .unique
             default: continue
             }
-            let properties = try CodeGen.schemaDirectiveProperties(directive, kind: kind)
-            try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
+            for properties in try CodeGen.schemaDirectiveProperties(directive, kind: kind) {
+                try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
+            }
         }
         diagnoseConflictingPropertyMacros(in: classDeclaration, context: context)
         let members = CodeGen.memberSources(

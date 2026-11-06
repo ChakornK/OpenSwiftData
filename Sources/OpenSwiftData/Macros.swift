@@ -59,11 +59,13 @@ public macro Relationship(
 ) = #externalMacro(module: "OpenSwiftDataMacros", type: "RelationshipMacro")
 @attached(peer)
 public macro Transient() = #externalMacro(module: "OpenSwiftDataMacros", type: "TransientMacro")
+/// Declares uniqueness constraints; each array names properties whose combined values must be unique.
 @freestanding(declaration)
-public macro Unique<Model>(_ keyPaths: PartialKeyPath<Model>...) =
+public macro Unique<T: PersistentModel>(_ constraints: [PartialKeyPath<T>]...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "UniqueMacro")
+/// Declares indexes; each array names the properties of one index, in column order.
 @freestanding(declaration)
-public macro Index<Model>(_ keyPaths: PartialKeyPath<Model>...) =
+public macro Index<T: PersistentModel>(_ indices: [PartialKeyPath<T>]...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "IndexMacro")
 @attached(member, names: arbitrary)
 @attached(extension, conformances: ModelActor)

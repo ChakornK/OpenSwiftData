@@ -347,19 +347,26 @@ final class CodeGenTests: XCTestCase {
     }
 
     func testUniqueAndIndexDirectiveSourcesPreserveColumnOrder() throws {
-        let unique = try parseDirective("#Unique(\\Model.second, \\Model.first)")
-        let index = try parseDirective("#Index(\\Model.first, \\Model.second)")
+        let unique = try parseDirective("#Unique<Model>([\\.second, \\.first])")
+        let index = try parseDirective("#Index<Model>([\\Model.first, \\Model.second], [\\.third])")
 
-        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(unique, kind: .unique), ["second", "first"])
-        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(index, kind: .index), ["first", "second"])
+        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(unique, kind: .unique), [["second", "first"]])
+        XCTAssertEqual(
+            try CodeGen.schemaDirectiveProperties(index, kind: .index), [["first", "second"], ["third"]])
     }
 
     func testSchemaDirectiveSourcesRejectNestedAndRepeatedKeyPaths() throws {
-        let nested = try parseDirective("#Unique(\\Model.child.value)")
+        let nested = try parseDirective("#Unique<Model>([\\.child.value])")
         XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(nested, kind: .unique))
 
-        let repeated = try parseDirective("#Index(\\Model.value, \\Model.value)")
+        let repeated = try parseDirective("#Index<Model>([\\.value, \\.value])")
         XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(repeated, kind: .index))
+
+        let bare = try parseDirective("#Index<Model>(\\.value)")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(bare, kind: .index))
+
+        let empty = try parseDirective("#Unique<Model>([])")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(empty, kind: .unique))
     }
 
     func testModelIndexDirectivesGenerateSchemaIndexesInDeclarationOrder() throws {
@@ -368,8 +375,8 @@ final class CodeGenTests: XCTestCase {
             final class Record {
                 var first: String
                 var second: Int
-                #Index(\\Record.second, \\Record.first)
-                #Unique(\\Record.first)
+                #Index<Record>([\\.second, \\.first])
+                #Unique<Record>([\\.first])
             }
             """)
         let generated = CodeGen.memberSources(
@@ -393,26 +400,27 @@ final class CodeGenTests: XCTestCase {
             final class Record {
                 var value: Int
                 var computed: Int { value }
-                #Index(\\Record.computed)
+                #Index<Record>([\\.computed])
             }
             """)
         let directive = try XCTUnwrap(
             declaration.memberBlock.members.compactMap { $0.decl.as(MacroExpansionDeclSyntax.self) }.first)
         let properties = try CodeGen.schemaDirectiveProperties(directive, kind: .index)
-        XCTAssertThrowsError(try CodeGen.validateSchemaDirectiveTargets(properties, kind: .index, in: declaration))
+        XCTAssertThrowsError(
+            try CodeGen.validateSchemaDirectiveTargets(properties[0], kind: .index, in: declaration))
 
         let unknown = try parseClass(
             """
             final class Other {
                 var value: Int
-                #Index(\\Other.missing)
+                #Index<Other>([\\.missing])
             }
             """)
         let unknownDirective = try XCTUnwrap(
             unknown.memberBlock.members.compactMap { $0.decl.as(MacroExpansionDeclSyntax.self) }.first)
         let unknownProperties = try CodeGen.schemaDirectiveProperties(unknownDirective, kind: .index)
         XCTAssertThrowsError(
-            try CodeGen.validateSchemaDirectiveTargets(unknownProperties, kind: .index, in: unknown))
+            try CodeGen.validateSchemaDirectiveTargets(unknownProperties[0], kind: .index, in: unknown))
     }
 
     func testTripMemberSourcesMatchVariantAExactly() throws {

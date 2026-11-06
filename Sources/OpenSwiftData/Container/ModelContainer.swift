@@ -52,7 +52,14 @@ public final class ModelContainer: Sendable {
     /// Creates a container for the schema inferred from model types and configurations.
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
-    public init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
+    public convenience init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
+        try self.init(inferredSchema: Self.inferredSchema(for: types), configurations: configurations)
+    }
+
+    /// Infers a schema from model types and their ancestors, capturing the types for materialization.
+    package static func inferredSchema(
+        for types: [any PersistentModel.Type], version: Schema.Version? = nil
+    ) throws -> Schema {
         let types = Self.modelTypesIncludingAncestors(of: types)
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         var uniqueEntityNames = Set<String>()
@@ -369,8 +376,17 @@ public final class ModelContainer: Sendable {
                 name: entity.name, attributes: entity.attributes, relationships: relationships,
                 indexes: entity.indexes, superentityName: entity.superentityName)
         }
-        let schema = Schema(inferredEntities)
+        var schema = Schema(inferredEntities, version: version)
         try schema.validateRelationshipStorageMappings()
+        schema.modelTypes = Schema.ModelTypes(types: types)
+        return schema
+    }
+
+    /// Creates a container for a schema produced by `inferredSchema(for:version:)`.
+    private init(inferredSchema schema: Schema, configurations: [ModelConfiguration]) throws {
+        if let error = schema.modelTypes.inferenceError { throw error }
+        let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
+        let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
         let runtimeSchema: Schema
@@ -421,7 +437,16 @@ public final class ModelContainer: Sendable {
     /// Creates a container for an existing schema.
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
-    public init(for schema: Schema, configurations: [ModelConfiguration]) throws {
+    public convenience init(for schema: Schema, configurations: [ModelConfiguration]) throws {
+        if !schema.modelTypes.types.isEmpty || schema.modelTypes.inferenceError != nil {
+            try self.init(inferredSchema: schema, configurations: configurations)
+        } else {
+            try self.init(descriptionOnly: schema, configurations: configurations)
+        }
+    }
+
+    /// Creates a container for a hand-built schema that names no model types.
+    private init(descriptionOnly schema: Schema, configurations: [ModelConfiguration]) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)

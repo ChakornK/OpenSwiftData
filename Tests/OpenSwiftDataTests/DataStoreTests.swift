@@ -161,7 +161,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         let offset = request.descriptor.fetchOffset ?? 0
         rows = Array(rows.dropFirst(offset))
         if let limit = request.descriptor.fetchLimit { rows = Array(rows.prefix(limit)) }
-        guard let keyPaths = request.descriptor.propertiesToFetch else {
+        guard case let keyPaths = request.descriptor.propertiesToFetch, !keyPaths.isEmpty else {
             lastFetchedValueKeys = rows.first.map { Set($0.values.keys) }
             return DataStoreFetchResult(snapshots: rows)
         }

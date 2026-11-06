@@ -6500,7 +6500,6 @@ final class PersistentModelTests: XCTestCase {
         let firstOwners = try XCTUnwrap(
             reader.fetch(
                 FetchDescriptor<InheritedManyToManyTagFixture>(
-                    propertiesToFetch: nil,
                     relationshipKeyPathsForPrefetching: [\InheritedManyToManyTagFixture.owners])
             )
             .first(where: { $0.title == "first" }))

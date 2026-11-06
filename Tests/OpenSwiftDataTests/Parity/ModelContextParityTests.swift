@@ -110,3 +110,40 @@ import Testing
         #expect(!context.hasChanges)
     }
 }
+
+/// `FetchDescriptor` shape, matching Apple's SwiftData.
+@Suite struct FetchDescriptorParityTests {
+    @Test func `defaults match SwiftData`() {
+        let descriptor = FetchDescriptor<ContextParityThing>()
+        #expect(descriptor.predicate == nil)
+        #expect(descriptor.sortBy.isEmpty)
+        #expect(descriptor.fetchLimit == nil)
+        #expect(descriptor.fetchOffset == nil)
+        #expect(descriptor.includePendingChanges)
+        #expect(descriptor.propertiesToFetch.isEmpty)
+        #expect(descriptor.relationshipKeyPathsForPrefetching.isEmpty)
+    }
+
+    @Test func `properties to fetch is a mutable array`() {
+        var descriptor = FetchDescriptor<ContextParityThing>()
+        descriptor.propertiesToFetch.append(\.name)
+        #expect(descriptor.propertiesToFetch == [\ContextParityThing.name])
+    }
+
+    @Test func `descriptors compare every option`() {
+        let base = FetchDescriptor<ContextParityThing>(
+            predicate: #Predicate { $0.name == "a" }, sortBy: [SortDescriptor(\.name)])
+        let same = FetchDescriptor<ContextParityThing>(
+            predicate: #Predicate { $0.name == "a" }, sortBy: [SortDescriptor(\.name)])
+        let different = FetchDescriptor<ContextParityThing>(
+            predicate: #Predicate { $0.name == "b" }, sortBy: [SortDescriptor(\.name)])
+        #expect(base == same)
+        #expect(base != different)
+        var limited = base
+        limited.fetchLimit = 1
+        #expect(base != limited)
+        var pending = base
+        pending.includePendingChanges = false
+        #expect(base != pending)
+    }
+}

@@ -815,7 +815,7 @@ public final class ModelContext {
         }
         guard let store = container.store else { throw unsupportedStore("Fetch") }
         let allAttributes = canonicalAttributes(for: entity)
-        let requestedProperties = try selectedAttributes(descriptor.propertiesToFetch, entity: entity, type: Model.self)
+        let requestedProperties = try selectedAttributes(descriptor.selectedProperties, entity: entity, type: Model.self)
         let selectedAttributesForMaterialization =
             hasHierarchy
             ? try hierarchyAttributes(for: entity)
@@ -947,7 +947,7 @@ public final class ModelContext {
         if let offset = descriptor.fetchOffset, offset < 0 {
             throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
         }
-        let requestedAttributeNames = try descriptor.propertiesToFetch.map {
+        let requestedAttributeNames = try descriptor.selectedProperties.map {
             Set(try selectedAttributes($0, entity: entity, type: Model.self))
         }
         if hasHierarchy, !descriptor.sortBy.isEmpty {

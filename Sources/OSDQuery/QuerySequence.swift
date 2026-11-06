@@ -71,6 +71,23 @@ public struct QuerySequence: AsyncSequence {
             self.refresh = refresh
         }
 
+        /// Returns the initial result snapshot or the next relevant identifier diff without caller isolation.
+        @_disfavoredOverload
+        public mutating func next() async throws -> QueryUpdate? {
+            try await next(isolation: nil)
+        }
+
+        private mutating func nextChange(isolation actor: isolated (any Actor)?) async -> ChangeSet? {
+            if #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) {
+                return await changes.next(isolation: actor)
+            }
+            // AsyncStream synchronizes its buffer internally, and only this iterator consumes the copy.
+            nonisolated(unsafe) var iterator = changes
+            let change = await iterator.next()
+            changes = iterator
+            return change
+        }
+
         /// Returns the initial result snapshot or the next relevant identifier diff.
         public mutating func next(isolation actor: isolated (any Actor)? = #isolation) async throws -> QueryUpdate? {
             guard !isTerminated else { return nil }
@@ -93,7 +110,7 @@ public struct QuerySequence: AsyncSequence {
                 }
             }
 
-            while let change = await changes.next(isolation: actor) {
+            while let change = await nextChange(isolation: actor) {
                 try Task.checkCancellation()
                 guard change.storeIdentifier == storeIdentifier else { continue }
                 let relevant =

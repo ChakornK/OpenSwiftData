@@ -1,5 +1,4 @@
 import Foundation
-import OpenSwiftData
 import OSDCore
 import OSDStorage
 
@@ -325,9 +324,9 @@ private enum SQLiteExternalColumnBinding {
 
 }
 
-/// SQLite store composition for OpenSwiftData containers.
-public enum OpenSwiftDataSQLite {
-    static let sqliteVersionReader: RuntimeSchemaVersionReader = { location in
+/// The built-in SQLite store provider used by default and SQLite configurations.
+package enum SQLiteStoreProvider {
+    package static let versionReader: RuntimeSchemaVersionReader = { location in
         let driverLocation: StoreLocation =
             switch location {
             case let .memory(name): .memory(name: name)
@@ -338,7 +337,7 @@ public enum OpenSwiftDataSQLite {
         return try driver.read { try LightweightMigration.storedSchemaVersion(connection: $0) }
     }
 
-    static let sqliteSchemaCompatibilityReader: RuntimeSchemaCompatibilityReader = { location, schema in
+    package static let schemaCompatibilityReader: RuntimeSchemaCompatibilityReader = { location, schema in
         let driverLocation: StoreLocation =
             switch location {
             case let .memory(name): .memory(name: name)
@@ -349,7 +348,7 @@ public enum OpenSwiftDataSQLite {
         return try driver.read { try LightweightMigration.storedSchemaMatches(schema, connection: $0) }
     }
 
-    static let sqliteFactory: RuntimeStoreFactory = { location, schema in
+    package static let factory: RuntimeStoreFactory = { location, schema in
         let driverLocation: StoreLocation =
             switch location {
             case let .memory(name): .memory(name: name)
@@ -379,29 +378,5 @@ public enum OpenSwiftDataSQLite {
             try? driver.close()
             throw error
         }
-    }
-}
-
-extension ModelConfiguration {
-    /// Creates a SQLite-backed configuration for memory storage.
-    public static func sqliteMemory(_ name: String = "default", allowsSave: Bool = true) -> Self {
-        Self(
-            name, isStoredInMemoryOnly: true, allowsSave: allowsSave,
-            storeFactory: OpenSwiftDataSQLite.sqliteFactory,
-            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader,
-            schemaCompatibilityReader: OpenSwiftDataSQLite.sqliteSchemaCompatibilityReader)
-    }
-
-    /// Creates a SQLite-backed configuration at an explicit URL.
-    public static func sqliteFile(
-        _ name: String = "default",
-        url: URL,
-        allowsSave: Bool = true
-    ) -> Self {
-        Self(
-            name, url: url, allowsSave: allowsSave,
-            storeFactory: OpenSwiftDataSQLite.sqliteFactory,
-            schemaVersionReader: OpenSwiftDataSQLite.sqliteVersionReader,
-            schemaCompatibilityReader: OpenSwiftDataSQLite.sqliteSchemaCompatibilityReader)
     }
 }

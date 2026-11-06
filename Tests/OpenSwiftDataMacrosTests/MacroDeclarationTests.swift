@@ -41,7 +41,8 @@ final class MacroDeclarationTests: XCTestCase {
 
     @MainActor
     func testQualifiedRelationshipMacroGeneratesRelationshipMetadata() throws {
-        let container = try ModelContainer(for: QualifiedRelationshipMacroFixture.self, OtherModel.self)
+        let container = try ModelContainer(
+            for: [QualifiedRelationshipMacroFixture.self, OtherModel.self], configurations: [])
         let relationship = try XCTUnwrap(
             container.schema.entity(forName: "QualifiedRelationshipMacroFixture")?.relationships.first)
         XCTAssertEqual(relationship.name, "target")
@@ -73,7 +74,7 @@ final class MacroDeclarationTests: XCTestCase {
 
     @MainActor
     func testModelActorMacroCreatesExecutorAndContext() async throws {
-        let container = try ModelContainer(for: ExampleModel.self)
+        let container = try ModelContainer(for: [ExampleModel.self], configurations: [])
         let actor = ExampleModelActor(modelContainer: container)
         let usesContainer = await actor.uses(container)
         XCTAssertTrue(usesContainer)

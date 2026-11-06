@@ -17,7 +17,7 @@ var targets: [Target] = [
     ),
     .target(
         name: "OpenSwiftData",
-        dependencies: ["OSDCore", "OpenSwiftDataMacros"]
+        dependencies: ["OSDCore", "OSDStorage", "OpenSwiftDataMacros"]
     ),
     .target(
         name: "OSDStorage",

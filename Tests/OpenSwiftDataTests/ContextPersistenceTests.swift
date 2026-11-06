@@ -2684,7 +2684,7 @@ final class ContextPersistenceTests: XCTestCase {
         let foreignDescriptor = FetchDescriptor<PersistenceTestModel>(
             predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == foreignIdentifier })
         let wrongEntityIdentifier = PersistentIdentifier(
-            storeIdentifier: identifier.storeIdentifier, entityName: "OtherEntity", primaryKey: 1)
+            storeIdentifier: identifier.resolvedStoreIdentifier, entityName: "OtherEntity", primaryKey: 1)
         let wrongEntityDescriptor = FetchDescriptor<PersistenceTestModel>(
             predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == wrongEntityIdentifier })
         let encodedIdentifier = try JSONEncoder().encode(identifier)
@@ -2726,7 +2726,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetch(decodedDescriptor).map(\.title), ["match"])
 
         let temporaryIdentifier = PersistentIdentifier(
-            storeIdentifier: identifier.storeIdentifier,
+            storeIdentifier: identifier.resolvedStoreIdentifier,
             entityName: identifier.entityName,
             temporaryIdentifier: try XCTUnwrap(
                 UUID(uuidString: "00000000-0000-0000-0000-000000000099")))
@@ -4020,7 +4020,8 @@ final class ContextPersistenceTests: XCTestCase {
 
         XCTAssertNil(model.modelContext)
         XCTAssertEqual(model.persistentModelID, detachedID)
-        XCTAssertEqual(model.persistentModelID.storeIdentifier, "OSD.Detached")
+        XCTAssertNil(model.persistentModelID.storeIdentifier)
+        XCTAssertEqual(model.persistentModelID.resolvedStoreIdentifier, "OSD.Detached")
         XCTAssertTrue(model.persistentModelID.isTemporary)
         XCTAssertEqual(model.title, "pending")
         XCTAssertFalse(model.hasChanges)

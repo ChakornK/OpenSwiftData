@@ -10,7 +10,8 @@ final class PersistentIdentifierTests: XCTestCase {
             temporaryIdentifier: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
         )
 
-        XCTAssertEqual(identifier.storeIdentifier, "store-A")
+        XCTAssertNil(identifier.storeIdentifier)
+        XCTAssertEqual(identifier.resolvedStoreIdentifier, "store-A")
         XCTAssertEqual(identifier.entityName, "Trip")
         XCTAssertNil(identifier.primaryKey)
         XCTAssertEqual(identifier.temporaryIdentifier?.uuidString, "00112233-4455-6677-8899-AABBCCDDEEFF")
@@ -53,7 +54,9 @@ final class PersistentIdentifierTests: XCTestCase {
 
         XCTAssertEqual(firstTemporary, sameTemporary)
         XCTAssertEqual(Set([firstTemporary, sameTemporary]).count, 1)
-        XCTAssertNotEqual(firstTemporary, otherStore)
+        // Temporary UUIDs are unique on their own, matching SwiftData, which encodes them without a store.
+        XCTAssertEqual(firstTemporary, otherStore)
+        XCTAssertEqual(firstTemporary.hashValue, otherStore.hashValue)
         XCTAssertNotEqual(firstTemporary, otherEntity)
         XCTAssertNotEqual(firstTemporary, permanent)
     }
@@ -81,7 +84,8 @@ final class PersistentIdentifierTests: XCTestCase {
         let permanent = PersistentIdentifier(storeIdentifier: "store-A", entityName: "Trip", primaryKey: 17)
         XCTAssertEqual(
             String(decoding: try encoder.encode(permanent), as: UTF8.self),
-            "{\"entityName\":\"Trip\",\"kind\":\"primaryKey\",\"payload\":{\"primaryKey\":{\"value\":17}},\"storeIdentifier\":\"store-A\"}"
+            "{\"implementation\":{\"entityName\":\"Trip\",\"isTemporary\":false,\"primaryKey\":\"p17\","
+                + "\"storeIdentifier\":\"store-A\",\"uriRepresentation\":\"x-coredata:\\/\\/store-A\\/Trip\\/p17\"}}"
         )
 
         let temporary = PersistentIdentifier(
@@ -91,7 +95,9 @@ final class PersistentIdentifierTests: XCTestCase {
         )
         XCTAssertEqual(
             String(decoding: try encoder.encode(temporary), as: UTF8.self),
-            "{\"entityName\":\"Trip\",\"kind\":\"temporary\",\"payload\":{\"temporaryIdentifier\":{\"value\":\"00112233-4455-6677-8899-AABBCCDDEEFF\"}},\"storeIdentifier\":\"store-A\"}"
+            "{\"implementation\":{\"entityName\":\"Trip\",\"isTemporary\":true,"
+                + "\"primaryKey\":\"00112233-4455-6677-8899-AABBCCDDEEFF\","
+                + "\"uriRepresentation\":\"x-swiftdata:\\/\\/Trip\\/00112233-4455-6677-8899-AABBCCDDEEFF\"}}"
         )
     }
 

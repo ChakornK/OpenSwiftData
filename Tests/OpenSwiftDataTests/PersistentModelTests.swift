@@ -7003,7 +7003,7 @@ final class PersistentModelTests: XCTestCase {
             for: grandchildIdentifier)
         XCTAssertTrue(resolvedGrandchildAsChild is InheritanceMacroGrandchildFixture)
         let mismatchedIdentifier = PersistentIdentifier(
-            storeIdentifier: childIdentifier.storeIdentifier,
+            storeIdentifier: childIdentifier.resolvedStoreIdentifier,
             entityName: "InheritanceMacroChildFixture",
             primaryKey: try XCTUnwrap(grandchildIdentifier.primaryKey))
         let mismatchedModel: InheritanceMacroChildFixture? = try identifierReader.model(for: mismatchedIdentifier)

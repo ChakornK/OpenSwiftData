@@ -114,7 +114,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
             }
             let backing = ManagedBackingData<Model.Model>(
                 metadata: metadata, values: values, context: context,
-                storeIdentifier: identifier.storeIdentifier,
+                storeIdentifier: identifier.resolvedStoreIdentifier,
                 entityID: entityID,
                 primaryKey: identifier.primaryKey, version: 0, identifier: identifier)
             let model = Model(backingData: backing)

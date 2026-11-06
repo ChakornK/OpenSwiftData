@@ -1048,7 +1048,7 @@ public final class ModelContext {
     ) throws -> Int64 {
         guard snapshot.entityName == entity.name,
             snapshot.persistentIdentifier.entityName == entity.name,
-            snapshot.persistentIdentifier.storeIdentifier == store.identifier,
+            snapshot.persistentIdentifier.resolvedStoreIdentifier == store.identifier,
             let primaryKey = snapshot.persistentIdentifier.primaryKey
         else {
             throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with an incompatible identifier.")
@@ -1378,7 +1378,7 @@ public final class ModelContext {
             return try model(for: permanent)
         }
         if let container, container.store != nil,
-            identifier.storeIdentifier == storeIdentifier,
+            identifier.resolvedStoreIdentifier == storeIdentifier,
             let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
             let concreteEntity = container.schema.entity(forName: identifier.entityName),
             requestedEntity.name != concreteEntity.name
@@ -1426,7 +1426,7 @@ public final class ModelContext {
                     entity: concreteEntity,
                     attributes: attributes,
                     row: materializationRow,
-                    storeIdentifier: identifier.storeIdentifier,
+                    storeIdentifier: identifier.resolvedStoreIdentifier,
                     entityID: concreteID,
                     primaryKey: key,
                     version: version)
@@ -1450,7 +1450,7 @@ public final class ModelContext {
             return compatible
         }
         guard let container,
-            identifier.storeIdentifier == storeIdentifier,
+            identifier.resolvedStoreIdentifier == storeIdentifier,
             let entity = container.schema.entity(forName: identifier.entityName),
             let modelEntity = container.schema.entity(forName: String(describing: Model.self)),
             isEntity(entity.name, descendantOf: modelEntity.name)
@@ -1503,7 +1503,7 @@ public final class ModelContext {
         }
         guard let row = rows.first else { return nil }
         let candidate = try materialize(
-            Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: identifier.storeIdentifier,
+            Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: identifier.resolvedStoreIdentifier,
             primaryKey: key, version: row.count > 1 ? runtimeInt(row[1]) : 0)
         let model =
             identityMap.canonicalHandle(
@@ -1523,7 +1523,7 @@ public final class ModelContext {
         assertAffinity()
         guard let container,
             let key = identifier.primaryKey,
-            identifier.storeIdentifier == storeIdentifier,
+            identifier.resolvedStoreIdentifier == storeIdentifier,
             let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
             let concreteEntity = container.schema.entity(forName: identifier.entityName),
             let concreteEntityID = container.schema.entityIDsByName[concreteEntity.name],
@@ -3819,9 +3819,9 @@ public final class ModelContext {
         }
         guard
             (inserted + updated).allSatisfy({
-                $0.persistentIdentifier.storeIdentifier == dataStore.identifier
+                $0.persistentIdentifier.resolvedStoreIdentifier == dataStore.identifier
                     && container.schema.entity(forName: $0.entityName) != nil
-            }), deleted.allSatisfy({ $0.storeIdentifier == dataStore.identifier })
+            }), deleted.allSatisfy({ $0.resolvedStoreIdentifier == dataStore.identifier })
         else {
             throw SwiftDataError.unsupportedStore("DataStore save request contains identifiers from another store.")
         }
@@ -3834,7 +3834,7 @@ public final class ModelContext {
                 source.isTemporary,
                 !destination.isTemporary,
                 source.entityName == destination.entityName,
-                destination.storeIdentifier == dataStore.identifier,
+                destination.resolvedStoreIdentifier == dataStore.identifier,
                 !insertedIdentifiers.contains(destination)
             )
         }
@@ -3883,9 +3883,9 @@ public final class ModelContext {
         let mappingsAreUnique = Set(allPermanentIdentifiers).count == allPermanentIdentifiers.count
         let mappingsAreValid = result.identifierRemappings.allSatisfy({ source, destination in
             source.isTemporary && !destination.isTemporary
-                && source.storeIdentifier == dataStore.identifier
+                && source.resolvedStoreIdentifier == dataStore.identifier
                 && source.entityName == destination.entityName
-                && destination.storeIdentifier == dataStore.identifier
+                && destination.resolvedStoreIdentifier == dataStore.identifier
         })
         guard mappingsCoverInserts, updatesAcknowledged, deletionsAcknowledged, mappingsAreUnique,
             mappingsAreValid
@@ -3915,7 +3915,7 @@ public final class ModelContext {
                 || result.identifierRemappings[requestIdentifier] != nil
             {
                 model.markPersistedLifecycle(
-                    storeIdentifier: identifier.storeIdentifier, entityName: identifier.entityName,
+                    storeIdentifier: identifier.resolvedStoreIdentifier, entityName: identifier.entityName,
                     entityID: try entityID(for: identifier.entityName),
                     primaryKey: primaryKey, version: 1)
             } else {

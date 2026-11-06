@@ -517,7 +517,7 @@ final class RuntimeAPITests: XCTestCase {
         XCTAssertTrue(model.hasChanges)
         XCTAssertFalse(model.isDeleted)
         XCTAssertTrue(model.modelContext === context)
-        XCTAssertEqual(model.persistentModelID.storeIdentifier, "OSD.InMemory.\(ObjectIdentifier(context))")
+        XCTAssertEqual(model.persistentModelID.resolvedStoreIdentifier, "OSD.InMemory.\(ObjectIdentifier(context))")
         XCTAssertEqual(model.persistentModelID.temporaryIdentifier, originalIdentifier.temporaryIdentifier)
         XCTAssertTrue(context.insertedModelsArray.contains { $0 === model })
         XCTAssertTrue(context.hasChanges)

@@ -403,10 +403,10 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, Any
         lock.lock()
         if let primaryKey = identifier.primaryKey {
             identifier = PersistentIdentifier(
-                storeIdentifier: identifier.storeIdentifier, entityName: entityName, primaryKey: primaryKey)
+                storeIdentifier: identifier.resolvedStoreIdentifier, entityName: entityName, primaryKey: primaryKey)
         } else if let temporaryIdentifier = identifier.temporaryIdentifier {
             identifier = PersistentIdentifier(
-                storeIdentifier: identifier.storeIdentifier,
+                storeIdentifier: identifier.resolvedStoreIdentifier,
                 entityName: entityName,
                 temporaryIdentifier: temporaryIdentifier)
         }

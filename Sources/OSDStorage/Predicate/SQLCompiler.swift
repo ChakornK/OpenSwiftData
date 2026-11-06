@@ -215,7 +215,7 @@ package enum SQLCompiler {
             let primaryKey = identifier.primaryKey.map(StoredValue.int) ?? .null
             let sameStore = PredicateIR.comparison(
                 .equal,
-                .value(.text(identifier.storeIdentifier)),
+                .value(.text(identifier.resolvedStoreIdentifier)),
                 .value(.text(storeIdentifier)))
             let sameEntity = PredicateIR.comparison(
                 .equal,

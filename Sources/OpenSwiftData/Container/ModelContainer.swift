@@ -15,6 +15,9 @@ public final class ModelContainer: Sendable {
     private let mainContextStorage = MainContextStorage()
     /// The configurations used by the container.
     public let configurations: [ModelConfiguration]
+    /// The migration plan the container ran when it opened, if any.
+    public var migrationPlan: (any SchemaMigrationPlan.Type)? { migrationPlanStorage.plan }
+    private let migrationPlanStorage = MigrationPlanStorage()
     package let store: (any RuntimeStore)?
     package let dataStore: (any DataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
@@ -34,12 +37,22 @@ public final class ModelContainer: Sendable {
         modelTypesByEntityID[identifier]
     }
 
-    /// Creates a container for the schema inferred from model types.
+    /// Creates a container for the schema inferred from model types, migrating the store first when a plan is given.
     ///
     /// Omitting `configurations` opens the implicit default store, a SQLite file named
     /// `default.store` in the Application Support directory.
-    public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
-        try self.init(for: types, configurations: Self.configurationsOrDefault(configurations))
+    public convenience init(
+        for types: any PersistentModel.Type...,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: ModelConfiguration...
+    ) throws {
+        let configurations = try Self.configurationsOrDefault(configurations)
+        if let migrationPlan {
+            try self.init(migrating: types, plan: migrationPlan, configurations: configurations)
+        } else {
+            try self.init(for: types, configurations: configurations)
+        }
+        migrationPlanStorage.plan = migrationPlan
     }
 
     /// Creates a container for the schema inferred from model types, backed by the implicit default store.
@@ -427,17 +440,37 @@ public final class ModelContainer: Sendable {
         relationshipAdapterTable = adaptersByModel
     }
 
-    /// Creates a container for an existing schema, backed by the implicit default store.
+    /// Creates a container for an existing schema, migrating the store first when a plan is given.
     ///
-    /// The default store is a SQLite file named `default.store` in the Application Support directory.
-    public convenience init(for schema: Schema) throws {
-        try self.init(for: schema, configurations: [ModelConfiguration.implicitDefault()])
+    /// Omitting `configurations` opens the implicit default store, a SQLite file named
+    /// `default.store` in the Application Support directory.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: ModelConfiguration...
+    ) throws {
+        try self.init(
+            for: schema, migrationPlan: migrationPlan, configurations: Self.configurationsOrDefault(configurations))
     }
 
-    /// Creates a container for an existing schema.
+    /// Creates a container for an existing schema, migrating the store first when a plan is given.
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
-    public convenience init(for schema: Schema, configurations: [ModelConfiguration]) throws {
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: [ModelConfiguration]
+    ) throws {
+        if let migrationPlan {
+            let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
+            try self.init(migrating: types, plan: migrationPlan, configurations: configurations)
+            migrationPlanStorage.plan = migrationPlan
+        } else {
+            try self.init(schemaOnly: schema, configurations: configurations)
+        }
+    }
+
+    private convenience init(schemaOnly schema: Schema, configurations: [ModelConfiguration]) throws {
         if !schema.modelTypes.types.isEmpty || schema.modelTypes.inferenceError != nil {
             try self.init(inferredSchema: schema, configurations: configurations)
         } else {
@@ -521,15 +554,12 @@ public final class ModelContainer: Sendable {
         relationshipAdapterTable = adaptersByModel
     }
 
-    /// Creates a container using a migration plan.
-    ///
-    /// Omitting `configurations` migrates and opens the implicit default store.
-    public convenience init<Plan: SchemaMigrationPlan>(
-        for types: any PersistentModel.Type...,
-        migrationPlan: Plan.Type,
-        configurations: ModelConfiguration...
+    /// Migrates the configured stores through a plan, then opens them with the plan's latest schema.
+    private convenience init(
+        migrating types: [any PersistentModel.Type],
+        plan migrationPlan: any SchemaMigrationPlan.Type,
+        configurations: [ModelConfiguration]
     ) throws {
-        let configurations = try Self.configurationsOrDefault(configurations)
         let descriptor = try MigrationPlanDescriptor(migrationPlan)
         guard let destination = descriptor.schemas.last else {
             throw SwiftDataError.migrationUnsupported("Migration plan contains no schemas.")
@@ -611,7 +641,17 @@ public final class ModelContainer: Sendable {
                 throw SwiftDataError.migrationUnsupported(
                     "Stored schema does not match recorded version '\(version.identifier)'.")
             }
-            startIndex = try migrationStartIndex(for: versionState, in: plan)
+            var resolvedState = versionState
+            // A store created without a plan records no version; identify it by matching its stored layout
+            // against the plan's schemas, preferring the newest match.
+            if case .unversioned = versionState, let verifyStoredSchema = configuration.schemaCompatibilityReader,
+                let index = try plan.schemas.indices.reversed().first(where: {
+                    try verifyStoredSchema(Self.storeLocation(for: configuration), plan.schemas[$0].schema)
+                })
+            {
+                resolvedState = .version(plan.schemas[index].version)
+            }
+            startIndex = try migrationStartIndex(for: resolvedState, in: plan)
         }
 
         guard startIndex < plan.schemas.count - 1 else { return finalPendingMigration }
@@ -1182,4 +1222,9 @@ private final class MainContextStorage {
     var context: ModelContext?
 
     nonisolated init() {}
+}
+
+/// Holds a container's migration plan, written once while the container initializes.
+private final class MigrationPlanStorage: @unchecked Sendable {
+    var plan: (any SchemaMigrationPlan.Type)?
 }

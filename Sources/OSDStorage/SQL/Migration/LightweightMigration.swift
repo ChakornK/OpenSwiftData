@@ -207,7 +207,7 @@ package enum LightweightMigration {
                     throw error
                 }
             } else {
-                try writeSchemaVersion(destination.version, connection: connection)
+                try writeSchemaVersion(destination.declaredVersion, connection: connection)
                 try writeEntityIDHighWatermark(
                     max(
                         minimumNextEntityID,
@@ -571,7 +571,7 @@ package enum LightweightMigration {
         try writeEntityIDHighWatermark(
             max(minimumNextEntityID ?? 1, try nextEntityIdentifier(after: schema.entityIDsByName.values)),
             connection: connection)
-        try writeSchemaVersion(schema.version, connection: connection)
+        try writeSchemaVersion(schema.declaredVersion, connection: connection)
     }
 
     private static func writeEntityIDHighWatermark(_ nextIdentifier: Int, connection: SQLConnection) throws {
@@ -1185,7 +1185,7 @@ package enum LightweightMigration {
         }
         let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
         let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
-        let retainedSchema = try Schema(retainedEntities, version: source.version, entityIDs: retainedIDs)
+        let retainedSchema = try Schema(retainedEntities, version: source.declaredVersion, entityIDs: retainedIDs)
         let retainedIndexNames = Set(
             retainedSchema.entities.flatMap { indexDefinitions(for: $0, schema: retainedSchema) }
                 .map { $0.name.uppercased() })

@@ -101,7 +101,7 @@ struct MigrationPlanDescriptor: @unchecked Sendable {
         }
         var identifiers: Set<String> = []
         for schema in schemas {
-            guard schema.schema.version == schema.version else {
+            guard schema.schema.declaredVersion == schema.version else {
                 throw SwiftDataError.migrationUnsupported(
                     "Versioned schema '\(schema.version.identifier)' must carry its declared schema version.")
             }

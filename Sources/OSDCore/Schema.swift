@@ -408,19 +408,37 @@ public struct Schema: Sendable {
 
     /// The schema's entities in deterministic name order.
     public let entities: [Entity]
-    /// The optional schema version.
-    public let version: Version?
+    /// The version declared when the schema was created, or `nil` when none was given.
+    package let declaredVersion: Version?
+
+    /// The schema version, which defaults to 1.0.0.
+    public var version: Version { declaredVersion ?? Version(1, 0, 0) }
+
+    /// Model types captured by the schema, wrapped so the schema stays `Sendable`.
+    package struct ModelTypes: @unchecked Sendable {
+        package var types: [Any.Type] = []
+        /// An error raised while inferring entities from `types`, reported when a container opens.
+        package var inferenceError: (any Error)?
+
+        package init(types: [Any.Type] = [], inferenceError: (any Error)? = nil) {
+            self.types = types
+            self.inferenceError = inferenceError
+        }
+    }
+
+    /// The model types the schema was created from, in declaration order; empty for hand-built schemas.
+    package var modelTypes = ModelTypes()
 
     /// Creates a schema with entities sorted by name.
     public init(_ entities: [Entity], version: Version? = nil) {
         self.entities = entities.sorted { $0.name < $1.name }
-        self.version = version
+        self.declaredVersion = version
         persistedEntityIDs = nil
     }
 
     package init(_ entities: [Entity], version: Version? = nil, entityIDs: [String: Int]) throws {
         self.entities = entities.sorted { $0.name < $1.name }
-        self.version = version
+        self.declaredVersion = version
         try Self.validateEntityIdentifiers(entityIDs, entities: entities, requiresCompleteMap: true)
         persistedEntityIDs = entityIDs
     }
@@ -460,7 +478,9 @@ public struct Schema: Sendable {
             }
             nextIdentifier = overflow ? nil : followingIdentifier
         }
-        return try Schema(entities, version: version, entityIDs: resolved)
+        var reconciled = try Schema(entities, version: declaredVersion, entityIDs: resolved)
+        reconciled.modelTypes = modelTypes
+        return reconciled
     }
 
     private static func validateEntityIdentifiers(

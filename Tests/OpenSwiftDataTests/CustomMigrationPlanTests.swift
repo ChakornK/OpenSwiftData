@@ -189,7 +189,7 @@ private enum TestMigrationPlan: SchemaMigrationPlan {
                 toVersion: MigrationV2.self,
                 willMigrate: { context in
                     MigrationStageRecorder.shared.append(
-                        "will:\(context.container?.schema.version?.identifier ?? "nil")")
+                        "will:\(context.container?.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
                         context.container?.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
                         ["name"])
@@ -198,7 +198,7 @@ private enum TestMigrationPlan: SchemaMigrationPlan {
                 },
                 didMigrate: { context in
                     MigrationStageRecorder.shared.append(
-                        "did:\(context.container?.schema.version?.identifier ?? "nil")")
+                        "did:\(context.container?.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
                         context.container?.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
                         ["name", "note"])
@@ -436,7 +436,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             configurations: .sqliteFile("migration-plan", url: storeURL))
 
         XCTAssertEqual(container.schema.version, MigrationV2.versionIdentifier)
-        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:migration-v1", "did:migration-v2"])
+        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:1.0.0", "did:2.0.0"])
         XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>()).map(\.name), ["from-v1"])
         let migratedRow = try container.store?.read { connection in
             try connection.rows("SELECT ZNAME, ZNOTE FROM ZMIGRATIONPLANRECORD", arguments: []).first
@@ -447,7 +447,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             for: MigrationPlanRecord.self,
             migrationPlan: TestMigrationPlan.self,
             configurations: .sqliteFile("migration-plan-reopen", url: storeURL))
-        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:migration-v1", "did:migration-v2"])
+        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:1.0.0", "did:2.0.0"])
     }
 
     func testMigrationPlanRejectsDisconnectedStages() {
@@ -599,7 +599,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
                 return XCTFail("Expected an unknown stored schema version to fail closed, got \(error)")
             }
-            XCTAssertTrue(message.contains("migration-v3' is not present in the migration plan."), message)
+            XCTAssertTrue(message.contains("3.0.0' is not present in the migration plan."), message)
         }
         XCTAssertEqual(MigrationStageRecorder.shared.values, [])
 
@@ -779,7 +779,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
                 return XCTFail("Expected version/hash mismatch to fail closed, got \(error)")
             }
-            XCTAssertTrue(message.contains("Stored schema does not match recorded version 'migration-v2'"), message)
+            XCTAssertTrue(message.contains("Stored schema does not match recorded version '2.0.0'"), message)
         }
         XCTAssertEqual(MigrationStageRecorder.shared.values, [])
         XCTAssertEqual(try query(metadataSQL), inconsistentMetadata)
@@ -1533,14 +1533,14 @@ final class CustomMigrationPlanTests: XCTestCase {
             try ModelContainer(
                 for: MigrationPlanRecord.self, migrationPlan: TestMigrationPlan.self,
                 configurations: configuration))
-        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:migration-v1", "did:migration-v2"])
+        XCTAssertEqual(MigrationStageRecorder.shared.values, ["will:1.0.0", "did:2.0.0"])
 
         let retried = try ModelContainer(
             for: MigrationPlanRecord.self, migrationPlan: TestMigrationPlan.self,
             configurations: configuration)
         XCTAssertEqual(
             MigrationStageRecorder.shared.values,
-            ["will:migration-v1", "did:migration-v2", "did:migration-v2"])
+            ["will:1.0.0", "did:2.0.0", "did:migration-v2"])
         XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
     }
 }

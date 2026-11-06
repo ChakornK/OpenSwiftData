@@ -7176,7 +7176,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteInsideTransactionDefersSaveToOuterBoundary() throws {
+    func testPredicateDeleteInsideTransactionAppliesImmediately() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7189,9 +7189,9 @@ final class PersistentModelTests: XCTestCase {
 
         try context.transaction {
             try context.delete(model: InheritanceMacroBaseFixture.self, where: #Predicate { $0.name == "base" })
-            XCTAssertTrue(context.hasChanges)
+            XCTAssertFalse(context.hasChanges)
             let inTransaction = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
-            XCTAssertEqual(inTransaction.map(\.name), ["base", "child"])
+            XCTAssertEqual(inTransaction.map(\.name), ["child"])
         }
 
         let afterCommit = try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>())
@@ -7200,7 +7200,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteRollsBackWithFailedOuterTransaction() throws {
+    func testPredicateDeleteIsNotRolledBackWithFailedOuterTransaction() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7223,8 +7223,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertFalse(model.isDeleted)
         XCTAssertFalse(model.hasChanges)
         XCTAssertFalse(context.hasChanges)
-        XCTAssertEqual(
-            try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name), ["base"])
+        XCTAssertTrue(try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
     }
 
     @MainActor
@@ -7278,7 +7277,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteCancelsMatchingPendingInsertions() throws {
+    func testPredicateDeleteLeavesPendingInsertions() throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7293,12 +7292,16 @@ final class PersistentModelTests: XCTestCase {
         try context.delete(
             model: InheritanceMacroBaseFixture.self, where: #Predicate { $0.name.starts(with: "pending-") })
 
-        XCTAssertNil(pendingBase.modelContext)
-        XCTAssertNil(pendingChild.modelContext)
+        XCTAssertTrue(pendingBase.modelContext === context)
+        XCTAssertTrue(pendingChild.modelContext === context)
         XCTAssertFalse(pendingBase.isDeleted)
         XCTAssertFalse(pendingChild.isDeleted)
-        XCTAssertFalse(context.hasChanges)
-        XCTAssertTrue(try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).isEmpty)
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertEqual(context.insertedModelsArray.count, 2)
+        try context.save()
+        XCTAssertEqual(
+            try container.makeContext().fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).map(\.name).sorted(),
+            ["pending-base", "pending-child"])
     }
 
     @MainActor

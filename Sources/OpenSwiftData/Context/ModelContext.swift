@@ -74,6 +74,21 @@ public final class ModelContext {
         get { assertAffinity(); return historyAuthorStorage }
         set { assertAffinity(); historyAuthorStorage = newValue }
     }
+
+    /// The author recorded with history transactions created by this context.
+    public var author: String? {
+        get { historyAuthor }
+        set { historyAuthor = newValue }
+    }
+
+    /// This context's editing state, whose identifier is stable for the context's lifetime.
+    ///
+    /// Setting the state updates `author`; the identifier cannot change.
+    public var editingState: EditingState {
+        get { EditingState(id: editingStateID, author: author) }
+        set { author = newValue.author }
+    }
+    private let editingStateID = UUID()
     /// The undo manager associated with this context.
     public var undoManager: UndoManager? {
         get {
@@ -729,20 +744,42 @@ public final class ModelContext {
                 relationshipMutationEvents: pending.relationshipMutationEvents))
     }
 
-    /// Deletes models matching a predicate, which requires a persistent store.
+    /// Deletes saved models matching a predicate directly from the store.
+    ///
+    /// The deletion bypasses this context: pending changes stay pending, pending insertions are not deleted,
+    /// registered instances are not marked deleted, and no save notifications are posted. Cascade rules apply.
+    /// Throws a Core Data–domain error (code 134060) without deleting anything when the entity declares a
+    /// relationship with the `deny` rule.
     public func delete<Model: PersistentModel>(
         model: Model.Type,
         where predicate: Predicate<Model>? = nil,
         includeSubclasses: Bool = true
     ) throws {
         assertAffinity()
-        let descriptor = FetchDescriptor<Model>(predicate: predicate)
-        let matches = try fetch(descriptor)
-        for match in matches where includeSubclasses || ObjectIdentifier(type(of: match)) == ObjectIdentifier(model) {
-            delete(match)
+        guard let container = containerStorage else { throw unsupportedStore("Batch delete") }
+        if let entity = container.schema.entity(forName: String(describing: Model.self)),
+            let denied = entity.relationships.first(where: { $0.deleteRule == .deny })
+        {
+            throw NSError(
+                domain: NSCocoaErrorDomain, code: 134060,
+                userInfo: [
+                    "Reason": "Delete rule is not supported for batch deletes",
+                    "Relationship": "\(entity.name).\(denied.name)",
+                ])
         }
-        try save()
+        let scratch = ModelContext(container: container, autosaveEnabled: false)
+        scratch.postsSaveNotifications = false
+        var descriptor = FetchDescriptor<Model>(predicate: predicate)
+        descriptor.includePendingChanges = false
+        for match in try scratch.fetch(descriptor)
+        where includeSubclasses || ObjectIdentifier(type(of: match)) == ObjectIdentifier(model) {
+            scratch.delete(match)
+        }
+        try scratch.save()
     }
+
+    /// Whether saving posts `willSave` and `didSave`; batch deletes save through a silent scratch context.
+    private var postsSaveNotifications = true
 
     /// Fetches models matching a descriptor, which requires a persistent store.
     public func fetch<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> [Model] {
@@ -1325,7 +1362,7 @@ public final class ModelContext {
     /// Enumerates models matching a descriptor, which requires a persistent store.
     public func enumerate<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>,
-        batchSize: Int = 500,
+        batchSize: Int = 5000,
         allowEscapingMutations: Bool = false,
         block: (Model) throws -> Void
     ) throws {
@@ -1607,25 +1644,26 @@ public final class ModelContext {
         return try store.deleteHistory(before: token)
     }
 
+    /// Posts `willSave` without user info, then commits pending changes and posts `didSave` when any existed.
     private func saveChanges() throws {
         assertAffinity()
+        if postsSaveNotifications {
+            NotificationCenter.default.post(name: Self.willSave, object: self, userInfo: nil)
+        }
         guard state.hasChanges else { return }
         guard allowsSave else { throw unsupportedStore("Saving is disabled") }
         let before = state.pendingState()
         let insertedModels = before.inserted
         let originalInsertedIDs = insertedModels.map { ($0, $0.persistentModelID) }
-        let willInfo = saveNotificationInfo(
-            inserted: before.inserted.map(\.persistentModelID),
-            updated: before.changed.map(\.persistentModelID),
-            deleted: before.deleted.map(\.persistentModelID))
-        NotificationCenter.default.post(name: Self.willSave, object: self, userInfo: willInfo)
 
         if let testSaveHook {
             try testSaveHook()
             let savedIDs = saveNotificationIdentifiers(before: before, insertedModels: originalInsertedIDs)
             finalizePendingChanges()
             state.clearRelationshipMutationEvents()
-            NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
+            if postsSaveNotifications {
+                NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
+            }
             return
         }
         if let dataStore = optionalContainer?.dataStore {
@@ -1636,7 +1674,9 @@ public final class ModelContext {
             throw unsupportedStore("Saving")
         }
         let savedIDs = saveNotificationIdentifiers(before: before, insertedModels: originalInsertedIDs)
-        NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
+        if postsSaveNotifications {
+            NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
+        }
     }
 
     private func saveNotificationIdentifiers(

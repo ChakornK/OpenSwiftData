@@ -354,10 +354,9 @@ public final class ModelContext {
         }
         state.insert(model, snapshot: insertionSnapshot)
         attach(model)
-        if optionalContainer?.dataStore != nil {
-            for destination in detachedDestinations where destination !== model {
-                insertRelationshipDestination(destination, snapshot: destination.snapshotLifecycle())
-            }
+        // Inserting a model also inserts the detached models it relates to, recursively.
+        for destination in detachedDestinations where destination !== model {
+            insertRelationshipDestination(destination, snapshot: destination.snapshotLifecycle())
         }
     }
 

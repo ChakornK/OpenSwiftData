@@ -171,7 +171,11 @@ public final class ModelContext {
         let entityName: String
         let primaryKey: Int64
         let version: Int
+        /// The registered instance of the row a unique-constraint conflict merged into, if any.
         let replacedModel: (any PersistentModel)?
+        /// Whether a unique-constraint conflict merged this model's values into another row, leaving the model
+        /// without a stored row of its own.
+        var mergedIntoExistingRow = false
     }
 
     private struct IdentifierQueryRow {
@@ -3912,6 +3916,27 @@ public final class ModelContext {
             let model = result.model
             let entityName = result.entityName
             let originalIdentifier = state.snapshotIdentifier(for: model)
+            if result.mergedIntoExistingRow {
+                // SwiftData keeps the existing row's registered instance, refreshed with the merged values, and
+                // leaves the conflicting model attached without changes and without a row.
+                if let replacedModel = result.replacedModel {
+                    let merged = model.snapshotLifecycle()
+                    let existing = replacedModel.snapshotLifecycle()
+                    replacedModel.restoreLifecycle(
+                        BackingDataSnapshot(
+                            values: existing.values.merging(merged.values) { _, new in new },
+                            context: existing.context, identifier: existing.identifier, isDeleted: false,
+                            hasChanges: false, savedValues: nil, primaryKey: existing.primaryKey,
+                            entityID: existing.entityID, optimisticLockVersion: existing.optimisticLockVersion))
+                    replacedModel.markPersistedLifecycle(
+                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        entityID: try entityID(for: entityName), primaryKey: result.primaryKey,
+                        version: result.version)
+                    state.setBaseline(replacedModel, snapshot: replacedModel.snapshotLifecycle())
+                }
+                model.markSavedLifecycle()
+                continue
+            }
             if let replacedModel = result.replacedModel {
                 identityMap.remove(identityKey(forEntityName: entityName, primaryKey: result.primaryKey))
                 detachModel(replacedModel)
@@ -4218,13 +4243,24 @@ public final class ModelContext {
             var values: [RuntimeValue] = []
             let savedValues = snapshot.savedValues
             let metadata = Model.schemaMetadata()
+            // Current values of unchanged scalar attributes, used to detect unique-constraint conflicts on update.
+            var unchangedColumns: [String] = []
+            var unchangedValues: [RuntimeValue] = []
             for attribute in canonicalAttributes(for: entity) {
                 let flattened = attribute.options.contains(.flattened)
                 guard let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath else { continue }
                 if !inserted {
                     guard let current = snapshot.values[keyPath],
                         let saved = savedValues?[keyPath], !Self.persistenceValuesEqual(current, saved)
-                    else { continue }
+                    else {
+                        if !flattened, !attribute.options.contains(.externalStorage),
+                            let adapter = adapters.first(where: { $0.name == attribute.name })
+                        {
+                            unchangedColumns.append("Z\(attribute.name.uppercased())")
+                            unchangedValues.append(runtimeValue(try adapter.encoded(model)))
+                        }
+                        continue
+                    }
                 }
                 if flattened {
                     let components = flattenedAdapters[attribute.name] ?? []
@@ -4291,7 +4327,10 @@ public final class ModelContext {
                     append.append(
                         PersistedModel(
                             model: model, entityName: entity.name, primaryKey: match.primaryKey, version: version,
-                            replacedModel: replaced === model ? nil : replaced))
+                            replacedModel: replaced === model ? nil : replaced,
+                            // A registered instance of another subclass cannot represent the merged row, so the
+                            // conflicting model takes over the row instead.
+                            mergedIntoExistingRow: replaced.map { type(of: $0) == Model.self } ?? true))
                     return
                 }
                 let names = ((preservedPrimaryKey == nil ? [] : ["Z_PK"]) + ["Z_ENT", "Z_OPT"] + columns)
@@ -4312,6 +4351,25 @@ public final class ModelContext {
                         replacedModel: nil))
             } else if let pk = model.persistentModelID.primaryKey {
                 let expectedVersion = snapshot.optimisticLockVersion
+                if !columns.isEmpty,
+                    let match = try uniqueMatch(
+                        entity: entity, columns: columns + unchangedColumns, values: values + unchangedValues,
+                        connection: connection),
+                    match.primaryKey != pk
+                {
+                    // SwiftData resolves the conflict by applying the changed values to the existing row and
+                    // removing this model's row. Rows that referenced the removed row are not rewritten.
+                    let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
+                    try connection.execute(
+                        "UPDATE \(table) SET \(assignments), Z_OPT = ? WHERE Z_PK = ?",
+                        arguments: values + [.int(Int64(match.version + 1)), .int(match.primaryKey)])
+                    try connection.execute("DELETE FROM \(table) WHERE Z_PK = ?", arguments: [.int(pk)])
+                    append.append(
+                        PersistedModel(
+                            model: model, entityName: entity.name, primaryKey: pk, version: expectedVersion,
+                            replacedModel: nil, mergedIntoExistingRow: true))
+                    return
+                }
                 let version = expectedVersion + 1
                 let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
                 if columns.isEmpty {

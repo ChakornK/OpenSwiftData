@@ -3715,7 +3715,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUniqueInsertUpsertsAndRebindsIdentityMap() throws {
+    func testUniqueInsertUpsertsIntoTheExistingInstance() throws {
         let container = try ModelContainer(
             for: FailedWritePersistenceFixture.self, configurations: .sqliteMemory("unique-upsert"))
         let context = container.mainContext
@@ -3729,9 +3729,12 @@ final class ContextPersistenceTests: XCTestCase {
         context.insert(replacement)
         try context.save()
 
-        XCTAssertEqual(replacement.persistentModelID, originalID)
-        XCTAssertNil(original.modelContext)
-        XCTAssertTrue(try context.model(for: originalID) as FailedWritePersistenceFixture? === replacement)
+        // SwiftData merges the duplicate into the existing row and keeps the existing registered instance.
+        XCTAssertNotEqual(replacement.persistentModelID, originalID)
+        XCTAssertTrue(original.modelContext === context)
+        XCTAssertTrue(replacement.modelContext === context)
+        XCTAssertFalse(replacement.hasChanges)
+        XCTAssertTrue(try context.model(for: originalID) as FailedWritePersistenceFixture? === original)
         let reader = container.makeContext()
         let fetched = try reader.fetch(FetchDescriptor<FailedWritePersistenceFixture>())
         XCTAssertEqual(fetched.count, 1)
@@ -3754,7 +3757,7 @@ final class ContextPersistenceTests: XCTestCase {
         replacement.destination = destination
         try context.save()
 
-        let ownerPK = try XCTUnwrap(replacement.persistentModelID.primaryKey)
+        let ownerPK = try XCTUnwrap(original.persistentModelID.primaryKey)
         let destinationPK = try XCTUnwrap(destination.persistentModelID.primaryKey)
         try container.store?.read { connection in
             let rows = try connection.rows(

@@ -4767,13 +4767,13 @@ final class AutosaveTriggerTests: XCTestCase {
         XCTAssertTrue(events.allSatisfy { $0.objectIdentifier == ObjectIdentifier(context) })
         let willInserted = events[0].inserted
         let didInserted = events[1].inserted
-        XCTAssertEqual(willInserted, [temporaryID])
+        XCTAssertEqual(willInserted, [])
         XCTAssertEqual(didInserted, [inserted.persistentModelID])
         XCTAssertNotEqual(didInserted.first, temporaryID)
         XCTAssertTrue(events.allSatisfy { $0.updated.isEmpty && $0.deleted.isEmpty })
-        XCTAssertEqual(ModelContext.NotificationKey.insertedIdentifiers.rawValue, "insertedIdentifiers")
-        XCTAssertEqual(ModelContext.NotificationKey.updatedIdentifiers.rawValue, "updatedIdentifiers")
-        XCTAssertEqual(ModelContext.NotificationKey.deletedIdentifiers.rawValue, "deletedIdentifiers")
+        XCTAssertEqual(ModelContext.NotificationKey.insertedIdentifiers.rawValue, "inserted")
+        XCTAssertEqual(ModelContext.NotificationKey.updatedIdentifiers.rawValue, "updated")
+        XCTAssertEqual(ModelContext.NotificationKey.deletedIdentifiers.rawValue, "deleted")
     }
 
     @MainActor

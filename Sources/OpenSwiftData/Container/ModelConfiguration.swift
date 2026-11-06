@@ -76,7 +76,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     /// Creates a default-named configuration that stores the given model types.
     public init(for forTypes: any PersistentModel.Type..., isStoredInMemoryOnly: Bool = false) {
-        self.init(nil, schema: Schema(forTypes), isStoredInMemoryOnly: isStoredInMemoryOnly)
+        self.init(nil, schema: Schema(forTypes as [any PersistentModel.Type], version: nil), isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
     /// Creates a configuration whose store file is `<name>.store` in Application Support.

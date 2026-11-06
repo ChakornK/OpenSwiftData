@@ -247,20 +247,20 @@ public final class ModelContext {
         subscribeToStoreChanges()
     }
 
-    /// Models inserted into this context and not yet saved.
+    /// Models inserted into this context and not yet saved, including inserted models deleted before saving.
     public var insertedModelsArray: [any PersistentModel] {
         assertAffinity()
-        return state.insertedModels
+        return state.insertedModels + deletedInsertions
     }
     /// Models changed in this context and not yet saved.
     public var changedModelsArray: [any PersistentModel] {
         assertAffinity()
         return state.changedModels
     }
-    /// Models deleted in this context and not yet saved.
+    /// Models deleted in this context and not yet saved, including inserted models deleted before saving.
     public var deletedModelsArray: [any PersistentModel] {
         assertAffinity()
-        return state.deletedModels
+        return state.deletedModels + deletedInsertions
     }
     /// Compatibility alias for inserted models.
     public var insertedModels: [any PersistentModel] { insertedModelsArray }
@@ -271,7 +271,18 @@ public final class ModelContext {
     /// Whether this context currently has unsaved changes.
     public var hasChanges: Bool {
         assertAffinity()
-        return state.hasChanges
+        return state.hasChanges || !deletedInsertions.isEmpty
+    }
+
+    /// Inserted models deleted before saving.
+    ///
+    /// They stay attached and marked deleted until a save or rollback detaches them, and are never persisted.
+    private var deletedInsertions: [any PersistentModel] = []
+
+    /// Detaches inserted models that were deleted before saving.
+    private func detachDeletedInsertions() {
+        for model in deletedInsertions { model.detachLifecycle() }
+        deletedInsertions.removeAll()
     }
     /// Sort descriptors used by this context.
     private var sortDescriptorsStorage: [NSSortDescriptor] = []
@@ -346,15 +357,21 @@ public final class ModelContext {
         }
     }
 
-    /// Deletes a model or cancels its pending insertion.
+    /// Deletes a model.
+    ///
+    /// Deleting a pending insertion marks it deleted and reports it as both inserted and deleted until the next
+    /// save or rollback, which detaches it without persisting it.
     public func delete<Model: PersistentModel>(_ model: Model) {
         assertAffinity()
         state.withExclusiveOperation {
             guard model.modelContext === self else { return }
+            guard !deletedInsertions.contains(where: { $0 === model }) else { return }
             if state.containsInserted(model) {
-                model.restoreValuesAndDetachLifecycle(state.cancelInsertion(model) ?? model.snapshotLifecycle())
+                _ = state.cancelInsertion(model)
                 state.removeBaseline(for: model)
-                clearDataStoreTemporaryIdentifiers(for: model)
+                markDeletedTyped(model)
+                deletedInsertions.append(model)
+                autosaveHandle.changed()
                 return
             }
             guard !state.containsDeleted(model) else { return }
@@ -1694,7 +1711,10 @@ public final class ModelContext {
         if postsSaveNotifications {
             NotificationCenter.default.post(name: Self.willSave, object: self, userInfo: nil)
         }
-        guard state.hasChanges else { return }
+        guard state.hasChanges else {
+            detachDeletedInsertions()
+            return
+        }
         guard allowsSave else { throw unsupportedStore("Saving is disabled") }
         let before = state.pendingState()
         let insertedModels = before.inserted
@@ -1718,6 +1738,7 @@ public final class ModelContext {
             throw unsupportedStore("Saving")
         }
         let savedIDs = saveNotificationIdentifiers(before: before, insertedModels: originalInsertedIDs)
+        detachDeletedInsertions()
         if postsSaveNotifications {
             NotificationCenter.default.post(name: Self.didSave, object: self, userInfo: savedIDs)
         }
@@ -1753,6 +1774,7 @@ public final class ModelContext {
     /// Discards pending changes and restores values to their prior saved state.
     public func rollback() {
         assertAffinity()
+        detachDeletedInsertions()
         state.withExclusiveOperation {
             let pendingState = state.pendingState()
             let pendingInsertions = pendingState.inserted

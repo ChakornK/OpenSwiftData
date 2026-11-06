@@ -654,22 +654,31 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingUnsavedInsertionRestoresDetachedBaseline() {
+    func testDeletingUnsavedInsertionKeepsItPendingUntilSave() throws {
         let context = ModelContext()
         let model = TransactionFixture()
         model.title = "baseline"
-        let identifier = model.persistentModelID
         context.insert(model)
         model.title = "inserted"
+        let identifier = model.persistentModelID
 
         context.delete(model)
 
-        XCTAssertEqual(model.title, "baseline")
+        XCTAssertEqual(model.title, "inserted")
+        XCTAssertTrue(model.modelContext === context)
+        XCTAssertTrue(model.isDeleted)
+        XCTAssertEqual(model.persistentModelID, identifier)
+        XCTAssertTrue(context.hasChanges)
+        XCTAssertTrue(context.insertedModelsArray.contains { $0 === model })
+        XCTAssertTrue(context.deletedModelsArray.contains { $0 === model })
+
+        try context.save()
+
         XCTAssertNil(model.modelContext)
         XCTAssertFalse(model.isDeleted)
-        XCTAssertFalse(model.hasChanges)
-        XCTAssertEqual(model.persistentModelID, identifier)
         XCTAssertFalse(context.hasChanges)
+        XCTAssertTrue(context.insertedModelsArray.isEmpty)
+        XCTAssertTrue(context.deletedModelsArray.isEmpty)
     }
 
     @MainActor

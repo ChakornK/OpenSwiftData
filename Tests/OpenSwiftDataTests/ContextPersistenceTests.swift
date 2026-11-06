@@ -3387,7 +3387,10 @@ final class ContextPersistenceTests: XCTestCase {
             try context.fetch(FetchDescriptor<PersistenceTestModel>(includePendingChanges: false)).isEmpty)
         XCTAssertTrue(try context.fetchIdentifiers(FetchDescriptor<PersistenceTestModel>()).isEmpty)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersistenceTestModel>()), 0)
+        XCTAssertTrue(context.hasChanges)
+        try context.save()
         XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersistenceTestModel>()), 0)
     }
 
     @MainActor

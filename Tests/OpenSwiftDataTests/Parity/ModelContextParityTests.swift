@@ -59,3 +59,54 @@ import Testing
         #expect(try context.fetchCount(saved) == 2)
     }
 }
+
+/// Deleting a model that was inserted but not saved, matching Apple's SwiftData.
+@MainActor @Suite struct DeletedInsertionParityTests {
+    let container: ModelContainer
+    var context: ModelContext { container.mainContext }
+
+    init() throws {
+        container = try ModelContainer(
+            for: ContextParityThing.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+    }
+
+    @Test func `a deleted insertion is reported as inserted and deleted until saved`() throws {
+        let model = ContextParityThing(name: "p")
+        context.insert(model)
+        context.delete(model)
+        #expect(model.isDeleted)
+        #expect(model.modelContext === context)
+        #expect(context.hasChanges)
+        #expect(context.insertedModelsArray.count == 1)
+        #expect(context.deletedModelsArray.count == 1)
+        #expect(try context.fetch(FetchDescriptor<ContextParityThing>()).isEmpty)
+
+        try context.save()
+        #expect(model.modelContext == nil)
+        #expect(!model.isDeleted)
+        #expect(!context.hasChanges)
+        #expect(context.insertedModelsArray.isEmpty)
+        #expect(context.deletedModelsArray.isEmpty)
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<ContextParityThing>()) == 0)
+    }
+
+    @Test func `inserting a deleted insertion again does nothing`() {
+        let model = ContextParityThing(name: "p")
+        context.insert(model)
+        context.delete(model)
+        context.insert(model)
+        #expect(model.isDeleted)
+        #expect(context.insertedModelsArray.count == 1)
+        #expect(context.deletedModelsArray.count == 1)
+    }
+
+    @Test func `rolling back detaches a deleted insertion`() {
+        let model = ContextParityThing(name: "p")
+        context.insert(model)
+        context.delete(model)
+        context.rollback()
+        #expect(model.modelContext == nil)
+        #expect(!model.isDeleted)
+        #expect(!context.hasChanges)
+    }
+}

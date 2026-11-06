@@ -1081,7 +1081,9 @@ public final class ModelContainer: Sendable {
     }
 
     private static func normalizedTypeName(_ type: String) -> String {
+        // Newer Apple SDKs bridge `Decimal` to the imported C struct `NSDecimal` at runtime.
         type.replacingOccurrences(of: "Swift.", with: "")
+            .replacingOccurrences(of: "__C.NSDecimal", with: "Decimal")
     }
 
     private static func normalizedPropertyType(_ type: String) -> (String, Bool) {

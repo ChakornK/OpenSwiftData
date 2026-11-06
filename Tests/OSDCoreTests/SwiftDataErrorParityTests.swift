@@ -44,3 +44,14 @@ import Testing
         #expect(matched)
     }
 }
+
+@Suite struct SwiftDataErrorDescriptionParityTests {
+    @Test func `descriptions use SwiftData's format`() {
+        #expect(
+            SwiftDataError.unsupportedPredicate.description
+                == "SwiftDataError(_error: SwiftData.SwiftDataError._Error.unsupportedPredicate, _explanation: nil)")
+        #expect(
+            SwiftDataError.unsupportedStore("detail").description
+                == #"SwiftDataError(_error: SwiftData.SwiftDataError._Error.unsupportedStore, _explanation: Optional("detail"))"#)
+    }
+}

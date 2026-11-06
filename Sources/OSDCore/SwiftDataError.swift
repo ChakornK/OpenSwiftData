@@ -53,8 +53,11 @@ public struct SwiftDataError: Error, Hashable, Sendable, CustomStringConvertible
         (rhs as? SwiftDataError).map { $0.code == lhs.code } ?? false
     }
 
+    /// Describes the error in SwiftData's format, such as
+    /// `SwiftDataError(_error: SwiftData.SwiftDataError._Error.unsupportedPredicate, _explanation: nil)`.
     public var description: String {
-        explanation.map { "SwiftDataError.\(code.rawValue): \($0)" } ?? "SwiftDataError.\(code.rawValue)"
+        let explanation = self.explanation.map { "Optional(\($0.debugDescription))" } ?? "nil"
+        return "SwiftDataError(_error: SwiftData.SwiftDataError._Error.\(code.rawValue), _explanation: \(explanation))"
     }
 
     /// A fetch requested pending changes together with a batch size.

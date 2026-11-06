@@ -189,18 +189,18 @@ private enum TestMigrationPlan: SchemaMigrationPlan {
                 toVersion: MigrationV2.self,
                 willMigrate: { context in
                     MigrationStageRecorder.shared.append(
-                        "will:\(context.container?.schema.declaredVersion?.identifier ?? "nil")")
+                        "will:\(context.container.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
-                        context.container?.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
+                        context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
                         ["name"])
                     context.insert(MigrationPlanRecord(name: "from-v1"))
                     try context.save()
                 },
                 didMigrate: { context in
                     MigrationStageRecorder.shared.append(
-                        "did:\(context.container?.schema.declaredVersion?.identifier ?? "nil")")
+                        "did:\(context.container.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
-                        context.container?.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
+                        context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
                         ["name", "note"])
                     let records = try context.fetch(FetchDescriptor<MigrationPlanRecord>())
                     XCTAssertEqual(records.map(\.name), ["from-v1"])

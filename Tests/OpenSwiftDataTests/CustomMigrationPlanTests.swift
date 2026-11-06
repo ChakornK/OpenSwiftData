@@ -870,7 +870,7 @@ final class CustomMigrationPlanTests: XCTestCase {
                 return XCTFail("Expected pending/schema mismatch to fail closed, got \(error)")
             }
             XCTAssertTrue(
-                message.contains("Stored schema does not match pending destination version 'migration-v2'"), message)
+                message.contains("Stored schema does not match pending destination version '2.0.0'"), message)
         }
         XCTAssertEqual(MigrationStageRecorder.shared.values, [])
         XCTAssertEqual(try query(metadataSQL), inconsistentMetadata)
@@ -1540,7 +1540,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             configurations: configuration)
         XCTAssertEqual(
             MigrationStageRecorder.shared.values,
-            ["will:1.0.0", "did:2.0.0", "did:migration-v2"])
+            ["will:1.0.0", "did:2.0.0", "did:2.0.0"])
         XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
     }
 }

@@ -1198,7 +1198,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(offsetOnly), 2)
         XCTAssertEqual(
             try context.fetchCount(FetchDescriptor<PersistenceTestModel>(fetchLimit: 0, includePendingChanges: false)),
-            0)
+            3)
         let limitedPage = FetchDescriptor<PersistenceTestModel>(
             sortBy: [SortDescriptor(\.title)], fetchLimit: 1, fetchOffset: 1, includePendingChanges: false)
         XCTAssertEqual(try context.fetch(limitedPage).map(\.title), ["b"])
@@ -1206,7 +1206,7 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(limitedPage), 1)
         XCTAssertEqual(
             try context.fetchCount(FetchDescriptor<PersistenceTestModel>(fetchLimit: 0, includePendingChanges: false)),
-            0)
+            3)
         XCTAssertEqual(
             try context.fetchCount(
                 FetchDescriptor<PersistenceTestModel>(fetchOffset: 10, includePendingChanges: false)),
@@ -1657,6 +1657,8 @@ final class ContextPersistenceTests: XCTestCase {
         let changed: PersistentRelationshipOwner = try XCTUnwrap(reader.model(for: ownerIDs[0]))
         let changedTarget = try XCTUnwrap(changed.favorite)
         changedTarget.title = "no longer matching"
+        // SwiftData evaluates unchanged owners against stored related values, so persist the edit.
+        try reader.save()
         let newFavorite = PersistentRelationshipChild(title: "matching")
         let newOwner = PersistentRelationshipOwner(title: "new")
         newOwner.favorite = newFavorite
@@ -1744,13 +1746,15 @@ final class ContextPersistenceTests: XCTestCase {
 
         let zeroLimit = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchLimit: 0)
-        XCTAssertTrue(try context.mergedIdentifiers(zeroLimit).isEmpty)
-        XCTAssertEqual(try context.fetchCount(zeroLimit), 0)
+        // A zero limit means no limit.
+        XCTAssertEqual(try context.mergedIdentifiers(zeroLimit), expectedIDs)
+        XCTAssertEqual(try context.fetchCount(zeroLimit), 2)
 
+        // The offset applies to stored rows; matching pending changes merge in afterward.
         let pastEnd = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, sortBy: [SortDescriptor(\.id)], fetchOffset: 1)
-        XCTAssertEqual(try context.mergedIdentifiers(pastEnd), [changedInto.persistentModelID])
-        XCTAssertEqual(try context.fetchCount(pastEnd), 1)
+        XCTAssertEqual(try context.mergedIdentifiers(pastEnd), expectedIDs)
+        XCTAssertEqual(try context.fetchCount(pastEnd), 2)
 
         let committedOnly = FetchDescriptor<PredicateAgreementFixture>(
             predicate: predicate, includePendingChanges: false)
@@ -1854,21 +1858,22 @@ final class ContextPersistenceTests: XCTestCase {
         reader.insert(pendingEquivalent)
         let descriptor = FetchDescriptor<QualifiedOptionalScalarFixture>(
             sortBy: [SortDescriptor(\.amount)], fetchLimit: 2, fetchOffset: 3)
-        let expectedIDs = [lowerAmount.persistentModelID, largerAmount.persistentModelID]
+        // The store window (offset 3, limit 2) holds only "10"; the pending "1.0" merges in by numeric order.
+        let expectedIDs = [pendingEquivalent.persistentModelID, largerAmount.persistentModelID]
 
         XCTAssertEqual(try reader.mergedIdentifiers(descriptor), expectedIDs)
         XCTAssertEqual(try reader.fetchCount(descriptor), 2)
         let nilRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(for: nilAmount.persistentModelID)
         let storedUnitRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
             for: unitAmount.persistentModelID)
-        let largerRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
-            for: largerAmount.persistentModelID)
+        let lowerRegistered: QualifiedOptionalScalarFixture? = reader.registeredModel(
+            for: lowerAmount.persistentModelID)
         XCTAssertNil(nilRegistered)
         XCTAssertNil(storedUnitRegistered)
-        XCTAssertNil(largerRegistered)
+        XCTAssertNil(lowerRegistered)
         let fetched = try reader.fetch(descriptor)
         XCTAssertEqual(fetched.map(\.persistentModelID), expectedIDs)
-        XCTAssertEqual(fetched.map(\.amount), [lowerAmount.amount, largerAmount.amount])
+        XCTAssertEqual(fetched.map(\.amount), [pendingEquivalent.amount, largerAmount.amount])
 
         let equivalentTie = FetchDescriptor<QualifiedOptionalScalarFixture>(sortBy: [SortDescriptor(\.amount)])
         let tiedIDs = try reader.mergedIdentifiers(equivalentTie)
@@ -3353,7 +3358,8 @@ final class ContextPersistenceTests: XCTestCase {
             predicate: predicate, sortBy: [SortDescriptor(\.count)], fetchLimit: 1, fetchOffset: 1)
         storedLow.count = 9
         storedHigh.count = 1
-        XCTAssertEqual(try context.fetch(page).map(\.title), ["stored-low"])
+        // The offset skips the only stored match; changed and inserted matches then merge in before the limit.
+        XCTAssertEqual(try context.fetch(page).map(\.title), ["pending-match"])
 
         storedHigh.count = 8
         let limited = FetchDescriptor<PersistenceTestModel>(

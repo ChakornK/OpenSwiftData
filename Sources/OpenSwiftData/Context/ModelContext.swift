@@ -830,12 +830,9 @@ public final class ModelContext {
         if let offset = descriptor.fetchOffset, offset < 0 {
             throw SwiftDataError.unsupportedPredicate("Negative fetch offset")
         }
-        let fetchedLimit: Int?
-        if descriptor.includePendingChanges {
-            fetchedLimit = nil
-        } else {
-            fetchedLimit = descriptor.fetchLimit
-        }
+        // A limit of zero means no limit. With pending changes, the store applies the offset and limit to stored
+        // values and pending models merge in afterward, matching SwiftData.
+        let fetchedLimit = descriptor.fetchLimit == 0 ? nil : descriptor.fetchLimit
         let orderSQL = try sortSQL(descriptor.sortBy, entity: entity, type: Model.self)
         let compiled: RuntimeCompiledPredicate?
         if let predicate = descriptor.predicate {
@@ -851,20 +848,15 @@ public final class ModelContext {
             throw SwiftDataError.unsupportedPredicate(
                 "The store cannot evaluate this predicate against pending models.")
         }
-        let evaluatePredicateAfterPendingMerge =
-            descriptor.includePendingChanges
-            && descriptor.predicate != nil
-            && compiled?.evaluatorPlan != nil
-            && !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         let query = FetchSQLBuilder.build(
             FetchSQLInput(
                 table: "Z\(rootEntity(for: entity).name.uppercased())",
                 columns: selectedColumns.map { "Z\($0.uppercased())" },
-                predicateSQL: evaluatePredicateAfterPendingMerge ? nil : compiled?.sql,
-                predicateArguments: evaluatePredicateAfterPendingMerge ? [] : (compiled?.arguments ?? []),
+                predicateSQL: compiled?.sql,
+                predicateArguments: compiled?.arguments ?? [],
                 orderSQL: orderSQL,
                 limit: fetchedLimit,
-                offset: descriptor.includePendingChanges ? nil : descriptor.fetchOffset,
+                offset: descriptor.fetchOffset,
                 entityIDs: hasHierarchy ? descendantEntityIDs(for: entity) : nil))
         let rows = try store.read { connection in
             try connection.rows(query.sql, arguments: query.arguments)
@@ -967,8 +959,8 @@ public final class ModelContext {
         let requestDescriptor = FetchDescriptor(
             predicate: descriptor.predicate,
             sortBy: descriptor.sortBy,
-            fetchLimit: descriptor.includePendingChanges ? nil : descriptor.fetchLimit,
-            fetchOffset: descriptor.includePendingChanges ? nil : descriptor.fetchOffset,
+            fetchLimit: descriptor.fetchLimit == 0 ? nil : descriptor.fetchLimit,
+            fetchOffset: descriptor.fetchOffset,
             includePendingChanges: false,
             propertiesToFetch: descriptor.propertiesToFetch,
             relationshipKeyPathsForPrefetching: descriptor.relationshipKeyPathsForPrefetching)
@@ -1154,11 +1146,12 @@ public final class ModelContext {
     public func fetchCount<Model: PersistentModel>(_ descriptor: FetchDescriptor<Model>) throws -> Int {
         assertAffinity()
         try processPendingChangesThrowing()
+        var descriptor = descriptor
+        if descriptor.fetchLimit == 0 { descriptor.fetchLimit = nil }
         if descriptor.includePendingChanges,
             !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
         {
-            if optionalContainer?.dataStore != nil { return try fetch(descriptor).count }
-            return try mergedIdentifiers(descriptor).count
+            return try fetch(descriptor).count
         }
         if optionalContainer?.dataStore != nil { return try fetch(descriptor).count }
         if !descriptor.includePendingChanges {
@@ -1254,7 +1247,14 @@ public final class ModelContext {
     ) throws -> [PersistentIdentifier] {
         assertAffinity()
         try processPendingChangesThrowing()
+        var descriptor = descriptor
+        if descriptor.fetchLimit == 0 { descriptor.fetchLimit = nil }
         if optionalContainer?.dataStore != nil { return try fetch(descriptor).map(\.persistentModelID) }
+        if descriptor.includePendingChanges,
+            !(state.insertedModels + state.changedModels + state.deletedModels).isEmpty
+        {
+            return try fetch(descriptor).map(\.persistentModelID)
+        }
         guard let container = optionalContainer,
             let store = container.store,
             let entity = container.schema.entity(forName: String(describing: Model.self))
@@ -2373,7 +2373,11 @@ public final class ModelContext {
         guard descriptor.includePendingChanges else { return fetched }
         var merged = fetched.filter { model in !state.containsDeleted(model) }
         if let evaluatorPlan {
-            merged = try merged.filter { try pendingModel($0, matches: evaluatorPlan) }
+            // Unchanged rows matched on stored values; only changed models are re-evaluated in memory.
+            let changed = Set(state.changedModels.map(ObjectIdentifier.init))
+            merged = try merged.filter {
+                try !changed.contains(ObjectIdentifier($0)) || pendingModel($0, matches: evaluatorPlan)
+            }
         }
         var present = Set(merged.map(ObjectIdentifier.init))
         let pending = (state.insertedModels + state.changedModels).compactMap { $0 as? Model }
@@ -2423,11 +2427,8 @@ public final class ModelContext {
                 return lhs.offset < rhs.offset
             }.map(\.element)
         }
-        let offset = descriptor.includePendingChanges ? max(0, descriptor.fetchOffset ?? 0) : 0
-        guard offset < merged.count else { return [] }
-        merged = Array(merged.dropFirst(offset))
-        if descriptor.includePendingChanges, let limit = descriptor.fetchLimit {
-            merged = Array(merged.prefix(max(0, limit)))
+        if let limit = descriptor.fetchLimit, limit > 0 {
+            merged = Array(merged.prefix(limit))
         }
         return merged
     }

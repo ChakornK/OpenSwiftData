@@ -178,6 +178,7 @@ final class ManagedBackingDataTests: XCTestCase {
         context.undoManager = undoManager
 
         model.value = 2
+        XCTAssertTrue(undoManager.canUndo)
         context.rollback()
         XCTAssertEqual(model.value, 1)
         XCTAssertFalse(context.hasChanges)
@@ -190,7 +191,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackClearsOnlyTheCallingContextsUndoActions() async throws {
+    func testRollbackClearsSharedUndoStack() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("scoped-rollback-undo"))
         let firstContext = container.mainContext
@@ -216,10 +217,11 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertEqual(second.value, 20)
         XCTAssertFalse(first.hasChanges)
         XCTAssertTrue(second.hasChanges)
-        XCTAssertTrue(undoManager.canUndo)
+        XCTAssertFalse(undoManager.canUndo)
+        XCTAssertFalse(undoManager.canRedo)
 
         undoManager.undo()
-        XCTAssertEqual(second.value, 2)
+        XCTAssertEqual(second.value, 20)
         XCTAssertTrue(second.hasChanges)
         XCTAssertFalse(undoManager.canUndo)
     }

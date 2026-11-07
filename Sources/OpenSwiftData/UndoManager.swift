@@ -3,21 +3,15 @@
 /// Registering while undoing pushes onto the redo stack. Registering while redoing pushes onto the undo
 /// stack and keeps the remaining redo actions. Any other registration clears the redo stack.
 struct UndoActionStack {
-    private struct Action {
-        let target: ObjectIdentifier?
-        let perform: () -> Void
-    }
-
-    private var undoActions: [Action] = []
-    private var redoActions: [Action] = []
+    private var undoActions: [() -> Void] = []
+    private var redoActions: [() -> Void] = []
     private(set) var isUndoing = false
     private(set) var isRedoing = false
 
     var canUndo: Bool { !undoActions.isEmpty }
     var canRedo: Bool { !redoActions.isEmpty }
 
-    mutating func register(target: ObjectIdentifier? = nil, _ action: @escaping () -> Void) {
-        let action = Action(target: target, perform: action)
+    mutating func register(_ action: @escaping () -> Void) {
         if isUndoing {
             redoActions.append(action)
         } else {
@@ -32,7 +26,7 @@ struct UndoActionStack {
     mutating func beginUndo() -> (() -> Void)? {
         guard let action = undoActions.popLast() else { return nil }
         isUndoing = true
-        return action.perform
+        return action
     }
 
     mutating func finishUndo() { isUndoing = false }
@@ -43,7 +37,7 @@ struct UndoActionStack {
     mutating func beginRedo() -> (() -> Void)? {
         guard let action = redoActions.popLast() else { return nil }
         isRedoing = true
-        return action.perform
+        return action
     }
 
     mutating func finishRedo() { isRedoing = false }
@@ -53,10 +47,6 @@ struct UndoActionStack {
         redoActions.removeAll()
     }
 
-    mutating func removeAll(target: ObjectIdentifier) {
-        undoActions.removeAll { $0.target == target }
-        redoActions.removeAll { $0.target == target }
-    }
 }
 
 #if canImport(ObjectiveC)
@@ -100,16 +90,11 @@ struct UndoActionStack {
             stack.removeAll()
         }
 
-        /// Clears the undo and redo operations registered for a target.
-        public func removeAllActions(withTarget target: AnyObject) {
-            stack.removeAll(target: ObjectIdentifier(target))
-        }
-
         /// Registers a reversible action for the target object.
         ///
         /// Retains `target` until the action runs or is removed.
         public func registerUndo<Target: AnyObject>(withTarget target: Target, handler: @escaping (Target) -> Void) {
-            stack.register(target: ObjectIdentifier(target)) { handler(target) }
+            stack.register { handler(target) }
         }
 
         /// Accepts an action name without storing it.

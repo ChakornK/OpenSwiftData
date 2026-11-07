@@ -105,18 +105,6 @@ final class UndoGroupOperation {
     }
 }
 
-final class UndoOperationTarget: @unchecked Sendable {
-    private let contextReference: AutosaveContextReference
-
-    init(contextReference: AutosaveContextReference) {
-        self.contextReference = contextReference
-    }
-
-    @MainActor func perform(_ handle: UndoOperationHandle) {
-        contextReference.withContext { handle.perform(in: $0) }
-    }
-}
-
 final class UndoOperationHandle: @unchecked Sendable {
     private let operation: UndoGroupOperation
 
@@ -124,7 +112,7 @@ final class UndoOperationHandle: @unchecked Sendable {
         self.operation = operation
     }
 
-    func perform(in context: ModelContext) {
-        context.performUndoOperation(operation)
+    func perform() {
+        operation.perform()
     }
 }

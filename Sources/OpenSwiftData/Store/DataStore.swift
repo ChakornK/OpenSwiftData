@@ -190,14 +190,14 @@ public protocol AppleDataStoreSnapshot: Codable, Sendable {
     ) -> Self
 }
 
-/// A value-oriented snapshot for stores that explicitly provide stored values and relationships.
+    /// A value-oriented snapshot whose model values and relationships are supplied explicitly.
 public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
     public let persistentIdentifier: PersistentIdentifier
     public let entityName: String
     public let values: [String: StoredValue]
     public let relationships: [String: [PersistentIdentifier]]
 
-    /// Creates an identity-only snapshot because the current backing interface does not expose model values.
+    /// Creates a snapshot with explicitly supplied identity, values, and relationships.
     public init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
@@ -215,8 +215,8 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
         relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
     ) throws {
         _ = (backingData, relatedBackingDatas)
-        let lifecycle = backingData.snapshot()
-        self.init(persistentIdentifier: lifecycle.identifier, entityName: lifecycle.identifier.entityName)
+        throw SwiftDataError.unsupportedStore(
+            "AppleDefaultSnapshot does not capture values from backing data; initialize it with explicit values.")
     }
 
     public func copy(
@@ -264,7 +264,6 @@ public struct AppleDataStoreFetchRequest<Model: PersistentModel> {
     }
 }
 
-
 /// The snapshots returned by an Apple-shaped custom store fetch.
 public struct AppleDataStoreFetchResult<Model: PersistentModel, Snapshot: AppleDataStoreSnapshot> {
     /// The descriptor associated with the fetched snapshots.
@@ -285,7 +284,6 @@ public struct AppleDataStoreFetchResult<Model: PersistentModel, Snapshot: AppleD
     }
 }
 
-
 /// A batch of model changes passed to an Apple-shaped custom store.
 public struct AppleDataStoreSaveChangesRequest<Snapshot: AppleDataStoreSnapshot> {
     public let inserted: [Snapshot]
@@ -298,7 +296,6 @@ public struct AppleDataStoreSaveChangesRequest<Snapshot: AppleDataStoreSnapshot>
         self.deleted = deleted
     }
 }
-
 
 /// A batch of changes passed to an Apple-shaped custom store.
 public struct AppleDataStoreBatchRequest<Snapshot: AppleDataStoreSnapshot> {

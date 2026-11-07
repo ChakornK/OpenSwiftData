@@ -16,10 +16,7 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
         self.title = title
     }
 
-    init(
-        from backingData: any BackingData,
-        relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
-    ) throws {
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) throws {
         _ = (backingData, relatedBackingDatas)
         throw SwiftDataError.unsupportedStore("fixture requires explicit snapshot values")
     }
@@ -29,8 +26,6 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
         remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
     ) -> Self {
         Self(persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier, title: title)
-    }
-
 }
 
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
@@ -72,8 +67,6 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
     func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
         _ = (schema, migrationPlan)
         return FixtureLegacyBackend()
-    }
-
 }
 
 private struct FixtureLegacyBackend: DataStore {
@@ -83,62 +76,6 @@ private struct FixtureLegacyBackend: DataStore {
     }
     func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
     func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
-}
-
-private final class FixtureTransactionState: @unchecked Sendable {
-    private let lock = NSRecursiveLock()
-    private var snapshots: [PersistentIdentifier: DataStoreSnapshot] = [:]
-    private var failAfterFirstInsert = false
-    private var inserts = 0
-
-    func enableFailure() { lock.lock(); failAfterFirstInsert = true; lock.unlock() }
-    func resetFailure() { lock.lock(); failAfterFirstInsert = false; inserts = 0; lock.unlock() }
-
-    func apply(_ request: DataStoreSaveRequest) throws {
-        lock.lock(); defer { lock.unlock() }
-        for snapshot in request.inserted {
-            snapshots[snapshot.persistentIdentifier] = snapshot
-            inserts += 1
-            if failAfterFirstInsert, inserts == 1 {
-                throw SwiftDataError.unsupportedStore("injected atomic write failure")
-            }
-        }
-        for snapshot in request.updated { snapshots[snapshot.persistentIdentifier] = snapshot }
-        for identifier in request.deleted { snapshots.removeValue(forKey: identifier) }
-    }
-
-    func all() -> [DataStoreSnapshot] { lock.lock(); defer { lock.unlock() }; return Array(snapshots.values) }
-    func restore(_ values: [DataStoreSnapshot]) {
-        lock.lock(); defer { lock.unlock() }
-        snapshots = Dictionary(uniqueKeysWithValues: values.map { ($0.persistentIdentifier, $0) })
-    }
-}
-
-private struct AtomicFixtureBackend: DataStore {
-    let identifier = "apple.fixture"
-    let state: FixtureTransactionState
-
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        DataStoreFetchResult(snapshots: state.all())
-    }
-
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
-        let before = state.all()
-        do {
-            try state.apply(request)
-            return DataStoreSaveResult(
-                updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
-                deletedIdentifiers: Set(request.deleted))
-        } catch {
-            state.restore(before)
-            state.resetFailure()
-            throw error
-        }
-    }
-
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
-        state.all().first { $0.persistentIdentifier == identifier }
-    }
 }
 
 @Suite
@@ -164,13 +101,12 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
-    func testDefaultSnapshotBackingInitializerCapturesIdentityOnly() throws {
+    func testDefaultSnapshotBackingInitializerRejectsValueCapture() throws {
         let backing = DetachedBackingData<AppleStoreFixture>(metadata: AppleStoreFixture.schemaMetadata())
         var related: [PersistentIdentifier: any BackingData] = [:]
-        let snapshot = try AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
-        #expect(snapshot.persistentIdentifier == backing.persistentModelID)
-        #expect(snapshot.entityName == backing.persistentModelID.entityName)
-        #expect(snapshot.values.isEmpty)
+        #expect(throws: SwiftDataError.self) {
+            try AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
+        }
     }
 
     @Test @MainActor
@@ -183,6 +119,4 @@ struct AppleDataStoreAPITests {
                 appleStore: "apple-fixture", schema: schema,
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
-    }
-
 }

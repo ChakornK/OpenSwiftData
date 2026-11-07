@@ -91,7 +91,8 @@ import Testing
     }
 
     @Test func `cloud and group selections do not affect equality`() {
-        #expect(ModelConfiguration("A", cloudKitDatabase: .none) == ModelConfiguration("A", cloudKitDatabase: .automatic))
+        #expect(
+            ModelConfiguration("A", cloudKitDatabase: .none) == ModelConfiguration("A", cloudKitDatabase: .automatic))
         #expect(ModelConfiguration("A", groupContainer: .none) == ModelConfiguration("A", groupContainer: .automatic))
     }
 
@@ -120,7 +121,8 @@ import Testing
             "P", isStoredInMemoryOnly: true, groupContainer: .none, cloudKitDatabase: .private("iCloud.x"))
         #expect(
             custom.debugDescription.contains(
-                "cloudKitDatabase: CloudKitDatabase(_automatic: false, _none: false, _privateDBName: Optional(\"iCloud.x\"))"))
+                "cloudKitDatabase: CloudKitDatabase(_automatic: false, _none: false, _privateDBName: Optional(\"iCloud.x\"))"
+            ))
         #expect(custom.debugDescription.contains("cloudKitContainerIdentifier: Optional(\"iCloud.x\")"))
         #expect(custom.debugDescription.contains("GroupContainer(_automatic: false, _none: true, _identifier: nil)"))
     }
@@ -156,7 +158,8 @@ import Testing
     @Test func `containers reject configurations with invalid names`() {
         #expect(throws: SwiftDataError.configurationFileNameContainsInvalidCharacters) {
             try ModelContainer(
-                for: ConfigurationParityThing.self, configurations: ModelConfiguration("a/b", isStoredInMemoryOnly: true))
+                for: ConfigurationParityThing.self,
+                configurations: ModelConfiguration("a/b", isStoredInMemoryOnly: true))
         }
     }
 

@@ -111,7 +111,9 @@ final class DefaultStoreTests: XCTestCase {
             XCTAssertNil(container.store)
             XCTAssertTrue(container.configurations.isEmpty)
             XCTAssertThrowsError(try container.mainContext.fetch(FetchDescriptor<DefaultStoreFixture>())) { error in
-                guard let dataError = error as? SwiftDataError, dataError == .unsupportedStore, let message = dataError.explanation else {
+                guard let dataError = error as? SwiftDataError, dataError == .unsupportedStore,
+                    let message = dataError.explanation
+                else {
                     return XCTFail("Expected unsupportedStore, got \(error)")
                 }
                 XCTAssertEqual(message, "Fetch is unavailable without a persistent store.")

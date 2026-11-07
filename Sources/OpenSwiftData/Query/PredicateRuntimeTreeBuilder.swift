@@ -756,10 +756,12 @@ package enum PredicateRuntimeTreeBuilder {
                         activeModelType.schemaMetadata().first(where: { $0.name == reference.name })?.keypath
                         .map { String(reflecting: type(of: $0).valueType) } ?? "Swift.Optional<Swift.String>"
                     func nilValue(at nodePath: [String]) -> RuntimePredicateNode {
-                        captures[RuntimePredicatePath(labels: capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) })] =
+                        captures[
+                            RuntimePredicatePath(labels: capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) })] =
                             .null
                         return .expression(
-                            name: "Value", children: [("value", .capture(typeName: wrappedTypeName, description: "nil"))])
+                            name: "Value",
+                            children: [("value", .capture(typeName: wrappedTypeName, description: "nil"))])
                     }
                     return .expression(
                         name: "Conditional",

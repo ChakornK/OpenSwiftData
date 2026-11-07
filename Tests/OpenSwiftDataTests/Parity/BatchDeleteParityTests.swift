@@ -60,7 +60,10 @@ import Testing
         #expect(a.modelContext === context)
         #expect(c.modelContext === context)
         #expect(try ModelContext(container).fetch(saved).map(\.name) == ["b"])
-        #expect(try context.fetch(FetchDescriptor<BatchParityOwner>(sortBy: [SortDescriptor(\.name)])).map(\.name) == ["b", "c"])
+        #expect(
+            try context.fetch(FetchDescriptor<BatchParityOwner>(sortBy: [SortDescriptor(\.name)])).map(\.name) == [
+                "b", "c",
+            ])
         try context.save()
         #expect(try ModelContext(container).fetch(saved).map(\.name) == ["b", "c"])
     }

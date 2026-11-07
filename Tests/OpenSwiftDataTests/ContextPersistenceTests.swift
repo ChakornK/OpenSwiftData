@@ -2053,7 +2053,9 @@ final class ContextPersistenceTests: XCTestCase {
             try PredicateRuntimeTreeBuilder.build(
                 negativeMinimum, modelType: PredicateAgreementFixture.self, entity: entity)
         ) { error in
-            guard let dataError = error as? SwiftDataError, dataError == .unsupportedPredicate, let message = dataError.explanation else {
+            guard let dataError = error as? SwiftDataError, dataError == .unsupportedPredicate,
+                let message = dataError.explanation
+            else {
                 return XCTFail("Expected overflowing unary minus to fail safely, got \(error)")
             }
             XCTAssertTrue(message.contains("overflows"), "Unexpected unary-minus error: \(message)")

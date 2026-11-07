@@ -215,6 +215,7 @@ public struct Schema: Sendable {
             /// Requires each destination to be unique across owners.
             public static var unique: Option { Option(name: "unique") }
 
+            /// The option name.
             public var debugDescription: String { name }
         }
 
@@ -302,6 +303,7 @@ public struct Schema: Sendable {
             self.patch = patch
         }
 
+        /// Orders versions by major, then minor, then patch number.
         public static func < (lhs: Version, rhs: Version) -> Bool {
             (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
         }

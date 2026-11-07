@@ -43,6 +43,7 @@ public struct FetchDescriptor<Model: PersistentModel>: Equatable {
 }
 
 extension FetchDescriptor {
+    /// Returns whether both descriptors have equal predicates, sorting, paging, and fetch options.
     public static func == (lhs: FetchDescriptor, rhs: FetchDescriptor) -> Bool {
         lhs.sortBy == rhs.sortBy && lhs.fetchLimit == rhs.fetchLimit && lhs.fetchOffset == rhs.fetchOffset
             && lhs.includePendingChanges == rhs.includePendingChanges

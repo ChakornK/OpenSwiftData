@@ -50,10 +50,11 @@ private final class NotificationLog: @unchecked Sendable {
         try context.save()
 
         let entries = log.entries
-        #expect(entries.map(\.name) == [
-            ModelContext.willSave, ModelContext.didSave, ModelContext.willSave, ModelContext.didSave,
-            ModelContext.willSave,
-        ])
+        #expect(
+            entries.map(\.name) == [
+                ModelContext.willSave, ModelContext.didSave, ModelContext.willSave, ModelContext.didSave,
+                ModelContext.willSave,
+            ])
         #expect(entries.filter { $0.name == ModelContext.willSave }.allSatisfy { ($0.info ?? [:]).isEmpty })
         func identifiers(_ index: Int, _ key: ModelContext.NotificationKey) -> [PersistentIdentifier]? {
             entries[index].info?[key.rawValue] as? [PersistentIdentifier]

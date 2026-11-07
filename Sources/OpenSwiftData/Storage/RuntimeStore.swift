@@ -220,11 +220,13 @@ public struct RuntimeHistoryChange: Sendable, Hashable {
         self.tombstone = tombstone
     }
 
+    /// Returns whether both changes record the same change to the same row.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.type == rhs.type && lhs.entityName == rhs.entityName && lhs.primaryKey == rhs.primaryKey
             && lhs.updatedAttributes == rhs.updatedAttributes && lhs.tombstone == rhs.tombstone
     }
 
+    /// Hashes every property that `==` compares.
     public func hash(into hasher: inout Hasher) {
         hasher.combine(type)
         hasher.combine(entityName)

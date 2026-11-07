@@ -93,7 +93,8 @@ package enum RuntimePredicateEvaluator {
             return [components[0]: [components[1]]]
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
-        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+            let .isNull(value, _):
             return relationshipProperties(in: value)
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
             let .arithmetic(_, lhs, rhs), let .boundedArithmetic(_, lhs, rhs, _),
@@ -125,7 +126,8 @@ package enum RuntimePredicateEvaluator {
                 let .stringStartsWith(lhs, rhs):
                 walk(lhs, collectionDepth: collectionDepth)
                 walk(rhs, collectionDepth: collectionDepth)
-            case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+            case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+                let .isNull(value, _):
                 walk(value, collectionDepth: collectionDepth)
             case let .conditional(test, yes, no):
                 walk(test, collectionDepth: collectionDepth)
@@ -154,7 +156,8 @@ package enum RuntimePredicateEvaluator {
             let .boundedArithmetic(_, lhs, rhs, _), let .floatArithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
             return containsNestedRelationship(lhs, depth: depth) || containsNestedRelationship(rhs, depth: depth)
-        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+            let .isNull(value, _):
             return containsNestedRelationship(value, depth: depth)
         case let .conditional(test, yes, no):
             return containsNestedRelationship(test, depth: depth)

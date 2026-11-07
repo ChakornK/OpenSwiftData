@@ -596,7 +596,9 @@ final class CustomMigrationPlanTests: XCTestCase {
                 migrationPlan: TestMigrationPlan.self,
                 configurations: .sqliteFile("migration-future-version", url: url))
         ) { error in
-            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
+            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                let message = dataError.explanation
+            else {
                 return XCTFail("Expected an unknown stored schema version to fail closed, got \(error)")
             }
             XCTAssertTrue(message.contains("3.0.0' is not present in the migration plan."), message)
@@ -776,7 +778,9 @@ final class CustomMigrationPlanTests: XCTestCase {
                 for: MigrationPlanRecord.self, migrationPlan: TestMigrationPlan.self,
                 configurations: .sqliteFile("migration-version-hash-mismatch", url: url))
         ) { error in
-            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
+            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                let message = dataError.explanation
+            else {
                 return XCTFail("Expected version/hash mismatch to fail closed, got \(error)")
             }
             XCTAssertTrue(message.contains("Stored schema does not match recorded version '2.0.0'"), message)
@@ -866,7 +870,9 @@ final class CustomMigrationPlanTests: XCTestCase {
                 for: MigrationPlanRecord.self, migrationPlan: VersionThreePlan.self,
                 configurations: .sqliteFile("migration-pending-hash-mismatch", url: url))
         ) { error in
-            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
+            guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                let message = dataError.explanation
+            else {
                 return XCTFail("Expected pending/schema mismatch to fail closed, got \(error)")
             }
             XCTAssertTrue(
@@ -959,7 +965,9 @@ final class CustomMigrationPlanTests: XCTestCase {
                     for: MigrationPlanRecord.self, migrationPlan: VersionThreePlan.self,
                     configurations: .sqliteFile("malformed-pending-\(name)", url: url))
             ) { error in
-                guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported, let message = dataError.explanation else {
+                guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                    let message = dataError.explanation
+                else {
                     return XCTFail("Expected malformed pending marker \(name) to fail closed, got \(error)")
                 }
                 XCTAssertTrue(message.contains(expectedMessage), "Expected '\(expectedMessage)', got '\(message)'")

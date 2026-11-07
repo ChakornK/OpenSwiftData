@@ -34,12 +34,16 @@ public struct FetchResultsCollection<Element>: RandomAccessCollection {
     /// Creates a collection of `count` elements loaded `batchSize` at a time; a non-positive batch size loads
     /// every element in one batch.
     package init(count: Int, batchSize: Int, loadBatch: @escaping (Range<Int>) -> [Element]) {
-        storage = Storage(count: count, batchSize: batchSize > 0 ? batchSize : Swift.max(count, 1), loadBatch: loadBatch)
+        storage = Storage(
+            count: count, batchSize: batchSize > 0 ? batchSize : Swift.max(count, 1), loadBatch: loadBatch)
     }
 
+    /// The position of the first result.
     public var startIndex: Int { 0 }
+    /// The position one past the last result.
     public var endIndex: Int { storage.count }
 
+    /// Returns the result at a position, fetching its batch if needed.
     public subscript(position: Int) -> Element {
         precondition(indices.contains(position), "Index out of range")
         return storage.element(at: position)

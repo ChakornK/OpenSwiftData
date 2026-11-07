@@ -87,8 +87,10 @@ import Testing
             "uriRepresentation":"x-coredata:\\/\\/CC259F7B-10A2-4132-A41A-2AAB83D11A0D\\/Thing\\/p1"}}
             """
         let decoded = try JSONDecoder().decode(PersistentIdentifier.self, from: Data(permanent.utf8))
-        #expect(decoded == PersistentIdentifier(
-            storeIdentifier: "CC259F7B-10A2-4132-A41A-2AAB83D11A0D", entityName: "Thing", primaryKey: 1))
+        #expect(
+            decoded
+                == PersistentIdentifier(
+                    storeIdentifier: "CC259F7B-10A2-4132-A41A-2AAB83D11A0D", entityName: "Thing", primaryKey: 1))
 
         let temporary = """
             {"implementation":{"entityName":"Thing","isTemporary":true,\
@@ -105,8 +107,10 @@ import Testing
             "uriRepresentation":"developer-provided:\\/\\/store\\/Thing\\/abc"}}
             """
         let decodedDeveloper = try JSONDecoder().decode(PersistentIdentifier.self, from: Data(developer.utf8))
-        #expect(decodedDeveloper == (try PersistentIdentifier.identifier(
-            for: "store", entityName: "Thing", primaryKey: "abc")))
+        #expect(
+            decodedDeveloper
+                == (try PersistentIdentifier.identifier(
+                    for: "store", entityName: "Thing", primaryKey: "abc")))
     }
 
     @Test func `decodes the legacy tagged format`() throws {

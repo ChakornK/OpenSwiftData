@@ -90,7 +90,9 @@ import Testing
         #expect(!duplicate.persistentModelID.isTemporary)
         #expect((context.registeredModel(for: duplicate.persistentModelID) as UniqueParityKeyed?) === duplicate)
         #expect(duplicate.persistentModelID.storeIdentifier != nil)
-        #expect(try duplicate.persistentModelID != context.fetch(FetchDescriptor<UniqueParityKeyed>()).first?.persistentModelID)
+        #expect(
+            try duplicate.persistentModelID
+                != context.fetch(FetchDescriptor<UniqueParityKeyed>()).first?.persistentModelID)
     }
 
     @Test func `deleting a merged duplicate leaves the merged row`() throws {

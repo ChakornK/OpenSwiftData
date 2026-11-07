@@ -11,6 +11,7 @@ public protocol VersionedSchema: Sendable {
 }
 
 extension VersionedSchema {
+    /// A schema of `models` at `versionIdentifier`.
     public static var schema: Schema { Schema(models, version: versionIdentifier) }
 }
 

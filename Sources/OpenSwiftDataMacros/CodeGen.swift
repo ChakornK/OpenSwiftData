@@ -46,7 +46,8 @@ enum CodeGen {
         }
         return try arguments.map { argument in
             guard let array = argument.expression.as(ArrayExprSyntax.self), !array.elements.isEmpty else {
-                throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be non-empty arrays of property key paths.")
+                throw SchemaDirectiveDiagnostic(
+                    "#\(kind.name) arguments must be non-empty arrays of property key paths.")
             }
             let properties = try array.elements.map { element -> String in
                 guard let keyPath = element.expression.as(KeyPathExprSyntax.self),

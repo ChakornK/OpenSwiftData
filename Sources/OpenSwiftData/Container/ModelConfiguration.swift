@@ -76,7 +76,9 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     /// Creates a default-named configuration that stores the given model types.
     public init(for forTypes: any PersistentModel.Type..., isStoredInMemoryOnly: Bool = false) {
-        self.init(nil, schema: Schema(forTypes as [any PersistentModel.Type], version: nil), isStoredInMemoryOnly: isStoredInMemoryOnly)
+        self.init(
+            nil, schema: Schema(forTypes as [any PersistentModel.Type], version: nil),
+            isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
     /// Creates a configuration whose store file is `<name>.store` in Application Support.
@@ -209,6 +211,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     private static let invalidNameCharacters: Set<Character> = ["/", ":", "\\", "*", "?", "\"", "<", ">", "|"]
 
+    /// Returns whether both configurations have the same name, URL, schema, save permission, and in-memory flag.
     public static func == (lhs: ModelConfiguration, rhs: ModelConfiguration) -> Bool {
         lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema == rhs.schema && lhs.allowsSave == rhs.allowsSave
             && lhs.isStoredInMemoryOnly == rhs.isStoredInMemoryOnly
@@ -222,6 +225,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         hasher.combine(isStoredInMemoryOnly)
     }
 
+    /// A multiline summary of the configuration's settings.
     public var debugDescription: String {
         """
         ModelConfiguration
@@ -266,8 +270,9 @@ extension ModelConfiguration {
                 return container.appendingPathComponent("Library/Application Support", isDirectory: true)
             }
         #endif
-        return (try? FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false))
+        return
+            (try? FileManager.default.url(
+                for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false))
             ?? FileManager.default.temporaryDirectory
     }
 

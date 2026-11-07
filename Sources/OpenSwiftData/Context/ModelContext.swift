@@ -550,7 +550,8 @@ public final class ModelContext {
                     throw SwiftDataError.unsupportedSchemaProperty(
                         "Relationship adapter '\(adapter.name)' is unresolved during delete processing.")
                 }
-                guard metadata.deleteRule == .nullify || metadata.deleteRule == .deny, let inverseName = metadata.inverse
+                guard metadata.deleteRule == .nullify || metadata.deleteRule == .deny,
+                    let inverseName = metadata.inverse
                 else { continue }
                 for endpoint in endpoints {
                     guard let inverse = state.relationshipAdapter(for: endpoint, property: inverseName) else {
@@ -820,7 +821,8 @@ public final class ModelContext {
         }
         guard let store = container.store else { throw unsupportedStore("Fetch") }
         let allAttributes = canonicalAttributes(for: entity)
-        let requestedProperties = try selectedAttributes(descriptor.selectedProperties, entity: entity, type: Model.self)
+        let requestedProperties = try selectedAttributes(
+            descriptor.selectedProperties, entity: entity, type: Model.self)
         let selectedAttributesForMaterialization =
             hasHierarchy
             ? try hierarchyAttributes(for: entity)
@@ -1645,7 +1647,8 @@ public final class ModelContext {
         }
         guard let row = rows.first else { return nil }
         let candidate = try materialize(
-            Model.self, entity: entity, attributes: attributes, row: row, storeIdentifier: identifier.resolvedStoreIdentifier,
+            Model.self, entity: entity, attributes: attributes, row: row,
+            storeIdentifier: identifier.resolvedStoreIdentifier,
             primaryKey: key, version: row.count > 1 ? runtimeInt(row[1]) : 0)
         let model =
             identityMap.canonicalHandle(
@@ -2548,7 +2551,8 @@ public final class ModelContext {
                         let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
                         try collect(lhs)
                         try collect(rhs)
-                    case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+                    case let .negation(value), let .stringCount(value), let .unaryNegation(value, _),
+                        let .floatNegation(value),
                         let .isNull(value, _):
                         try collect(value)
                     case let .conditional(test, yes, no):
@@ -3273,7 +3277,9 @@ public final class ModelContext {
                 let ownerIDs = ownerHasHierarchy ? descendantEntityIDs(for: entity) : []
                 let destinationHasHierarchy =
                     destinationEntity.superentityName != nil
-                    || optionalContainer?.schema.entities.contains(where: { $0.superentityName == destinationEntity.name })
+                    || optionalContainer?.schema.entities.contains(where: {
+                        $0.superentityName == destinationEntity.name
+                    })
                         == true
                 let destinationRoot = rootEntity(for: destinationEntity)
                 let destinationIDs = destinationHasHierarchy ? descendantEntityIDs(for: destinationEntity) : []
@@ -3401,7 +3407,9 @@ public final class ModelContext {
             if let destinationEntity {
                 let destinationHasHierarchy =
                     destinationEntity.superentityName != nil
-                    || optionalContainer?.schema.entities.contains(where: { $0.superentityName == destinationEntity.name })
+                    || optionalContainer?.schema.entities.contains(where: {
+                        $0.superentityName == destinationEntity.name
+                    })
                         == true
                 let destinationKeys = Set(
                     rows.compactMap { row -> Int64? in
@@ -3451,7 +3459,9 @@ public final class ModelContext {
                     let candidate: any PersistentModel
                     let key: EntityPrimaryKey
                     if destinationHasHierarchy {
-                        guard let container = optionalContainer else { throw unsupportedStore("Relationship destination lookup") }
+                        guard let container = optionalContainer else {
+                            throw unsupportedStore("Relationship destination lookup")
+                        }
                         guard row.count >= 3, case let .int(rawEntityID) = row[2],
                             let concreteEntityID = Int(exactly: rawEntityID),
                             let registration = container.modelRegistration(forEntityID: concreteEntityID),
@@ -3487,7 +3497,9 @@ public final class ModelContext {
                 }
             }
 
-            guard let relationshipDestinationEntity = optionalContainer?.schema.entity(forName: relationship.destination) else {
+            guard
+                let relationshipDestinationEntity = optionalContainer?.schema.entity(forName: relationship.destination)
+            else {
                 throw SwiftDataError.unsupportedSchemaProperty(
                     "Relationship destination '\(relationship.destination)' is missing from the schema.")
             }
@@ -3657,7 +3669,9 @@ public final class ModelContext {
         visited: inout Set<EntityPrimaryKey>, materializeRelations: Bool = true
     ) throws -> (any PersistentModel)? {
         func load<Model: PersistentModel>(_ type: Model.Type) throws -> Model? {
-            guard let entity = optionalContainer?.schema.entity(forName: String(describing: Model.self)) else { return nil }
+            guard let entity = optionalContainer?.schema.entity(forName: String(describing: Model.self)) else {
+                return nil
+            }
             let key = EntityPrimaryKey(entityName: entity.name, primaryKey: primaryKey)
             guard visited.insert(key).inserted else {
                 if let existing = identityMap.model(for: key, as: Model.self) { return existing }
@@ -4042,7 +4056,8 @@ public final class ModelContext {
                         storeIdentifier: storeIdentifier, entityName: entityName,
                         entityID: try entityID(for: entityName), primaryKey: ghostPrimaryKey, version: 1)
                     mergedDuplicateIdentifiers.insert(model.persistentModelID)
-                    identityMap.register(model, for: identityKey(forEntityName: entityName, primaryKey: ghostPrimaryKey))
+                    identityMap.register(
+                        model, for: identityKey(forEntityName: entityName, primaryKey: ghostPrimaryKey))
                     if let old = originalIdentifier, old.isTemporary {
                         temporaryIdentifiers[old] = model.persistentModelID
                     }
@@ -4452,7 +4467,8 @@ public final class ModelContext {
                             mergedDuplicatePrimaryKey: mergedDuplicatePrimaryKey))
                     return
                 }
-                let primaryKey = try preservedPrimaryKey ?? Self.allocatePrimaryKey(table: table, connection: connection)
+                let primaryKey =
+                    try preservedPrimaryKey ?? Self.allocatePrimaryKey(table: table, connection: connection)
                 let names = (["Z_PK", "Z_ENT", "Z_OPT"] + columns).joined(separator: ", ")
                 let placeholders = Array(repeating: "?", count: columns.count + 3).joined(separator: ", ")
                 let identityValues: [RuntimeValue] = [

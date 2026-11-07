@@ -66,7 +66,8 @@ import Testing
     private func makePendingChanges() throws {
         context.insert(PendingFetchPerson(name: "p1", age: 20))
         let byName = { (name: String) in
-            try #require(try context.fetch(FetchDescriptor<PendingFetchPerson>(predicate: #Predicate { $0.name == name })).first)
+            try #require(
+                try context.fetch(FetchDescriptor<PendingFetchPerson>(predicate: #Predicate { $0.name == name })).first)
         }
         try byName("s1").age = 60
         context.delete(try byName("s2"))

@@ -7768,8 +7768,10 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(
             container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
-        let managedFirst = try XCTUnwrap(container.mainContext.model(for: first.persistentModelID) as? ToManyHierarchyTargetChildFixture)
-        let managedSecond = try XCTUnwrap(container.mainContext.model(for: second.persistentModelID) as? ToManyHierarchyTargetGrandchildFixture)
+        let managedFirst = try XCTUnwrap(
+            container.mainContext.model(for: first.persistentModelID) as? ToManyHierarchyTargetChildFixture)
+        let managedSecond = try XCTUnwrap(
+            container.mainContext.model(for: second.persistentModelID) as? ToManyHierarchyTargetGrandchildFixture)
         let root = IndependentToManyRootFixture(name: "root", items: [managedFirst, managedSecond])
         container.mainContext.insert(root)
         try container.mainContext.save()

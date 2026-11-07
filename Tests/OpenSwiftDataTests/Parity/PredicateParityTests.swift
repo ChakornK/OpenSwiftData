@@ -56,7 +56,9 @@ import Testing
         let result = try names(#Predicate { none.contains($0.name) })
         #expect(result.pending.isEmpty)
         #expect(result.saved.isEmpty)
-        #expect(try context.fetchCount(FetchDescriptor(predicate: #Predicate<PredicateParityRow> { none.contains($0.name) })) == 0)
+        #expect(
+            try context.fetchCount(
+                FetchDescriptor(predicate: #Predicate<PredicateParityRow> { none.contains($0.name) })) == 0)
     }
 
     @Test func `negated, integer, and combined membership`() throws {

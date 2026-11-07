@@ -76,7 +76,8 @@ final class HistoryTests: XCTestCase {
         let reopened = try ModelContainer(
             for: HistoryFixture.self,
             configurations: .sqliteFile("history-reopened", url: directory.appendingPathComponent("store.sqlite")))
-        XCTAssertEqual(try reopened.makeContext().allHistory().map(\.transactionIdentifier), [delete.transactionIdentifier])
+        XCTAssertEqual(
+            try reopened.makeContext().allHistory().map(\.transactionIdentifier), [delete.transactionIdentifier])
     }
 
     @MainActor

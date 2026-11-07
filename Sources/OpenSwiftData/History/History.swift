@@ -90,6 +90,7 @@ public struct HistoryTombstone<Model: PersistentModel>: Sequence, @unchecked Sen
     /// Iterates the preserved values.
     public struct Iterator: IteratorProtocol {
         fileprivate var base: IndexingIterator<[Any]>
+        /// Returns the next preserved value, or `nil` after the last one.
         public mutating func next() -> Any? { base.next() }
     }
 
@@ -98,6 +99,7 @@ public struct HistoryTombstone<Model: PersistentModel>: Sequence, @unchecked Sen
         entries.first(where: { $0.keyPath == keyPath })?.value
     }
 
+    /// Returns an iterator over the preserved values.
     public func makeIterator() -> Iterator { Iterator(base: entries.map(\.value).makeIterator()) }
 }
 
@@ -126,6 +128,7 @@ public struct HistoryDescriptor<TransactionType: HistoryTransaction> {
 ///
 /// Encodes as `{"storeTokens": {"<store identifier>": <transaction identifier>}}`.
 public struct DefaultHistoryToken: HistoryToken, Codable {
+    /// The token value: each store identifier mapped to its transaction identifier.
     public typealias TokenType = [String: Int64]
     private let storeTokens: [String: Int64]
 
@@ -133,6 +136,7 @@ public struct DefaultHistoryToken: HistoryToken, Codable {
         self.storeTokens = storeTokens
     }
 
+    /// An identifier derived from the token value.
     public var id: Int { storeTokens.hashValue }
     /// The transaction identifier reached in each store.
     public var tokenValue: TokenType? { storeTokens }
@@ -152,24 +156,35 @@ public struct DefaultHistoryToken: HistoryToken, Codable {
 
 /// A transaction recorded in the default store's history.
 public struct DefaultHistoryTransaction: HistoryTransaction {
+    /// Transaction identifiers are store-assigned integers.
     public typealias TransactionIdentifier = Int64
+    /// The token type that marks this transaction's position.
     public typealias TokenType = DefaultHistoryToken
+    /// The transaction identifier.
     public var id: Int64 { transactionIdentifier }
+    /// When the transaction was saved.
     public let timestamp: Date
+    /// The inserts, updates, and deletes the transaction recorded, in order.
     public let changes: [HistoryChange]
+    /// The history position just after this transaction.
     public let token: DefaultHistoryToken
+    /// The store-assigned identifier of the transaction.
     public let transactionIdentifier: Int64
+    /// The identifier of the store that recorded the transaction.
     public let storeIdentifier: String
     /// The bundle identifier of the app that saved the transaction, or its process name.
     public let bundleIdentifier: String
     /// The identifier of the process that saved the transaction.
     public let processIdentifier: String
+    /// The saving context's author, if it set one.
     public let author: String?
 
+    /// Returns whether both values have the same identifiers.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.transactionIdentifier == rhs.transactionIdentifier && lhs.storeIdentifier == rhs.storeIdentifier
     }
 
+    /// Hashes the identifiers that `==` compares.
     public func hash(into hasher: inout Hasher) {
         hasher.combine(transactionIdentifier)
         hasher.combine(storeIdentifier)
@@ -178,27 +193,41 @@ public struct DefaultHistoryTransaction: HistoryTransaction {
 
 /// An insertion recorded in the default store's history.
 public struct DefaultHistoryInsert<Model: PersistentModel>: HistoryInsert, Hashable {
+    /// Transaction identifiers are store-assigned integers.
     public typealias TransactionIdentifier = Int64
+    /// Change identifiers are store-assigned integers.
     public typealias ChangeIdentifier = Int64
+    /// The store-assigned identifier of the change.
     public let changeIdentifier: Int64
+    /// The store-assigned identifier of the transaction.
     public let transactionIdentifier: Int64
+    /// The identifier of the changed model.
     public let changedPersistentIdentifier: PersistentIdentifier
 }
 
 /// An update recorded in the default store's history.
 public struct DefaultHistoryUpdate<Model: PersistentModel>: HistoryUpdate, Hashable {
+    /// Transaction identifiers are store-assigned integers.
     public typealias TransactionIdentifier = Int64
+    /// Change identifiers are store-assigned integers.
     public typealias ChangeIdentifier = Int64
+    /// Updated properties are identified by key path.
     public typealias PropertyUpdate = PartialKeyPath<Model> & Sendable
+    /// The store-assigned identifier of the change.
     public let changeIdentifier: Int64
+    /// The store-assigned identifier of the transaction.
     public let transactionIdentifier: Int64
+    /// The identifier of the changed model.
     public let changedPersistentIdentifier: PersistentIdentifier
+    /// The attributes the update changed.
     public let updatedAttributes: [any PartialKeyPath<Model> & Sendable]
 
+    /// Returns whether both values have the same identifiers.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.changeIdentifier == rhs.changeIdentifier && lhs.transactionIdentifier == rhs.transactionIdentifier
     }
 
+    /// Hashes the identifiers that `==` compares.
     public func hash(into hasher: inout Hasher) {
         hasher.combine(changeIdentifier)
         hasher.combine(transactionIdentifier)
@@ -207,17 +236,25 @@ public struct DefaultHistoryUpdate<Model: PersistentModel>: HistoryUpdate, Hasha
 
 /// A deletion recorded in the default store's history.
 public struct DefaultHistoryDelete<Model: PersistentModel>: HistoryDelete, Hashable {
+    /// Transaction identifiers are store-assigned integers.
     public typealias TransactionIdentifier = Int64
+    /// Change identifiers are store-assigned integers.
     public typealias ChangeIdentifier = Int64
+    /// The store-assigned identifier of the change.
     public let changeIdentifier: Int64
+    /// The store-assigned identifier of the transaction.
     public let transactionIdentifier: Int64
+    /// The identifier of the changed model.
     public let changedPersistentIdentifier: PersistentIdentifier
+    /// The values preserved from the deleted model.
     public let tombstone: HistoryTombstone<Model>
 
+    /// Returns whether both values have the same identifiers.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.changeIdentifier == rhs.changeIdentifier && lhs.transactionIdentifier == rhs.transactionIdentifier
     }
 
+    /// Hashes the identifiers that `==` compares.
     public func hash(into hasher: inout Hasher) {
         hasher.combine(changeIdentifier)
         hasher.combine(transactionIdentifier)

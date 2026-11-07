@@ -311,14 +311,17 @@ final class CodeGenTests: XCTestCase {
 
         XCTAssertTrue(
             baseSources.contains(
-                "static func __BasePropertyDescriptors<_OSDRoot: Base>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __BasePropertyDescriptors<_OSDRoot: Base>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"
+            ),
             baseSources)
         XCTAssertTrue(
-            baseSources.contains("descriptors[\\_OSDRoot.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
+            baseSources.contains(
+                "descriptors[\\_OSDRoot.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
             baseSources)
         XCTAssertTrue(
             childSources.contains(
-                "static func __ChildPropertyDescriptors<_OSDRoot: Child>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __ChildPropertyDescriptors<_OSDRoot: Child>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"
+            ),
             childSources)
         XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(_OSDRoot.self)"), childSources)
         XCTAssertTrue(

@@ -68,7 +68,10 @@ import Testing
             return
         }
         #expect(typed.changedPersistentIdentifier == a.persistentModelID)
-        #expect(Set(typed.updatedAttributes.map { $0 as AnyKeyPath }) == [\HistoryParityItem.count, \HistoryParityItem.name])
+        #expect(
+            Set(typed.updatedAttributes.map { $0 as AnyKeyPath }) == [
+                \HistoryParityItem.count, \HistoryParityItem.name,
+            ])
 
         guard case .delete(let delete) = history[2].changes.first,
             let deleted = delete as? DefaultHistoryDelete<HistoryParityItem>
@@ -90,7 +93,9 @@ import Testing
         #expect(try context.fetchHistory(Transactions(predicate: #Predicate { $0.author == "alice" })).count == 2)
         var limited = Transactions()
         limited.fetchLimit = 2
-        #expect(try context.fetchHistory(limited).map(\.transactionIdentifier) == all.prefix(2).map(\.transactionIdentifier))
+        #expect(
+            try context.fetchHistory(limited).map(\.transactionIdentifier) == all.prefix(2).map(\.transactionIdentifier)
+        )
         let reversed = try context.fetchHistory(
             Transactions(sortBy: [SortDescriptor(\.transactionIdentifier, order: .reverse)]))
         #expect(reversed.map(\.transactionIdentifier) == all.reversed().map(\.transactionIdentifier))

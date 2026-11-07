@@ -105,7 +105,8 @@ public final class ModelContext {
         }
     }
     private var undoManagerStorage: UndoManager?
-    private lazy var undoOperationTarget = UndoOperationTarget(context: self)
+    private let undoContextReference: AutosaveContextReference
+    private let undoOperationTarget: UndoOperationTarget
     private var undoRegisteredModels = Set<ObjectIdentifier>()
     private var currentUndoGroup: UndoGroupOperation?
     private var isApplyingUndoGroup = false
@@ -206,6 +207,8 @@ public final class ModelContext {
         affinity: ModelContextAffinity = .unchecked,
         affinityToken: ModelExecutorAffinityToken? = nil
     ) {
+        undoContextReference = AutosaveContextReference()
+        undoOperationTarget = UndoOperationTarget(contextReference: undoContextReference)
         containerStorage = container
         self.affinity = affinityToken == nil ? affinity : .unchecked
         self.affinityToken = affinityToken
@@ -234,11 +237,14 @@ public final class ModelContext {
         autosaveEnabledStorage = autosaveEnabled
         allowsSave = container?.configurationList.first?.allowsSave ?? true
         testSaveHook = nil
+        undoContextReference.set(self)
         autosaveContextReference.set(self)
         subscribeToStoreChanges()
     }
 
     internal init(testSave hook: @escaping () throws -> Void, container: ModelContainer? = nil) {
+        undoContextReference = AutosaveContextReference()
+        undoOperationTarget = UndoOperationTarget(contextReference: undoContextReference)
         containerStorage = container
         affinity = .unchecked
         affinityToken = nil
@@ -253,6 +259,7 @@ public final class ModelContext {
         autosaveEnabledStorage = false
         allowsSave = true
         testSaveHook = hook
+        undoContextReference.set(self)
         autosaveContextReference.set(self)
         subscribeToStoreChanges()
     }
@@ -1861,7 +1868,16 @@ public final class ModelContext {
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
-            undoManagerStorage?.removeAllActions(withTarget: undoOperationTarget)
+            if let undoManagerStorage {
+                #if canImport(ObjectiveC)
+                    let target = undoOperationTarget
+                    MainActor.assumeIsolated {
+                        undoManagerStorage.removeAllActions(withTarget: target)
+                    }
+                #else
+                    undoManagerStorage.removeAllActions(withTarget: undoOperationTarget)
+                #endif
+            }
         }
     }
 
@@ -1965,15 +1981,17 @@ public final class ModelContext {
 
     func registerUndoOperation(_ operation: UndoGroupOperation) {
         guard let manager = undoManagerStorage else { return }
+        let target = undoOperationTarget
+        let handle = UndoOperationHandle(operation)
         #if canImport(ObjectiveC)
             MainActor.assumeIsolated {
-                manager.registerUndo(withTarget: undoOperationTarget) { [operation] target in
-                    MainActor.assumeIsolated { target.perform(operation) }
+                manager.registerUndo(withTarget: target) { [handle] target in
+                    target.perform(handle)
                 }
             }
         #else
-            manager.registerUndo(withTarget: undoOperationTarget) { target in
-                target.perform(operation)
+            manager.registerUndo(withTarget: target) { target in
+                MainActor.assumeIsolated { target.perform(handle) }
             }
         #endif
     }

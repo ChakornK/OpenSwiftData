@@ -88,12 +88,13 @@ OpenSwiftData uses its own SQLite store and cannot open Apple's SwiftData stores
 
 ### Behavior differences
 
-- `rollback()` clears pending-change tracking but keeps edited values in memory. A later fetch can refresh those values from the store.
+- Apple bugs that lose data or crash are not replicated. Examples include losing a pending rename after a batch delete, crashing when fetching after `erase()`, and crashing in `fetchCount` when a descriptor has an offset.
 - Deleting an unsaved model keeps it attached and marked deleted until save or rollback.
 - Context deletes do not enforce the `.deny` relationship rule and nullify related models. Batch deletes reject entities with `.deny` relationships.
-- `fetchCount` supports descriptors with an offset. Batch deletes leave pending changes and registered model instances intact.
+- Batch deletes leave pending changes and registered model instances intact.
 - Predicate evaluation follows Swift semantics in cases where SwiftData has returned inconsistent results, such as comparisons involving `String.count`.
 - When SwiftData returns nondeterministic result order or duplicate selection, OpenSwiftData may return a different result.
+- Rollback restores changed models to their most recently committed values, as documented by Apple SwiftData.
 
 ### Platform and storage limits
 

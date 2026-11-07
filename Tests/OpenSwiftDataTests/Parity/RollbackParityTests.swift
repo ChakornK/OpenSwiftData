@@ -36,7 +36,7 @@ import Testing
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
 
-    @Test func `rollback clears change tracking but keeps in-memory values until a fetch refreshes them`() throws {
+    @Test func `rollback restores committed values immediately and clears change tracking`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)
         try context.save()
@@ -46,12 +46,13 @@ import Testing
         owner.tag = "t"
         owner.tags = ["x"]
         context.rollback()
-        #expect(owner.age == 2)
-        #expect(owner.name == "a2")
-        #expect(owner.tag == "t")
-        #expect(owner.tags == ["x"])
+        #expect(owner.age == 1)
+        #expect(owner.name == "a")
+        #expect(owner.tag == nil)
+        #expect(owner.tags.isEmpty)
         #expect(!owner.hasChanges)
         #expect(!context.hasChanges)
+        #expect(owner.modelContext === context)
         #expect(try ModelContext(container).fetch(saved).map(\.age) == [1])
 
         let fetched = try context.fetch(saved)
@@ -61,7 +62,7 @@ import Testing
         #expect(owner.tag == nil)
     }
 
-    @Test func `rollback keeps in-memory relationship edits`() throws {
+    @Test func `rollback restores committed relationship edits`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         let item = RollbackParityItem(value: 1)
         context.insert(owner)
@@ -70,8 +71,42 @@ import Testing
 
         owner.items.append(item)
         context.rollback()
-        #expect(owner.items.count == 1)
-        #expect(item.owner === owner)
+        #expect(owner.items.isEmpty)
+        #expect(item.owner == nil)
+        #expect(!context.hasChanges)
+    }
+
+    @Test func `rollback restores first committed values after repeated edits`() throws {
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        context.insert(owner)
+        try context.save()
+
+        owner.age = 2
+        owner.age = 3
+        context.rollback()
+
+        #expect(owner.age == 1)
+        #expect(!owner.hasChanges)
+
+        owner.age = 4
+        #expect(owner.hasChanges)
+        context.rollback()
+        #expect(owner.age == 1)
+        #expect(!owner.hasChanges)
+    }
+
+    @Test func `rollback restores values when an edited model is deleted`() throws {
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        context.insert(owner)
+        try context.save()
+
+        owner.age = 2
+        context.delete(owner)
+        context.rollback()
+
+        #expect(owner.age == 1)
+        #expect(!owner.isDeleted)
+        #expect(owner.modelContext === context)
         #expect(!context.hasChanges)
     }
 

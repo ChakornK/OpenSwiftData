@@ -1826,11 +1826,9 @@ public final class ModelContext {
         ]
     }
 
-    /// Discards pending changes.
+    /// Discards pending changes and restores changed models to their most recently committed values.
     ///
-    /// Pending insertions detach and pending deletions are restored. Changed models stop reporting changes but
-    /// keep their current in-memory values, including relationships, until a later fetch refreshes them from
-    /// the store; nothing reverts in the store.
+    /// Pending insertions detach and pending deletions are restored. Nothing reverts in the store.
     public func rollback() {
         assertAffinity()
         detachDeletedInsertions()
@@ -1843,13 +1841,7 @@ public final class ModelContext {
                 } else if state.contains(model, in: pendingState.deleted) {
                     model.restoreLifecycle(snapshot)
                 } else {
-                    let current = model.snapshotLifecycle()
-                    model.restoreLifecycle(
-                        BackingDataSnapshot(
-                            values: current.values, context: snapshot.context, identifier: snapshot.identifier,
-                            isDeleted: snapshot.isDeleted, hasChanges: false, savedValues: snapshot.savedValues,
-                            primaryKey: snapshot.primaryKey, entityID: snapshot.entityID,
-                            optimisticLockVersion: snapshot.optimisticLockVersion))
+                    model.restoreLifecycle(snapshot)
                 }
             }
             for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
@@ -1868,6 +1860,15 @@ public final class ModelContext {
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
+            if let undoManagerStorage {
+                #if canImport(ObjectiveC)
+                    MainActor.assumeIsolated {
+                        undoManagerStorage.removeAllActions()
+                    }
+                #else
+                    undoManagerStorage.removeAllActions()
+                #endif
+            }
         }
     }
 
@@ -1971,16 +1972,15 @@ public final class ModelContext {
 
     func registerUndoOperation(_ operation: UndoGroupOperation) {
         guard let manager = undoManagerStorage else { return }
+        let handle = UndoOperationHandle(operation)
         #if canImport(ObjectiveC)
-            let handle = UndoOperationHandle(operation)
             MainActor.assumeIsolated {
-                // UndoManager does not retain its target, so the handler keeps the handle alive.
                 manager.registerUndo(withTarget: manager) { [handle] _ in
                     MainActor.assumeIsolated { handle.perform() }
                 }
             }
         #else
-            manager.registerUndo(withTarget: operation) { $0.perform() }
+            manager.registerUndo(withTarget: handle) { $0.perform() }
         #endif
     }
 

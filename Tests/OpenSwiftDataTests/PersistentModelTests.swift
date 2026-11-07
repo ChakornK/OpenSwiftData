@@ -8107,14 +8107,13 @@ final class PersistentModelTests: XCTestCase {
         grandchild.rank = 10
         XCTAssertTrue(grandchild.hasChanges)
         context.rollback()
-        // Rollback keeps the in-memory value; undo later restores the value it held before the next edit.
-        XCTAssertEqual(grandchild.rank, 10)
+        XCTAssertEqual(grandchild.rank, 8)
         XCTAssertFalse(context.hasChanges)
 
         grandchild.rank = 11
         try context.save()
         undoManager.undo()
-        XCTAssertEqual(grandchild.rank, 10)
+        XCTAssertEqual(grandchild.rank, 8)
         try context.save()
         undoManager.redo()
         XCTAssertEqual(grandchild.rank, 11)

@@ -88,18 +88,17 @@ OpenSwiftData uses its own SQLite store and cannot open Apple's SwiftData stores
 
 ### Behavior differences
 
-- `rollback()` clears pending-change tracking but keeps edited values in memory. A later fetch can refresh those values from the store.
-- Deleting an unsaved model keeps it attached and marked deleted until save or rollback.
-- Context deletes do not enforce the `.deny` relationship rule and nullify related models. Batch deletes reject entities with `.deny` relationships.
-- `fetchCount` supports descriptors with an offset. Batch deletes leave pending changes and registered model instances intact.
-- Predicate evaluation follows Swift semantics in cases where SwiftData has returned inconsistent results, such as comparisons involving `String.count`.
-- When SwiftData returns nondeterministic result order or duplicate selection, OpenSwiftData may return a different result.
+- Apple bugs that lose data or crash are not replicated. Examples include a pending rename lost after a batch delete, crashes on fetch after `erase()`, and crashes on `fetchCount` with an offset.
+- Where Apple returns results that contradict Swift semantics, OpenSwiftData follows Swift semantics. For example, Apple's `name.count == 4` doesn't match `"beta"`.
+- Nondeterministic Apple behavior, such as unsorted order with pending changes or which duplicate survives when two are inserted in one save, is not matched.
+- Replicated Apple quirks: `.deny` is not enforced, and context deletes nullify related models.
+- Deleting an unsaved model keeps it attached and marked deleted until save or rollback. Batch deletes reject entities with `.deny` relationships and leave pending changes and registered model instances intact.
+- Apple's custom `DataStore` protocol API and class-based `Schema` shape (`Set`-typed attributes, `valueType`, and `CompositeAttribute`) are not implemented. OpenSwiftData schemas use value types and arrays for attributes and relationships.
 
 ### Platform and storage limits
 
 - SQLite through GRDB is the default backend. CloudKit is unsupported.
 - The package builds on Linux and Apple platforms. On Linux, `NotificationCenter` observers filtered with `object: context` do not receive save notifications.
-- The custom `DataStore` protocol API and SwiftData's class-based `Schema` API are not implemented. OpenSwiftData schemas use value types and arrays for attributes and relationships.
 
 ## License
 

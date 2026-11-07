@@ -178,13 +178,52 @@ final class ManagedBackingDataTests: XCTestCase {
         context.undoManager = undoManager
 
         model.value = 2
+        XCTAssertTrue(undoManager.canUndo)
         context.rollback()
-        XCTAssertEqual(model.value, 2)
+        XCTAssertEqual(model.value, 1)
         XCTAssertFalse(context.hasChanges)
+        XCTAssertFalse(undoManager.canUndo)
+        XCTAssertFalse(undoManager.canRedo)
 
         undoManager.undo()
-        XCTAssertEqual(model.value, 2)
+        XCTAssertEqual(model.value, 1)
         XCTAssertFalse(context.hasChanges)
+    }
+
+    @MainActor
+    func testRollbackClearsSharedUndoStack() async throws {
+        let container = try ModelContainer(
+            for: MacroBackingTestModel.self, configurations: .sqliteMemory("scoped-rollback-undo"))
+        let firstContext = container.mainContext
+        let secondContext = container.makeContext()
+        let first = MacroBackingTestModel(value: 1)
+        let second = MacroBackingTestModel(value: 2)
+        firstContext.insert(first)
+        secondContext.insert(second)
+        try firstContext.save()
+        try secondContext.save()
+
+        let undoManager = UndoManager()
+        firstContext.undoManager = undoManager
+        secondContext.undoManager = undoManager
+
+        first.value = 10
+        second.value = 20
+        XCTAssertTrue(undoManager.canUndo)
+
+        firstContext.rollback()
+
+        XCTAssertEqual(first.value, 1)
+        XCTAssertEqual(second.value, 20)
+        XCTAssertFalse(first.hasChanges)
+        XCTAssertTrue(second.hasChanges)
+        XCTAssertFalse(undoManager.canUndo)
+        XCTAssertFalse(undoManager.canRedo)
+
+        undoManager.undo()
+        XCTAssertEqual(second.value, 20)
+        XCTAssertTrue(second.hasChanges)
+        XCTAssertFalse(undoManager.canUndo)
     }
 
     @MainActor
@@ -364,7 +403,7 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertTrue(result.1)
         XCTAssertTrue(result.2)
 
-        XCTAssertEqual(model.value, 12)
+        XCTAssertEqual(model.value, 1)
         XCTAssertFalse(model.hasChanges)
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenSwiftData
 
@@ -98,4 +99,5 @@ import Testing
         #expect(!stack.canUndo)
         #expect(!stack.canRedo)
     }
+
 }

@@ -46,6 +46,7 @@ struct UndoActionStack {
         undoActions.removeAll()
         redoActions.removeAll()
     }
+
 }
 
 #if canImport(ObjectiveC)

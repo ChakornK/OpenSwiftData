@@ -51,12 +51,12 @@ package enum RuntimePredicateEvaluator {
             Set([name]).union(referencedProperties(in: element))
         case let .codableCollectionIsEmpty(name):
             [name]
-        case let .codableCollectionCount(name):
+        case let .codableCollectionCount(name), let .codableMember(name, _):
             [name]
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
                 referencedProperties(in: falseBranch))
-        case let .negation(value), let .unaryNegation(value, _), let .floatNegation(value):
+        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value):
             referencedProperties(in: value)
         case let .isNull(value, _):
             referencedProperties(in: value)
@@ -83,7 +83,7 @@ package enum RuntimePredicateEvaluator {
             return relationshipProperties(in: element)
         case .codableCollectionIsEmpty:
             return [:]
-        case .codableCollectionCount:
+        case .codableCollectionCount, .codableMember:
             return [:]
         case let .collectionCount(name):
             return [name: []]
@@ -93,7 +93,8 @@ package enum RuntimePredicateEvaluator {
             return [components[0]: [components[1]]]
         case let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return merge(relationshipProperties(in: lhs), relationshipProperties(in: rhs))
-        case let .negation(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+            let .isNull(value, _):
             return relationshipProperties(in: value)
         case let .comparison(_, lhs, rhs), let .decimalComparison(_, lhs, rhs),
             let .arithmetic(_, lhs, rhs), let .boundedArithmetic(_, lhs, rhs, _),
@@ -125,7 +126,8 @@ package enum RuntimePredicateEvaluator {
                 let .stringStartsWith(lhs, rhs):
                 walk(lhs, collectionDepth: collectionDepth)
                 walk(rhs, collectionDepth: collectionDepth)
-            case let .negation(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+            case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+                let .isNull(value, _):
                 walk(value, collectionDepth: collectionDepth)
             case let .conditional(test, yes, no):
                 walk(test, collectionDepth: collectionDepth)
@@ -136,7 +138,8 @@ package enum RuntimePredicateEvaluator {
                 walk(value, collectionDepth: collectionDepth)
             case .collectionAllNil:
                 break
-            case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+            case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount,
+                .codableMember:
                 break
             }
         }
@@ -153,7 +156,8 @@ package enum RuntimePredicateEvaluator {
             let .boundedArithmetic(_, lhs, rhs, _), let .floatArithmetic(_, lhs, rhs), let .coalesce(lhs, rhs),
             let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
             return containsNestedRelationship(lhs, depth: depth) || containsNestedRelationship(rhs, depth: depth)
-        case let .negation(value), let .unaryNegation(value, _), let .floatNegation(value), let .isNull(value, _):
+        case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
+            let .isNull(value, _):
             return containsNestedRelationship(value, depth: depth)
         case let .conditional(test, yes, no):
             return containsNestedRelationship(test, depth: depth)
@@ -163,7 +167,7 @@ package enum RuntimePredicateEvaluator {
             let .collectionAllCompare(_, _, _, value):
             return containsNestedRelationship(value, depth: depth)
         case .collectionAllNil, .property, .value, .collectionCount, .codableCollectionIsEmpty,
-            .codableCollectionCount:
+            .codableCollectionCount, .codableMember:
             return false
         }
     }
@@ -244,7 +248,8 @@ package enum RuntimePredicateEvaluator {
                     "Scalar collection membership does not evaluate to a boolean value")
             }
             return integer == 0 ? .no : .yes
-        case .property, .value, .coalesce, .collectionCount, .codableCollectionCount:
+        case .property, .value, .coalesce, .collectionCount, .codableCollectionCount, .codableMember,
+            .stringCount:
             let value = try evaluateValue(plan, context: context)
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate("Predicate expression does not evaluate to a boolean value")
@@ -596,6 +601,9 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("Codable collection count received malformed JSON data")
             }
             return .int(Int64(array.count))
+        case let .codableMember(name, members):
+            guard case let .blob(bytes) = try evaluateValue(.property(name), context: context) else { return .null }
+            return runtimeValue(CodableMemberValue.extract(from: bytes, members: members))
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):
@@ -643,6 +651,12 @@ package enum RuntimePredicateEvaluator {
             case .yes: return try evaluateValue(trueBranch, context: context)
             case .no, .unknown:
                 return try evaluateValue(falseBranch, context: context)
+            }
+        case let .stringCount(string):
+            switch try evaluateValue(string, context: context) {
+            case .null: return .null
+            case let .text(text): return .int(Int64(text.count))
+            default: throw SwiftDataError.unsupportedPredicate("String count requires a string operand")
             }
         case let .localizedStandardContains(lhs, rhs):
             let lhsValue = try evaluateValue(lhs, context: context)

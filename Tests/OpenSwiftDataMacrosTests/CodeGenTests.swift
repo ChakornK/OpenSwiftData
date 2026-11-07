@@ -311,19 +311,22 @@ final class CodeGenTests: XCTestCase {
 
         XCTAssertTrue(
             baseSources.contains(
-                "static func __BasePropertyDescriptors<Root: Base>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __BasePropertyDescriptors<_OSDRoot: Base>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"
+            ),
             baseSources)
         XCTAssertTrue(
-            baseSources.contains("descriptors[\\Root.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
+            baseSources.contains(
+                "descriptors[\\_OSDRoot.name as AnyKeyPath] = PropertyDescriptor(slot: 0, name: \"name\""),
             baseSources)
         XCTAssertTrue(
             childSources.contains(
-                "static func __ChildPropertyDescriptors<Root: Child>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor]"),
+                "static func __ChildPropertyDescriptors<_OSDRoot: Child>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor]"
+            ),
             childSources)
-        XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(Root.self)"), childSources)
+        XCTAssertTrue(childSources.contains("Base.__BasePropertyDescriptors(_OSDRoot.self)"), childSources)
         XCTAssertTrue(
             childSources.contains(
-                "descriptors[\\Root.age as AnyKeyPath] = PropertyDescriptor(slot: Base.propertyDescriptors.count"),
+                "descriptors[\\_OSDRoot.age as AnyKeyPath] = PropertyDescriptor(slot: Base.propertyDescriptors.count"),
             childSources)
         XCTAssertTrue(
             childSources.contains(
@@ -335,7 +338,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.modelActorMemberSources(actorName: "StoreActor"),
             [
-                "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+                "nonisolated let modelExecutor: any ModelExecutor",
                 "nonisolated let modelContainer: ModelContainer",
                 "init(modelContainer: ModelContainer) {\n"
                     + "    self.modelContainer = modelContainer\n"
@@ -347,19 +350,26 @@ final class CodeGenTests: XCTestCase {
     }
 
     func testUniqueAndIndexDirectiveSourcesPreserveColumnOrder() throws {
-        let unique = try parseDirective("#Unique(\\Model.second, \\Model.first)")
-        let index = try parseDirective("#Index(\\Model.first, \\Model.second)")
+        let unique = try parseDirective("#Unique<Model>([\\.second, \\.first])")
+        let index = try parseDirective("#Index<Model>([\\Model.first, \\Model.second], [\\.third])")
 
-        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(unique, kind: .unique), ["second", "first"])
-        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(index, kind: .index), ["first", "second"])
+        XCTAssertEqual(try CodeGen.schemaDirectiveProperties(unique, kind: .unique), [["second", "first"]])
+        XCTAssertEqual(
+            try CodeGen.schemaDirectiveProperties(index, kind: .index), [["first", "second"], ["third"]])
     }
 
     func testSchemaDirectiveSourcesRejectNestedAndRepeatedKeyPaths() throws {
-        let nested = try parseDirective("#Unique(\\Model.child.value)")
+        let nested = try parseDirective("#Unique<Model>([\\.child.value])")
         XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(nested, kind: .unique))
 
-        let repeated = try parseDirective("#Index(\\Model.value, \\Model.value)")
+        let repeated = try parseDirective("#Index<Model>([\\.value, \\.value])")
         XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(repeated, kind: .index))
+
+        let bare = try parseDirective("#Index<Model>(\\.value)")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(bare, kind: .index))
+
+        let empty = try parseDirective("#Unique<Model>([])")
+        XCTAssertThrowsError(try CodeGen.schemaDirectiveProperties(empty, kind: .unique))
     }
 
     func testModelIndexDirectivesGenerateSchemaIndexesInDeclarationOrder() throws {
@@ -368,8 +378,8 @@ final class CodeGenTests: XCTestCase {
             final class Record {
                 var first: String
                 var second: Int
-                #Index(\\Record.second, \\Record.first)
-                #Unique(\\Record.first)
+                #Index<Record>([\\.second, \\.first])
+                #Unique<Record>([\\.first])
             }
             """)
         let generated = CodeGen.memberSources(
@@ -393,26 +403,27 @@ final class CodeGenTests: XCTestCase {
             final class Record {
                 var value: Int
                 var computed: Int { value }
-                #Index(\\Record.computed)
+                #Index<Record>([\\.computed])
             }
             """)
         let directive = try XCTUnwrap(
             declaration.memberBlock.members.compactMap { $0.decl.as(MacroExpansionDeclSyntax.self) }.first)
         let properties = try CodeGen.schemaDirectiveProperties(directive, kind: .index)
-        XCTAssertThrowsError(try CodeGen.validateSchemaDirectiveTargets(properties, kind: .index, in: declaration))
+        XCTAssertThrowsError(
+            try CodeGen.validateSchemaDirectiveTargets(properties[0], kind: .index, in: declaration))
 
         let unknown = try parseClass(
             """
             final class Other {
                 var value: Int
-                #Index(\\Other.missing)
+                #Index<Other>([\\.missing])
             }
             """)
         let unknownDirective = try XCTUnwrap(
             unknown.memberBlock.members.compactMap { $0.decl.as(MacroExpansionDeclSyntax.self) }.first)
         let unknownProperties = try CodeGen.schemaDirectiveProperties(unknownDirective, kind: .index)
         XCTAssertThrowsError(
-            try CodeGen.validateSchemaDirectiveTargets(unknownProperties, kind: .index, in: unknown))
+            try CodeGen.validateSchemaDirectiveTargets(unknownProperties[0], kind: .index, in: unknown))
     }
 
     func testTripMemberSourcesMatchVariantAExactly() throws {
@@ -438,8 +449,8 @@ final class CodeGenTests: XCTestCase {
                 "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
-                "internal nonisolated func access<Root: Trip, _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
-                "internal nonisolated func withMutation<Root: Trip, _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
+                "internal nonisolated func access<_OSDRoot: Trip, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+                "internal nonisolated func withMutation<_OSDRoot: Trip, _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
                 "struct _SwiftDataNoType {}",
             ])
     }
@@ -698,6 +709,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertFalse(adapters.contains("TypedPropertyAdapter<Garage, [Car]>(\"cars\""))
         XCTAssertTrue(adapters.contains("storedPayload"))
         XCTAssertTrue(adapters.contains("PersistentValue.decode(Payload.self, from: value)"))
+        XCTAssertTrue(adapters.contains("TypedPropertyAdapter<Garage, Payload>.codableIfPossible(\"payload\""))
     }
 
     func testRelationshipAdaptersUseMetadataAndActualModelTypes() throws {
@@ -717,7 +729,10 @@ final class CodeGenTests: XCTestCase {
                 $0.contains("persistenceAdapters()")
             })
         XCTAssertTrue(generatedAdapters.contains("unrelatedString"))
-        XCTAssertFalse(generatedAdapters.contains("destination"))
+        // A syntactically ambiguous type only gets an adapter that decides at runtime whether it's Codable.
+        XCTAssertFalse(generatedAdapters.contains("TypedPropertyAdapter<Parcel, Destination?>(\"destination\""))
+        XCTAssertTrue(
+            generatedAdapters.contains("TypedPropertyAdapter<Parcel, Destination?>.codableIfPossible(\"destination\""))
         XCTAssertFalse(generatedAdapters.contains("explicitlyMarked"))
         XCTAssertFalse(generatedAdapters.contains("explicitlyMarkedWithEmptyArguments"))
         XCTAssertTrue(generatedAdapters.contains("payload"))

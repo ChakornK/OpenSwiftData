@@ -155,7 +155,7 @@ public enum RelationshipAdapterFactory {
             name,
             keyPath: keyPath,
             read: read,
-            endpoints: { $0.map(Array.init) ?? [] },
+            endpoints: { $0.map { Array($0) } ?? [] },
             build: { Optional(Set($0)) },
             isToMany: true)
         return [RelationshipAdapterBox(adapter)]

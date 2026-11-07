@@ -256,7 +256,7 @@ final class QuerySequenceTests: XCTestCase {
             dependencyEntityNames: [String(describing: QuerySequenceFixture.self)],
             resultEntityNames: [String(describing: QuerySequenceFixture.self)],
             refresh: {
-                try queryContext.processPendingChanges()
+                try queryContext.processPendingChangesThrowing()
                 return try queryContext.fetchIdentifiers(descriptor)
             })
         var iterator = sequence.makeAsyncIterator()

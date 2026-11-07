@@ -108,13 +108,13 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 values[keyPath] = composite
             }
             let identifier = snapshot.persistentIdentifier
-            guard let entityID = context.container?.schema.entityIDsByName[entity.name] else {
+            guard let entityID = context.optionalContainer?.schema.entityIDsByName[entity.name] else {
                 throw SwiftDataError.unsupportedStore(
                     "DataStore schema has no entity identifier for \(entity.name).")
             }
             let backing = ManagedBackingData<Model.Model>(
                 metadata: metadata, values: values, context: context,
-                storeIdentifier: identifier.storeIdentifier,
+                storeIdentifier: identifier.resolvedStoreIdentifier,
                 entityID: entityID,
                 primaryKey: identifier.primaryKey, version: 0, identifier: identifier)
             let model = Model(backingData: backing)

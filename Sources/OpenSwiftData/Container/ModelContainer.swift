@@ -14,8 +14,18 @@ public final class ModelContainer: Sendable {
     }
     private let mainContextStorage = MainContextStorage()
     /// The configurations used by the container.
-    public let configurations: [ModelConfiguration]
+    public var configurations: Set<ModelConfiguration> { Set(configurationList) }
+    /// The configurations in the order the container received them.
+    package let configurationList: [ModelConfiguration]
+    /// The migration plan the container ran when it opened, if any.
+    public var migrationPlan: (any SchemaMigrationPlan.Type)? { migrationPlanStorage.plan }
+    private let migrationPlanStorage = MigrationPlanStorage()
     package let store: (any RuntimeStore)?
+    /// The store identifier recorded in persistent identifiers: a UUID string saved with the store, as in
+    /// Apple's SwiftData, falling back to the configuration name for stores that don't provide one.
+    package var storeIdentifier: String {
+        dataStore?.identifier ?? store?.persistentStoreIdentifier ?? configurationList.first?.name ?? "default"
+    }
     package let dataStore: (any DataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
@@ -34,12 +44,22 @@ public final class ModelContainer: Sendable {
         modelTypesByEntityID[identifier]
     }
 
-    /// Creates a container for the schema inferred from model types.
+    /// Creates a container for the schema inferred from model types, migrating the store first when a plan is given.
     ///
     /// Omitting `configurations` opens the implicit default store, a SQLite file named
     /// `default.store` in the Application Support directory.
-    public convenience init(for types: any PersistentModel.Type..., configurations: ModelConfiguration...) throws {
-        try self.init(for: types, configurations: Self.configurationsOrDefault(configurations))
+    public convenience init(
+        for types: any PersistentModel.Type...,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: ModelConfiguration...
+    ) throws {
+        let configurations = try Self.configurationsOrDefault(configurations)
+        if let migrationPlan {
+            try self.init(migrating: types, plan: migrationPlan, configurations: configurations)
+        } else {
+            try self.init(for: types, configurations: configurations)
+        }
+        migrationPlanStorage.plan = migrationPlan
     }
 
     /// Creates a container for the schema inferred from model types, backed by the implicit default store.
@@ -52,7 +72,14 @@ public final class ModelContainer: Sendable {
     /// Creates a container for the schema inferred from model types and configurations.
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
-    public init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
+    public convenience init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
+        try self.init(inferredSchema: Self.inferredSchema(for: types), configurations: configurations)
+    }
+
+    /// Infers a schema from model types and their ancestors, capturing the types for materialization.
+    package static func inferredSchema(
+        for types: [any PersistentModel.Type], version: Schema.Version? = nil
+    ) throws -> Schema {
         let types = Self.modelTypesIncludingAncestors(of: types)
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         var uniqueEntityNames = Set<String>()
@@ -369,8 +396,17 @@ public final class ModelContainer: Sendable {
                 name: entity.name, attributes: entity.attributes, relationships: relationships,
                 indexes: entity.indexes, superentityName: entity.superentityName)
         }
-        let schema = Schema(inferredEntities)
+        var schema = Schema(inferredEntities, version: version)
         try schema.validateRelationshipStorageMappings()
+        schema.modelTypes = Schema.ModelTypes(types: types)
+        return schema
+    }
+
+    /// Creates a container for a schema produced by `inferredSchema(for:version:)`.
+    private init(inferredSchema schema: Schema, configurations: [ModelConfiguration]) throws {
+        if let error = schema.modelTypes.inferenceError { throw error }
+        let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
+        let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
         let runtimeSchema: Schema
@@ -403,7 +439,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -411,17 +447,46 @@ public final class ModelContainer: Sendable {
         relationshipAdapterTable = adaptersByModel
     }
 
-    /// Creates a container for an existing schema, backed by the implicit default store.
+    /// Creates a container for an existing schema, migrating the store first when a plan is given.
     ///
-    /// The default store is a SQLite file named `default.store` in the Application Support directory.
-    public convenience init(for schema: Schema) throws {
-        try self.init(for: schema, configurations: [ModelConfiguration.implicitDefault()])
+    /// Omitting `configurations` opens the implicit default store, a SQLite file named
+    /// `default.store` in the Application Support directory.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: ModelConfiguration...
+    ) throws {
+        try self.init(
+            for: schema, migrationPlan: migrationPlan, configurations: Self.configurationsOrDefault(configurations))
     }
 
-    /// Creates a container for an existing schema.
+    /// Creates a container for an existing schema, migrating the store first when a plan is given.
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
-    public init(for schema: Schema, configurations: [ModelConfiguration]) throws {
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: [ModelConfiguration]
+    ) throws {
+        if let migrationPlan {
+            let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
+            try self.init(migrating: types, plan: migrationPlan, configurations: configurations)
+            migrationPlanStorage.plan = migrationPlan
+        } else {
+            try self.init(schemaOnly: schema, configurations: configurations)
+        }
+    }
+
+    private convenience init(schemaOnly schema: Schema, configurations: [ModelConfiguration]) throws {
+        if !schema.modelTypes.types.isEmpty || schema.modelTypes.inferenceError != nil {
+            try self.init(inferredSchema: schema, configurations: configurations)
+        } else {
+            try self.init(descriptionOnly: schema, configurations: configurations)
+        }
+    }
+
+    /// Creates a container for a hand-built schema that names no model types.
+    private init(descriptionOnly schema: Schema, configurations: [ModelConfiguration]) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
@@ -435,7 +500,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = [:]
@@ -488,7 +553,7 @@ public final class ModelContainer: Sendable {
             throw error
         }
         self.schema = runtimeSchema
-        self.configurations = configurations
+        configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -496,15 +561,12 @@ public final class ModelContainer: Sendable {
         relationshipAdapterTable = adaptersByModel
     }
 
-    /// Creates a container using a migration plan.
-    ///
-    /// Omitting `configurations` migrates and opens the implicit default store.
-    public convenience init<Plan: SchemaMigrationPlan>(
-        for types: any PersistentModel.Type...,
-        migrationPlan: Plan.Type,
-        configurations: ModelConfiguration...
+    /// Migrates the configured stores through a plan, then opens them with the plan's latest schema.
+    private convenience init(
+        migrating types: [any PersistentModel.Type],
+        plan migrationPlan: any SchemaMigrationPlan.Type,
+        configurations: [ModelConfiguration]
     ) throws {
-        let configurations = try Self.configurationsOrDefault(configurations)
         let descriptor = try MigrationPlanDescriptor(migrationPlan)
         guard let destination = descriptor.schemas.last else {
             throw SwiftDataError.migrationUnsupported("Migration plan contains no schemas.")
@@ -586,7 +648,17 @@ public final class ModelContainer: Sendable {
                 throw SwiftDataError.migrationUnsupported(
                     "Stored schema does not match recorded version '\(version.identifier)'.")
             }
-            startIndex = try migrationStartIndex(for: versionState, in: plan)
+            var resolvedState = versionState
+            // A store created without a plan records no version; identify it by matching its stored layout
+            // against the plan's schemas, preferring the newest match.
+            if case .unversioned = versionState, let verifyStoredSchema = configuration.schemaCompatibilityReader,
+                let index = try plan.schemas.indices.reversed().first(where: {
+                    try verifyStoredSchema(Self.storeLocation(for: configuration), plan.schemas[$0].schema)
+                })
+            {
+                resolvedState = .version(plan.schemas[index].version)
+            }
+            startIndex = try migrationStartIndex(for: resolvedState, in: plan)
         }
 
         guard startIndex < plan.schemas.count - 1 else { return finalPendingMigration }
@@ -662,11 +734,7 @@ public final class ModelContainer: Sendable {
     }
 
     private static func storeLocation(for configuration: ModelConfiguration) -> RuntimeStoreLocation {
-        if configuration.isStoredInMemoryOnly { return .memory(name: configuration.name) }
-        if let url = configuration.url { return .file(url) }
-        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("\(configuration.name).sqlite")
-        return .file(url)
+        configuration.isStoredInMemoryOnly ? .memory(name: configuration.name) : .file(configuration.url)
     }
 
     /// Returns the resolved relationship adapters registered for a model type.
@@ -792,20 +860,29 @@ public final class ModelContainer: Sendable {
         ModelContext(container: self, autosaveEnabled: false)
     }
 
-    /// Deletes all persistent data owned by this container.
-    public func deleteAllData() throws {
-        guard store != nil else {
-            throw SwiftDataError.unsupportedStore("Deleting all data is unavailable without a persistent store.")
-        }
-        throw SwiftDataError.unsupportedStore("Deleting all data is not implemented.")
+    /// Deletes all persistent data owned by this container, ignoring failures.
+    @available(*, deprecated, renamed: "erase", message: "deleteAllData has been replaced by `erase`.")
+    public func deleteAllData() {
+        try? erase()
     }
 
-    /// Erases this container's store.
+    /// Removes every model, relationship, and history record from the container's store.
+    ///
+    /// The store file remains and stays open, and contexts keep their pending changes. Primary keys continue
+    /// from where they were, so identifiers held from before the erase never match new models.
     public func erase() throws {
-        guard store != nil else {
+        guard let store else {
             throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
         }
-        throw SwiftDataError.unsupportedStore("Erasing the store is not implemented.")
+        let preserved: Set<String> = ["_osd_meta", "_osd_primary_keys"]
+        try store.write { connection in
+            let tables = try connection.rows(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'", arguments: [])
+            for row in tables {
+                guard case let .text(name)? = row.first, !preserved.contains(name) else { continue }
+                try connection.execute("DELETE FROM \"\(name)\"", arguments: [])
+            }
+        }
     }
 
     private static func openStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any RuntimeStore)? {
@@ -813,30 +890,19 @@ public final class ModelContainer: Sendable {
         guard configurations.count == 1, let configuration = configurations.first else {
             throw SwiftDataError.unsupportedStore("Exactly one store configuration is supported.")
         }
-        guard configuration.cloudKitDatabase == .none else {
+        try configuration.validate()
+        guard configuration.cloudKitDatabase.privateDatabaseName == nil else {
             throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
         }
         if configuration.dataStoreConfiguration != nil { return nil }
-        guard case .none = configuration.groupContainer else {
-            throw SwiftDataError.unsupportedStore("App-group store locations are not supported.")
-        }
         guard let factory = configuration.storeFactory else {
             throw SwiftDataError.unsupportedStore("The configured store backend/provider is unavailable.")
         }
-        let location: RuntimeStoreLocation
-        if configuration.isStoredInMemoryOnly {
-            location = .memory(name: configuration.name)
-        } else if let url = configuration.url {
-            location = .file(url)
-        } else {
-            guard Self.isSafeStoreName(configuration.name) else {
-                throw SwiftDataError.unsupportedStore("The store name must be a single safe path component.")
-            }
-            let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("\(configuration.name).sqlite")
-            location = .file(url)
+        if !configuration.isStoredInMemoryOnly {
+            try FileManager.default.createDirectory(
+                at: configuration.url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        return try factory(location, schema)
+        return try factory(storeLocation(for: configuration), schema)
     }
 
     private static func validateDataStoreInheritanceSupport(
@@ -867,9 +933,9 @@ public final class ModelContainer: Sendable {
             throw SwiftDataError.unsupportedStore("Exactly one custom DataStore configuration is supported.")
         }
         guard let dataStoreConfiguration = configuration.dataStoreConfiguration else { return nil }
-        guard configuration.cloudKitDatabase == .none, case .none = configuration.groupContainer,
+        guard configuration.cloudKitDatabase.privateDatabaseName == nil,
             configuration.storeFactory == nil, configuration.schemaVersionReader == nil,
-            configuration.url == nil, !configuration.isStoredInMemoryOnly
+            !configuration.isStoredInMemoryOnly
         else {
             throw SwiftDataError.unsupportedStore(
                 "Custom DataStore configurations cannot be combined with another backend.")
@@ -1081,7 +1147,9 @@ public final class ModelContainer: Sendable {
     }
 
     private static func normalizedTypeName(_ type: String) -> String {
+        // Newer Apple SDKs bridge `Decimal` to the imported C struct `NSDecimal` at runtime.
         type.replacingOccurrences(of: "Swift.", with: "")
+            .replacingOccurrences(of: "__C.NSDecimal", with: "Decimal")
     }
 
     private static func normalizedPropertyType(_ type: String) -> (String, Bool) {
@@ -1170,4 +1238,14 @@ private final class MainContextStorage {
     var context: ModelContext?
 
     nonisolated init() {}
+}
+
+/// Holds a container's migration plan, written once while the container initializes.
+private final class MigrationPlanStorage: @unchecked Sendable {
+    var plan: (any SchemaMigrationPlan.Type)?
+}
+
+extension ModelContainer: Equatable {
+    /// Returns whether both operands are the same container instance.
+    public static func == (lhs: ModelContainer, rhs: ModelContainer) -> Bool { lhs === rhs }
 }

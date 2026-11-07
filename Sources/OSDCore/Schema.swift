@@ -133,15 +133,18 @@ public struct Schema: Sendable {
         public let originalName: String?
         /// Flattened scalar components, when `.flattened` is enabled.
         public let components: [Component]
+        /// A value that changes the schema's version hash without changing the stored representation.
+        public var hashModifier: String?
 
         /// Creates metadata describing attribute options without property details.
-        public init(_ options: Option...) {
+        public init(_ options: Option..., originalName: String? = nil, hashModifier: String? = nil) {
             self.name = ""
             self.type = ""
             self.isOptional = false
             self.defaultValue = nil
             self.options = Set(options)
-            self.originalName = nil
+            self.originalName = originalName
+            self.hashModifier = hashModifier
             components = []
         }
 
@@ -161,6 +164,7 @@ public struct Schema: Sendable {
             self.defaultValue = defaultValue
             self.options = options
             self.originalName = originalName
+            self.hashModifier = nil
             self.components = components.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         }
     }
@@ -168,7 +172,7 @@ public struct Schema: Sendable {
     /// Describes a persisted model relationship.
     public struct Relationship: Hashable, Sendable {
         /// Describes relationship delete behavior.
-        public enum DeleteRule: Sendable, Hashable {
+        public enum DeleteRule: String, Codable, Sendable, Hashable {
             /// Removes the relationship reference when its destination is deleted.
             case nullify
             /// Deletes related models with the source model.
@@ -186,7 +190,7 @@ public struct Schema: Sendable {
         /// Whether the relationship contains multiple destinations.
         public let isToMany: Bool
         /// Whether the relationship can be empty.
-        package let isOptional: Bool
+        public let isOptional: Bool
         /// The inverse relationship property name, if known.
         public let inverse: String?
         /// The relationship's delete behavior.
@@ -199,16 +203,38 @@ public struct Schema: Sendable {
         public let originalName: String?
         /// The model entity that originally declares this relationship.
         package let declaringEntityName: String?
+        /// Options applied to this relationship.
+        public var options: [Option] = []
+        /// A value that changes the schema's version hash without changing the stored representation.
+        public var hashModifier: String?
+
+        /// Describes a relationship option.
+        public struct Option: Codable, Hashable, Sendable, CustomDebugStringConvertible {
+            private let name: String
+
+            /// Requires each destination to be unique across owners.
+            public static var unique: Option { Option(name: "unique") }
+
+            /// The option name.
+            public var debugDescription: String { name }
+        }
 
         /// Creates metadata describing relationship options without property details.
+        ///
+        /// Parameters follow the `@Relationship` macro's order; `inverseName` names the inverse property when
+        /// `inverse` is unavailable.
         public init(
+            _ options: Option...,
             deleteRule: DeleteRule = .nullify,
             minimumModelCount: Int? = nil,
             maximumModelCount: Int? = nil,
+            originalName: String? = nil,
             inverse: AnyKeyPath? = nil,
-            inverseName: String? = nil,
-            originalName: String? = nil
+            hashModifier: String? = nil,
+            inverseName: String? = nil
         ) {
+            self.options = options
+            self.hashModifier = hashModifier
             self.name = ""
             self.destination = ""
             self.isToMany = false
@@ -259,18 +285,34 @@ public struct Schema: Sendable {
         }
     }
 
-    /// Identifies a schema version for migration planning.
-    public struct Version: Sendable, Hashable, Codable {
-        /// The version's components.
-        public let version: [Int]
-        /// A stable identifier for the version.
-        public let identifier: String
+    /// A semantic schema version.
+    ///
+    /// Versions order by major, then minor, then patch component.
+    public struct Version: Sendable, Hashable, Codable, Comparable, CustomStringConvertible {
+        /// The major version component.
+        public let major: Int
+        /// The minor version component.
+        public let minor: Int
+        /// The patch version component.
+        public let patch: Int
 
-        /// Creates version metadata.
-        public init(version: [Int], identifier: String) {
-            self.version = version
-            self.identifier = identifier
+        /// Creates a version from its components.
+        public init(_ major: Int, _ minor: Int, _ patch: Int) {
+            self.major = major
+            self.minor = minor
+            self.patch = patch
         }
+
+        /// Orders versions by major, then minor, then patch number.
+        public static func < (lhs: Version, rhs: Version) -> Bool {
+            (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+        }
+
+        /// The version formatted as `major.minor.patch`.
+        public var description: String { "\(major).\(minor).\(patch)" }
+
+        /// The string that identifies this version in store metadata and migration bookkeeping.
+        package var identifier: String { description }
 
         package func encoded() throws -> [UInt8] {
             let encoder = JSONEncoder()
@@ -278,15 +320,19 @@ public struct Schema: Sendable {
             return Array(try encoder.encode(self))
         }
 
+        /// Decodes a stored version written as `{"major":…,"minor":…,"patch":…}` or in the legacy
+        /// `{"version":[…],"identifier":…}` form, whose missing components default to zero.
         package static func decode(_ identifier: String) throws -> Self {
             guard let data = identifier.data(using: .utf8) else {
                 throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
             }
-            do {
-                return try JSONDecoder().decode(Self.self, from: data)
-            } catch {
+            if let version = try? JSONDecoder().decode(Self.self, from: data) { return version }
+            struct Legacy: Decodable { let version: [Int] }
+            guard let legacy = try? JSONDecoder().decode(Legacy.self, from: data) else {
                 throw SwiftDataError.migrationUnsupported("Invalid stored schema version.")
             }
+            let components = legacy.version + [0, 0, 0]
+            return Self(components[0], components[1], components[2])
         }
     }
 
@@ -389,19 +435,37 @@ public struct Schema: Sendable {
 
     /// The schema's entities in deterministic name order.
     public let entities: [Entity]
-    /// The optional schema version.
-    public let version: Version?
+    /// The version declared when the schema was created, or `nil` when none was given.
+    package let declaredVersion: Version?
+
+    /// The schema version, which defaults to 1.0.0.
+    public var version: Version { declaredVersion ?? Version(1, 0, 0) }
+
+    /// Model types captured by the schema, wrapped so the schema stays `Sendable`.
+    package struct ModelTypes: @unchecked Sendable {
+        package var types: [Any.Type] = []
+        /// An error raised while inferring entities from `types`, reported when a container opens.
+        package var inferenceError: (any Error)?
+
+        package init(types: [Any.Type] = [], inferenceError: (any Error)? = nil) {
+            self.types = types
+            self.inferenceError = inferenceError
+        }
+    }
+
+    /// The model types the schema was created from, in declaration order; empty for hand-built schemas.
+    package var modelTypes = ModelTypes()
 
     /// Creates a schema with entities sorted by name.
     public init(_ entities: [Entity], version: Version? = nil) {
         self.entities = entities.sorted { $0.name < $1.name }
-        self.version = version
+        self.declaredVersion = version
         persistedEntityIDs = nil
     }
 
     package init(_ entities: [Entity], version: Version? = nil, entityIDs: [String: Int]) throws {
         self.entities = entities.sorted { $0.name < $1.name }
-        self.version = version
+        self.declaredVersion = version
         try Self.validateEntityIdentifiers(entityIDs, entities: entities, requiresCompleteMap: true)
         persistedEntityIDs = entityIDs
     }
@@ -441,7 +505,9 @@ public struct Schema: Sendable {
             }
             nextIdentifier = overflow ? nil : followingIdentifier
         }
-        return try Schema(entities, version: version, entityIDs: resolved)
+        var reconciled = try Schema(entities, version: declaredVersion, entityIDs: resolved)
+        reconciled.modelTypes = modelTypes
+        return reconciled
     }
 
     private static func validateEntityIdentifiers(
@@ -593,3 +659,53 @@ public struct Schema: Sendable {
         return nil
     }
 }
+
+extension Schema.Index: Codable {}
+extension Schema.Attribute.Option: Codable {}
+extension Schema.Attribute: Codable {}
+extension Schema.Relationship: Codable {}
+extension Schema.Entity: Codable {}
+
+extension Schema: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case entities
+        case version
+    }
+
+    /// Decodes a schema's entities and declared version. Decoded schemas aren't linked to model types.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            try container.decode([Entity].self, forKey: .entities),
+            version: try container.decodeIfPresent(Version.self, forKey: .version))
+    }
+
+    /// Encodes the schema's entities and declared version.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(entities, forKey: .entities)
+        try container.encodeIfPresent(declaredVersion, forKey: .version)
+    }
+}
+
+extension Schema: Hashable {
+    /// Returns whether both schemas have equal entities and versions.
+    public static func == (lhs: Schema, rhs: Schema) -> Bool {
+        lhs.entities == rhs.entities && lhs.version == rhs.version
+    }
+
+    /// Hashes the schema's entities and version.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(entities)
+        hasher.combine(version)
+    }
+}
+
+#if canImport(ObjectiveC)
+    extension Schema.Attribute.Option {
+        /// Stores values using the given value transformer class, identified by its registered class name.
+        public static func transformable(by transformerType: ValueTransformer.Type) -> Self {
+            .transformable(by: NSStringFromClass(transformerType))
+        }
+    }
+#endif

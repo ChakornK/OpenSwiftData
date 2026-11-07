@@ -32,14 +32,14 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDefaultTypedContainerSavesAndFetches() throws {
+    func testDefaultTypedContainerSavesAndFetches() async throws {
         try withIsolatedDefaultStore {
             let container = try ModelContainer(for: DefaultStoreFixture.self)
             defer { try? container.store?.close() }
             XCTAssertNotNil(container.store)
             XCTAssertEqual(container.configurations.count, 1)
             XCTAssertEqual(
-                container.configurations.first?.url?.standardizedFileURL, defaultStoreURL.standardizedFileURL)
+                container.configurations.first?.url.standardizedFileURL, defaultStoreURL.standardizedFileURL)
             XCTAssertEqual(container.configurations.first?.isStoredInMemoryOnly, false)
 
             let context = container.mainContext
@@ -54,7 +54,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDefaultTypedContainerPersistsAcrossReopen() throws {
+    func testDefaultTypedContainerPersistsAcrossReopen() async throws {
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: DefaultStoreFixture.self)
             writer.mainContext.insert(DefaultStoreFixture(title: "durable"))
@@ -69,7 +69,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testArrayInitializerWithoutConfigurationsUsesDefaultStore() throws {
+    func testArrayInitializerWithoutConfigurationsUsesDefaultStore() async throws {
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: [DefaultStoreFixture.self])
             writer.mainContext.insert(DefaultStoreFixture(title: "array"))
@@ -84,7 +84,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSchemaInitializerWithoutConfigurationsOpensDefaultStore() throws {
+    func testSchemaInitializerWithoutConfigurationsOpensDefaultStore() async throws {
         try withIsolatedDefaultStore {
             let typed = try ModelContainer(for: DefaultStoreFixture.self)
             typed.mainContext.insert(DefaultStoreFixture(title: "schema"))
@@ -96,7 +96,7 @@ final class DefaultStoreTests: XCTestCase {
             defer { try? container.store?.close() }
             let store = try XCTUnwrap(container.store)
             XCTAssertEqual(
-                container.configurations.first?.url?.standardizedFileURL, defaultStoreURL.standardizedFileURL)
+                container.configurations.first?.url.standardizedFileURL, defaultStoreURL.standardizedFileURL)
             let rows = try store.read { connection in
                 try connection.rows("SELECT ZTITLE FROM ZDEFAULTSTOREFIXTURE", arguments: [])
             }
@@ -105,13 +105,15 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitEmptyConfigurationsRemainSchemaOnly() throws {
+    func testExplicitEmptyConfigurationsRemainSchemaOnly() async throws {
         try withIsolatedDefaultStore {
             let container = try ModelContainer(for: [DefaultStoreFixture.self], configurations: [])
             XCTAssertNil(container.store)
             XCTAssertTrue(container.configurations.isEmpty)
             XCTAssertThrowsError(try container.mainContext.fetch(FetchDescriptor<DefaultStoreFixture>())) { error in
-                guard case SwiftDataError.unsupportedStore(let message) = error else {
+                guard let dataError = error as? SwiftDataError, dataError == .unsupportedStore,
+                    let message = dataError.explanation
+                else {
                     return XCTFail("Expected unsupportedStore, got \(error)")
                 }
                 XCTAssertEqual(message, "Fetch is unavailable without a persistent store.")
@@ -121,7 +123,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitMemoryConfigurationDoesNotPersistOrTouchDefaultStore() throws {
+    func testExplicitMemoryConfigurationDoesNotPersistOrTouchDefaultStore() async throws {
         let name = "default-store-memory-\(UUID().uuidString)"
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: DefaultStoreFixture.self, configurations: .sqliteMemory(name))
@@ -138,7 +140,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitFileConfigurationPersistsAtRequestedURL() throws {
+    func testExplicitFileConfigurationPersistsAtRequestedURL() async throws {
         let url = directory.appendingPathComponent("explicit.sqlite")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try withIsolatedDefaultStore {
@@ -156,21 +158,17 @@ final class DefaultStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: defaultStoreURL.path))
     }
 
-    func testExplicitConfigurationWithoutProviderStillThrows() throws {
+    @MainActor
+    func testExplicitPublicConfigurationOpensWithoutTouchingDefaultStore() async throws {
         try withIsolatedDefaultStore {
-            XCTAssertThrowsError(
-                try ModelContainer(
-                    for: DefaultStoreFixture.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-            ) { error in
-                guard case SwiftDataError.unsupportedStore(let message) = error else {
-                    return XCTFail("Expected unsupportedStore, got \(error)")
-                }
-                XCTAssertEqual(message, "The configured store backend/provider is unavailable.")
-            }
+            let container = try ModelContainer(
+                for: DefaultStoreFixture.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            container.mainContext.insert(DefaultStoreFixture(title: "memory"))
+            try container.mainContext.save()
+            XCTAssertEqual(try container.mainContext.fetchCount(FetchDescriptor<DefaultStoreFixture>()), 1)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: defaultStoreURL.path))
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: defaultStoreURL.path))
     }
-
     func testDefaultStoreLocationFailureSurfacesInsteadOfFallingBack() throws {
         let blocker = directory.appendingPathComponent("not-a-directory")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

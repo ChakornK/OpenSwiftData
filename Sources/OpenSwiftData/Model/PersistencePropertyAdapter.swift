@@ -100,3 +100,59 @@ public struct TypedPropertyAdapter<Model: PersistentModel, Value>: PersistencePr
     /// Decodes through the erased adapter interface.
     public func decoded(_ value: StoredValue) throws -> Any { try decodeValue(value) }
 }
+
+extension TypedPropertyAdapter {
+    /// Creates an adapter for a property whose type the `@Model` macro can't classify syntactically.
+    ///
+    /// The macro emits this for property types that might be models or Codable values. It returns
+    /// `nil` when `Value` isn't Codable, or when it is a model (possibly wrapped in an `Optional`,
+    /// `Array`, or `Set`), because those properties are persisted as relationships.
+    public static func codableIfPossible(
+        _ name: String, keyPath: AnyKeyPath, get: @escaping (Model) -> Value, set: @escaping (Model, Value) -> Void
+    ) -> Self? {
+        guard Value.self is any Codable.Type, !containsModelType(Value.self) else { return nil }
+        let decodeValue: (StoredValue) throws -> Any = { value in
+            // `Value` was checked to be Codable above, so these casts can't fail.
+            let decodable = Value.self as! any Decodable.Type
+            return try decodeOpened(decodable, from: value)
+        }
+        return Self(
+            name, keyPath: keyPath,
+            encode: { model in
+                let encodable = get(model) as! any Encodable
+                return try encodeOpened(encodable)
+            },
+            decode: { value, model in set(model, try decodeValue(value) as! Value) },
+            decodeValue: decodeValue)
+    }
+}
+
+private protocol ModelValueWrapper {
+    static var wrappedValueType: Any.Type { get }
+}
+
+extension Optional: ModelValueWrapper {
+    fileprivate static var wrappedValueType: Any.Type { Wrapped.self }
+}
+
+extension Array: ModelValueWrapper {
+    fileprivate static var wrappedValueType: Any.Type { Element.self }
+}
+
+extension Set: ModelValueWrapper {
+    fileprivate static var wrappedValueType: Any.Type { Element.self }
+}
+
+private func containsModelType(_ type: Any.Type) -> Bool {
+    if type is any PersistentModel.Type { return true }
+    guard let wrapper = type as? any ModelValueWrapper.Type else { return false }
+    return containsModelType(wrapper.wrappedValueType)
+}
+
+private func encodeOpened<T: Encodable>(_ value: T) throws -> StoredValue {
+    try PersistentValue.encode(value)
+}
+
+private func decodeOpened<T: Decodable>(_ type: T.Type, from value: StoredValue) throws -> Any {
+    try PersistentValue.decode(type, from: value)
+}

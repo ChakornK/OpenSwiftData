@@ -116,6 +116,9 @@ package enum PredicatePlanBuilder {
             guard let test = build(test), let trueBranch = build(trueBranch), let falseBranch = build(falseBranch)
             else { return nil }
             return .conditional(test, trueBranch, falseBranch)
+        case let .stringCount(string):
+            guard let string = build(string) else { return nil }
+            return .stringCount(string)
         case let .localizedStandardContains(lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .localizedStandardContains(lhs, rhs)
@@ -140,6 +143,8 @@ package enum PredicatePlanBuilder {
             return .codableCollectionIsEmpty(name)
         case let .codableCollectionCount(name):
             return .codableCollectionCount(name)
+        case let .codableMember(name, members):
+            return .codableMember(name, members)
         case let .relationshipContains(name, body):
             guard let body = build(body) else { return nil }
             return .relationshipContains(name, body)
@@ -215,7 +220,7 @@ package enum SQLCompiler {
             let primaryKey = identifier.primaryKey.map(StoredValue.int) ?? .null
             let sameStore = PredicateIR.comparison(
                 .equal,
-                .value(.text(identifier.storeIdentifier)),
+                .value(.text(identifier.resolvedStoreIdentifier)),
                 .value(.text(storeIdentifier)))
             let sameEntity = PredicateIR.comparison(
                 .equal,
@@ -325,6 +330,10 @@ package enum SQLCompiler {
                 name,
                 resolvePersistentIdentifierComparisons(
                     body, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .stringCount(string):
+            return .stringCount(
+                resolvePersistentIdentifierComparisons(
+                    string, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
         case let .localizedStandardContains(lhs, rhs):
             return .localizedStandardContains(
                 resolvePersistentIdentifierComparisons(
@@ -367,7 +376,7 @@ package enum SQLCompiler {
                 resolvePersistentIdentifierComparisons(
                     value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
         case .keyPath, .persistentIdentifier, .identifierValue, .relationshipIsPresent, .value,
-            .codableCollectionIsEmpty, .codableCollectionCount, .relationshipCount:
+            .codableCollectionIsEmpty, .codableCollectionCount, .codableMember, .relationshipCount:
             return ir
         }
     }
@@ -730,6 +739,9 @@ package enum SQLCompiler {
         case let .conditional(test, trueBranch, falseBranch):
             return
                 "(CASE WHEN \(try render(test, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) THEN \(try render(trueBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) ELSE \(try render(falseBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) END)"
+        case let .stringCount(string):
+            return
+                "osd_string_count(\(try render(string, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .localizedStandardContains(lhs, rhs):
             return
                 "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
@@ -806,6 +818,12 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
             }
             return "osd_json_array_count(\(tableAlias).Z\(name.uppercased()))"
+        case let .codableMember(name, members):
+            guard Self.validIdentifier(name) else {
+                throw SwiftDataError.unsupportedPredicate("Invalid Codable attribute property name")
+            }
+            arguments.append(.text(members.joined(separator: ".")))
+            return "osd_json_member(\(tableAlias).Z\(name.uppercased()), ?)"
         case let .relationshipContains(name, body):
             let path = name.split(separator: ".").map(String.init)
             guard let collectionName = path.last else {
@@ -1017,6 +1035,7 @@ package enum SQLCompiler {
         case let .nilCoalesce(lhs, rhs): "coalesce(\(structure(lhs)),\(structure(rhs)))"
         case let .conditional(test, trueBranch, falseBranch):
             "conditional(\(structure(test)),\(structure(trueBranch)),\(structure(falseBranch)))"
+        case let .stringCount(string): "stringCount(\(structure(string)))"
         case let .localizedStandardContains(lhs, rhs): "localizedContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringContains(lhs, rhs): "stringContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"
@@ -1030,6 +1049,7 @@ package enum SQLCompiler {
             "collectionAllCompare(\(name),\(elementType),\(operation),\(structure(element)))"
         case let .codableCollectionIsEmpty(name): "codableCollectionIsEmpty(\(name))"
         case let .codableCollectionCount(name): "codableCollectionCount(\(name))"
+        case let .codableMember(name, members): "codableMember(\(name),\(members.joined(separator: ".")))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
         case let .relationshipCount(name): "relationshipCount(\(name))"

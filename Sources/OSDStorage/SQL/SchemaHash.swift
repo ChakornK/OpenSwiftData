@@ -365,7 +365,7 @@ package enum EntityIDMapCodec {
     private static let format = "entity-id-map.v1"
 
     package static func encode(_ identifiers: [String: Int], for schema: Schema) throws -> [UInt8] {
-        _ = try Schema(schema.entities, version: schema.version, entityIDs: identifiers)
+        _ = try Schema(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
         let entries = identifiers.map { Entry(name: $0.key, identifier: $0.value) }
             .sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         let encoder = JSONEncoder()
@@ -390,7 +390,7 @@ package enum EntityIDMapCodec {
             }
         }
         do {
-            _ = try Schema(schema.entities, version: schema.version, entityIDs: identifiers)
+            _ = try Schema(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
         } catch {
             throw SwiftDataError.migrationUnsupported("Stored entity identifier map does not match the schema.")
         }

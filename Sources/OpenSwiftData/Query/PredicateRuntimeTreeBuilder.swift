@@ -133,6 +133,138 @@ package enum PredicateRuntimeTreeBuilder {
                 return nil
             }
         }
+        /// Rewrites `capturedArray.contains(element)` as `element == a || element == b || …`, or `false` when the
+        /// array is empty, giving each array element its own capture. Returns `nil` for other sequences.
+        func capturedMembership(
+            _ mirror: Mirror,
+            path: [String],
+            bindings: [UInt: ExpressionBinding],
+            capturePathRewrites: [CapturePathRewrite]
+        ) throws -> RuntimePredicateNode? {
+            let fields = Dictionary(
+                mirror.children.compactMap { child in child.label.map { ($0, child.value) } },
+                uniquingKeysWith: { first, _ in first })
+            guard let sequence = fields["sequence"], let elementValue = fields["element"],
+                PredicateNodeMetadata.entry(for: String(reflecting: type(of: sequence)))?.name == "Value",
+                let captured = Mirror(reflecting: sequence).children.first(where: { $0.label == "value" })?.value,
+                let items = captured as? [Any]
+            else { return nil }
+            func capturedValue(_ item: Any, at nodePath: [String]) throws -> RuntimePredicateNode {
+                let rewrittenPath = capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) }
+                do {
+                    captures[RuntimePredicatePath(labels: rewrittenPath)] = try StoredValue(
+                        predicateScalar: item, type: type(of: item))
+                } catch {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Unsupported predicate capture \(String(reflecting: type(of: item)))")
+                }
+                return .expression(
+                    name: "Value",
+                    children: [
+                        ("value", .capture(typeName: String(reflecting: type(of: item)), description: "\(item)"))
+                    ])
+            }
+            guard !items.isEmpty else { return try capturedValue(false, at: path) }
+            // Builds Disjunction(lhs: Equal(element, item₀), rhs: Disjunction(…)) so each node's path is known.
+            func disjunction(from index: Int, at nodePath: [String]) throws -> RuntimePredicateNode {
+                let equalPath = index == items.count - 1 ? nodePath : nodePath + ["lhs"]
+                let equal = RuntimePredicateNode.expression(
+                    name: "Equal",
+                    children: [
+                        (
+                            "lhs",
+                            try visit(
+                                elementValue, path: equalPath + ["lhs"], bindings: bindings,
+                                capturePathRewrites: capturePathRewrites)
+                        ),
+                        ("rhs", try capturedValue(items[index], at: equalPath + ["rhs"])),
+                    ])
+                guard index < items.count - 1 else { return equal }
+                return .expression(
+                    name: "Disjunction",
+                    children: [("lhs", equal), ("rhs", try disjunction(from: index + 1, at: nodePath + ["rhs"]))])
+            }
+            return try disjunction(from: 0, at: path)
+        }
+
+        /// Resolves `root.member` where `root` is a direct Codable attribute (or a member of one) to an
+        /// `OSDCodableMember` node, or returns `nil` when `root` isn't a Codable attribute.
+        func codableMember(
+            root: Any,
+            memberKeyPath: AnyKeyPath,
+            path: [String],
+            bindings: [UInt: ExpressionBinding],
+            capturePathRewrites: [CapturePathRewrite]
+        ) throws -> RuntimePredicateNode? {
+            let rootFields = Dictionary(
+                Mirror(reflecting: root).children.compactMap { child in child.label.map { ($0, child.value) } },
+                uniquingKeysWith: { first, _ in first })
+            guard let rootKeyPath = rootFields["keyPath"] as? AnyKeyPath, let rootRoot = rootFields["root"] else {
+                return nil
+            }
+            let attributeName: String
+            let parentMembers: [String]
+            let parentType: Any.Type
+            if PredicateNodeMetadata.entry(for: String(reflecting: type(of: rootRoot)))?.name == "KeyPath" {
+                guard
+                    case let .expression(name: "OSDCodableMember", children: children)? = try codableMember(
+                        root: rootRoot, memberKeyPath: rootKeyPath, path: path + ["root"], bindings: bindings,
+                        capturePathRewrites: capturePathRewrites),
+                    case let .property(reference)? = children.first(where: { $0.0 == "value" })?.1,
+                    case let .capture(typeName: _, description: members)? =
+                        children.first(where: { $0.0 == "member" })?.1
+                else { return nil }
+                attributeName = reference.name
+                parentMembers = members.split(separator: ".").map(String.init)
+                parentType = type(of: rootKeyPath).valueType
+            } else {
+                // The root must be the predicate's own model variable, not a relationship or collection element.
+                guard activeRelationshipName == nil, activeCollectionName == nil,
+                    ObjectIdentifier(type(of: rootKeyPath).rootType) == ObjectIdentifier(activePredicateRootType),
+                    let name = activeModelType.propertyName(forKeyPath: rootKeyPath),
+                    activeEntity.attributes.first(where: { $0.name == name })?.options.contains(.codable) == true
+                else { return nil }
+                attributeName = name
+                parentMembers = []
+                parentType = type(of: rootKeyPath).valueType
+            }
+            // Collections and optionals have their own predicate operators; only composite members map to JSON keys.
+            let parentTypeName = String(reflecting: parentType)
+            guard ObjectIdentifier(type(of: memberKeyPath).rootType) == ObjectIdentifier(parentType),
+                !["Swift.Array<", "Swift.Set<", "Swift.Dictionary<", "Swift.Optional<"].contains(where: {
+                    parentTypeName.hasPrefix($0)
+                })
+            else {
+                return nil
+            }
+            // `\Address.city` describes itself as "\Address.city"; the components after the root are the members.
+            let members = String(describing: memberKeyPath).split(separator: ".").dropFirst().map(String.init)
+            guard !members.isEmpty, members.allSatisfy({ !$0.contains("?") && !$0.contains("!") }) else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable attribute member path is unsupported: \(String(describing: memberKeyPath)).")
+            }
+            let valueType = type(of: memberKeyPath).valueType
+            // JSONEncoder writes these differently from their scalar column encodings, so comparisons can't match.
+            let valueTypeName = String(reflecting: valueType)
+            if ["Foundation.UUID", "Foundation.Decimal", "Foundation.Data"].contains(where: {
+                valueTypeName == $0 || valueTypeName == "Swift.Optional<\($0)>"
+            }) {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable attribute members of type \(valueTypeName) can't be compared in predicates.")
+            }
+            return .expression(
+                name: "OSDCodableMember",
+                children: [
+                    ("value", .property(RuntimePropertyReference(name: attributeName))),
+                    (
+                        "member",
+                        .capture(
+                            typeName: String(reflecting: valueType),
+                            description: (parentMembers + members).joined(separator: "."))
+                    ),
+                ])
+        }
+
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -152,6 +284,12 @@ package enum PredicateRuntimeTreeBuilder {
             if outerTypeName == "FoundationEssentials.Expression" || outerTypeName == "Foundation.Expression" {
                 throw SwiftDataError.unsupportedPredicate(
                     "Expression values are only supported inside ExpressionEvaluate")
+            }
+            if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "SequenceContains",
+                let membership = try capturedMembership(
+                    mirror, path: path, bindings: bindings, capturePathRewrites: capturePathRewrites)
+            {
+                return membership
             }
             if let entry = PredicateNodeMetadata.entry(for: typeName), entry.name == "UnaryMinus" {
                 let children = Array(mirror.children)
@@ -557,7 +695,11 @@ package enum PredicateRuntimeTreeBuilder {
                                 (operation.operandLabel, operandNode),
                             ])
                     }
-                    if ["Comparison", "Equal", "NotEqual"].contains(transformMetadata.name) {
+                    if ["Comparison", "Equal", "NotEqual"].contains(transformMetadata.name),
+                        Mirror(reflecting: transform).children.contains(where: {
+                            variableIdentifier($0.value) == variableID
+                        })
+                    {
                         let transformChildren = Array(Mirror(reflecting: transform).children)
                         let transformLabels = transformChildren.compactMap(\.label)
                         guard transformLabels.count == transformChildren.count,
@@ -594,6 +736,45 @@ package enum PredicateRuntimeTreeBuilder {
                         }
                         return .expression(name: transformMetadata.name, children: rewritten)
                     }
+                }
+                if case let .property(reference) = wrappedNode, !reference.name.contains("."),
+                    let wrappedAttribute = activeEntity.attributes.first(where: { $0.name == reference.name }),
+                    !wrappedAttribute.options.contains(.codable),
+                    !wrappedAttribute.options.contains(.flattened)
+                {
+                    // Lowered to `wrapped == nil ? nil : transform(wrapped)`, so a nil attribute yields nil even
+                    // when the transform would treat NULL operands as values (as optional comparisons do).
+                    var scopedBindings = bindings
+                    scopedBindings[variableID] = ExpressionBinding(
+                        value: wrapped, outerBindings: bindings, capturePathRewrites: capturePathRewrites)
+                    let captureRewrite = CapturePathRewrite(
+                        sourcePrefix: path + ["transform"], destinationPrefix: path + ["falseBranch"])
+                    let transformNode = try visit(
+                        transform, path: path + ["transform"], bindings: scopedBindings,
+                        capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                    let wrappedTypeName =
+                        activeModelType.schemaMetadata().first(where: { $0.name == reference.name })?.keypath
+                        .map { String(reflecting: type(of: $0).valueType) } ?? "Swift.Optional<Swift.String>"
+                    func nilValue(at nodePath: [String]) -> RuntimePredicateNode {
+                        captures[
+                            RuntimePredicatePath(labels: capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) })] =
+                            .null
+                        return .expression(
+                            name: "Value",
+                            children: [("value", .capture(typeName: wrappedTypeName, description: "nil"))])
+                    }
+                    return .expression(
+                        name: "Conditional",
+                        children: [
+                            (
+                                "test",
+                                .expression(
+                                    name: "Equal",
+                                    children: [("lhs", wrappedNode), ("rhs", nilValue(at: path + ["test", "rhs"]))])
+                            ),
+                            ("trueBranch", nilValue(at: path + ["trueBranch"])),
+                            ("falseBranch", transformNode),
+                        ])
                 }
                 if codableCollectionName(wrappedNode, entity: activeEntity) != nil {
                     var scopedBindings = bindings
@@ -747,6 +928,30 @@ package enum PredicateRuntimeTreeBuilder {
                 {
                     return .expression(name: "OSDSequenceCount", children: [("sequence", rootNode)])
                 }
+            }
+            if name == "KeyPath",
+                let keyPath = children.first(where: { $0.label == "keyPath" })?.value as? AnyKeyPath,
+                keyPath == \String.isEmpty || keyPath == \String.count,
+                let root = children.first(where: { $0.label == "root" })?.value
+            {
+                let captureRewrite = CapturePathRewrite(
+                    sourcePrefix: path + ["root"], destinationPrefix: path + ["string"])
+                let rootNode = try visit(
+                    root, path: path + ["root"], bindings: bindings,
+                    capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                return .expression(
+                    name: keyPath == \String.isEmpty ? "OSDStringIsEmpty" : "OSDStringCount",
+                    children: [("string", rootNode)])
+            }
+            if name == "KeyPath",
+                let keyPath = children.first(where: { $0.label == "keyPath" })?.value as? AnyKeyPath,
+                let root = children.first(where: { $0.label == "root" })?.value,
+                PredicateNodeMetadata.entry(for: String(reflecting: type(of: root)))?.name == "KeyPath",
+                let member = try codableMember(
+                    root: root, memberKeyPath: keyPath, path: path, bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+            {
+                return member
             }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath

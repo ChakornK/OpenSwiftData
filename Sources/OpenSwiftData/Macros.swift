@@ -24,46 +24,35 @@ public macro _PersistedProperty(
 public macro Model(protocolConformancesOnly: Bool = false) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "ModelMacro")
 
-/// Describes options for a persisted attribute.
-public enum Attribute {
-    /// Options that control how an attribute is persisted.
-    public enum Option: Sendable, Hashable {
-        case unique
-        case externalStorage
-        case encrypt
-        case preserveValueOnDeletion
-        case spotlight
-        case transformable(by: String)
-        case allowsCloudEncryption
-        case ephemeral
-        case codable
-        case flattened
-    }
-}
+/// Customizes how a property is persisted.
+///
+/// `originalName` names the property in the previous schema version for migration. `hashModifier` forces a new
+/// schema version hash when the property's stored representation changes without a visible declaration change.
 @attached(peer)
-public macro Attribute(_ options: Attribute.Option...) =
-    #externalMacro(module: "OpenSwiftDataMacros", type: "AttributeMacro")
+public macro Attribute(
+    _ options: Schema.Attribute.Option..., originalName: String? = nil, hashModifier: String? = nil
+) = #externalMacro(module: "OpenSwiftDataMacros", type: "AttributeMacro")
 
-/// Describes options for a persisted relationship.
-public enum Relationship {
-    /// Behavior applied when deleting a related model.
-    public enum DeleteRule: Sendable, Hashable { case nullify, cascade, deny, noAction }
-}
+/// Customizes how a relationship is persisted.
 @attached(peer)
 public macro Relationship(
-    deleteRule: Relationship.DeleteRule = .nullify,
-    minimumModelCount: Int? = nil,
-    maximumModelCount: Int? = nil,
+    _ options: Schema.Relationship.Option...,
+    deleteRule: Schema.Relationship.DeleteRule = .nullify,
+    minimumModelCount: Int? = 0,
+    maximumModelCount: Int? = 0,
     originalName: String? = nil,
-    inverse: AnyKeyPath? = nil
+    inverse: AnyKeyPath? = nil,
+    hashModifier: String? = nil
 ) = #externalMacro(module: "OpenSwiftDataMacros", type: "RelationshipMacro")
 @attached(peer)
 public macro Transient() = #externalMacro(module: "OpenSwiftDataMacros", type: "TransientMacro")
+/// Declares uniqueness constraints; each array names properties whose combined values must be unique.
 @freestanding(declaration)
-public macro Unique<Model>(_ keyPaths: PartialKeyPath<Model>...) =
+public macro Unique<T: PersistentModel>(_ constraints: [PartialKeyPath<T>]...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "UniqueMacro")
+/// Declares indexes; each array names the properties of one index, in column order.
 @freestanding(declaration)
-public macro Index<Model>(_ keyPaths: PartialKeyPath<Model>...) =
+public macro Index<T: PersistentModel>(_ indices: [PartialKeyPath<T>]...) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "IndexMacro")
 @attached(member, names: arbitrary)
 @attached(extension, conformances: ModelActor)

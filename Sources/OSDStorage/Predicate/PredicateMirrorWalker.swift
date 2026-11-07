@@ -93,7 +93,7 @@ package enum PredicateMirrorWalker {
         return [
             "ComparisonOperator", "ArithmeticOperator", "StringComparisonOptions",
             "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
-            "UInt64", "Float", "Double", "String", "Character", "Decimal", "Date", "UUID", "Data", "URL",
+            "UInt64", "Float", "Double", "String", "Character", "Decimal", "NSDecimal", "Date", "UUID", "Data", "URL",
         ].contains(name)
     }
 

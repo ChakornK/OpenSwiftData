@@ -184,7 +184,7 @@ public struct FlattenedPropertyAdapter<Model: PersistentModel, Composite: Flatte
 }
 
 /// A model whose properties are stored in OpenSwiftData backing data.
-public protocol PersistentModel: AnyObject {
+public protocol PersistentModel: AnyObject, Observable, Hashable, Identifiable {
     associatedtype Model: PersistentModel = Self
     /// Type-erased backing used by subclass properties whose key paths are rooted at a derived model type.
     var anyBackingData: any AnyBackingData { get }
@@ -228,6 +228,21 @@ public protocol PersistentModel: AnyObject {
 }
 
 public extension PersistentModel {
+    /// The model's persistent identifier.
+    var id: PersistentIdentifier { persistentModelID }
+
+    /// Returns whether both operands are the same model instance.
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs === rhs }
+
+    /// Hashes the model's current persistent identifier.
+    ///
+    /// The hash changes when saving replaces a temporary identifier with a permanent one, and instances
+    /// of the same row in different contexts hash equally while comparing unequal.
+    func hash(into hasher: inout Hasher) { hasher.combine(persistentModelID) }
+
+    // An explicit witness avoids a synthesized one that fails to link for non-final model classes.
+    var hashValue: Int { persistentModelID.hashValue }
+
     static var parentModel: (any PersistentModel.Type)? { nil }
     func prepareForPersistence() {}
     var anyBackingData: any AnyBackingData {
@@ -258,7 +273,7 @@ public extension PersistentModel {
     }
     static func persistenceAdapters() -> [any PersistencePropertyAdapter<Model>] { [] }
     static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] {
-        persistenceAdapters().map(ErasedPersistencePropertyAdapter.init)
+        persistenceAdapters().map { ErasedPersistencePropertyAdapter($0) }
     }
     static func flattenedPropertyAdapters() -> [any AnyFlattenedPropertyAdapter] { [] }
     static func hasFlattenedKeyPath(_ keyPath: AnyKeyPath) -> Bool {
@@ -363,6 +378,12 @@ public extension PersistentModel {
             }
             do {
                 let endpoints = try adapter.endpoints(in: value)
+                // Relating a detached model to a managed one inserts it into the managed model's context.
+                if let managedContext = endpoints.lazy.compactMap(\.modelContext).first {
+                    managedContext.insert(self)
+                    setRelationshipValue(forKey: keyPath, to: value)
+                    return
+                }
                 try DetachedRelationshipGraph.assign(
                     endpoints: endpoints, owner: self, ownerType: modelType, adapter: adapter)
             } catch {

@@ -65,8 +65,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             case "Unique": kind = .unique
             default: continue
             }
-            let properties = try CodeGen.schemaDirectiveProperties(directive, kind: kind)
-            try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
+            for properties in try CodeGen.schemaDirectiveProperties(directive, kind: kind) {
+                try CodeGen.validateSchemaDirectiveTargets(properties, kind: kind, in: classDeclaration)
+            }
         }
         diagnoseConflictingPropertyMacros(in: classDeclaration, context: context)
         let members = CodeGen.memberSources(
@@ -132,11 +133,12 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
         if protocolConformancesOnly(in: node) == false,
             classDeclaration.inheritanceClause?.inheritedTypes.isEmpty == false
         {
-            return CodeGen.extensionSources(classDeclaration)
+            return CodeGen.extensionSources(modelName: type.trimmedDescription)
                 .filter { $0.contains("extension PersistentModel where Self:") || $0.contains("@unchecked Sendable") }
                 .compactMap { DeclSyntax(stringLiteral: $0).as(ExtensionDeclSyntax.self) }
         }
-        return CodeGen.extensionSources(declaration)
+        // The provided type is fully qualified, so models nested in other types extend correctly.
+        return CodeGen.extensionSources(modelName: type.trimmedDescription)
             .filter {
                 $0.contains("PersistentModel") || $0.contains("RelationshipModel")
                     || $0.contains("Observation.Observable") || $0.contains("@unchecked Sendable")
@@ -272,8 +274,8 @@ struct ModelActorMacro: MemberMacro, ExtensionMacro {
         conformingTo protocols: [TypeSyntax],
         in context: some MacroExpansionContext
     ) throws -> [ExtensionDeclSyntax] {
-        guard let actor = declaration.as(ActorDeclSyntax.self) else { return [] }
-        return [DeclSyntax(stringLiteral: CodeGen.modelActorExtensionSource(actorName: actor.name.text))]
+        guard declaration.is(ActorDeclSyntax.self) else { return [] }
+        return [DeclSyntax(stringLiteral: CodeGen.modelActorExtensionSource(actorName: type.trimmedDescription))]
             .compactMap { $0.as(ExtensionDeclSyntax.self) }
     }
 }

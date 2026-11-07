@@ -21,7 +21,7 @@ final class SchemaTests: XCTestCase {
             maximumModelCount: 8
         )
         let entity = Schema.Entity(name: "Trip", attributes: [attribute], relationships: [relationship])
-        let version = Schema.Version(version: [1, 2], identifier: "trip-v1")
+        let version = Schema.Version(1, 2, 0)
         let schema = Schema([entity], version: version)
 
         XCTAssertEqual(schema.entities, [entity])

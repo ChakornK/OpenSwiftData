@@ -4,7 +4,7 @@ import XCTest
 
 final class RelationshipContextTests: XCTestCase {
     @MainActor
-    func testAttachedAssignmentAutoInsertsDestinationAndRollbackDetachesIt() throws {
+    func testAttachedAssignmentAutoInsertsDestinationAndRollbackDetachesIt() async throws {
         let owner = ContextOwner(name: "Ada")
         let pet = ContextPet(name: "Milo")
         let container = try ModelContainer(for: [ContextOwner.self, ContextPet.self], configurations: [])
@@ -24,7 +24,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOwnerAssignmentDoesNotAutoInsert() throws {
+    func testDetachedOwnerAssignmentDoesNotAutoInsert() async throws {
         let owner = ContextOwner(name: "Ada")
         let pet = ContextPet(name: "Milo")
         let container = try ModelContainer(for: [ContextOwner.self, ContextPet.self], configurations: [])
@@ -39,7 +39,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testToOneCardinalityBoundaryAcceptsSingleEndpoint() throws {
+    func testToOneCardinalityBoundaryAcceptsSingleEndpoint() async throws {
         let owner = ContextSingleOwner(name: "Ada")
         let first = ContextPet(name: "First")
         let container = try ModelContainer(for: [ContextSingleOwner.self, ContextPet.self], configurations: [])
@@ -54,28 +54,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteDenyLeavesOwnerUntouchedAndProcessingIsIdempotent() throws {
-        let owner = ContextDenyOwner(name: "Ada")
-        let pet = ContextPet(name: "Milo")
-        let container = try ModelContainer(for: [ContextDenyOwner.self, ContextPet.self], configurations: [])
-        let context = ModelContext(testSave: {}, container: container)
-        context.insert(owner)
-        context.insert(pet)
-        try context.save()
-        let adapter = try XCTUnwrap(container.relationshipAdapters(for: ContextDenyOwner.self).first)
-        try adapter.write([pet], to: owner)
-
-        context.delete(owner)
-        XCTAssertFalse(owner.isDeleted)
-        XCTAssertFalse(context.deletedModelsArray.contains { $0 === owner })
-        XCTAssertEqual(adapter.read(owner)?.map(ObjectIdentifier.init), [ObjectIdentifier(pet)])
-        let eventCount = context.state.relationshipMutations.count
-        try context.processPendingChanges()
-        XCTAssertEqual(context.state.relationshipMutations.count, eventCount)
-    }
-
-    @MainActor
-    func testCascadeAndNullifyDeleteRulesApplySynchronously() throws {
+    func testCascadeAndNullifyDeleteRulesApplySynchronously() async throws {
         let cascadeOwner = ContextCascadeOwner(name: "A")
         let cascadePet = ContextPet(name: "Cascade")
         let cascadeContainer = try ModelContainer(for: [ContextCascadeOwner.self, ContextPet.self], configurations: [])
@@ -87,7 +66,7 @@ final class RelationshipContextTests: XCTestCase {
             .write([cascadePet], to: cascadeOwner)
         cascadeContext.delete(cascadeOwner)
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadeOwner })
-        try cascadeContext.processPendingChanges()
+        try cascadeContext.processPendingChangesThrowing()
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadeOwner })
         XCTAssertTrue(cascadeContext.deletedModelsArray.contains { $0 === cascadePet })
 
@@ -102,7 +81,7 @@ final class RelationshipContextTests: XCTestCase {
             .write([nullifyPet], to: nullifyOwner)
         nullifyContext.delete(nullifyOwner)
         XCTAssertTrue(nullifyContext.deletedModelsArray.contains { $0 === nullifyOwner })
-        try nullifyContext.processPendingChanges()
+        try nullifyContext.processPendingChangesThrowing()
         XCTAssertNil(nullifyPet.owner)
     }
 

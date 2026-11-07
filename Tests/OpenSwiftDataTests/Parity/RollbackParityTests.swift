@@ -1,0 +1,118 @@
+import Foundation
+import OpenSwiftData
+import Testing
+
+@Model final class RollbackParityOwner {
+    var name: String
+    var age: Int
+    var tag: String?
+    var tags: [String] = []
+    @Relationship(inverse: \RollbackParityItem.owner) var items: [RollbackParityItem] = []
+    init(name: String, age: Int) {
+        self.name = name
+        self.age = age
+    }
+}
+
+@Model final class RollbackParityItem {
+    var value: Int
+    var owner: RollbackParityOwner?
+    init(value: Int) { self.value = value }
+}
+
+/// `rollback()` semantics observed from Apple's SwiftData.
+@MainActor @Suite struct RollbackParityTests {
+    let container: ModelContainer
+    var context: ModelContext { container.mainContext }
+    var saved: FetchDescriptor<RollbackParityOwner> {
+        var descriptor = FetchDescriptor<RollbackParityOwner>()
+        descriptor.includePendingChanges = false
+        return descriptor
+    }
+
+    init() throws {
+        container = try ModelContainer(
+            for: RollbackParityOwner.self, RollbackParityItem.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+    }
+
+    @Test func `rollback clears change tracking but keeps in-memory values until a fetch refreshes them`() throws {
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        context.insert(owner)
+        try context.save()
+
+        owner.age = 2
+        owner.name = "a2"
+        owner.tag = "t"
+        owner.tags = ["x"]
+        context.rollback()
+        #expect(owner.age == 2)
+        #expect(owner.name == "a2")
+        #expect(owner.tag == "t")
+        #expect(owner.tags == ["x"])
+        #expect(!owner.hasChanges)
+        #expect(!context.hasChanges)
+        #expect(try ModelContext(container).fetch(saved).map(\.age) == [1])
+
+        let fetched = try context.fetch(saved)
+        #expect(fetched.first === owner)
+        #expect(owner.age == 1)
+        #expect(owner.name == "a")
+        #expect(owner.tag == nil)
+    }
+
+    @Test func `rollback keeps in-memory relationship edits`() throws {
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        let item = RollbackParityItem(value: 1)
+        context.insert(owner)
+        context.insert(item)
+        try context.save()
+
+        owner.items.append(item)
+        context.rollback()
+        #expect(owner.items.count == 1)
+        #expect(item.owner === owner)
+        #expect(!context.hasChanges)
+    }
+
+    @Test func `rollback detaches insertions and restores deletions`() throws {
+        let inserted = RollbackParityOwner(name: "b", age: 5)
+        context.insert(inserted)
+        context.rollback()
+        #expect(inserted.modelContext == nil)
+        #expect(!inserted.isDeleted)
+        #expect(context.insertedModelsArray.isEmpty)
+        #expect(inserted.name == "b")
+
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        context.insert(owner)
+        try context.save()
+        context.delete(owner)
+        #expect(owner.isDeleted)
+        context.rollback()
+        #expect(!owner.isDeleted)
+        #expect(owner.modelContext === context)
+        #expect(try context.fetchCount(FetchDescriptor<RollbackParityOwner>()) == 1)
+    }
+}
+
+@MainActor @Suite struct RollbackRelationshipParityTests {
+    @Test func `rolled back relationship edits are not saved`() throws {
+        let container = try ModelContainer(
+            for: RollbackParityOwner.self, RollbackParityItem.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        let item = RollbackParityItem(value: 1)
+        context.insert(owner)
+        context.insert(item)
+        try context.save()
+
+        owner.items.append(item)
+        context.rollback()
+        #expect(context.changedModelsArray.isEmpty)
+        try context.save()
+        let stored = try #require(try ModelContext(container).fetch(FetchDescriptor<RollbackParityOwner>()).first)
+        #expect(stored.items.isEmpty)
+    }
+}

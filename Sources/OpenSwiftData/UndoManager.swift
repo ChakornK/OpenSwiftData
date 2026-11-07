@@ -1,61 +1,106 @@
+/// Undo and redo stacks with Foundation `UndoManager` semantics for registrations made during undo and redo.
+///
+/// Registering while undoing pushes onto the redo stack. Registering while redoing pushes onto the undo
+/// stack and keeps the remaining redo actions. Any other registration clears the redo stack.
+struct UndoActionStack {
+    private var undoActions: [() -> Void] = []
+    private var redoActions: [() -> Void] = []
+    private(set) var isUndoing = false
+    private(set) var isRedoing = false
+
+    var canUndo: Bool { !undoActions.isEmpty }
+    var canRedo: Bool { !redoActions.isEmpty }
+
+    mutating func register(_ action: @escaping () -> Void) {
+        if isUndoing {
+            redoActions.append(action)
+        } else {
+            undoActions.append(action)
+            if !isRedoing { redoActions.removeAll() }
+        }
+    }
+
+    /// Removes the most recent undo action and returns it with the stack in undoing mode.
+    ///
+    /// Call `finishUndo()` after running the action.
+    mutating func beginUndo() -> (() -> Void)? {
+        guard let action = undoActions.popLast() else { return nil }
+        isUndoing = true
+        return action
+    }
+
+    mutating func finishUndo() { isUndoing = false }
+
+    /// Removes the most recent redo action and returns it with the stack in redoing mode.
+    ///
+    /// Call `finishRedo()` after running the action.
+    mutating func beginRedo() -> (() -> Void)? {
+        guard let action = redoActions.popLast() else { return nil }
+        isRedoing = true
+        return action
+    }
+
+    mutating func finishRedo() { isRedoing = false }
+
+    mutating func removeAll() {
+        undoActions.removeAll()
+        redoActions.removeAll()
+    }
+}
+
 #if canImport(ObjectiveC)
     /// Uses Foundation's undo manager on supported Apple platforms.
     public typealias UndoManager = Foundation.UndoManager
 #else
-    /// Keeps Linux-host builds type-checkable while Apple clients use Foundation's implementation.
+    /// A minimal undo manager for platforms without Foundation's Objective-C implementation.
+    ///
+    /// Each registration is its own undo step; the model context groups related changes itself.
     public final class UndoManager {
-        private var undoActions: [() -> Void] = []
-        private var redoActions: [() -> Void] = []
-        private var isPerformingUndo = false
-        /// Whether the manager has actions available to undo.
-        public private(set) var canUndo = false
-        /// Whether the manager has actions available to redo.
-        public private(set) var canRedo = false
+        private var stack = UndoActionStack()
 
-        /// Creates a host-only undo manager placeholder.
+        /// Whether the manager has actions available to undo.
+        public var canUndo: Bool { stack.canUndo }
+        /// Whether the manager has actions available to redo.
+        public var canRedo: Bool { stack.canRedo }
+        /// Whether the manager is running an undo action.
+        public var isUndoing: Bool { stack.isUndoing }
+        /// Whether the manager is running a redo action.
+        public var isRedoing: Bool { stack.isRedoing }
+
+        /// Creates an empty undo manager.
         public init() {}
 
-        /// Does nothing because undo operations are unavailable on the Linux build host.
+        /// Runs the most recent undo action; registrations it makes become redo actions.
         public func undo() {
-            guard let action = undoActions.popLast() else { return }
-            isPerformingUndo = true
+            guard let action = stack.beginUndo() else { return }
+            defer { stack.finishUndo() }
             action()
-            isPerformingUndo = false
-            canUndo = !undoActions.isEmpty
-            canRedo = !redoActions.isEmpty
         }
-        /// Does nothing because redo operations are unavailable on the Linux build host.
+
+        /// Runs the most recent redo action; registrations it makes become undo actions.
         public func redo() {
-            guard let action = redoActions.popLast() else { return }
-            isPerformingUndo = false
+            guard let action = stack.beginRedo() else { return }
+            defer { stack.finishRedo() }
             action()
-            canUndo = !undoActions.isEmpty
-            canRedo = !redoActions.isEmpty
         }
-        /// Clears the undo and redo state.
+
+        /// Clears the undo and redo stacks.
         public func removeAllActions() {
-            undoActions.removeAll()
-            redoActions.removeAll()
-            canUndo = false
-            canRedo = false
+            stack.removeAll()
         }
+
         /// Registers a reversible action for the target object.
+        ///
+        /// Retains `target` until the action runs or is removed.
         public func registerUndo<Target: AnyObject>(withTarget target: Target, handler: @escaping (Target) -> Void) {
-            let action = { handler(target) }
-            if isPerformingUndo {
-                redoActions.append(action)
-                canRedo = true
-            } else {
-                undoActions.append(action)
-                redoActions.removeAll()
-                canUndo = true
-                canRedo = false
-            }
+            stack.register { handler(target) }
         }
+
         /// Accepts an action name without storing it.
         public func setActionName(_ actionName: String) {
             _ = actionName
         }
+
         /// Returns whether the current undo action can be discarded.
         public func undoActionIsDiscardable() -> Bool { false }
     }

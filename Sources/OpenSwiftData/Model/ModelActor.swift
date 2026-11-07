@@ -1,14 +1,17 @@
 import Dispatch
 import Foundation
 
-/// An executor that provides the serial execution context for a model actor.
-public protocol ModelExecutor: AnyObject, Sendable {
+/// An executor that provides the execution context for a model actor.
+public protocol ModelExecutor: Executor {
     /// The context managed by this executor.
     var modelContext: ModelContext { get }
 }
 
+/// A model executor that runs jobs one at a time.
+public protocol SerialModelExecutor: ModelExecutor, SerialExecutor {}
+
 /// A serial executor that owns one model context.
-public final class DefaultSerialModelExecutor: ModelExecutor, SerialExecutor, @unchecked Sendable {
+public final class DefaultSerialModelExecutor: SerialModelExecutor, @unchecked Sendable {
     /// The context serialized by this executor.
     public var modelContext: ModelContext { contextHolder.context }
     private let queue: DispatchQueue
@@ -20,6 +23,14 @@ public final class DefaultSerialModelExecutor: ModelExecutor, SerialExecutor, @u
         self.queue = affinityToken.queue
         self.affinityToken = affinityToken
         self.contextHolder = contextHolder
+    }
+
+    /// Creates a serial executor for an existing context.
+    public convenience init(modelContext: ModelContext) {
+        let queue = DispatchQueue(label: "OpenSwiftData.ModelActor.\(UUID().uuidString)")
+        let holder = ModelExecutorContextHolder()
+        holder.context = modelContext
+        self.init(affinityToken: ModelExecutorAffinityToken(queue: queue), contextHolder: holder)
     }
 
     package static func make(container: ModelContainer) -> DefaultSerialModelExecutor {
@@ -92,18 +103,28 @@ package final class ModelExecutorAffinityToken: @unchecked Sendable {
 
 /// An actor whose isolated work is serialized alongside a model context.
 public protocol ModelActor: Actor {
-    /// The serial executor that owns this actor's model context.
-    nonisolated var modelExecutor: DefaultSerialModelExecutor { get }
     /// The container used by this actor.
     nonisolated var modelContainer: ModelContainer { get }
-    /// The context serialized by this actor's model executor.
-    var modelContext: ModelContext { get }
+    /// The executor that owns this actor's model context; it must be a `SerialModelExecutor`.
+    nonisolated var modelExecutor: any ModelExecutor { get }
 }
 
-public extension ModelActor where Self: Actor {
-    var modelContext: ModelContext { modelExecutor.modelContext }
+extension ModelActor {
+    /// The context serialized by this actor's model executor.
+    public var modelContext: ModelContext { modelExecutor.modelContext }
 
-    nonisolated var unownedExecutor: UnownedSerialExecutor {
-        modelExecutor.asUnownedSerialExecutor()
+    /// The actor's executor, which is its model executor.
+    public nonisolated var unownedExecutor: UnownedSerialExecutor {
+        guard let serial = modelExecutor as? any SerialModelExecutor else {
+            preconditionFailure("A model actor's executor must be a SerialModelExecutor.")
+        }
+        return serial.asUnownedSerialExecutor()
+    }
+
+    /// Returns the model for an identifier from this actor's context, or `nil` when it does not exist or has
+    /// another type.
+    public subscript<T: PersistentModel>(id: PersistentIdentifier, as _: T.Type) -> T? {
+        if let registered: T = modelContext.registeredModel(for: id) { return registered }
+        return try? modelContext.model(for: id) as T?
     }
 }

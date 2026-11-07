@@ -1,7 +1,9 @@
 import Foundation
 
 /// Describes a typed model fetch request.
-public struct FetchDescriptor<Model: PersistentModel> {
+///
+/// Descriptors compare equal when every option matches; predicates compare by their expression trees.
+public struct FetchDescriptor<Model: PersistentModel>: Equatable {
     /// The predicate applied to fetched models.
     public var predicate: Predicate<Model>?
     /// The sort descriptors applied in declaration order.
@@ -12,8 +14,11 @@ public struct FetchDescriptor<Model: PersistentModel> {
     public var fetchOffset: Int?
     /// Whether unsaved context changes are included in the result.
     public var includePendingChanges: Bool
-    /// The model properties selected by this fetch, when specified.
-    public var propertiesToFetch: [PartialKeyPath<Model>]?
+    /// The properties to load when fetching; empty loads every property.
+    public var propertiesToFetch: [PartialKeyPath<Model>]
+
+    /// The selected properties, or `nil` when the fetch loads every property.
+    var selectedProperties: [PartialKeyPath<Model>]? { propertiesToFetch.isEmpty ? nil : propertiesToFetch }
     /// The relationship properties to materialize with fetched models.
     public var relationshipKeyPathsForPrefetching: [PartialKeyPath<Model>]
 
@@ -24,7 +29,7 @@ public struct FetchDescriptor<Model: PersistentModel> {
         fetchLimit: Int? = nil,
         fetchOffset: Int? = nil,
         includePendingChanges: Bool = true,
-        propertiesToFetch: [PartialKeyPath<Model>]? = nil,
+        propertiesToFetch: [PartialKeyPath<Model>] = [],
         relationshipKeyPathsForPrefetching: [PartialKeyPath<Model>] = []
     ) {
         self.predicate = predicate
@@ -37,72 +42,86 @@ public struct FetchDescriptor<Model: PersistentModel> {
     }
 }
 
-/// Describes a model property used to order fetched results.
-public struct SortDescriptor<Model: PersistentModel> {
-    /// The property used to compare models.
-    public let keyPath: PartialKeyPath<Model>
-    private let propertyDescription: String
-    /// Whether the ordering is ascending.
-    public let isAscending: Bool
-    private let compareValues: (Model, Model) -> ComparisonResult
-
-    /// Creates an ascending or descending ordering for a model property.
-    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value>, order: SortOrder = .forward) {
-        self.keyPath = keyPath
-        isAscending = order == .forward
-        propertyDescription = String(describing: keyPath)
-        compareValues = { lhs, rhs in
-            let lhsValue = lhs[keyPath: keyPath]
-            let rhsValue = rhs[keyPath: keyPath]
-            if lhsValue == rhsValue { return .orderedSame }
-            return lhsValue < rhsValue ? .orderedAscending : .orderedDescending
-        }
+extension FetchDescriptor {
+    /// Returns whether both descriptors have equal predicates, sorting, paging, and fetch options.
+    public static func == (lhs: FetchDescriptor, rhs: FetchDescriptor) -> Bool {
+        lhs.sortBy == rhs.sortBy && lhs.fetchLimit == rhs.fetchLimit && lhs.fetchOffset == rhs.fetchOffset
+            && lhs.includePendingChanges == rhs.includePendingChanges
+            && lhs.propertiesToFetch == rhs.propertiesToFetch
+            && lhs.relationshipKeyPathsForPrefetching == rhs.relationshipKeyPathsForPrefetching
+            && dumped(lhs.predicate?.expression) == dumped(rhs.predicate?.expression)
     }
 
-    /// Creates an ascending or descending ordering for an optional model property.
-    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value?>, order: SortOrder = .forward) {
-        self.keyPath = keyPath
-        isAscending = order == .forward
-        propertyDescription = String(describing: keyPath)
-        compareValues = { lhs, rhs in
-            switch (lhs[keyPath: keyPath], rhs[keyPath: keyPath]) {
-            case (nil, nil): return .orderedSame
-            case (nil, _?): return .orderedAscending
-            case (_?, nil): return .orderedDescending
-            case let (left?, right?):
-                if left == right { return .orderedSame }
-                return left < right ? .orderedAscending : .orderedDescending
+    /// Renders a value's full reflection tree, including captured constants.
+    ///
+    /// Predicate variables are numbered from a process-wide counter, so they are renumbered in order of first
+    /// appearance to make structurally identical predicates render identically.
+    private static func dumped(_ value: Any?) -> String {
+        var output = ""
+        dump(value, to: &output)
+        var renumbered: [Substring: Int] = [:]
+        return output.replacing(/Variable\((\d+)\)|id: (\d+)/) { match in
+            let number = match.output.1 ?? match.output.2 ?? ""
+            let index = renumbered[number] ?? renumbered.count
+            renumbered[number] = index
+            return match.output.1 != nil ? "Variable(\(index))" : "id: \(index)"
+        }
+    }
+}
+
+extension SortDescriptor where Compared: PersistentModel {
+    /// Whether the descriptor orders values from lower to higher.
+    var isAscending: Bool { order == .forward }
+
+    /// The string ordering requested by the descriptor's comparator, defaulting to localized standard order.
+    var stringCollation: StringSortCollation {
+        #if canImport(Darwin)
+            switch stringComparator {
+            case String.StandardComparator.lexical?: .lexical
+            case String.StandardComparator.localized?: .localized
+            default: .localizedStandard
             }
-        }
+        #else
+            // Linux Foundation has no `String.StandardComparator.localized`.
+            stringComparator == String.StandardComparator.lexical ? .lexical : .localizedStandard
+        #endif
     }
 
-    func compare(_ lhs: Model, _ rhs: Model) -> ComparisonResult {
-        let result = compareValues(lhs, rhs)
-        return isAscending ? result : result.reversed
-    }
-
+    /// The persisted property the descriptor sorts by, or `nil` when it does not sort by a key path.
     var propertyName: String? {
-        let components = propertyDescription.split(separator: ".")
+        guard let keyPath else { return nil }
+        if let name = Compared.propertyName(forKeyPath: keyPath) { return name }
+        let components = String(describing: keyPath).split(separator: ".")
         guard let member = components.last else { return nil }
         return String(member).trimmingCharacters(in: CharacterSet(charactersIn: "`"))
     }
 }
 
-private extension ComparisonResult {
-    var reversed: ComparisonResult {
+/// How sorting compares string values.
+package enum StringSortCollation: Sendable {
+    /// Finder-style ordering: case-insensitive, diacritic-aware, and numeric-aware.
+    case localizedStandard
+    /// Locale-aware ordering without numeric awareness.
+    case localized
+    /// Ordering by UTF-8 bytes.
+    case lexical
+
+    /// The SQLite collation implementing this ordering.
+    package var sqlCollation: String {
         switch self {
-        case .orderedAscending: .orderedDescending
-        case .orderedSame: .orderedSame
-        case .orderedDescending: .orderedAscending
-        @unknown default: .orderedSame
+        case .localizedStandard: "swiftLocalizedStandardCompare"
+        case .localized: "swiftLocalizedCompare"
+        case .lexical: "BINARY"
         }
     }
-}
 
-/// The direction of a model sort descriptor.
-public enum SortOrder: Sendable {
-    /// Sort from lower to higher values.
-    case forward
-    /// Sort from higher to lower values.
-    case reverse
+    package func compare(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        switch self {
+        case .localizedStandard: return lhs.localizedStandardCompare(rhs)
+        case .localized: return lhs.localizedCompare(rhs)
+        case .lexical:
+            if lhs == rhs { return .orderedSame }
+            return lhs.utf8.lexicographicallyPrecedes(rhs.utf8) ? .orderedAscending : .orderedDescending
+        }
+    }
 }

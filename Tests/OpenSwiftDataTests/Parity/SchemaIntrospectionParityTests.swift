@@ -16,12 +16,12 @@ import Testing
     init(title: String) { self.title = title }
 }
 
-/// Schema inspection APIs report entities and properties as Apple's SwiftData does.
+/// SchemaDescriptor inspection APIs report entities and properties as Apple's SwiftData does.
 @Suite struct SchemaIntrospectionParityTests {
-    private let schema = Schema([IntrospectionAuthor.self, IntrospectionBook.self], version: Schema.Version(2, 1, 0))
+    private let schema = SchemaDescriptor([IntrospectionAuthor.self, IntrospectionBook.self], version: SchemaDescriptor.Version(2, 1, 0))
 
     @Test func `entities are found by model type`() throws {
-        #expect(Schema.entityName(for: IntrospectionAuthor.self) == "IntrospectionAuthor")
+        #expect(SchemaDescriptor.entityName(for: IntrospectionAuthor.self) == "IntrospectionAuthor")
         let author = try #require(schema.entity(for: IntrospectionAuthor.self))
         #expect(author.name == "IntrospectionAuthor")
         #expect(Set(author.attributesByName.keys) == ["handle", "bio"])
@@ -49,13 +49,13 @@ import Testing
     }
 
     @Test func `schemas round-trip through Codable and files`() throws {
-        let decoded = try JSONDecoder().decode(Schema.self, from: JSONEncoder().encode(schema))
+        let decoded = try JSONDecoder().decode(SchemaDescriptor.self, from: JSONEncoder().encode(schema))
         #expect(decoded == schema)
-        #expect(decoded.version == Schema.Version(2, 1, 0))
+        #expect(decoded.version == SchemaDescriptor.Version(2, 1, 0))
 
         let url = FileManager.default.temporaryDirectory.appending(path: "osd-schema-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         try schema.save(to: url)
-        #expect(try Schema.load(from: url) == schema)
+        #expect(try SchemaDescriptor.load(from: url) == schema)
     }
 }

@@ -4,16 +4,16 @@ import OSDCore
 
 final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
     func testAcceptsToManyToReciprocalToOneAsSupportedOneToManyPair() {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
                 relationships: [
-                    Schema.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
+                    SchemaDescriptor.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
                 ]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
-                relationships: [Schema.Relationship(name: "parent", destination: "Parent", inverse: "children")]
+                relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent", inverse: "children")]
             ),
         ])
 
@@ -21,15 +21,15 @@ final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
     }
 
     func testAcceptsToOnePointingToReciprocalToManyAsSupportedOneToManyPair() {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
-                relationships: [Schema.Relationship(name: "child", destination: "Child", inverse: "parents")]
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child", inverse: "parents")]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parents", destination: "Parent", isToMany: true, inverse: "child")
+                    SchemaDescriptor.Relationship(name: "parents", destination: "Parent", isToMany: true, inverse: "child")
                 ]
             ),
         ])
@@ -38,27 +38,27 @@ final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
     }
 
     func testOneToManyUsesToOneSideAsForeignKeyOwner() throws {
-        let toManyOwned = Schema([
-            Schema.Entity(
+        let toManyOwned = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
                 relationships: [
-                    Schema.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
+                    SchemaDescriptor.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
                 ]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
-                relationships: [Schema.Relationship(name: "parent", destination: "Parent", inverse: "children")]
+                relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent", inverse: "children")]
             ),
         ])
-        let toOneOwned = Schema([
-            Schema.Entity(
+        let toOneOwned = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
-                relationships: [Schema.Relationship(name: "children", destination: "Child", inverse: "parent")]
+                relationships: [SchemaDescriptor.Relationship(name: "children", destination: "Child", inverse: "parent")]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parent", destination: "Parent", isToMany: true, inverse: "children")
+                    SchemaDescriptor.Relationship(name: "parent", destination: "Parent", isToMany: true, inverse: "children")
                 ]
             ),
         ])
@@ -79,15 +79,15 @@ final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
     }
 
     func testInverseToManyUsesToOneSideForeignKey() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
-                relationships: [Schema.Relationship(name: "child", destination: "Child", inverse: "parents")]
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child", inverse: "parents")]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parents", destination: "Parent", isToMany: true, inverse: "child")
+                    SchemaDescriptor.Relationship(name: "parents", destination: "Parent", isToMany: true, inverse: "child")
                 ]
             ),
         ])
@@ -102,34 +102,34 @@ final class SchemaBuilderRelationshipCardinalityTests: XCTestCase {
 
     func testRejectsMismatchedInverseNameAndDestination() {
         let schemas = [
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "First",
                     relationships: [
-                        Schema.Relationship(name: "second", destination: "Second", inverse: "first")
+                        SchemaDescriptor.Relationship(name: "second", destination: "Second", inverse: "first")
                     ]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "Second",
                     relationships: [
-                        Schema.Relationship(name: "first", destination: "First", inverse: "wrongName")
+                        SchemaDescriptor.Relationship(name: "first", destination: "First", inverse: "wrongName")
                     ]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "First",
                     relationships: [
-                        Schema.Relationship(name: "second", destination: "Second", inverse: "first")
+                        SchemaDescriptor.Relationship(name: "second", destination: "Second", inverse: "first")
                     ]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "Second",
                     relationships: [
-                        Schema.Relationship(name: "first", destination: "Other", inverse: "second")
+                        SchemaDescriptor.Relationship(name: "first", destination: "Other", inverse: "second")
                     ]
                 ),
-                Schema.Entity(name: "Other"),
+                SchemaDescriptor.Entity(name: "Other"),
             ]),
         ]
 

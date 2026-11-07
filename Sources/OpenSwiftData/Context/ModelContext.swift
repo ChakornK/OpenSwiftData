@@ -509,7 +509,7 @@ public final class ModelContext {
                 owner: nullification.owner,
                 property: nullification.adapter.name,
                 relationship: nullification.adapter.metadata
-                    ?? Schema.Relationship(
+                    ?? SchemaDescriptor.Relationship(
                         name: nullification.adapter.name,
                         destination: String(describing: nullification.adapter.destinationType),
                         isToMany: nullification.adapter.isToMany),
@@ -680,7 +680,7 @@ public final class ModelContext {
 
     private func invalidateRelationships(
         on type: any PersistentModel.Type,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         primaryKey: Int64
     ) {
         func invalidate<Model: PersistentModel>(_ type: Model.Type) {
@@ -700,7 +700,7 @@ public final class ModelContext {
 
     private func refreshRegisteredModel(
         _ type: any PersistentModel.Type,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         primaryKey: Int64,
         store: any RuntimeStore
     ) throws {
@@ -871,7 +871,7 @@ public final class ModelContext {
         var primaryKeys: [Int64] = []
         for row in rows {
             guard row.count >= 2, case let .int(pk) = row[0], case let .int(version) = row[1] else { continue }
-            let concreteEntity: Schema.Entity
+            let concreteEntity: SchemaDescriptor.Entity
             let concreteModel: any PersistentModel
             if hasHierarchy {
                 guard row.count >= 3, case let .int(rawEntityID) = row[2],
@@ -945,7 +945,7 @@ public final class ModelContext {
         _ descriptor: FetchDescriptor<Model>,
         dataStore: any DataStore,
         container: ModelContainer,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         hasHierarchy: Bool
     ) throws -> [Model] {
         if let limit = descriptor.fetchLimit, limit < 0 {
@@ -978,7 +978,7 @@ public final class ModelContext {
         var seenIdentifiers = Set<PersistentIdentifier>()
         var models: [Model] = []
         var materialized: [PersistentIdentifier: any PersistentModel] = [:]
-        let includedModels = try result.snapshots.map { snapshot -> (DataStoreSnapshot, Schema.Entity) in
+        let includedModels = try result.snapshots.map { snapshot -> (DataStoreSnapshot, SchemaDescriptor.Entity) in
             guard seenIdentifiers.insert(snapshot.persistentIdentifier).inserted else {
                 throw SwiftDataError.unsupportedStore(
                     "DataStore returned duplicate snapshot identifier \(snapshot.persistentIdentifier).")
@@ -1119,7 +1119,7 @@ public final class ModelContext {
     }
 
     private func validateDataStoreSnapshot(
-        _ snapshot: DataStoreSnapshot, entity: Schema.Entity, store: any DataStore
+        _ snapshot: DataStoreSnapshot, entity: SchemaDescriptor.Entity, store: any DataStore
     ) throws -> Int64 {
         guard snapshot.entityName == entity.name,
             snapshot.persistentIdentifier.entityName == entity.name,
@@ -1132,7 +1132,7 @@ public final class ModelContext {
     }
 
     private func dataStoreRow(
-        _ snapshot: DataStoreSnapshot, attributes: [Schema.Attribute], type: any PersistentModel.Type,
+        _ snapshot: DataStoreSnapshot, attributes: [SchemaDescriptor.Attribute], type: any PersistentModel.Type,
         primaryKey: Int64
     ) -> [RuntimeValue] {
         var values = [RuntimeValue.int(primaryKey), .int(0)]
@@ -1381,7 +1381,7 @@ public final class ModelContext {
     private func pendingIdentifierRows<Model: PersistentModel>(
         _ committedRows: [IdentifierQueryRow],
         modelType: Model.Type,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         hasHierarchy: Bool,
         sortProperties: [String],
         evaluatorPlan: PredicatePlan?,
@@ -2072,14 +2072,14 @@ public final class ModelContext {
         optionalContainer?.storeIdentifier ?? "default"
     }
 
-    private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
+    private func canonicalAttributes(for entity: SchemaDescriptor.Entity) -> [SchemaDescriptor.Attribute] {
         entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
     }
 
-    private func hierarchyAttributes(for entity: Schema.Entity) throws -> [Schema.Attribute] {
+    private func hierarchyAttributes(for entity: SchemaDescriptor.Entity) throws -> [SchemaDescriptor.Attribute] {
         guard let container = optionalContainer else { throw unsupportedStore("Hierarchy schema lookup") }
         let identifiers = Set(descendantEntityIDs(for: entity))
-        var attributesByName: [String: Schema.Attribute] = [:]
+        var attributesByName: [String: SchemaDescriptor.Attribute] = [:]
         for candidate in container.schema.entities
         where container.schema.entityIDsByName[candidate.name].map(
             identifiers.contains) == true
@@ -2098,18 +2098,18 @@ public final class ModelContext {
         }
     }
 
-    private func storedColumns(for attribute: Schema.Attribute) -> [String] {
+    private func storedColumns(for attribute: SchemaDescriptor.Attribute) -> [String] {
         if attribute.options.contains(.flattened) {
             return attribute.components.map(\.columnName)
         }
         return [attribute.name]
     }
 
-    private func storedColumnNames(for attributes: [Schema.Attribute]) -> [String] {
+    private func storedColumnNames(for attributes: [SchemaDescriptor.Attribute]) -> [String] {
         attributes.flatMap(storedColumns(for:))
     }
 
-    private func isBlobFlattenedColumn(_ property: String, in entity: Schema.Entity) -> Bool {
+    private func isBlobFlattenedColumn(_ property: String, in entity: SchemaDescriptor.Entity) -> Bool {
         guard let component = entity.attributes.lazy.flatMap(\.components).first(where: { $0.columnName == property })
         else { return false }
         return component.type == "Data" || component.type == "UUID"
@@ -2124,7 +2124,7 @@ public final class ModelContext {
 
     private func selectedAttributes<Model: PersistentModel>(
         _ keyPaths: [PartialKeyPath<Model>]?,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         type: Model.Type
     ) throws -> [String] {
         guard let keyPaths else { return canonicalAttributes(for: entity).map(\.name) }
@@ -2152,7 +2152,7 @@ public final class ModelContext {
 
     private func selectedRelationships<Model: PersistentModel>(
         _ keyPaths: [PartialKeyPath<Model>],
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         type: Model.Type
     ) throws -> [String] {
         try keyPaths.map { keyPath in
@@ -2171,7 +2171,7 @@ public final class ModelContext {
     private func compilePredicate<Model: PersistentModel>(
         _ predicate: Predicate<Model>?,
         modelType: Model.Type,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         store: any RuntimeStore,
         ordering: [String]
     ) throws -> RuntimeCompiledPredicate? {
@@ -2188,8 +2188,8 @@ public final class ModelContext {
                 container?.modelType(forEntityName: entityName)
             })
         func relationshipDescriptor(
-            ownerEntity: Schema.Entity,
-            relationship: Schema.Relationship
+            ownerEntity: SchemaDescriptor.Entity,
+            relationship: SchemaDescriptor.Relationship
         ) -> RuntimePredicateRelationship? {
             guard let schema = containerStorage?.schema,
                 let destination = schema.entity(forName: relationship.destination)
@@ -2273,8 +2273,8 @@ public final class ModelContext {
         var attributeNames = Set(entity.attributes.map(\.name)).union(flattenedAttributes.map(\.0))
         var optionalAttributeNames = Set(entity.attributes.filter(\.isOptional).map(\.name))
         func addCollectionPath(
-            ownerEntity: Schema.Entity,
-            relationship: Schema.Relationship,
+            ownerEntity: SchemaDescriptor.Entity,
+            relationship: SchemaDescriptor.Relationship,
             prefix: String,
             depth: Int
         ) {
@@ -2307,7 +2307,7 @@ public final class ModelContext {
         }
         if let schema = containerStorage?.schema {
             func addRelationshipPaths(
-                ownerEntity: Schema.Entity,
+                ownerEntity: SchemaDescriptor.Entity,
                 prefix: [String],
                 visited: Set<String>,
                 hasOptionalPrefix: Bool
@@ -2402,7 +2402,7 @@ public final class ModelContext {
 
     private func sortSQL<Model: PersistentModel>(
         _ descriptors: [SortDescriptor<Model>],
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         type: Model.Type
     ) throws -> String {
         let columns = try descriptors.map { descriptor -> String in
@@ -2439,7 +2439,7 @@ public final class ModelContext {
     private func mergePending<Model: PersistentModel>(
         _ fetched: [Model],
         descriptor: FetchDescriptor<Model>,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         evaluatorPlan: PredicatePlan?
     ) throws -> [Model] {
         guard descriptor.includePendingChanges else { return fetched }
@@ -2825,7 +2825,7 @@ public final class ModelContext {
 
     private func sortProperties<Model: PersistentModel>(
         _ descriptors: [SortDescriptor<Model>],
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         type: Model.Type
     ) throws -> [String] {
         try descriptors.map { descriptor in
@@ -2842,7 +2842,7 @@ public final class ModelContext {
     }
 
     private func resolvedPropertyName<Model: PersistentModel>(
-        keyPath: PartialKeyPath<Model>, fallback: String?, entity: Schema.Entity, type: Model.Type
+        keyPath: PartialKeyPath<Model>, fallback: String?, entity: SchemaDescriptor.Entity, type: Model.Type
     ) -> String? {
         if let property = type.propertyName(forKeyPath: keyPath),
             entity.attributes.contains(where: { $0.name == property }),
@@ -2902,7 +2902,7 @@ public final class ModelContext {
         }
     }
 
-    package static func sortCollation(for attribute: Schema.Attribute) -> String? {
+    package static func sortCollation(for attribute: SchemaDescriptor.Attribute) -> String? {
         if attribute.options.contains(.codable)
             || attribute.options.contains(where: { if case .transformable = $0 { true } else { false } })
         {
@@ -2927,7 +2927,7 @@ public final class ModelContext {
         }
     }
 
-    private func isDecimalAttribute(_ property: String, in entity: Schema.Entity) -> Bool {
+    private func isDecimalAttribute(_ property: String, in entity: SchemaDescriptor.Entity) -> Bool {
         guard let attribute = entity.attributes.first(where: { $0.name == property }) else { return false }
         return Self.normalizedSortType(attribute.type) == "Decimal"
     }
@@ -2966,7 +2966,7 @@ public final class ModelContext {
     }
 
     private func materialize<Model: PersistentModel>(
-        _ type: Model.Type, entity: Schema.Entity, attributes: [Schema.Attribute], row: [RuntimeValue],
+        _ type: Model.Type, entity: SchemaDescriptor.Entity, attributes: [SchemaDescriptor.Attribute], row: [RuntimeValue],
         storeIdentifier: String, primaryKey: Int64, version: Int
     ) throws -> Model {
         let managedValues =
@@ -3013,7 +3013,7 @@ public final class ModelContext {
     private func installPropertyFaults<Model: PersistentModel>(
         on backing: ManagedBackingData<Model>,
         type: Model.Type,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         loadedAttributes: [String],
         primaryKey: Int64,
         store: any RuntimeStore
@@ -3038,8 +3038,8 @@ public final class ModelContext {
             guard !requested.isEmpty else { return [:] }
             let flattenedAdapters = Dictionary(grouping: type.flattenedPropertyAdapters(), by: \.propertyName)
                 .mapValues { $0.sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) } }
-            let selections: [(Schema.PropertyMetadata, String, AnyFlattenedPropertyAdapter?)] = try requested.flatMap {
-                property -> [(Schema.PropertyMetadata, String, AnyFlattenedPropertyAdapter?)] in
+            let selections: [(SchemaDescriptor.PropertyMetadata, String, AnyFlattenedPropertyAdapter?)] = try requested.flatMap {
+                property -> [(SchemaDescriptor.PropertyMetadata, String, AnyFlattenedPropertyAdapter?)] in
                 guard let attribute = entity.attributes.first(where: { $0.name == property.name })
                 else { return [] }
                 if attribute.options.contains(.flattened) {
@@ -3112,7 +3112,7 @@ public final class ModelContext {
     }
 
     private func refreshAttributes<Model: PersistentModel>(
-        _ model: Model, entity: Schema.Entity, attributes: [Schema.Attribute], row: [RuntimeValue]
+        _ model: Model, entity: SchemaDescriptor.Entity, attributes: [SchemaDescriptor.Attribute], row: [RuntimeValue]
     ) throws {
         guard !model.hasChanges,
             let backing = model.persistentBackingData as? ManagedBackingData<Model>
@@ -3225,7 +3225,7 @@ public final class ModelContext {
     }
 
     private func materializeRelationships<Model: PersistentModel>(
-        _ models: [Model], entity: Schema.Entity, primaryKeys: [Int64], store: any RuntimeStore,
+        _ models: [Model], entity: SchemaDescriptor.Entity, primaryKeys: [Int64], store: any RuntimeStore,
         requested: Set<String>?,
         visited: inout Set<EntityPrimaryKey>
     ) throws {
@@ -3260,7 +3260,7 @@ public final class ModelContext {
                 let storageEntity =
                     storageOwner
                     ? entity : (optionalContainer?.schema.entity(forName: inverse.entityName) ?? destinationEntity)
-                let storageRelationship: Schema.Relationship
+                let storageRelationship: SchemaDescriptor.Relationship
                 if storageOwner {
                     storageRelationship = relationship
                 } else {
@@ -3577,11 +3577,11 @@ public final class ModelContext {
         optionalContainer?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]?.first { $0.name == property }
     }
 
-    private func canonicalRelationships(for entity: Schema.Entity) -> [Schema.Relationship] {
+    private func canonicalRelationships(for entity: SchemaDescriptor.Entity) -> [SchemaDescriptor.Relationship] {
         entity.relationships.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
     }
 
-    private func isToOneStorageOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
+    private func isToOneStorageOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = containerStorage?.schema.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination),
@@ -3592,7 +3592,7 @@ public final class ModelContext {
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
 
-    private func isCanonicalSideA(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
+    private func isCanonicalSideA(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = containerStorage?.schema.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
@@ -3602,7 +3602,7 @@ public final class ModelContext {
         return current.utf8.lexicographicallyPrecedes(other.utf8)
     }
 
-    private func joinSideAOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
+    private func joinSideAOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = containerStorage?.schema.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
@@ -3611,7 +3611,7 @@ public final class ModelContext {
         return isCanonicalSideA(entity, relationship)
     }
 
-    private func isToManyStorageOwner(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> Bool {
+    private func isToManyStorageOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = containerStorage?.schema.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
@@ -3619,7 +3619,7 @@ public final class ModelContext {
         return inverse.relationship.isToMany && !isCanonicalSideA(entity, relationship)
     }
 
-    private func relationshipLogicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
+    private func relationshipLogicalOwnerName(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> String {
         containerStorage?.schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
     }
@@ -3628,7 +3628,7 @@ public final class ModelContext {
         String(describing: type(of: model)).split(separator: ".").last.map(String.init)
     }
 
-    private func joinTableName(for entity: Schema.Entity, _ relationship: Schema.Relationship) -> String? {
+    private func joinTableName(for entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> String? {
         guard relationship.isToMany else { return nil }
         let mapping = containerStorage?.schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)
@@ -3654,7 +3654,7 @@ public final class ModelContext {
     }
 
     private func relationshipStorageLocation(
-        ownerEntity: Schema.Entity, relationship: Schema.Relationship
+        ownerEntity: SchemaDescriptor.Entity, relationship: SchemaDescriptor.Relationship
     ) -> (tableName: String, columnName: String) {
         let mapping = containerStorage?.schema.relationshipStorageMapping(
             modelEntityName: ownerEntity.name, relationshipName: relationship.name)
@@ -3727,7 +3727,7 @@ public final class ModelContext {
     }
 
     private func refreshStoredAttributes<Model: PersistentModel>(
-        _ model: Model, entity: Schema.Entity, key: Int64, store: any RuntimeStore
+        _ model: Model, entity: SchemaDescriptor.Entity, key: Int64, store: any RuntimeStore
     ) throws {
         guard !model.hasChanges else { return }
         let attributes = canonicalAttributes(for: entity)
@@ -3775,7 +3775,7 @@ public final class ModelContext {
         return identifier
     }
 
-    private func rootEntity(for entity: Schema.Entity) -> Schema.Entity {
+    private func rootEntity(for entity: SchemaDescriptor.Entity) -> SchemaDescriptor.Entity {
         guard let entities = containerStorage?.schema.entities else { return entity }
         var current = entity
         var visited: Set<String> = []
@@ -3788,10 +3788,10 @@ public final class ModelContext {
         return current
     }
 
-    private func descendantEntityIDs(for entity: Schema.Entity) -> [Int] {
+    private func descendantEntityIDs(for entity: SchemaDescriptor.Entity) -> [Int] {
         guard let schema = containerStorage?.schema else { return [] }
         return schema.entities.compactMap { candidate in
-            var current: Schema.Entity? = candidate
+            var current: SchemaDescriptor.Entity? = candidate
             var visited = Set<String>()
             while let value = current, visited.insert(value.name).inserted {
                 if value.name == entity.name { return schema.entityIDsByName[candidate.name] }
@@ -3810,7 +3810,7 @@ public final class ModelContext {
         return descendantEntityIDs(for: ancestor).contains(entityID)
     }
 
-    private func identityKey(for entity: Schema.Entity, primaryKey: Int64) -> EntityPrimaryKey {
+    private func identityKey(for entity: SchemaDescriptor.Entity, primaryKey: Int64) -> EntityPrimaryKey {
         var root = entity
         var visited = Set<String>()
         while let parentName = root.superentityName,
@@ -4527,7 +4527,7 @@ public final class ModelContext {
         try dispatch(model)
     }
 
-    private static func externalDataColumns(in schema: Schema) -> Set<String> {
+    private static func externalDataColumns(in schema: SchemaDescriptor) -> Set<String> {
         Set(
             schema.entities.flatMap { entity in
                 entity.attributes.compactMap { attribute in
@@ -4538,20 +4538,20 @@ public final class ModelContext {
     }
 
     private func uniqueMatch(
-        entity: Schema.Entity, columns: [String], values: [RuntimeValue], connection: any RuntimeConnection
+        entity: SchemaDescriptor.Entity, columns: [String], values: [RuntimeValue], connection: any RuntimeConnection
     ) throws -> (primaryKey: Int64, version: Int)? {
         let storageEntity = rootEntity(for: entity)
-        var ancestors: [Schema.Entity] = []
-        var current: Schema.Entity? = entity
+        var ancestors: [SchemaDescriptor.Entity] = []
+        var current: SchemaDescriptor.Entity? = entity
         var visited = Set<String>()
         while let value = current, visited.insert(value.name).inserted {
             ancestors.append(value)
             current = value.superentityName.flatMap { containerStorage?.schema.entity(forName: $0) }
         }
         let orderedAncestors = ancestors.reversed()
-        var constraints: [(properties: [String], owner: Schema.Entity)] = []
+        var constraints: [(properties: [String], owner: SchemaDescriptor.Entity)] = []
         var ancestorAttributes = Set<String>()
-        var ancestorIndexes = Set<Schema.Index>()
+        var ancestorIndexes = Set<SchemaDescriptor.Index>()
         for owner in orderedAncestors {
             for attribute in owner.attributes
             where attribute.options.contains(.unique) && !ancestorAttributes.contains(attribute.name) {
@@ -4644,7 +4644,7 @@ public final class ModelContext {
         func primaryKey(for model: any PersistentModel) -> Int64? {
             model.persistentModelID.primaryKey ?? assignedIDs[ObjectIdentifier(model)]
         }
-        var relationships: [String: (any PersistentModel, Schema.Relationship, [any PersistentModel])] = [:]
+        var relationships: [String: (any PersistentModel, SchemaDescriptor.Relationship, [any PersistentModel])] = [:]
         let insertedIDs = Set(insertedModels.map(ObjectIdentifier.init))
         for event in events where !insertedIDs.contains(ObjectIdentifier(event.owner)) {
             relationships[relationshipValueKey(event.owner, event.property)] =
@@ -4664,7 +4664,7 @@ public final class ModelContext {
             }
         }
 
-        var toOneValues: [String: (Schema.Entity, Schema.Relationship, Int64, Int64?)] = [:]
+        var toOneValues: [String: (SchemaDescriptor.Entity, SchemaDescriptor.Relationship, Int64, Int64?)] = [:]
         var replacedRows: [String: (Set<Int64>, Set<Int64>)] = [:]
         var pairs: [String: [String: (Int64, Int64)]] = [:]
         for (owner, relationship, endpoints) in relationships.values {
@@ -4680,8 +4680,8 @@ public final class ModelContext {
             }
 
             let sideA = relationship.inverse == nil || joinSideAOwner(entity, relationship)
-            let tableEntity: Schema.Entity
-            let tableRelationship: Schema.Relationship
+            let tableEntity: SchemaDescriptor.Entity
+            let tableRelationship: SchemaDescriptor.Relationship
             if sideA {
                 tableEntity = entity
                 tableRelationship = relationship

@@ -20,7 +20,7 @@ package final class ContextState: @unchecked Sendable {
     package struct RelationshipMutationEvent {
         package let owner: any PersistentModel
         package let property: String
-        package let relationship: Schema.Relationship
+        package let relationship: SchemaDescriptor.Relationship
         package let oldEndpointIDs: [PersistentIdentifier]
         package let oldEndpoints: [any PersistentModel]
         package let newEndpointIDs: [PersistentIdentifier]
@@ -31,7 +31,7 @@ package final class ContextState: @unchecked Sendable {
     private let relationshipAdaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
     private let storeIdentifier: String
     private let entityIDsByName: [String: Int]
-    private let entitiesByName: [String: Schema.Entity]
+    private let entitiesByName: [String: SchemaDescriptor.Entity]
     private let onLocalChange: (@Sendable () -> Void)?
     private var inserted: [any PersistentModel] = []
     private var changed: [any PersistentModel] = []
@@ -45,7 +45,7 @@ package final class ContextState: @unchecked Sendable {
         relationshipAdaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]] = [:],
         storeIdentifier: String = "default",
         entityIDsByName: [String: Int] = [:],
-        entitiesByName: [String: Schema.Entity] = [:],
+        entitiesByName: [String: SchemaDescriptor.Entity] = [:],
         onLocalChange: (@Sendable () -> Void)? = nil
     ) {
         self.relationshipAdaptersByModel = relationshipAdaptersByModel
@@ -373,7 +373,7 @@ package final class ContextState: @unchecked Sendable {
     func recordRelationshipMutation(
         owner: any PersistentModel,
         property: String,
-        relationship: Schema.Relationship,
+        relationship: SchemaDescriptor.Relationship,
         oldValues: [any PersistentModel],
         newValues: [any PersistentModel]
     ) {
@@ -463,7 +463,7 @@ package final class ContextState: @unchecked Sendable {
     private struct PlannedRelationshipMutation {
         let owner: any PersistentModel
         let adapter: any AnyRelationshipAdapterBox
-        let metadata: Schema.Relationship
+        let metadata: SchemaDescriptor.Relationship
         let oldEndpoints: [any PersistentModel]
         let newEndpoints: [any PersistentModel]
         let value: Any
@@ -474,7 +474,7 @@ package final class ContextState: @unchecked Sendable {
         adapter: any AnyRelationshipAdapterBox,
         value: Any,
         endpoints: [any PersistentModel],
-        metadata: Schema.Relationship,
+        metadata: SchemaDescriptor.Relationship,
         context: ModelContext
     ) throws -> [PlannedRelationshipMutation] {
         var plans: [RelationshipKey: RelationshipIntent] = [:]
@@ -707,12 +707,12 @@ package final class ContextState: @unchecked Sendable {
     private func relationshipMetadata(
         for adapter: any AnyRelationshipAdapterBox,
         owner: any PersistentModel
-    ) -> Schema.Relationship {
+    ) -> SchemaDescriptor.Relationship {
         if let metadata = adapter.metadata { return metadata }
         _ = owner
         let destinationName =
             String(describing: adapter.destinationType).split(separator: ".").last.map(String.init) ?? ""
-        return Schema.Relationship(name: adapter.name, destination: destinationName, isToMany: adapter.isToMany)
+        return SchemaDescriptor.Relationship(name: adapter.name, destination: destinationName, isToMany: adapter.isToMany)
     }
 
     private func unique(_ models: [any PersistentModel]) -> [any PersistentModel] {

@@ -15,7 +15,7 @@ import XCTest
 
     final class ExportsTests: XCTestCase {
         func testOpenSwiftDataSchemaIsReexportedBySwiftDataShim() {
-            let schema = Schema([Schema.Entity(name: "ShimModel")])
+            let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "ShimModel")])
             XCTAssertEqual(schema.entities.map(\.name), ["ShimModel"])
         }
 

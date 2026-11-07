@@ -3,7 +3,7 @@ import Foundation
 /// Owns a schema and its associated model contexts.
 public final class ModelContainer: Sendable {
     /// The schema managed by this container.
-    public let schema: Schema
+    public let schema: SchemaDescriptor
     /// The main context associated with this container, created on first access.
     @MainActor
     public var mainContext: ModelContext {
@@ -78,8 +78,8 @@ public final class ModelContainer: Sendable {
 
     /// Infers a schema from model types and their ancestors, capturing the types for materialization.
     package static func inferredSchema(
-        for types: [any PersistentModel.Type], version: Schema.Version? = nil
-    ) throws -> Schema {
+        for types: [any PersistentModel.Type], version: SchemaDescriptor.Version? = nil
+    ) throws -> SchemaDescriptor {
         let types = Self.modelTypesIncludingAncestors(of: types)
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         var uniqueEntityNames = Set<String>()
@@ -93,7 +93,7 @@ public final class ModelContainer: Sendable {
             zip(types, entityNames).compactMap { modelType, entityName in
                 (modelType is any RelationshipModel.Type) ? entityName : nil
             })
-        var propertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]] = [:]
+        var propertiesByEntity: [String: [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)]] = [:]
         for (modelType, entityName) in zip(types, entityNames) {
             propertiesByEntity[entityName] = modelType.schemaMetadata().compactMap { metadata in
                 metadata.keypath.map { (metadata, $0) }
@@ -103,7 +103,7 @@ public final class ModelContainer: Sendable {
         let entities = try types.map { modelType in
             let properties = propertiesByEntity[Self.unqualifiedTypeName(String(describing: modelType))] ?? []
             let schemaProperties = try properties.map {
-                metadata, keypath -> (Schema.PropertyMetadata, String, Bool, Any.Type) in
+                metadata, keypath -> (SchemaDescriptor.PropertyMetadata, String, Bool, Any.Type) in
                 let rawType = String(reflecting: type(of: keypath).valueType)
                 let (normalizedType, isOptional) = Self.normalizedPropertyType(rawType)
                 let parsedType = Self.parseType(normalizedType)
@@ -117,8 +117,8 @@ public final class ModelContainer: Sendable {
                 return (metadata, normalizedType, isOptional, type(of: keypath).valueType)
             }
             let attributes = try schemaProperties.compactMap {
-                metadata, propertyType, isOptional, valueType -> Schema.Attribute? in
-                let typedRelationship = metadata.metadata?.base as? Schema.Relationship
+                metadata, propertyType, isOptional, valueType -> SchemaDescriptor.Attribute? in
+                let typedRelationship = metadata.metadata?.base as? SchemaDescriptor.Relationship
                 let parsedType = Self.parseType(propertyType)
                 let destinationType = Self.unqualifiedTypeName(parsedType.collectionElement ?? parsedType.name)
                 let isInferredModelType = metadata.isInferredRelationship && modelNames.contains(destinationType)
@@ -135,14 +135,14 @@ public final class ModelContainer: Sendable {
                 else {
                     return nil
                 }
-                let typedAttribute = metadata.metadata?.base as? Schema.Attribute
+                let typedAttribute = metadata.metadata?.base as? SchemaDescriptor.Attribute
                 let options = (typedAttribute?.options ?? []).union(
                     metadata.options.compactMap(Self.attributeOption))
                 if options.contains(.externalStorage), Self.unqualifiedTypeName(parsedType.name) != "Data" {
                     throw SwiftDataError.unsupportedSchemaProperty(
                         "External storage is supported only for Data properties ('\(metadata.name)').")
                 }
-                let flattenedComponents: [Schema.Attribute.Component]
+                let flattenedComponents: [SchemaDescriptor.Attribute.Component]
                 if options.contains(.flattened) {
                     guard !isOptional else {
                         throw SwiftDataError.unsupportedSchemaProperty(
@@ -180,7 +180,7 @@ public final class ModelContainer: Sendable {
                                 "Unsupported flattened scalar type '\(component.type)' for '\(metadata.name).\(component.name)'."
                             )
                         }
-                        return Schema.Attribute.Component(
+                        return SchemaDescriptor.Attribute.Component(
                             name: component.name,
                             columnName: "\(metadata.name)_\(component.name)",
                             type: componentType)
@@ -197,7 +197,7 @@ public final class ModelContainer: Sendable {
                 } else {
                     flattenedComponents = []
                 }
-                return Schema.Attribute(
+                return SchemaDescriptor.Attribute(
                     name: metadata.name,
                     type: propertyType,
                     isOptional: isOptional,
@@ -208,11 +208,11 @@ public final class ModelContainer: Sendable {
                 )
             }
             let relationships = try schemaProperties.compactMap {
-                metadata, propertyType, isOptional, _ -> Schema.Relationship? in
+                metadata, propertyType, isOptional, _ -> SchemaDescriptor.Relationship? in
                 let parsedType = Self.parseType(propertyType)
                 let isToMany = parsedType.collectionElement != nil
                 let destination = parsedType.collectionElement ?? parsedType.name
-                let typedRelationship = metadata.metadata?.base as? Schema.Relationship
+                let typedRelationship = metadata.metadata?.base as? SchemaDescriptor.Relationship
                 let destinationName = Self.unqualifiedTypeName(destination)
                 let declaringEntityName = Self.relationshipDeclaringEntityName(
                     modelType: modelType, metadata: metadata)
@@ -274,7 +274,7 @@ public final class ModelContainer: Sendable {
                         } ?? ""
                     let (normalizedInversePropertyType, _) = Self.normalizedPropertyType(inversePropertyRawType)
                     guard
-                        inverseMetadata.0.isRelationship || inverseMetadata.0.metadata?.base is Schema.Relationship
+                        inverseMetadata.0.isRelationship || inverseMetadata.0.metadata?.base is SchemaDescriptor.Relationship
                             || (Self.relationshipDestination(normalizedInversePropertyType).map {
                                 modelNames.contains(Self.unqualifiedTypeName($0))
                             } ?? false)
@@ -330,7 +330,7 @@ public final class ModelContainer: Sendable {
                     inferredInverse = nil
                 }
                 let inverse = hasExplicitInverse ? explicitInverse : inferredInverse
-                return Schema.Relationship(
+                return SchemaDescriptor.Relationship(
                     name: metadata.name,
                     destination: destinationName,
                     isToMany: isToMany,
@@ -357,10 +357,10 @@ public final class ModelContainer: Sendable {
                 }
                 + attributes.compactMap { attribute in
                     attribute.options.contains(.unique)
-                        ? Schema.Index(properties: [attribute.name], isUnique: true) : nil
+                        ? SchemaDescriptor.Index(properties: [attribute.name], isUnique: true) : nil
                 }
-            var seenIndexes = Set<Schema.Index>()
-            return Schema.Entity(
+            var seenIndexes = Set<SchemaDescriptor.Index>()
+            return SchemaDescriptor.Entity(
                 name: Self.unqualifiedTypeName(String(describing: modelType)),
                 attributes: attributes,
                 relationships: relationships,
@@ -379,7 +379,7 @@ public final class ModelContainer: Sendable {
                     among: types,
                     effectivePropertiesByEntity: effectivePropertiesByEntity)
                 guard let matchingInverse else { return relationship }
-                return Schema.Relationship(
+                return SchemaDescriptor.Relationship(
                     name: relationship.name,
                     destination: relationship.destination,
                     isToMany: relationship.isToMany,
@@ -392,25 +392,25 @@ public final class ModelContainer: Sendable {
                     declaringEntityName: relationship.declaringEntityName
                 )
             }
-            return Schema.Entity(
+            return SchemaDescriptor.Entity(
                 name: entity.name, attributes: entity.attributes, relationships: relationships,
                 indexes: entity.indexes, superentityName: entity.superentityName)
         }
-        var schema = Schema(inferredEntities, version: version)
+        var schema = SchemaDescriptor(inferredEntities, version: version)
         try schema.validateRelationshipStorageMappings()
-        schema.modelTypes = Schema.ModelTypes(types: types)
+        schema.modelTypes = SchemaDescriptor.ModelTypes(types: types)
         return schema
     }
 
     /// Creates a container for a schema produced by `inferredSchema(for:version:)`.
-    private init(inferredSchema schema: Schema, configurations: [ModelConfiguration]) throws {
+    private init(inferredSchema schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {
         if let error = schema.modelTypes.inferenceError { throw error }
         let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
         let openedDataStore = try Self.openDataStore(
             schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
-        let runtimeSchema: Schema
+        let runtimeSchema: SchemaDescriptor
         let registrations: [String: ModelTypeRegistration]
         let registrationsByID: [Int: ModelTypeRegistration]
         let adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
@@ -453,7 +453,7 @@ public final class ModelContainer: Sendable {
     /// Omitting `configurations` opens the implicit default store, a SQLite file named
     /// `default.store` in the Application Support directory.
     public convenience init(
-        for schema: Schema,
+        for schema: SchemaDescriptor,
         migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
         configurations: ModelConfiguration...
     ) throws {
@@ -465,7 +465,7 @@ public final class ModelContainer: Sendable {
     ///
     /// An empty `configurations` array creates a schema-only container without a persistent store.
     public convenience init(
-        for schema: Schema,
+        for schema: SchemaDescriptor,
         migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
         configurations: [ModelConfiguration]
     ) throws {
@@ -478,7 +478,7 @@ public final class ModelContainer: Sendable {
         }
     }
 
-    private convenience init(schemaOnly schema: Schema, configurations: [ModelConfiguration]) throws {
+    private convenience init(schemaOnly schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {
         if !schema.modelTypes.types.isEmpty || schema.modelTypes.inferenceError != nil {
             try self.init(inferredSchema: schema, configurations: configurations)
         } else {
@@ -487,12 +487,12 @@ public final class ModelContainer: Sendable {
     }
 
     /// Creates a container for a hand-built schema that names no model types.
-    private init(descriptionOnly schema: Schema, configurations: [ModelConfiguration]) throws {
+    private init(descriptionOnly schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(
             schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
-        let runtimeSchema: Schema
+        let runtimeSchema: SchemaDescriptor
         do {
             runtimeSchema = try Self.runtimeSchema(requested: schema, store: openedStore)
             try runtimeSchema.validateRelationshipStorageMappings()
@@ -515,14 +515,14 @@ public final class ModelContainer: Sendable {
     /// An empty `configurations` array creates a schema-only container without a persistent store.
     package init(
         for types: [any PersistentModel.Type],
-        schema: Schema,
+        schema: SchemaDescriptor,
         configurations: [ModelConfiguration]
     ) throws {
         try schema.validateRelationshipStorageMappings()
         let openedDataStore = try Self.openDataStore(
             schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
-        let runtimeSchema: Schema
+        let runtimeSchema: SchemaDescriptor
         let registrations: [String: ModelTypeRegistration]
         let registrationsByID: [Int: ModelTypeRegistration]
         let adaptersByModel: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
@@ -749,7 +749,7 @@ public final class ModelContainer: Sendable {
 
     private static func bindRelationshipAdapters<Model: PersistentModel>(
         for modelType: Model.Type,
-        schema: Schema,
+        schema: SchemaDescriptor,
         requiresCompatibleCandidates: Bool = false
     ) throws -> [any AnyRelationshipAdapterBox] {
         let entityName = unqualifiedTypeName(String(describing: modelType))
@@ -771,19 +771,19 @@ public final class ModelContainer: Sendable {
         var resolvedNames = Set<String>()
         var adapters: [any AnyRelationshipAdapterBox] = []
         var schemaRelationshipsByName = Dictionary(uniqueKeysWithValues: relationships.map { ($0.name, $0) })
-        for property in metadata where property.metadata?.base is Schema.Relationship {
+        for property in metadata where property.metadata?.base is SchemaDescriptor.Relationship {
             guard schemaRelationshipsByName[property.name] == nil,
                 let keyPath = property.keypath
             else { continue }
             let rawType = String(reflecting: type(of: keyPath).valueType)
             guard let destination = Self.relationshipDestination(rawType) else { continue }
-            schemaRelationshipsByName[property.name] = Schema.Relationship(
+            schemaRelationshipsByName[property.name] = SchemaDescriptor.Relationship(
                 name: property.name,
                 destination: unqualifiedTypeName(destination),
                 isToMany: rawType.contains("Array<") || rawType.contains("Set<"),
                 isOptional: rawType.contains("Array<") || rawType.contains("Set<")
                     || Self.normalizedPropertyType(rawType).1,
-                inverse: (property.metadata?.base as? Schema.Relationship)?.inverse,
+                inverse: (property.metadata?.base as? SchemaDescriptor.Relationship)?.inverse,
                 declaringEntityName: Self.relationshipDeclaringEntityName(
                     modelType: modelType, metadata: property))
         }
@@ -792,7 +792,7 @@ public final class ModelContainer: Sendable {
             guard !candidates.isEmpty else { continue }
             let propertyMetadata = metadata.first(where: { $0.name == relationship.name })
             if propertyMetadata?.isExplicitRelationship == true,
-                !(propertyMetadata?.metadata?.base is Schema.Relationship),
+                !(propertyMetadata?.metadata?.base is SchemaDescriptor.Relationship),
                 let destinationType = candidates.first(where: { $0.name == relationship.name })?.destinationType,
                 !(destinationType is any RelationshipModel.Type)
             {
@@ -805,7 +805,7 @@ public final class ModelContainer: Sendable {
                     && $0.isToMany == relationship.isToMany
             }
             guard matches.count == 1, let candidate = matches.first else {
-                let hasTypedSchemaMetadata = propertyMetadata?.metadata?.base is Schema.Relationship
+                let hasTypedSchemaMetadata = propertyMetadata?.metadata?.base is SchemaDescriptor.Relationship
                 let hasRelationshipRefinement = modelType is any RelationshipModel.Type
                 if matches.isEmpty, !hasTypedSchemaMetadata,
                     !requiresCompatibleCandidates, !hasRelationshipRefinement
@@ -823,10 +823,10 @@ public final class ModelContainer: Sendable {
             let resolved: any AnyRelationshipAdapterBox
             if let inverse = relationship.inverse,
                 candidate.explicitInverseKeyPath == nil,
-                metadata.first(where: { $0.name == relationship.name })?.metadata?.base is Schema.Relationship
+                metadata.first(where: { $0.name == relationship.name })?.metadata?.base is SchemaDescriptor.Relationship
             {
                 resolved = candidate.resolved(
-                    with: Schema.Relationship(
+                    with: SchemaDescriptor.Relationship(
                         name: relationship.name, destination: relationship.destination,
                         isToMany: relationship.isToMany, isOptional: relationship.isOptional, inverse: inverse,
                         deleteRule: relationship.deleteRule,
@@ -846,7 +846,7 @@ public final class ModelContainer: Sendable {
             guard let keyPath = property.keypath else { continue }
             let rawType = String(reflecting: type(of: keyPath).valueType)
             let destination = Self.relationshipDestination(rawType)
-            guard property.metadata?.base is Schema.Relationship else { continue }
+            guard property.metadata?.base is SchemaDescriptor.Relationship else { continue }
             guard let destination else { continue }
             guard !resolvedNames.contains(property.name) else { continue }
             let destinationName = unqualifiedTypeName(destination)
@@ -888,7 +888,7 @@ public final class ModelContainer: Sendable {
         }
     }
 
-    private static func openStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any RuntimeStore)? {
+    private static func openStore(schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws -> (any RuntimeStore)? {
         guard !configurations.isEmpty else { return nil }
         guard configurations.count == 1, let configuration = configurations.first else {
             throw SwiftDataError.unsupportedStore("Exactly one store configuration is supported.")
@@ -909,7 +909,7 @@ public final class ModelContainer: Sendable {
     }
 
     private static func validateDataStoreInheritanceSupport(
-        schema: Schema, dataStore: (any DataStore)?
+        schema: SchemaDescriptor, dataStore: (any DataStore)?
     ) throws {
         guard schema.entities.contains(where: { $0.superentityName != nil }),
             let dataStore,
@@ -919,7 +919,7 @@ public final class ModelContainer: Sendable {
             "The configured DataStore does not support model inheritance.")
     }
 
-    private static func runtimeSchema(requested: Schema, store: (any RuntimeStore)?) throws -> Schema {
+    private static func runtimeSchema(requested: SchemaDescriptor, store: (any RuntimeStore)?) throws -> SchemaDescriptor {
         guard let provider = store as? any RuntimeSchemaProvidingStore else { return requested }
         let resolved = provider.runtimeSchema
         guard resolved.entities == requested.entities, resolved.version == requested.version
@@ -931,7 +931,7 @@ public final class ModelContainer: Sendable {
     }
 
     private static func openDataStore(
-        schema: Schema,
+        schema: SchemaDescriptor,
         migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
         configurations: [ModelConfiguration]
     ) throws -> (any DataStore)? {
@@ -993,7 +993,7 @@ public final class ModelContainer: Sendable {
     }
 
     private static func relationshipDeclaringEntityName(
-        modelType: any PersistentModel.Type, metadata: Schema.PropertyMetadata
+        modelType: any PersistentModel.Type, metadata: SchemaDescriptor.PropertyMetadata
     ) -> String? {
         guard let keyPath = metadata.keypath else { return nil }
         var declaringType = modelType
@@ -1009,8 +1009,8 @@ public final class ModelContainer: Sendable {
     }
 
     private static func effectiveProperties(
-        _ properties: [(Schema.PropertyMetadata, AnyKeyPath)]
-    ) -> [(Schema.PropertyMetadata, AnyKeyPath)] {
+        _ properties: [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)]
+    ) -> [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)] {
         var lastIndexByName: [String: Int] = [:]
         for (index, property) in properties.enumerated() { lastIndexByName[property.0.name] = index }
         return properties.enumerated().compactMap { index, property in
@@ -1018,7 +1018,7 @@ public final class ModelContainer: Sendable {
         }
     }
 
-    private static func effectiveRelationships(_ relationships: [Schema.Relationship]) -> [Schema.Relationship] {
+    private static func effectiveRelationships(_ relationships: [SchemaDescriptor.Relationship]) -> [SchemaDescriptor.Relationship] {
         var lastIndexByName: [String: Int] = [:]
         for (index, relationship) in relationships.enumerated() { lastIndexByName[relationship.name] = index }
         return relationships.enumerated().compactMap { index, relationship in
@@ -1029,8 +1029,8 @@ public final class ModelContainer: Sendable {
     private static func relationshipProperties(
         entityName: String,
         among types: [any PersistentModel.Type],
-        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
-    ) -> [(Schema.PropertyMetadata, Schema.Relationship)] {
+        effectivePropertiesByEntity: [String: [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)]]
+    ) -> [(SchemaDescriptor.PropertyMetadata, SchemaDescriptor.Relationship)] {
         types
             .filter { candidate in
                 let candidateName = unqualifiedTypeName(String(describing: candidate))
@@ -1041,14 +1041,14 @@ public final class ModelContainer: Sendable {
                 effectivePropertiesByEntity[unqualifiedTypeName(String(describing: candidate))] ?? []
             }
             .compactMap { property, _ in
-                guard let relationship = property.metadata?.base as? Schema.Relationship else { return nil }
+                guard let relationship = property.metadata?.base as? SchemaDescriptor.Relationship else { return nil }
                 return (property, relationship)
             }
     }
 
     package static func relationshipProperties(
         entityName: String, among types: [any PersistentModel.Type]
-    ) -> [(Schema.PropertyMetadata, Schema.Relationship)] {
+    ) -> [(SchemaDescriptor.PropertyMetadata, SchemaDescriptor.Relationship)] {
         let effectivePropertiesByEntity = Dictionary(
             uniqueKeysWithValues: types.map { modelType in
                 let name = unqualifiedTypeName(String(describing: modelType))
@@ -1068,7 +1068,7 @@ public final class ModelContainer: Sendable {
         destinationName: String,
         logicalOwnerName: String,
         among types: [any PersistentModel.Type],
-        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
+        effectivePropertiesByEntity: [String: [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)]]
     ) throws -> String? {
         let candidateProperties = relationshipProperties(
             entityName: destinationName,
@@ -1121,8 +1121,8 @@ public final class ModelContainer: Sendable {
         named propertyName: String,
         onOrBelow entityName: String,
         among types: [any PersistentModel.Type],
-        effectivePropertiesByEntity: [String: [(Schema.PropertyMetadata, AnyKeyPath)]]
-    ) -> [(Schema.PropertyMetadata, AnyKeyPath)] {
+        effectivePropertiesByEntity: [String: [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)]]
+    ) -> [(SchemaDescriptor.PropertyMetadata, AnyKeyPath)] {
         types
             .filter { candidate in
                 let candidateName = unqualifiedTypeName(String(describing: candidate))
@@ -1246,7 +1246,7 @@ public final class ModelContainer: Sendable {
         return components
     }
 
-    private static func attributeOption(_ option: String) -> Schema.Attribute.Option? {
+    private static func attributeOption(_ option: String) -> SchemaDescriptor.Attribute.Option? {
         switch option {
         case "unique": .unique
         case "externalStorage": .externalStorage

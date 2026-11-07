@@ -9,64 +9,71 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCanonicalSchemaHashIgnoresDeclarationOrder() {
-        let first = Schema([
-            Schema.Entity(
+        let first = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "zeta", type: "String"),
-                    Schema.Attribute(name: "alpha", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "zeta", type: "String"),
+                    SchemaDescriptor.Attribute(name: "alpha", type: "Int"),
                 ])
         ])
-        let second = Schema([
-            Schema.Entity(
+        let second = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "alpha", type: "Int"),
-                    Schema.Attribute(name: "zeta", type: "String"),
+                    SchemaDescriptor.Attribute(name: "alpha", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "zeta", type: "String"),
                 ])
         ])
 
         XCTAssertEqual(SchemaHash.digest(first), SchemaHash.digest(second))
     }
 
+    func testCanonicalEncodingKeepsSchemaFormatIdentifier() {
+        let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
+
+        XCTAssertTrue(String(decoding: SchemaHash.canonicalEncoding(of: schema), as: UTF8.self)
+            .contains("OpenSwiftData.LayoutA.Schema.v1"))
+    }
+
     func testFlattenedComponentLayoutChangesSchemaHash() {
-        let blob = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "size", type: "Size")])
+        let blob = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "size", type: "Size")])
         ])
-        let flattened = Schema([
-            Schema.Entity(
+        let flattened = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
-                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                        components: [SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
                 ])
         ])
         XCTAssertNotEqual(SchemaHash.digest(blob), SchemaHash.digest(flattened))
     }
 
     func testFlattenedComponentDeclarationOrderIsCanonicalizedByName() {
-        let first = Schema([
-            Schema.Entity(
+        let first = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
                         components: [
-                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
-                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                            SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            SchemaDescriptor.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
                         ])
                 ])
         ])
-        let second = Schema([
-            Schema.Entity(
+        let second = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
                         components: [
-                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
-                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            SchemaDescriptor.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                            SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
                         ])
                 ])
         ])
@@ -79,13 +86,13 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("inline-option-toggle.sqlite"))
-        let inline = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "payload", type: "Data")])
+        let inline = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data")])
         ])
-        let external = Schema([
-            Schema.Entity(
+        let external = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: inline)
         let payload = Array(repeating: UInt8(0x37), count: ExternalStorage.threshold + 1)
@@ -146,13 +153,13 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-option-toggle.sqlite"))
-        let external = Schema([
-            Schema.Entity(
+        let external = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
         ])
-        let inline = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "payload", type: "Data")])
+        let inline = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data")])
         ])
         let externalColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
         let payload = Array(repeating: UInt8(0x6D), count: ExternalStorage.threshold + 1)
@@ -219,17 +226,17 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testBlobToFlattenedAttributeMigrationFailsClosedWithoutChangingStore() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "blob-to-flattened-migration"))
-        let blob = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "size", type: "Size", options: [.codable])])
+        let blob = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "size", type: "Size", options: [.codable])])
         ])
-        let flattened = Schema([
-            Schema.Entity(
+        let flattened = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
-                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                        components: [SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
                 ])
         ])
         try bootstrap(blob, driver: driver)
@@ -252,15 +259,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlattenedComponentMetadataRoundTrips() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
                         components: [
-                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
-                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                            SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            SchemaDescriptor.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
                         ])
                 ])
         ])
@@ -270,10 +277,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testSchemaParentMetadataRoundTripsAndNilRemainsCanonical() throws {
-        let legacy = Schema([Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")])])
-        let explicitlyUninherited = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")], superentityName: nil)
+        let legacy = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])])
+        let explicitlyUninherited = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")], superentityName: nil)
         ])
         XCTAssertEqual(
             SchemaHash.canonicalDescription(of: legacy), SchemaHash.canonicalDescription(of: explicitlyUninherited))
@@ -283,10 +290,10 @@ final class SchemaMigrationTests: XCTestCase {
             try SchemaBuilder.build(legacy).statements,
             try SchemaBuilder.build(explicitlyUninherited).statements)
 
-        let inherited = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
-                name: "Child", attributes: [Schema.Attribute(name: "age", type: "Int")], superentityName: "Base"),
+        let inherited = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "Child", attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")], superentityName: "Base"),
         ])
         let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: inherited))
         XCTAssertEqual(decoded.entity(forName: "Child")?.superentityName, "Base")
@@ -294,27 +301,27 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testRelationshipDeclarationOwnerChangesHashAndRoundTrips() throws {
-        let baseWithoutRelationship = Schema.Entity(name: "Base")
-        let baseWithRelationship = Schema.Entity(
+        let baseWithoutRelationship = SchemaDescriptor.Entity(name: "Base")
+        let baseWithRelationship = SchemaDescriptor.Entity(
             name: "Base",
-            relationships: [Schema.Relationship(name: "target", destination: "Target")])
-        let childOwns = Schema.Entity(
+            relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")])
+        let childOwns = SchemaDescriptor.Entity(
             name: "Child",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "target", destination: "Target", declaringEntityName: "Child")
             ],
             superentityName: "Base")
-        let baseOwns = Schema.Entity(
+        let baseOwns = SchemaDescriptor.Entity(
             name: "Child",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "target", destination: "Target", declaringEntityName: "Base")
             ],
             superentityName: "Base")
-        let target = Schema.Entity(name: "Target")
-        let childOwnedSchema = Schema([baseWithoutRelationship, childOwns, target])
-        let baseOwnedSchema = Schema([baseWithRelationship, baseOwns, target])
+        let target = SchemaDescriptor.Entity(name: "Target")
+        let childOwnedSchema = SchemaDescriptor([baseWithoutRelationship, childOwns, target])
+        let baseOwnedSchema = SchemaDescriptor([baseWithRelationship, baseOwns, target])
 
         XCTAssertNotEqual(SchemaHash.digest(childOwnedSchema), SchemaHash.digest(baseOwnedSchema))
         let decoded = try SchemaHash.decodeCanonicalDescription(
@@ -327,27 +334,27 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyRootIndexesChangeHashAndRoundTrip() throws {
-        let withoutIndex = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
-            Schema.Entity(
+        let withoutIndex = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")],
                 superentityName: "Base"),
         ])
-        let withIndex = Schema([
-            Schema.Entity(
+        let withIndex = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Base",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
-                indexes: [Schema.Index(properties: ["code"], isUnique: true)]),
-            Schema.Entity(
+                attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["code"], isUnique: true)]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String"),
-                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "code", type: "String"),
+                    SchemaDescriptor.Attribute(name: "score", type: "Int", options: [.unique]),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["code"], isUnique: true),
-                    Schema.Index(properties: ["score"]),
+                    SchemaDescriptor.Index(properties: ["code"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["score"]),
                 ],
                 superentityName: "Base"),
         ])
@@ -358,24 +365,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testSubtypeIndexesAndUniqueAttributesChangeHierarchyHash() throws {
-        let unconstrained = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "token", type: "String")]),
-            Schema.Entity(
+        let unconstrained = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "token", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "token", type: "String"), Schema.Attribute(name: "score", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"), SchemaDescriptor.Attribute(name: "score", type: "Int"),
                 ],
                 superentityName: "Base"),
         ])
-        let constrained = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "token", type: "String")]),
-            Schema.Entity(
+        let constrained = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "token", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "token", type: "String"),
-                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"),
+                    SchemaDescriptor.Attribute(name: "score", type: "Int", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["token"], isUnique: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["token"], isUnique: true)],
                 superentityName: "Base"),
         ])
 
@@ -389,49 +396,49 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCanonicalHashChangesWhenEachPersistedFieldChanges() {
-        let base = Schema([
-            Schema.Entity(
+        let base = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int")],
-                relationships: [Schema.Relationship(name: "parent", destination: "Parent")],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let variants = [
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int", isOptional: true)],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent")],
-                    indexes: [Schema.Index(properties: ["value"])])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int", isOptional: true)],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent")],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"])])
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int", defaultValue: "0")],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent")],
-                    indexes: [Schema.Index(properties: ["value"])])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int", defaultValue: "0")],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent")],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"])])
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int", options: [.unique])],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent")],
-                    indexes: [Schema.Index(properties: ["value"])])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int", options: [.unique])],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent")],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"])])
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent", isToMany: true)],
-                    indexes: [Schema.Index(properties: ["value"])])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent", isToMany: true)],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"])])
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent", deleteRule: .cascade)],
-                    indexes: [Schema.Index(properties: ["value"])])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent", deleteRule: .cascade)],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"])])
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")],
-                    relationships: [Schema.Relationship(name: "parent", destination: "Parent")],
-                    indexes: [Schema.Index(properties: ["value"], isUnique: true)])
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Parent")],
+                    indexes: [SchemaDescriptor.Index(properties: ["value"], isUnique: true)])
             ]),
         ]
 
@@ -442,15 +449,15 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testLightweightMigrationAddsOptionalAttributeAtomically() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-add-optional"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "notes", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "notes", type: "String", isOptional: true),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -465,19 +472,19 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAddingLiteralDefaultedAttributesBackfillsExistingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-required-default"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int", defaultValue: "7"),
-                    Schema.Attribute(name: "label", type: "String", isOptional: true, defaultValue: "\"O'Neil\""),
-                    Schema.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
-                    Schema.Attribute(name: "ratio", type: "Double", defaultValue: "1.25"),
-                    Schema.Attribute(name: "amount", type: "Decimal", defaultValue: "12.5"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", isOptional: true, defaultValue: "\"O'Neil\""),
+                    SchemaDescriptor.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
+                    SchemaDescriptor.Attribute(name: "ratio", type: "Double", defaultValue: "1.25"),
+                    SchemaDescriptor.Attribute(name: "amount", type: "Decimal", defaultValue: "12.5"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -505,23 +512,23 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["title"])])
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["title"])])
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -572,23 +579,23 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("required-to-optional.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "label", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int32", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int32", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["label"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "label", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int32", isOptional: true, options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int32", isOptional: true, options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["label"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -647,18 +654,18 @@ final class SchemaMigrationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "String")]),
-            Schema.Entity(name: "Other"),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
+            SchemaDescriptor.Entity(name: "Other"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)]),
-            Schema.Entity(
-                name: "Other", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", isOptional: true)]),
+            SchemaDescriptor.Entity(
+                name: "Other", attributes: [SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true)]),
         ])
         let location = StoreLocation.file(directory.appendingPathComponent("combined.sqlite"))
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -693,12 +700,12 @@ final class SchemaMigrationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", isOptional: true)])
         ])
         for (name, statement) in [
             ("index", "CREATE INDEX USER_VALUE_INDEX ON ZRECORD (ZVALUE)"),
@@ -743,15 +750,15 @@ final class SchemaMigrationTests: XCTestCase {
             ("amount", "Decimal", "12.5", .text("12.5")),
         ]
         for (name, type, defaultValue, expected) in cases {
-            let source = Schema([
-                Schema.Entity(
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: name, type: type, isOptional: true)])
+                    attributes: [SchemaDescriptor.Attribute(name: name, type: type, isOptional: true)])
             ])
-            let destination = Schema([
-                Schema.Entity(
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: name, type: type, defaultValue: defaultValue)])
+                    attributes: [SchemaDescriptor.Attribute(name: name, type: type, defaultValue: defaultValue)])
             ])
             let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
             let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -767,15 +774,15 @@ final class SchemaMigrationTests: XCTestCase {
             try migrated.close()
         }
 
-        let emptySource = Schema([
-            Schema.Entity(
+        let emptySource = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "String", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", isOptional: true)])
         ])
-        let emptyDestination = Schema([
-            Schema.Entity(
+        let emptyDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "String", defaultValue: "\"value\"")])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", defaultValue: "\"value\"")])
         ])
         let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty.sqlite"))
         let emptyInitial = try LightweightMigration.openStore(location: emptyLocation, schema: emptySource)
@@ -786,25 +793,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOptionalAttributesBackfillTypedDefaultsTogether() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "count", type: "Int32", isOptional: true, defaultValue: "9"),
-                    Schema.Attribute(name: "enabled", type: "Bool", isOptional: true, defaultValue: "true"),
-                    Schema.Attribute(name: "retained", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "count", type: "Int32", isOptional: true, defaultValue: "9"),
+                    SchemaDescriptor.Attribute(name: "enabled", type: "Bool", isOptional: true, defaultValue: "true"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "count", type: "Int32", defaultValue: "9"),
-                    Schema.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
-                    Schema.Attribute(name: "retained", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "count", type: "Int32", defaultValue: "9"),
+                    SchemaDescriptor.Attribute(name: "enabled", type: "Bool", defaultValue: "true"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-optional-to-required-defaults"))
         try bootstrap(source, driver: driver)
@@ -828,23 +835,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOptionalBackfillsRollbackWhenLaterUniqueValueCollides() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "5"),
-                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "5"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["second"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "5"),
-                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", defaultValue: "5"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["second"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-optional-backfill-unique-rollback"))
         try bootstrap(source, driver: driver)
@@ -884,23 +891,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOptionalBackfillsRollbackOnCompositeUniqueCollision() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
-                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "3"),
-                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", defaultValue: "3"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-backfill-composite-unique-rollback"))
         try bootstrap(source, driver: driver)
@@ -947,23 +954,23 @@ final class SchemaMigrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(
             directory.appendingPathComponent("optional-backfill-composite-rollback.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
-                    Schema.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", isOptional: true, defaultValue: "3"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", isOptional: true, defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", defaultValue: "3"),
-                    Schema.Attribute(name: "second", type: "Int32", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", defaultValue: "3"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32", defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"], isUnique: true)])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1008,21 +1015,21 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int32", isOptional: true, options: [.unique])
+                    SchemaDescriptor.Attribute(name: "value", type: "Int32", isOptional: true, options: [.unique])
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64", isOptional: true, options: [.unique])
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64", isOptional: true, options: [.unique])
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1076,25 +1083,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-integer-widening.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "Int8", options: [.unique]),
-                    Schema.Attribute(name: "rank", type: "Int16"),
-                    Schema.Attribute(name: "untouched", type: "String"),
+                    SchemaDescriptor.Attribute(name: "code", type: "Int8", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "untouched", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["code", "rank"])])
+                indexes: [SchemaDescriptor.Index(properties: ["code", "rank"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "Int32", options: [.unique]),
-                    Schema.Attribute(name: "rank", type: "Int64"),
-                    Schema.Attribute(name: "untouched", type: "String"),
+                    SchemaDescriptor.Attribute(name: "code", type: "Int32", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "untouched", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["code", "rank"])])
+                indexes: [SchemaDescriptor.Index(properties: ["code", "rank"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1134,25 +1141,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerWideningsCanReplaceOrdinaryIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int8"),
-                    Schema.Attribute(name: "medium", type: "Int16"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int32"),
-                    Schema.Attribute(name: "medium", type: "Int64"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["small"]), Schema.Index(properties: ["medium"])])
+                indexes: [SchemaDescriptor.Index(properties: ["small"]), SchemaDescriptor.Index(properties: ["medium"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-widening-index-replace"))
         try bootstrap(source, driver: driver)
@@ -1178,25 +1185,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("widen-and-add-scalars.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int32"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int64"),
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"]), Schema.Index(properties: ["rank"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"]), SchemaDescriptor.Index(properties: ["rank"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1257,24 +1264,24 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("widen-add-rollback.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int32"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int64"),
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["rank"])])
+                indexes: [SchemaDescriptor.Index(properties: ["rank"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1314,64 +1321,64 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningRejectsRequiredAndUniqueScalarAdditions() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "rank", type: "Int32")])
+                attributes: [SchemaDescriptor.Attribute(name: "rank", type: "Int32")])
         ])
         let destinations = [
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "required", type: "String"),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "required", type: "String"),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "priority", type: "Int16", defaultValue: "70000"),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "70000"),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "unique", type: "String", options: [.unique]),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "unique", type: "String", options: [.unique]),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                     ],
-                    indexes: [Schema.Index(properties: ["rank", "note"])])
+                    indexes: [SchemaDescriptor.Index(properties: ["rank", "note"])])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "retained", type: "String", options: [.unique]),
-                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "retained", type: "String", options: [.unique]),
+                        SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "retained", type: "String"),
-                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                        SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                     ],
                     indexes: [
-                        Schema.Index(properties: ["retained"], isUnique: true)
+                        SchemaDescriptor.Index(properties: ["retained"], isUnique: true)
                     ])
             ]),
         ]
@@ -1407,22 +1414,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerWideningsRejectUniqueIndexTransitions() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int8"),
-                    Schema.Attribute(name: "medium", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int16"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int32"),
-                    Schema.Attribute(name: "medium", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int64"),
                 ],
-                indexes: [Schema.Index(properties: ["small"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["small"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-widening-unique-reject"))
         try bootstrap(source, driver: driver)
@@ -1447,20 +1454,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("optional-integer-widening.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int8?", isOptional: true),
-                    Schema.Attribute(name: "medium", type: "Int16?", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int8?", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int16?", isOptional: true),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int32?", isOptional: true),
-                    Schema.Attribute(name: "medium", type: "Int64?", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int32?", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int64?", isOptional: true),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -1481,20 +1488,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("mixed-integer-widening.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int8"),
-                    Schema.Attribute(name: "narrow", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int16"),
-                    Schema.Attribute(name: "narrow", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int32"),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -1528,20 +1535,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMixedIntegerNarrowingAndWideningFailsWithoutChangingStore() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrow", type: "Int64"),
-                    Schema.Attribute(name: "wide", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int8"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrow", type: "Int32"),
-                    Schema.Attribute(name: "wide", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int16"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-integer-narrowing-widening"))
@@ -1573,20 +1580,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMixedIntegerWideningAndFloatConversionFailsWithoutChangingStore() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int8"),
-                    Schema.Attribute(name: "fraction", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "fraction", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int16"),
-                    Schema.Attribute(name: "fraction", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "fraction", type: "Double"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-integer-float-widening"))
@@ -1610,21 +1617,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningCombinedWithRenameFailsWithoutChangingStore() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int8"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int16"),
-                    Schema.Attribute(name: "title", type: "String", originalName: "label"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "label"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-widening-plus-rename"))
@@ -1657,21 +1664,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningWithScalarAdditionRejectsConcurrentNarrowing() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int8"),
-                    Schema.Attribute(name: "narrow", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int8"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "wide", type: "Int16"),
-                    Schema.Attribute(name: "narrow", type: "Int32"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-reject-narrowing"))
@@ -1697,19 +1704,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningWithScalarAdditionRejectsRelationshipChanges() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "rank", type: "Int32")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "rank", type: "Int32")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int64"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ],
-                relationships: [Schema.Relationship(name: "target", destination: "Target", isOptional: true)]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "widen-add-reject-relationship"))
         try bootstrap(source, driver: driver)
@@ -1735,33 +1742,33 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningWithScalarAdditionRejectsOtherTypeChangesAndRemovals() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int32"),
-                    Schema.Attribute(name: "other", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Bool"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Bool"),
                 ])
         ])
         let destinations = [
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "other", type: "Int"),
-                        Schema.Attribute(name: "obsolete", type: "Bool"),
-                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "other", type: "Int"),
+                        SchemaDescriptor.Attribute(name: "obsolete", type: "Bool"),
+                        SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "rank", type: "Int64"),
-                        Schema.Attribute(name: "other", type: "String"),
-                        Schema.Attribute(name: "note", type: "String", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                        SchemaDescriptor.Attribute(name: "other", type: "String"),
+                        SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                     ])
             ]),
         ]
@@ -1794,22 +1801,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerWideningAdditionRollsBackWhenLaterEntityAdditionIsInvalid() throws {
-        let source = Schema([
-            Schema.Entity(name: "ARecord", attributes: [Schema.Attribute(name: "rank", type: "Int32")]),
-            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "ARecord", attributes: [SchemaDescriptor.Attribute(name: "rank", type: "Int32")]),
+            SchemaDescriptor.Entity(name: "ZRecord", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "ARecord",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int64"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZRecord",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "required", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "required", type: "Int"),
                 ]),
         ])
         XCTAssertLessThan(
@@ -1857,11 +1864,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let narrower = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int32")])
+        let narrower = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1900,17 +1907,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("integer-narrowing.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int32", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -1951,34 +1958,34 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerNarrowingsPreserveBoundariesAndNulls() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "medium", type: "Int64"),
-                    Schema.Attribute(name: "wide", type: "Int64", isOptional: true),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int64", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["small"]),
-                    Schema.Index(properties: ["wide"]),
-                    Schema.Index(properties: ["retained"]),
+                    SchemaDescriptor.Index(properties: ["small"]),
+                    SchemaDescriptor.Index(properties: ["wide"]),
+                    SchemaDescriptor.Index(properties: ["retained"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "small", type: "Int8", isOptional: true),
-                    Schema.Attribute(name: "medium", type: "Int16"),
-                    Schema.Attribute(name: "wide", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "small", type: "Int8", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "medium", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "wide", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["small"]),
-                    Schema.Index(properties: ["wide"]),
-                    Schema.Index(properties: ["retained"]),
+                    SchemaDescriptor.Index(properties: ["small"]),
+                    SchemaDescriptor.Index(properties: ["wide"]),
+                    SchemaDescriptor.Index(properties: ["retained"]),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-signed-narrowing-boundaries"))
@@ -2010,27 +2017,27 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerNarrowingsCanReplaceOrdinaryIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int64"),
-                    Schema.Attribute(name: "second", type: "Int64"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int16"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["first"]),
-                    Schema.Index(properties: ["second"]),
+                    SchemaDescriptor.Index(properties: ["first"]),
+                    SchemaDescriptor.Index(properties: ["second"]),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-ordinary-index-replace"))
@@ -2053,22 +2060,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerNarrowingsRejectUniqueIndexTransitions() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int64"),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int16"),
                 ],
-                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-unique-reject"))
         try bootstrap(source, driver: driver)
@@ -2089,21 +2096,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerNarrowingsRejectUniqueIndexRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int64"),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ],
-                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int16"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-narrowing-unique-remove-reject"))
@@ -2122,23 +2129,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleSignedIntegerNarrowingsValidateAllColumnsBeforeMetadataChanges() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int64"),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ],
-                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first"]), SchemaDescriptor.Index(properties: ["second"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int16"),
                 ],
-                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first"]), SchemaDescriptor.Index(properties: ["second"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-signed-narrowing-overflow"))
         try bootstrap(source, driver: driver)
@@ -2181,23 +2188,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInt64ToInt32BatchNarrowingRejectsBothExtremesAndAdjacentValues() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "narrowed", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int64"),
                 ],
-                indexes: [Schema.Index(properties: ["narrowed"])])
+                indexes: [SchemaDescriptor.Index(properties: ["narrowed"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "narrowed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int32"),
                 ],
-                indexes: [Schema.Index(properties: ["narrowed"])])
+                indexes: [SchemaDescriptor.Index(properties: ["narrowed"])])
         ])
         for (caseIndex, value) in [Int64.min, Int64.max, Int64(Int32.min) - 1, Int64(Int32.max) + 1].enumerated() {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "int64-int32-edge-\(caseIndex)"))
@@ -2246,20 +2253,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleIntegerNarrowingsRejectFloatRebuildCombination() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrowed", type: "Int64"),
-                    Schema.Attribute(name: "converted", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "converted", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrowed", type: "Int32"),
-                    Schema.Attribute(name: "converted", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "converted", type: "Double"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "narrowing-float-rebuild-reject"))
@@ -2285,11 +2292,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testSignedIntegerNarrowingRejectsMalformedStorageTypeAtomically() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-narrowing-malformed"))
         try bootstrap(source, driver: driver)
@@ -2330,11 +2337,11 @@ final class SchemaMigrationTests: XCTestCase {
         ]
         for (sourceType, destinationType, minimum, maximum) in cases {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "narrow-\(sourceType)-\(destinationType)"))
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: sourceType)])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: sourceType)])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType)])
             ])
             try bootstrap(source, driver: driver)
             try driver.write { connection in
@@ -2356,15 +2363,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("integer-double-rebuild.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", isOptional: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true)])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -2416,11 +2423,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("integer-double-rollback.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -2476,11 +2483,11 @@ final class SchemaMigrationTests: XCTestCase {
             ),
         ]
         for (name, destinationType, values, expectedValues) in cases {
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType)])
             ])
             let driver = try GRDBSQLiteDriver(
                 location: .memory(name: "integer-float-exact-outside-dense-range-\(name)"))
@@ -2508,11 +2515,11 @@ final class SchemaMigrationTests: XCTestCase {
             ("double-max", "Double", Int64.max),
         ]
         for (name, destinationType, value) in cases {
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType)])
             ])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-inexact-no-trap-\(name)"))
             try bootstrap(source, driver: driver)
@@ -2545,12 +2552,12 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIntegerToFloatingExactnessUsesDestinationPrecision() throws {
         let value: Int64 = 16_777_217
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
         for destinationType in ["Float", "Double"] {
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType)])
             ])
             let driver = try GRDBSQLiteDriver(
                 location: .memory(name: "integer-float-cross-precision-\(destinationType)"))
@@ -2604,15 +2611,15 @@ final class SchemaMigrationTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let location = StoreLocation.file(directory.appendingPathComponent("integer-\(destinationType).sqlite"))
-            let source = Schema([
-                Schema.Entity(
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: "value", type: "Int64", options: [.unique])])
+                    attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", options: [.unique])])
             ])
-            let destination = Schema([
-                Schema.Entity(
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: "value", type: destinationType, options: [.unique])])
+                    attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType, options: [.unique])])
             ])
             let initial = try LightweightMigration.openStore(location: location, schema: source)
             try initial.write { connection in
@@ -2668,32 +2675,32 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("rename-then-widen.sqlite"))
-        let version1 = Schema([
-            Schema.Entity(
+        let version1 = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "count", type: "Int64"),
-                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "count", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["count"])])
+                indexes: [SchemaDescriptor.Index(properties: ["count"])])
         ])
-        let version2 = Schema([
-            Schema.Entity(
+        let version2 = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "count", type: "Int64"),
-                    Schema.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
+                    SchemaDescriptor.Attribute(name: "count", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
                 ],
-                indexes: [Schema.Index(properties: ["count"])])
+                indexes: [SchemaDescriptor.Index(properties: ["count"])])
         ])
-        let version3 = Schema([
-            Schema.Entity(
+        let version3 = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "count", type: "Double"),
-                    Schema.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
+                    SchemaDescriptor.Attribute(name: "count", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", options: [.unique], originalName: "label"),
                 ],
-                indexes: [Schema.Index(properties: ["count"])])
+                indexes: [SchemaDescriptor.Index(properties: ["count"])])
         ])
 
         let initial = try LightweightMigration.openStore(location: location, schema: version1)
@@ -2766,28 +2773,28 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildPreservesOrdinaryIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["value"]),
-                    Schema.Index(properties: ["value", "other"]),
+                    SchemaDescriptor.Index(properties: ["value"]),
+                    SchemaDescriptor.Index(properties: ["value", "other"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["value"]),
-                    Schema.Index(properties: ["value", "other"]),
+                    SchemaDescriptor.Index(properties: ["value"]),
+                    SchemaDescriptor.Index(properties: ["value", "other"]),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-preserved-indexes"))
@@ -2819,23 +2826,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildCanChangeOrdinaryIndexSet() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["other"])])
+                indexes: [SchemaDescriptor.Index(properties: ["other"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-index-set-change"))
         try bootstrap(source, driver: driver)
@@ -2855,23 +2862,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildCanReplaceOrdinaryIndexSet() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["other"])])
+                indexes: [SchemaDescriptor.Index(properties: ["other"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-replace-index-set"))
         try bootstrap(source, driver: driver)
@@ -2891,13 +2898,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildPreservesUniqueSourceConstraint() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64", options: [.unique])])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", options: [.unique])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-unique-source"))
         try bootstrap(source, driver: driver)
@@ -2925,23 +2932,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildPreservesCompositeUniqueIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"),
-                    Schema.Attribute(name: "tag", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "tag", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "tag"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "tag"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "tag", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "tag", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "tag"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "tag"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-composite-unique"))
         try bootstrap(source, driver: driver)
@@ -2967,20 +2974,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildRejectsUnrelatedDestinationIndexNameCollision() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"), Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"), SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"), Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"), SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["other"])])
+                indexes: [SchemaDescriptor.Index(properties: ["other"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-unrelated-index-collision"))
         try bootstrap(source, driver: driver)
@@ -3009,11 +3016,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildRejectsPhysicalDependenciesBeforeChanges() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
         let cases: [(String, String)] = [
             ("trigger", "CREATE TRIGGER USER_RECORD_TRIGGER AFTER INSERT ON ZRECORD BEGIN SELECT 1; END"),
@@ -3048,11 +3055,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildRejectsGeneratedSourceColumns() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-generated-column"))
         try bootstrap(source, driver: driver)
@@ -3083,13 +3090,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToFloatRebuildPreservesExactBoundariesAndNull() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int32", isOptional: true)])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32", isOptional: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float", isOptional: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-rebuild-boundaries"))
         try bootstrap(source, driver: driver)
@@ -3112,11 +3119,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToFloatRebuildRejectsInexactValueAndRollsBack() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-float-rebuild-inexact"))
         try bootstrap(source, driver: driver)
@@ -3151,23 +3158,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsPreserveMixedBoundariesAndNulls() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "singlePrecision", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "doublePrecision", type: "Int64", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "singlePrecision", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "doublePrecision", type: "Int64", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["singlePrecision"])])
+                indexes: [SchemaDescriptor.Index(properties: ["singlePrecision"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
-                    Schema.Attribute(name: "doublePrecision", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "doublePrecision", type: "Double", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["singlePrecision"])])
+                indexes: [SchemaDescriptor.Index(properties: ["singlePrecision"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-rebuilds"))
         try bootstrap(source, driver: driver)
@@ -3200,20 +3207,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsCanMixDirections() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integral", type: "Double", isOptional: true),
-                    Schema.Attribute(name: "exactInteger", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "integral", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "exactInteger", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integral", type: "Int16", isOptional: true),
-                    Schema.Attribute(name: "exactInteger", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "integral", type: "Int16", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "exactInteger", type: "Double"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-mixed-directions"))
@@ -3240,25 +3247,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsCanReplaceOrdinaryIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int64"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Double"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first"]), SchemaDescriptor.Index(properties: ["second"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-index-replacement"))
         try bootstrap(source, driver: driver)
@@ -3284,20 +3291,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-exact-empty.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double", isOptional: true),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Int16", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int16", isOptional: true),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -3321,23 +3328,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsValidateEveryColumnBeforeSwap() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "valid", type: "Int32"),
-                    Schema.Attribute(name: "fractional", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "valid", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "fractional", type: "Double"),
                 ],
-                indexes: [Schema.Index(properties: ["valid"])])
+                indexes: [SchemaDescriptor.Index(properties: ["valid"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "valid", type: "Float"),
-                    Schema.Attribute(name: "fractional", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "valid", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "fractional", type: "Int64"),
                 ],
-                indexes: [Schema.Index(properties: ["valid"])])
+                indexes: [SchemaDescriptor.Index(properties: ["valid"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-preflight"))
         try bootstrap(source, driver: driver)
@@ -3383,22 +3390,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsPreflightCombinedUniqueIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integerValue", type: "Int64"),
-                    Schema.Attribute(name: "floatingValue", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "integerValue", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "floatingValue", type: "Double"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integerValue", type: "Double"),
-                    Schema.Attribute(name: "floatingValue", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "integerValue", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "floatingValue", type: "Int16"),
                 ],
-                indexes: [Schema.Index(properties: ["integerValue", "floatingValue"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["integerValue", "floatingValue"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-unique-preflight"))
         try bootstrap(source, driver: driver)
@@ -3442,22 +3449,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsRejectUniqueNegativeZeroCollision() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Double"),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int16"),
-                    Schema.Attribute(name: "second", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double"),
                 ],
-                indexes: [Schema.Index(properties: ["first"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["first"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-negative-zero-unique"))
         try bootstrap(source, driver: driver)
@@ -3489,20 +3496,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsRejectCombinedNarrowing() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "converted", type: "Int64"),
-                    Schema.Attribute(name: "narrowed", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "converted", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "converted", type: "Double"),
-                    Schema.Attribute(name: "narrowed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "converted", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "narrowed", type: "Int32"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-narrowing"))
@@ -3528,20 +3535,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsAllowOptionalityRelaxation() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-optionality"))
@@ -3565,20 +3572,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsRejectUniqueOptionChange() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integerValue", type: "Int64"),
-                    Schema.Attribute(name: "floatingValue", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "integerValue", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "floatingValue", type: "Double"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "integerValue", type: "Double"),
-                    Schema.Attribute(name: "floatingValue", type: "Int16", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "integerValue", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "floatingValue", type: "Int16", options: [.unique]),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-numeric-reject-unique-change"))
@@ -3617,20 +3624,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsAllowRequiredToOptionalRelaxation() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "singlePrecision", type: "Int32"),
-                    Schema.Attribute(name: "integer", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "singlePrecision", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "integer", type: "Double"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
-                    Schema.Attribute(name: "integer", type: "Int16", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "singlePrecision", type: "Float", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "integer", type: "Int16", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-required-to-optional"))
@@ -3657,20 +3664,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleExactNumericRebuildsRejectOptionalToRequiredConversion() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "second", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-exact-reject-optional-to-required"))
@@ -3694,23 +3701,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testDoubleToSignedIntegerRebuildPreservesExactValuesAndUniqueIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double", isOptional: true),
-                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int16", isOptional: true),
-                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int16", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int16-rebuild"))
         try bootstrap(source, driver: driver)
@@ -3743,11 +3750,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testDoubleToSignedIntegerRebuildRejectsFractionAndRollsBack() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int8")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int8")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int8-fraction"))
         try bootstrap(source, driver: driver)
@@ -3782,15 +3789,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatToSignedIntegerRebuildAndInt64UpperBoundary() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float", isOptional: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", isOptional: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int64-boundary"))
         try bootstrap(source, driver: driver)
@@ -3824,11 +3831,11 @@ final class SchemaMigrationTests: XCTestCase {
             ("blob", "X'0102'", "Int64"),
         ]
         for (name, value, destinationType) in failures {
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: destinationType)])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: destinationType)])
             ])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-invalid-\(name)"))
             try bootstrap(source, driver: driver)
@@ -3855,11 +3862,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToInt64RejectsPositiveTwoToThe63() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "double-to-int64-positive-two63"))
         try bootstrap(source, driver: driver)
@@ -3885,15 +3892,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerPreservesAttributeUniqueConstraint() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int16", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16", options: [.unique])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-attribute"))
         try bootstrap(source, driver: driver)
@@ -3919,22 +3926,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerUniqueAdditionRejectsDuplicatesBeforeSwap() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int16"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "label"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-add-duplicate"))
         try bootstrap(source, driver: driver)
@@ -3970,22 +3977,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerUniqueAdditionAndNullSemantics() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double", isOptional: true),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int16", isOptional: true),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int16", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "label"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-add-null"))
         try bootstrap(source, driver: driver)
@@ -4010,13 +4017,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerUniqueRemovalAllowsDuplicatesAfterRebuild() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-remove"))
         try bootstrap(source, driver: driver)
@@ -4034,12 +4041,12 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToFloatUniqueAdditionRejectsInexactValuesAtomically() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int64")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float", options: [.unique])])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float", options: [.unique])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "int-to-float-unique-add-inexact"))
         try bootstrap(source, driver: driver)
@@ -4066,22 +4073,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleUniqueAdditionRejectsDuplicatesBeforeSwap() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int64"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "label"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "label"], isUnique: true)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "int-to-double-unique-add-duplicate"))
         try bootstrap(source, driver: driver)
@@ -4113,24 +4120,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testNumericRebuildRejectsHierarchyPartialUniqueIndexesBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")]),
+            SchemaDescriptor.Entity(
                 name: "SpecialRecord",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "specialValue", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "specialValue", type: "String", options: [.unique]),
                 ],
                 superentityName: "Record",
             ),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16")]),
+            SchemaDescriptor.Entity(
                 name: "SpecialRecord",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "specialValue", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "specialValue", type: "String", options: [.unique]),
                 ],
                 superentityName: "Record",
             ),
@@ -4176,13 +4183,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToRequiredIntegerRejectsNull() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16", isOptional: false)])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16", isOptional: false)])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-required-int-null"))
         try bootstrap(source, driver: driver)
@@ -4200,20 +4207,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToSignedIntegerRejectsCombinedTypeChanges() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "other", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "other", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int16"),
-                    Schema.Attribute(name: "other", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "other", type: "Int32"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-combined-types"))
@@ -4237,13 +4244,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToSignedIntegerRejectsDefaultChangesAtomically() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double", defaultValue: "1.0")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", defaultValue: "1.0")])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int16", defaultValue: "1")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16", defaultValue: "1")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-integer-default"))
         try bootstrap(source, driver: driver)
@@ -4274,11 +4281,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToUnsignedIntegerRemainsUnsupported() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "UInt16")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "UInt16")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-uint-unsupported"))
         try bootstrap(source, driver: driver)
@@ -4296,14 +4303,14 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerAddsUniqueIndexWhenDataIsDistinct() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int16", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16", options: [.unique])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-unique-change"))
         try bootstrap(source, driver: driver)
@@ -4326,28 +4333,28 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerAllowsUniqueIndexDeclarationReordering() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["value", "label"], isUnique: true),
-                    Schema.Index(properties: ["label"]),
+                    SchemaDescriptor.Index(properties: ["value", "label"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["label"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "label", type: "String"),
-                    Schema.Attribute(name: "value", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int16"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["label"]),
-                    Schema.Index(properties: ["value", "label"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["label"]),
+                    SchemaDescriptor.Index(properties: ["value", "label"], isUnique: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-index-declaration-order"))
@@ -4363,25 +4370,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatingToIntegerWithRelationshipsRemainsUnsupported() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double")],
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", isToMany: false, isOptional: true)
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int16")],
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int16")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", isToMany: false, isOptional: true)
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-to-int-relationship"))
         try bootstrap(source, driver: driver)
@@ -4393,20 +4400,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIntegerToDoubleRebuildRejectsCombinedNumericChangesAtomically() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrow", type: "Int64"),
-                    Schema.Attribute(name: "real", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int64"),
+                    SchemaDescriptor.Attribute(name: "real", type: "Int64"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "narrow", type: "Int32"),
-                    Schema.Attribute(name: "real", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "narrow", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "real", type: "Double"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "integer-double-combined-types"))
@@ -4459,17 +4466,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("float-widening.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -4518,11 +4525,11 @@ final class SchemaMigrationTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
             ])
             let initial = try LightweightMigration.openStore(location: location, schema: source)
             try initial.write { connection in
@@ -4569,17 +4576,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("double-narrowing.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Float", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -4616,11 +4623,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("float-double-bit-patterns.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
         let values: [Float] = [
             .leastNonzeroMagnitude,
@@ -4655,11 +4662,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("double-float-bit-patterns.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")])
         ])
         let values: [Float] = [
             .leastNonzeroMagnitude,
@@ -4700,11 +4707,11 @@ final class SchemaMigrationTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let location = StoreLocation.file(directory.appendingPathComponent("\(name).sqlite"))
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Double")])
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")])
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Float")])
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")])
             ])
             let initial = try LightweightMigration.openStore(location: location, schema: source)
             try initial.write { connection in
@@ -4739,23 +4746,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatToDoubleMigrationReconcilesOrdinaryIndexChanges() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Float"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"]), Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"]), SchemaDescriptor.Index(properties: ["label"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "label"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "float-double-index-reconcile"))
         try bootstrap(source, driver: driver)
@@ -4776,21 +4783,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFloatTypeMigrationRejectsUniqueIndexTransitions() throws {
-        let indexTransitions: [(String, [Schema.Index], [Schema.Index])] = [
-            ("add", [], [Schema.Index(properties: ["value"], isUnique: true)]),
-            ("remove", [Schema.Index(properties: ["value"], isUnique: true)], []),
+        let indexTransitions: [(String, [SchemaDescriptor.Index], [SchemaDescriptor.Index])] = [
+            ("add", [], [SchemaDescriptor.Index(properties: ["value"], isUnique: true)]),
+            ("remove", [SchemaDescriptor.Index(properties: ["value"], isUnique: true)], []),
         ]
         for (name, sourceIndexes, destinationIndexes) in indexTransitions {
-            let source = Schema([
-                Schema.Entity(
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: "value", type: "Float")],
+                    attributes: [SchemaDescriptor.Attribute(name: "value", type: "Float")],
                     indexes: sourceIndexes)
             ])
-            let destination = Schema([
-                Schema.Entity(
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
-                    attributes: [Schema.Attribute(name: "value", type: "Double")],
+                    attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double")],
                     indexes: destinationIndexes)
             ])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "float-unique-index-\(name)"))
@@ -4817,23 +4824,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testDoubleToFloatMigrationReconcilesOrdinaryIndexChanges() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"]), Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"]), SchemaDescriptor.Index(properties: ["label"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Float"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value", "label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value", "label"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "double-float-index-reconcile"))
         try bootstrap(source, driver: driver)
@@ -4854,23 +4861,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testDoubleToFloatIndexChangeRejectsInexactValueWithoutIndexChanges() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Float"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["label"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "double-float-inexact-index"))
         try bootstrap(source, driver: driver)
@@ -4905,23 +4912,23 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("float-double-index-migration.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Float"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["value"])])
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Double"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["label"])])
+                indexes: [SchemaDescriptor.Index(properties: ["label"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -4964,16 +4971,16 @@ final class SchemaMigrationTests: XCTestCase {
         ]
         for (caseName, sourceTypes, destinationTypes) in cases {
             let sourceAttributes = ["first", "second"].enumerated().map { offset, name in
-                Schema.Attribute(name: name, type: sourceTypes[offset])
+                SchemaDescriptor.Attribute(name: name, type: sourceTypes[offset])
             }
             let destinationAttributes = ["first", "second"].enumerated().map { offset, name in
-                Schema.Attribute(name: name, type: destinationTypes[offset])
+                SchemaDescriptor.Attribute(name: name, type: destinationTypes[offset])
             }
-            let source = Schema([
-                Schema.Entity(name: "Record", attributes: sourceAttributes)
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: sourceAttributes)
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Record", attributes: destinationAttributes)
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Record", attributes: destinationAttributes)
             ])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-float-double-\(caseName)"))
             try bootstrap(source, driver: driver)
@@ -4991,38 +4998,38 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFloatDoubleChangesRejectOtherMetadataEdits() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Float"),
                 ])
         ])
         let invalidDestinations = [
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "first", type: "Double"),
-                        Schema.Attribute(name: "second", type: "Double"),
-                        Schema.Attribute(name: "extra", type: "Int16", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "first", type: "Double"),
+                        SchemaDescriptor.Attribute(name: "second", type: "Double"),
+                        SchemaDescriptor.Attribute(name: "extra", type: "Int16", isOptional: true),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "first", type: "Double"),
-                        Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                        SchemaDescriptor.Attribute(name: "first", type: "Double"),
+                        SchemaDescriptor.Attribute(name: "second", type: "Double", isOptional: true),
                     ])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Record",
                     attributes: [
-                        Schema.Attribute(name: "first", type: "Double", defaultValue: "1"),
-                        Schema.Attribute(name: "second", type: "Double"),
+                        SchemaDescriptor.Attribute(name: "first", type: "Double", defaultValue: "1"),
+                        SchemaDescriptor.Attribute(name: "second", type: "Double"),
                     ])
             ]),
         ]
@@ -5054,23 +5061,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFloatDoubleChangesValidateEveryColumnBeforeIndexReconciliation() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Float"),
-                    Schema.Attribute(name: "second", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Float"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Float"),
                 ],
-                indexes: [Schema.Index(properties: ["first"]), Schema.Index(properties: ["second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first"]), SchemaDescriptor.Index(properties: ["second"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "Double"),
-                    Schema.Attribute(name: "second", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Double"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-float-double-index-failure"))
         try bootstrap(source, driver: driver)
@@ -5108,16 +5115,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int16"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int16"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -5148,13 +5155,13 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int")],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 2, 5)")
@@ -5181,28 +5188,28 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int"),
-                    Schema.Attribute(name: "category", type: "String"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "category", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["obsolete"]),
-                    Schema.Index(properties: ["category", "obsolete"]),
-                    Schema.Index(properties: ["title"]),
+                    SchemaDescriptor.Index(properties: ["obsolete"]),
+                    SchemaDescriptor.Index(properties: ["category", "obsolete"]),
+                    SchemaDescriptor.Index(properties: ["title"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "category", type: "String"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "category", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["title"])])
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -5232,25 +5239,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-removals.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "first", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "second", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "second", type: "Double", isOptional: true),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["first"]),
-                    Schema.Index(properties: ["second", "first"]),
-                    Schema.Index(properties: ["kept"]),
+                    SchemaDescriptor.Index(properties: ["first"]),
+                    SchemaDescriptor.Index(properties: ["second", "first"]),
+                    SchemaDescriptor.Index(properties: ["kept"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "kept", type: "String")],
-                indexes: [Schema.Index(properties: ["kept"])])
+                attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["kept"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -5279,24 +5286,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameComposesWithIndependentScalarRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-independent-removal"))
         try bootstrap(source, driver: driver)
@@ -5322,21 +5329,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameComposesWithDefaultedScalarAddition() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "4"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "4"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-defaulted-add"))
@@ -5353,15 +5360,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameWithDynamicDefaultRejectsBeforeChangingRows() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "legacyTitle", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "legacyTitle", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
-                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    SchemaDescriptor.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-plus-dynamic-default-reject"))
@@ -5389,15 +5396,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameAndAdditionRejectsExistingPhysicalColumnCollisionBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "legacyTitle", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "legacyTitle", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-add-existing-column-collision"))
@@ -5440,18 +5447,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameComposesWithRemovalButRejectsDestinationNameReuse() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String", originalName: "legacyTitle")])
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String", originalName: "legacyTitle")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-removal-column-reuse"))
         try bootstrap(source, driver: driver)
@@ -5475,19 +5482,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameWithIndexAndRemovalRemainsUnsupported() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["legacyTitle"])])
+                indexes: [SchemaDescriptor.Index(properties: ["legacyTitle"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle")])
+                attributes: [SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-index-removal-reject"))
         try bootstrap(source, driver: driver)
@@ -5505,22 +5512,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameWithGeneratedOrdinaryIndexComposesWithRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["legacyTitle"])])
+                indexes: [SchemaDescriptor.Index(properties: ["legacyTitle"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle")
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle")
                 ],
-                indexes: [Schema.Index(properties: ["title"])])
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-index-remove-scalar"))
         try bootstrap(source, driver: driver)
@@ -5541,24 +5548,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRenameRemovalCanReplaceUnrelatedOrdinaryIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "legacyTitle", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "legacyTitle", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["retained"])])
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String", originalName: "legacyTitle"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["title"])])
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "rename-removal-replace-unrelated-index"))
         try bootstrap(source, driver: driver)
@@ -5580,24 +5587,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalComposesWithOptionalAndDefaultedAdditions() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "identity", type: "String", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["obsolete", "identity"])])
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete", "identity"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "optionalNote", type: "String", isOptional: true),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "identity", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "optionalNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "7"),
                 ],
-                indexes: [Schema.Index(properties: ["identity"])])
+                indexes: [SchemaDescriptor.Index(properties: ["identity"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-scalar-columns"))
         try bootstrap(source, driver: driver)
@@ -5627,20 +5634,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarNameCannotBeRemovedAndReintroducedWithDifferentTypeInOneStage() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "value", type: "String"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int", isOptional: true),
                 ])
         ])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -5685,23 +5692,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarNameCanBeRemovedAndReintroducedAcrossStages() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "value", type: "String"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "String"),
                 ])
         ])
-        let removed = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let removed = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
-        let reintroduced = Schema([
-            Schema.Entity(
+        let reintroduced = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int", isOptional: true),
                 ])
         ])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -5737,14 +5744,14 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalAndAdditionRejectsNewUniqueAttributeAtomically() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "obsolete", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "added", type: "String", isOptional: true, options: [.unique])
+                    SchemaDescriptor.Attribute(name: "added", type: "String", isOptional: true, options: [.unique])
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-unique-reject"))
@@ -5770,14 +5777,14 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalAndAdditionRejectsNonliteralRequiredDefaultBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "obsolete", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP")
+                    SchemaDescriptor.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP")
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-add-dynamic-default"))
@@ -5814,20 +5821,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCodableBlobAttributeCanBeRemovedWithOrdinaryScalarRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "payload", type: "Payload", options: [.codable]),
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "payload", type: "Payload", options: [.codable]),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["payload"])])
+                indexes: [SchemaDescriptor.Index(properties: ["payload"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "retained", type: "String")])
+                attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-codable-blob-attribute"))
         try bootstrap(source, driver: driver)
@@ -5859,28 +5866,28 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-codable-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
+                    SchemaDescriptor.Attribute(
                         name: "address", type: "Address", options: [.flattened],
                         components: [
                             .init(name: "city", columnName: "address_city", type: "String"),
                             .init(name: "postalCode", columnName: "address_postalCode", type: "Int32"),
                         ]),
-                    Schema.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retainedCount", type: "Int64", isOptional: true),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -5929,17 +5936,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCodableRemovalRejectsPhysicalIndexDependencyBeforeAnyDrop() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
-                    Schema.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "firstPayload", type: "Payload", options: [.codable]),
+                    SchemaDescriptor.Attribute(name: "secondPayload", type: "Payload", options: [.codable]),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "codable-removal-index-dependency-reject"))
         try bootstrap(source, driver: driver)
@@ -5977,15 +5984,15 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testExternalCodableAttributeRemovalRemainsUnsupported() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "payload", type: "Payload", options: [.codable, .externalStorage])
                 ])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-external-codable-reject"))
         try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
@@ -6006,11 +6013,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlattenedAttributeCanBeRemovedAsAWhole() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "address",
                         type: "Address",
                         options: [.flattened],
@@ -6018,11 +6025,11 @@ final class SchemaMigrationTests: XCTestCase {
                             .init(name: "city", columnName: "address_city", type: "String"),
                             .init(name: "zip", columnName: "address_zip", type: "Int32"),
                         ]),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-whole-flattened-attribute"))
         try bootstrap(source, driver: driver)
@@ -6045,11 +6052,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFlattenedAttributesCanBeRemovedTogether() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "address",
                         type: "Address",
                         options: [.flattened],
@@ -6057,7 +6064,7 @@ final class SchemaMigrationTests: XCTestCase {
                             .init(name: "city", columnName: "address_city", type: "String"),
                             .init(name: "zip", columnName: "address_zip", type: "Int32"),
                         ]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "dimensions",
                         type: "Dimensions",
                         options: [.flattened],
@@ -6065,15 +6072,15 @@ final class SchemaMigrationTests: XCTestCase {
                             .init(name: "width", columnName: "dimensions_width", type: "Double"),
                             .init(name: "height", columnName: "dimensions_height", type: "Double"),
                         ]),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-multiple-flattened-attributes"))
@@ -6098,11 +6105,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlattenedAttributeRemovalRejectsMissingLeafBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "address",
                         type: "Address",
                         options: [.flattened],
@@ -6112,7 +6119,7 @@ final class SchemaMigrationTests: XCTestCase {
                         ])
                 ])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-missing-leaf"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6139,11 +6146,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlattenedAttributeRemovalRejectsPartiallyMissingPhysicalComponents() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "address",
                         type: "Address",
                         options: [.flattened],
@@ -6153,7 +6160,7 @@ final class SchemaMigrationTests: XCTestCase {
                         ])
                 ])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-partial-component"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6169,11 +6176,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlattenedAttributeRemovalRejectsCaseVariantPhysicalLeafIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "address",
                         type: "Address",
                         options: [.flattened],
@@ -6183,7 +6190,7 @@ final class SchemaMigrationTests: XCTestCase {
                         ])
                 ])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-flattened-case-variant-index"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6212,17 +6219,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarOptionalAdditionComposesWithOptionalToOneRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-optional-add-to-one-remove"))
         try bootstrap(source, driver: driver)
@@ -6241,17 +6248,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarDefaultedAdditionComposesWithOptionalToOneRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", attributes: [Schema.Attribute(name: "rank", type: "Int16", defaultValue: "11")]),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "rank", type: "Int16", defaultValue: "11")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-default-add-to-one-remove"))
         try bootstrap(source, driver: driver)
@@ -6266,19 +6273,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarAdditionIndexComposesWithOptionalToOneRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)],
-                indexes: [Schema.Index(properties: ["note"])]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["note"])]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-index-add-to-one-remove"))
         try bootstrap(source, driver: driver)
@@ -6297,25 +6304,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarDefaultAdditionAndIndexComposeWithMultipleOptionalToOneRemovals() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "primary", destination: "Target"),
-                    Schema.Relationship(name: "secondary", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "primary", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "secondary", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int16", defaultValue: "11"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int16", defaultValue: "11"),
                 ],
-                indexes: [Schema.Index(properties: ["rank"])]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                indexes: [SchemaDescriptor.Index(properties: ["rank"])]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multi-to-one-scalar-index-add"))
         try bootstrap(source, driver: driver)
@@ -6352,18 +6359,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testUniqueScalarAdditionWithRelationshipRemovalFailsAtomically() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "identity", type: "String", isOptional: true, options: [.unique])]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "identity", type: "String", isOptional: true, options: [.unique])]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "unique-add-to-one-remove-reject"))
         try bootstrap(source, driver: driver)
@@ -6387,19 +6394,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalCanAddIndexOnRetainedAttribute() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "kept", type: "String")],
-                indexes: [Schema.Index(properties: ["kept"])])
+                attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["kept"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-add-retained-index"))
         try bootstrap(source, driver: driver)
@@ -6419,19 +6426,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalAndIndexNameCollisionRollBackColumnDrop() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "kept", type: "String")],
-                indexes: [Schema.Index(properties: ["kept"])])
+                attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["kept"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-index-collision-rollback"))
         try bootstrap(source, driver: driver)
@@ -6460,19 +6467,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalRejectsDestinationIndexReferencingRemovedAttribute() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "kept", type: "String")],
-                indexes: [Schema.Index(properties: ["obsolete"])])
+                attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-index-removed-column"))
         try bootstrap(source, driver: driver)
@@ -6495,24 +6502,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalCanReplaceIndexOnRetainedAttributes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32"),
                 ],
-                indexes: [Schema.Index(properties: ["first", "second"])])
+                indexes: [SchemaDescriptor.Index(properties: ["first", "second"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["second", "first"])])
+                indexes: [SchemaDescriptor.Index(properties: ["second", "first"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-replace-retained-index"))
         try bootstrap(source, driver: driver)
@@ -6538,17 +6545,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarRemovalCanRemoveIndexOnRetainedAttributes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "obsolete", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32"),
                 ],
-                indexes: [Schema.Index(properties: ["kept"])])
+                indexes: [SchemaDescriptor.Index(properties: ["kept"])])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "remove-scalar-remove-retained-index"))
         try bootstrap(source, driver: driver)
@@ -6568,18 +6575,18 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testMultipleScalarRemovalAllowsCompositeIndexWhollyOnRemovedColumns() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-composite-index"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "left", type: "Int32"),
-                    Schema.Attribute(name: "right", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "left", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "right", type: "Int32"),
                 ],
-                indexes: [Schema.Index(properties: ["left", "right"])])
+                indexes: [SchemaDescriptor.Index(properties: ["left", "right"])])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6596,17 +6603,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleScalarRemovalRejectsUniqueIndexesSharedWithRetainedAttributes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "removed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "removed", type: "Int32"),
                 ],
-                indexes: [Schema.Index(properties: ["kept", "removed"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["kept", "removed"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-mixed-unique"))
         try bootstrap(source, driver: driver)
@@ -6624,16 +6631,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleScalarRemovalRejectsTamperedGeneratedUniqueIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "removed", type: "Int32", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "removed", type: "Int32", options: [.unique]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-tampered-unique"))
         try bootstrap(source, driver: driver)
@@ -6659,17 +6666,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleScalarRemovalPreservesSameNamedIndexOnOtherTable() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"), Schema.Attribute(name: "removed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"), SchemaDescriptor.Attribute(name: "removed", type: "Int32"),
                 ]),
-            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+            SchemaDescriptor.Entity(name: "ZRecord", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")]),
-            Schema.Entity(name: "ZRecord", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZRecord", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-index-other-table"))
         try bootstrap(source, driver: driver)
@@ -6694,17 +6701,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-drop-rollback.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -6753,17 +6760,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("unexpected-column.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "first", type: "Int32"),
-                    Schema.Attribute(name: "second", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "second", type: "Int32"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -6797,18 +6804,18 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testMultipleScalarRemovalAllowsUnrelatedForeignKeys() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-unrelated-fk"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "kept", type: "String"),
-                    Schema.Attribute(name: "removed", type: "Int32"),
+                    SchemaDescriptor.Attribute(name: "kept", type: "String"),
+                    SchemaDescriptor.Attribute(name: "removed", type: "Int32"),
                 ]),
-            Schema.Entity(name: "Other"),
+            SchemaDescriptor.Entity(name: "Other"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "kept", type: "String")]),
-            Schema.Entity(name: "Other"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "kept", type: "String")]),
+            SchemaDescriptor.Entity(name: "Other"),
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6825,13 +6832,13 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "unique-indexed-attribute-removal"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "obsolete", type: "Int")],
-                indexes: [Schema.Index(properties: ["obsolete"], isUnique: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete"], isUnique: true)])
         ])
-        let destination = Schema([Schema.Entity(name: "Record")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
             try driver.write {
@@ -6853,17 +6860,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "email", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["email"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["email"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "label", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -6896,17 +6903,17 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testCompositeUniqueIndexOnRemovedAttributeStillFailsClosed() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "composite-unique-attribute-removal"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "Int"),
-                    Schema.Attribute(name: "scope", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "scope", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["obsolete", "scope"], isUnique: true)])
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete", "scope"], isUnique: true)])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "scope", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "scope", type: "String")])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6930,20 +6937,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndexedAttributeRemovalPreflightsSideEffectsBeforeDroppingIndexes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "indexed-removal-preflight"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "Int"),
-                    Schema.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["obsolete"]),
-                    Schema.Index(properties: ["title"]),
+                    SchemaDescriptor.Index(properties: ["obsolete"]),
+                    SchemaDescriptor.Index(properties: ["title"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -6978,17 +6985,17 @@ final class SchemaMigrationTests: XCTestCase {
             ("partial", "CREATE INDEX USER_PARTIAL_INDEX ON ZRECORD (ZTITLE) WHERE ZOBSOLETE > 0"),
             ("expression", "CREATE INDEX USER_EXPRESSION_INDEX ON ZRECORD (ZOBSOLETE + 1)"),
         ]
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "Int"),
-                    Schema.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["obsolete"])])
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete"])])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
         for (kind, statement) in rawIndexes {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "attribute-removal-raw-index-\(kind)"))
@@ -7022,15 +7029,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -7056,13 +7063,13 @@ final class SchemaMigrationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let sourceWithExternalStorage = Schema([
-            Schema.Entity(
+        let sourceWithExternalStorage = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Removed",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
-            Schema.Entity(name: "Retained"),
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+            SchemaDescriptor.Entity(name: "Retained"),
         ])
-        let destination = Schema([Schema.Entity(name: "Retained")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Retained")])
         let externalLocation = StoreLocation.file(directory.appendingPathComponent("external.sqlite"))
         let externalStore = try LightweightMigration.openStore(
             location: externalLocation, schema: sourceWithExternalStorage)
@@ -7081,7 +7088,7 @@ final class SchemaMigrationTests: XCTestCase {
             })
         try externalReopened.close()
 
-        let plainSource = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])
+        let plainSource = SchemaDescriptor([SchemaDescriptor.Entity(name: "Removed"), SchemaDescriptor.Entity(name: "Retained")])
         let orphanLocation = StoreLocation.file(directory.appendingPathComponent("orphan.sqlite"))
         let orphanStore = try LightweightMigration.openStore(location: orphanLocation, schema: plainSource)
         try orphanStore.write { connection in
@@ -7107,20 +7114,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("external-rename.sqlite")
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
-                indexes: [Schema.Index(properties: ["payload"])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                indexes: [SchemaDescriptor.Index(properties: ["payload"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload")
                 ],
-                indexes: [Schema.Index(properties: ["renamedPayload"])])
+                indexes: [SchemaDescriptor.Index(properties: ["renamedPayload"])])
         ])
         let sourceColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
         let destinationColumns: Set<String> = ["ZRECORD.ZRENAMEDPAYLOAD"]
@@ -7189,20 +7196,20 @@ final class SchemaMigrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("external-rename-rollback.sqlite")
         let location = StoreLocation.file(databaseURL)
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
-                indexes: [Schema.Index(properties: ["payload"])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                indexes: [SchemaDescriptor.Index(properties: ["payload"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload")
                 ],
-                indexes: [Schema.Index(properties: ["renamedPayload"])])
+                indexes: [SchemaDescriptor.Index(properties: ["renamedPayload"])])
         ])
         let externalColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
         let payload = Array(repeating: UInt8(0xA5), count: ExternalStorage.threshold + 1)
@@ -7281,25 +7288,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "discarded", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "discarded", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(
                         name: "optionalRetained", type: "Data", isOptional: true, options: [.externalStorage]),
-                    Schema.Attribute(name: "inlineData", type: "Data"),
+                    SchemaDescriptor.Attribute(name: "inlineData", type: "Data"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(
                         name: "optionalRetained", type: "Data", isOptional: true, options: [.externalStorage]),
-                    Schema.Attribute(name: "inlineData", type: "Data"),
+                    SchemaDescriptor.Attribute(name: "inlineData", type: "Data"),
                 ])
         ])
         let sourceColumns: Set<String> = [
@@ -7399,22 +7406,22 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-multiple-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "firstDiscarded", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "firstDiscarded", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(
                         name: "secondDiscarded", type: "Data", isOptional: true, options: [.externalStorage]),
-                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let sourceColumns: Set<String> = [
@@ -7515,19 +7522,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-cross-entity.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "DiscardedRecord",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
-            Schema.Entity(
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+            SchemaDescriptor.Entity(
                 name: "RetainedRecord",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "DiscardedRecord", attributes: []),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "DiscardedRecord", attributes: []),
+            SchemaDescriptor.Entity(
                 name: "RetainedRecord",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])]),
         ])
         let sourceColumns: Set<String> = ["ZDISCARDEDRECORD.ZPAYLOAD", "ZRETAINEDRECORD.ZPAYLOAD"]
         let destinationColumns: Set<String> = ["ZRETAINEDRECORD.ZPAYLOAD"]
@@ -7594,17 +7601,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-addition.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(
                         name: "optionalPayload", type: "Data", isOptional: true, options: [.externalStorage]),
                 ])
         ])
@@ -7675,20 +7682,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-add-with-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage]),
+                    SchemaDescriptor.Attribute(
                         name: "newPayload", type: "Data", isOptional: true, options: [.externalStorage]),
                 ])
         ])
@@ -7768,18 +7775,18 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("external-rename-addition.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
+                attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "renamedPayload", type: "Data", options: [.externalStorage], originalName: "payload"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let sourceColumns: Set<String> = ["ZRECORD.ZPAYLOAD"]
@@ -7824,9 +7831,9 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testEntityRemovalRejectsUntrackedIndexes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-untracked-index"))
-        let source = Schema([Schema.Entity(name: "Removed"), Schema.Entity(name: "Retained")])
-        let destination = try Schema(
-            [Schema.Entity(name: "Retained")],
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Removed"), SchemaDescriptor.Entity(name: "Retained")])
+        let destination = try SchemaDescriptor(
+            [SchemaDescriptor.Entity(name: "Retained")],
             entityIDs: ["Retained": try XCTUnwrap(source.entityIDsByName["Retained"])])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -7855,12 +7862,12 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testEntityRemovalRejectsUntrackedIndexOnRetainedTable() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-retained-untracked-index"))
-        let source = Schema([
-            Schema.Entity(name: "Removed"),
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Removed"),
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -7888,12 +7895,12 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityRemovalRejectsSQLiteAutoindexOnRetainedTable() throws {
-        let source = Schema([
-            Schema.Entity(name: "Removed"),
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Removed"),
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-retained-autoindex"))
         try bootstrap(source, driver: driver)
@@ -7922,11 +7929,11 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityRemovalRejectsSQLiteAutoindexOnRemovedTable() throws {
-        let source = Schema([
-            Schema.Entity(name: "Removed", attributes: [Schema.Attribute(name: "value", type: "Int")]),
-            Schema.Entity(name: "Retained"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Removed", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")]),
+            SchemaDescriptor.Entity(name: "Retained"),
         ])
-        let destination = Schema([Schema.Entity(name: "Retained")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Retained")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-removed-autoindex"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -7956,21 +7963,21 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
                 ]),
-            Schema.Entity(name: "RetainedRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "RetainedRoot", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Tag",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
                 ]),
-            Schema.Entity(name: "ZRemovedRoot"),
+            SchemaDescriptor.Entity(name: "ZRemovedRoot"),
         ])
-        let destination = Schema(source.entities.filter { $0.name != "ZRemovedRoot" })
+        let destination = SchemaDescriptor(source.entities.filter { $0.name != "ZRemovedRoot" })
         let built = try SchemaBuilder.build(source)
         let joinStatement = try XCTUnwrap(
             built.statements.first { statement in
@@ -8010,22 +8017,22 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "Tag",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
                 ]),
-            Schema.Entity(name: "ZRemovedRoot"),
+            SchemaDescriptor.Entity(name: "ZRemovedRoot"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let joinStatement = try XCTUnwrap(
             SchemaBuilder.build(source).statements.first(where: { statement in
@@ -8067,24 +8074,24 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testEntityRemovalRejectsMissingRetainedJoinTable() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "missing-retained-join-table"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners")
                 ]),
-            Schema.Entity(name: "RetainedRoot"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "RetainedRoot"),
+            SchemaDescriptor.Entity(
                 name: "Tag",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
                 ]),
-            Schema.Entity(name: "ZRemovedRoot"),
+            SchemaDescriptor.Entity(name: "ZRemovedRoot"),
         ])
         let destinationNames = Set(source.entities.map(\.name).filter { $0 != "ZRemovedRoot" })
         let destinationEntities = source.entities.filter { destinationNames.contains($0.name) }
         let destinationIDs = source.entityIDsByName.filter { destinationNames.contains($0.key) }
-        let destination = try Schema(destinationEntities, entityIDs: destinationIDs)
+        let destination = try SchemaDescriptor(destinationEntities, entityIDs: destinationIDs)
         let joinStatement = try XCTUnwrap(
             SchemaBuilder.build(source).statements.first(where: { statement in
                 let components = statement.split(separator: " ")
@@ -8134,7 +8141,7 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([Schema.Entity(name: "Record")])
+        let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
         let originalHash = try initial.read {
             try $0.rows(
@@ -8186,7 +8193,7 @@ final class SchemaMigrationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let schema = Schema([Schema.Entity(name: "Alpha"), Schema.Entity(name: "Beta")])
+        let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Alpha"), SchemaDescriptor.Entity(name: "Beta")])
         let location = StoreLocation.file(directory.appendingPathComponent("allocator.sqlite"))
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
         try initial.write { connection in
@@ -8281,10 +8288,10 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try repair.close()
 
-        let addedSchema = Schema([
-            Schema.Entity(name: "Alpha"),
-            Schema.Entity(name: "Beta"),
-            Schema.Entity(name: "Gamma"),
+        let addedSchema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Alpha"),
+            SchemaDescriptor.Entity(name: "Beta"),
+            SchemaDescriptor.Entity(name: "Gamma"),
         ])
         let added = try LightweightMigration.openStore(location: location, schema: addedSchema)
         XCTAssertEqual(
@@ -8294,7 +8301,7 @@ final class SchemaMigrationTests: XCTestCase {
         try added.close()
 
         let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty.sqlite"))
-        let empty = try LightweightMigration.openStore(location: emptyLocation, schema: Schema([]))
+        let empty = try LightweightMigration.openStore(location: emptyLocation, schema: SchemaDescriptor([]))
         XCTAssertEqual(try empty.read { try LightweightMigration.storedNextEntityIdentifier(connection: $0) }, 1)
         XCTAssertEqual(
             try empty.read {
@@ -8305,7 +8312,7 @@ final class SchemaMigrationTests: XCTestCase {
             .blob(Array("1".utf8)))
         try empty.close()
         let firstEntity = try LightweightMigration.openStore(
-            location: emptyLocation, schema: Schema([Schema.Entity(name: "First")]))
+            location: emptyLocation, schema: SchemaDescriptor([SchemaDescriptor.Entity(name: "First")]))
         XCTAssertEqual(
             try firstEntity.read { try $0.rows("SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY") },
             [[.int(1), .text("First")]])
@@ -8317,20 +8324,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int", isOptional: true, options: [.unique]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int", defaultValue: "7", options: [.unique]),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -8377,21 +8384,21 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int", isOptional: true)])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int", isOptional: true)])
         ])
-        let missingDefault = Schema([
-            Schema.Entity(
+        let missingDefault = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int")])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])
         ])
-        let combinedChange = Schema([
-            Schema.Entity(name: "Extra"),
-            Schema.Entity(
+        let combinedChange = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Extra"),
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int", defaultValue: "0")]),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int", defaultValue: "0")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -8416,15 +8423,15 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAddingRequiredAttributeWithNonliteralDefaultFailsAtomically() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-dynamic-default"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "identifier", type: "UUID", defaultValue: "UUID()"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "identifier", type: "UUID", defaultValue: "UUID()"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -8444,21 +8451,21 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyRelationshipMigrationFailsBeforeCreatingPhysicalSchema() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-inherited-relationship"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Child", superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Child", superentityName: "Base"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", declaringEntityName: "Child")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
 
         XCTAssertThrowsError(
@@ -8479,22 +8486,22 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyIndexMigrationFailsBeforeCreatingPhysicalSchema() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-index"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "code", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Base",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
-                indexes: [Schema.Index(properties: ["code"], isUnique: true)]),
-            Schema.Entity(
+                attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["code"], isUnique: true)]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "code", type: "String")],
-                indexes: [Schema.Index(properties: ["code"], isUnique: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "code", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["code"], isUnique: true)],
                 superentityName: "Base"),
         ])
 
@@ -8516,65 +8523,65 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyAddOptionalSubtypeAttributeAndReopen() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-add-optional"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 superentityName: "Child"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Base",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rootNote", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rootNote", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
-                    Schema.Attribute(name: "rank", type: "Int"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "rankNote", type: "String", isOptional: true),
-                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rankNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rootNote", type: "String", isOptional: true),
                 ],
                 superentityName: "Child"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "label", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "rootNote", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rootNote", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
@@ -8621,35 +8628,35 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Dog",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"), Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"), SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Bird",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "wingSpan", type: "Double", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "wingSpan", type: "Double", isOptional: true),
                 ],
                 superentityName: "Animal"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Cat",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "furColor", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "furColor", type: "String", isOptional: true),
                 ],
                 superentityName: "Animal"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Dog",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"), Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"), SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Animal"),
         ])
@@ -8718,28 +8725,28 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Cat",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String", isOptional: true, options: [.unique]),
-                    Schema.Attribute(name: "label", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "code", type: "String", isOptional: true, options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", isOptional: true),
                 ],
-                indexes: [Schema.Index(properties: ["label"])],
+                indexes: [SchemaDescriptor.Index(properties: ["label"])],
                 superentityName: "Child"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -8781,24 +8788,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMigrationRejectsTamperedPartialIndexBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Cat",
-                attributes: [Schema.Attribute(name: "label", type: "String", isOptional: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String", isOptional: true)],
                 superentityName: "Child"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-tampered-partial-index"))
@@ -8836,22 +8843,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMigrationRejectsQuotedLiteralPredicateChange() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
-            Schema.Entity(name: "Cat", superentityName: "Child"),
+            SchemaDescriptor.Entity(name: "Cat", superentityName: "Child"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-index-quoted-literal"))
         try bootstrap(source, driver: driver)
@@ -8880,24 +8887,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMigrationRejectsNonPartialReplacementForPartialIndex() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Cat",
-                attributes: [Schema.Attribute(name: "label", type: "String", isOptional: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String", isOptional: true)],
                 superentityName: "Child"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-nonpartial-index-replacement"))
@@ -8931,16 +8938,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Cat",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "furColor", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "furColor", type: "String", isOptional: true),
                 ],
                 superentityName: "Animal"),
         ])
@@ -8976,19 +8983,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "pet", destination: "Pet", isOptional: true, inverse: nil)
                 ]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let sourceIDs = source.entityIDsByName
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -9029,16 +9036,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let withRelationship = Schema([
-            Schema.Entity(
+        let withRelationship = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let owner = try XCTUnwrap(withRelationship.entity(forName: "Owner"))
         let relationship = try XCTUnwrap(owner.relationships.first)
@@ -9093,21 +9100,21 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-owner-to-many-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
-                    Schema.Relationship(name: "groups", destination: "Group", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "groups", destination: "Group", isToMany: true),
                 ]),
-            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Group", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Group", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let tagsTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
@@ -9159,26 +9166,26 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multi-join-scalar-add.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
-                    Schema.Relationship(name: "groups", destination: "Group", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "groups", destination: "Group", isToMany: true),
                 ]),
-            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Group", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
                 ]),
-            Schema.Entity(name: "Group", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Group", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let joinTables = try owner.relationships.map { relationship in
@@ -9217,27 +9224,27 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerToManyRemovalsComposeWithScalarAdditionOnAnotherOwner() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "6"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "6"),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let tables = try owner.relationships.map {
@@ -9272,20 +9279,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleJoinScalarAdditionPreflightsEveryJoinBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "priority", type: "Int16", isOptional: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                attributes: [SchemaDescriptor.Attribute(name: "priority", type: "Int16", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let tables = try owner.relationships.map {
@@ -9318,20 +9325,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleJoinScalarUniqueAdditionRejectsBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "token", type: "Int16", isOptional: true, options: [.unique])]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                attributes: [SchemaDescriptor.Attribute(name: "token", type: "Int16", isOptional: true, options: [.unique])]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let tables = try owner.relationships.map {
@@ -9363,23 +9370,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleJoinScalarAdditionRejectsDynamicDefaultBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "createdAt", type: "Date", isOptional: false, defaultValue: "CURRENT_TIMESTAMP")
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let tables = try owner.relationships.map {
@@ -9413,18 +9420,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFlatToManyRemovalPreflightsEveryJoinBeforeDroppingAny() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"),
-            Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner"), Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let firstTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
@@ -9471,30 +9478,30 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFlatToManyRemovalRejectsUnrelatedOriginalNameClaimBeforeDrops() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(
                 name: "Observer",
-                relationships: [Schema.Relationship(name: "first", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Second"),
-            Schema.Entity(name: "Tag"),
+                relationships: [SchemaDescriptor.Relationship(name: "first", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "First"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(
                 name: "Observer",
                 relationships: [
-                    Schema.Relationship(name: "items", destination: "Tag", isToMany: true, originalName: "first")
+                    SchemaDescriptor.Relationship(name: "items", destination: "Tag", isToMany: true, originalName: "first")
                 ]),
-            Schema.Entity(name: "Second"),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let firstTable = try XCTUnwrap(
@@ -9533,25 +9540,25 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleFlatToManyRemovalRejectsCaseOnlyRenameBeforeDrops() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
-                    Schema.Relationship(name: "target", destination: "Target", isOptional: true),
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isOptional: true),
                 ]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "TARGET", destination: "Target", isOptional: true, originalName: "target")
                 ]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let joinTable = try XCTUnwrap(
@@ -9587,22 +9594,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testPairedInverseRemovalStillUsesPairPlanner() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
+                    SchemaDescriptor.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "ZTarget"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZTarget"),
         ])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -9633,25 +9640,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners"),
-                    Schema.Relationship(name: "tags", destination: "Tag", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "target", destination: "ZTarget", isOptional: true, inverse: "owners"),
+                    SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true),
                 ]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "ZTarget"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "ZTarget"),
         ])
         let ownerEntity = try XCTUnwrap(source.entity(forName: "AOwner"))
         let tagsRelationship = try XCTUnwrap(ownerEntity.relationships.first(where: { $0.name == "tags" }))
@@ -9754,18 +9761,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToManyRemovalRejectsEntityCaseRenameBeforeDrops() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "second", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"),
-            Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "OWNER"), Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "OWNER"), SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let firstRelationship = try XCTUnwrap(owner.relationships.first(where: { $0.name == "first" }))
@@ -9793,23 +9800,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyAdditionsCreateAllJoinTablesTogether() throws {
-        let source = Schema([
-            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "BOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "BOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
-            Schema.Entity(
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let additionPlans: [String] = try destination.entities.flatMap { entity in
             try entity.relationships.map { relationship in
@@ -9857,18 +9864,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyAdditionCollisionFailsBeforeCreatingAnyJoin() throws {
-        let source = Schema([
-            Schema.Entity(name: "AOwner"), Schema.Entity(name: "BOwner"), Schema.Entity(name: "First"),
-            Schema.Entity(name: "Second"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"), SchemaDescriptor.Entity(name: "BOwner"), SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let plannedTables: [String] = try destination.entities.flatMap { entity in
             try entity.relationships.map { relationship in
@@ -9908,21 +9915,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testOwnerOnlyToManyReplacementDropsOldJoinAndCreatesEmptyNewJoin() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "existing", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "existing", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let sourceOwner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let sourceRelationship = try XCTUnwrap(sourceOwner.relationships.first)
@@ -9982,17 +9989,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testOwnerOnlyToManyReplacementCanKeepTheSameDestination() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "oldItems", destination: "Target", isToMany: true)]),
-            Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "oldItems", destination: "Target", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "newItems", destination: "Target", isToMany: true)]),
-            Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "newItems", destination: "Target", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let sourceOwner = try XCTUnwrap(source.entity(forName: "Owner"))
         let oldRelationship = try XCTUnwrap(sourceOwner.relationships.first)
@@ -10020,17 +10027,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testOwnerOnlyToManyReplacementRejectsCaseInsensitiveJoinObjectCollisionAtomically() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "old", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let sourceOwner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let removedRelationship = try XCTUnwrap(sourceOwner.relationships.first)
@@ -10079,19 +10086,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testOwnerOnlyToManyReplacementRejectsOriginalNameClaim() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "old", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(name: "new", destination: "Second", isToMany: true, originalName: "old")
+                    SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true, originalName: "old")
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let oldRelationship = try XCTUnwrap(owner.relationships.first)
@@ -10128,34 +10135,34 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyReplacementsComposeAcrossOwners() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(name: "firstOld", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "secondOld", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "firstOld", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "secondOld", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "BOwner",
                 relationships: [
-                    Schema.Relationship(name: "thirdOld", destination: "Third", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "thirdOld", destination: "Third", isToMany: true)
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
-            Schema.Entity(name: "Fourth"), Schema.Entity(name: "Fifth"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
+            SchemaDescriptor.Entity(name: "Fourth"), SchemaDescriptor.Entity(name: "Fifth"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(name: "firstNew", destination: "Fourth", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "firstNew", destination: "Fourth", isToMany: true)
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "BOwner",
                 relationships: [
-                    Schema.Relationship(name: "thirdNew", destination: "Fifth", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "thirdNew", destination: "Fifth", isToMany: true)
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
-            Schema.Entity(name: "Fourth"), Schema.Entity(name: "Fifth"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
+            SchemaDescriptor.Entity(name: "Fourth"), SchemaDescriptor.Entity(name: "Fifth"),
         ])
         let oldTables = try source.entities.flatMap { entity in
             try entity.relationships.map { relationship in
@@ -10194,20 +10201,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyReplacementsRejectCollisionBeforeDrops() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
+                relationships: [SchemaDescriptor.Relationship(name: "old", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "new", destination: "Second", isToMany: true),
-                    Schema.Relationship(name: "alsoNew", destination: "Third", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "alsoNew", destination: "Third", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let oldRelationship = try XCTUnwrap(owner.relationships.first)
@@ -10250,22 +10257,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyReplacementRejectsRelationshipNameReuse() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "reuse", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "remove", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "reuse", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "remove", destination: "Second", isToMany: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "reuse", destination: "Third", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "reuse", destination: "Third", isToMany: true)
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "Third"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "Third"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let oldTables = try owner.relationships.map { relationship in
@@ -10304,23 +10311,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyReplacementRejectsMixedToOneChange() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "old", destination: "First", isToMany: true),
-                    Schema.Relationship(name: "link", destination: "First", isOptional: true),
+                    SchemaDescriptor.Relationship(name: "old", destination: "First", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "link", destination: "First", isOptional: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "new", destination: "Second", isToMany: true),
-                    Schema.Relationship(name: "otherLink", destination: "Second", isOptional: true),
+                    SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true),
+                    SchemaDescriptor.Relationship(name: "otherLink", destination: "Second", isOptional: true),
                 ]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let oldJoin = try XCTUnwrap(
@@ -10356,23 +10363,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyReplacementRejectsOtherOwnerToOneEdit() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "old", destination: "First", isToMany: true)]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "old", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                relationships: [Schema.Relationship(name: "link", destination: "First", isOptional: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "link", destination: "First", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "new", destination: "Second", isToMany: true)]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "new", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                relationships: [Schema.Relationship(name: "otherLink", destination: "Second", isOptional: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "otherLink", destination: "Second", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "AOwner"))
         let oldJoin = try XCTUnwrap(
@@ -10407,18 +10414,18 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleOwnerOnlyToManyAdditionsRejectNewRootBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "AOwner"), Schema.Entity(name: "BOwner"),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"), SchemaDescriptor.Entity(name: "BOwner"),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                relationships: [Schema.Relationship(name: "first", destination: "First", isToMany: true)]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "first", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(
                 name: "BOwner",
-                relationships: [Schema.Relationship(name: "second", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First"), Schema.Entity(name: "Second"), Schema.Entity(name: "NewRoot"),
+                relationships: [SchemaDescriptor.Relationship(name: "second", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"), SchemaDescriptor.Entity(name: "Second"), SchemaDescriptor.Entity(name: "NewRoot"),
         ])
         let destinationTables: [String] = try destination.entities.flatMap { entity in
             try entity.relationships.map { relationship in
@@ -10451,13 +10458,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityCaseRenameWithRootReplacementRejectsBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Obsolete", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Obsolete", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "obsolete", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "obsolete", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-case-rename-root-replacement"))
         try bootstrap(source, driver: driver)
@@ -10491,21 +10498,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarOptionalAdditionComposesWithOwnerOnlyToManyRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(name: "Tag", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Tag", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let joinTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
@@ -10535,21 +10542,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarDefaultedAdditionComposesWithOwnerOnlyToManyRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "priority", type: "Int16", defaultValue: "12"),
                 ]),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "scalar-default-add-to-many-remove"))
         try bootstrap(source, driver: driver)
@@ -10564,21 +10571,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarUniqueAdditionWithOwnerOnlyToManyRemovalFailsAtomically() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "token", type: "String", isOptional: true, options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "token", type: "String", isOptional: true, options: [.unique]),
                 ]),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let joinTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
@@ -10612,21 +10619,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarAdditionWithOwnerOnlyToManyRemovalRejectsTamperedJoinBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let relationship = try XCTUnwrap(owner.relationships.first)
@@ -10668,21 +10675,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testScalarAdditionFailureRollsBackOwnerOnlyToManyRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "createdAt", type: "Date", defaultValue: "CURRENT_TIMESTAMP"),
                 ]),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let owner = try XCTUnwrap(source.entity(forName: "Owner"))
         let relationship = try XCTUnwrap(owner.relationships.first)
@@ -10719,26 +10726,26 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyMigrationRejectsInverseConstraintsAndCombinedEdits() throws {
-        let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
+        let cases: [(String, SchemaDescriptor.Relationship, SchemaDescriptor.Relationship?)] = [
             (
                 "inverse",
-                Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners"),
-                Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
+                SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true, inverse: "owners"),
+                SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "tags")
             ),
             (
                 "minimum",
-                Schema.Relationship(name: "tags", destination: "Tag", isToMany: true, minimumModelCount: 1),
+                SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true, minimumModelCount: 1),
                 nil
             ),
         ]
         for (name, ownerRelationship, targetRelationship) in cases {
-            let source = Schema([
-                Schema.Entity(name: "Owner"),
-                Schema.Entity(name: "Tag"),
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Owner"),
+                SchemaDescriptor.Entity(name: "Tag"),
             ])
-            let destination = Schema([
-                Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
-                Schema.Entity(name: "Tag", relationships: targetRelationship.map { [$0] } ?? []),
+            let destination = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Owner", relationships: [ownerRelationship]),
+                SchemaDescriptor.Entity(name: "Tag", relationships: targetRelationship.map { [$0] } ?? []),
             ])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-reject-\(name)"))
             try bootstrap(source, driver: driver)
@@ -10760,17 +10767,17 @@ final class SchemaMigrationTests: XCTestCase {
             try driver.close()
         }
 
-        let source = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Other"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Other"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(
-                name: "Other", attributes: [Schema.Attribute(name: "note", type: "String", isOptional: true)]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(
+                name: "Other", attributes: [SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true)]),
         ])
         let combined = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-combined-edit"))
         try bootstrap(source, driver: combined)
@@ -10789,11 +10796,11 @@ final class SchemaMigrationTests: XCTestCase {
             })
         try combined.close()
 
-        let membershipDestination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "NewRoot"),
+        let membershipDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "NewRoot"),
         ])
         let membershipDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-membership-edit"))
         try bootstrap(source, driver: membershipDriver)
@@ -10814,16 +10821,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyInverseDetectionUsesRelationshipEndpoints() throws {
-        let source = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Other", relationships: [Schema.Relationship(name: "tags", destination: "Other")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Other", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Other")]),
         ])
-        let unrelatedInverseCollision = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Other", relationships: [Schema.Relationship(name: "tags", destination: "Other")]),
+        let unrelatedInverseCollision = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Other", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Other")]),
         ])
         let allowedDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-unrelated-inverse-name"))
         try bootstrap(source, driver: allowedDriver)
@@ -10832,17 +10839,17 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try allowedDriver.close()
 
-        let reciprocalSource = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(
-                name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner", inverse: "tags")]
+        let reciprocalSource = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(
+                name: "Tag", relationships: [SchemaDescriptor.Relationship(name: "owners", destination: "Owner", inverse: "tags")]
             ),
         ])
-        let reciprocalDestination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+        let reciprocalDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let rejectedDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-reciprocal"))
         try bootstrap(reciprocalSource, driver: rejectedDriver)
@@ -10858,14 +10865,14 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try rejectedDriver.close()
 
-        let inferredInverseSource = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner")]),
+        let inferredInverseSource = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag", relationships: [SchemaDescriptor.Relationship(name: "owners", destination: "Owner")]),
         ])
-        let inferredInverseDestination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag", relationships: [Schema.Relationship(name: "owners", destination: "Owner")]),
+        let inferredInverseDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag", relationships: [SchemaDescriptor.Relationship(name: "owners", destination: "Owner")]),
         ])
         let inferredDriver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-inferred-inverse"))
         try bootstrap(inferredInverseSource, driver: inferredDriver)
@@ -10887,19 +10894,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+                relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "labels", destination: "Tag", isToMany: true, originalName: "tags")
+                    SchemaDescriptor.Relationship(name: "labels", destination: "Tag", isToMany: true, originalName: "tags")
                 ]),
-            Schema.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -10993,19 +11000,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "items", destination: "First", isToMany: true)]),
-            Schema.Entity(name: "First"),
-            Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "items", destination: "First", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(name: "Second"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "items", destination: "Second", isToMany: true)]),
-            Schema.Entity(name: "First"),
-            Schema.Entity(name: "Second"),
+                relationships: [SchemaDescriptor.Relationship(name: "items", destination: "Second", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "First"),
+            SchemaDescriptor.Entity(name: "Second"),
         ])
         let ownerEntity = try XCTUnwrap(source.entity(forName: "Owner"))
         let sourceRelationship = try XCTUnwrap(ownerEntity.relationships.first)
@@ -11106,14 +11113,14 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyAdditionRejectsJoinObjectNameCollisionBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
         ])
         let owner = try XCTUnwrap(destination.entity(forName: "Owner"))
         let relation = try XCTUnwrap(owner.relationships.first)
@@ -11144,16 +11151,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyAdditionAllowsUnrelatedPhysicalForeignKeys() throws {
-        let source = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Unrelated"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Unrelated"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Unrelated"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Unrelated"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-add-unrelated-fk"))
         try bootstrap(source, driver: driver)
@@ -11176,16 +11183,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyAdditionAllowsUnrelatedViewsAndTriggers() throws {
-        let source = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Unrelated"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Unrelated"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
-            Schema.Entity(name: "Tag"),
-            Schema.Entity(name: "Unrelated"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Tag"),
+            SchemaDescriptor.Entity(name: "Unrelated"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "flat-to-many-add-unrelated-view-trigger"))
         try bootstrap(source, driver: driver)
@@ -11212,10 +11219,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyRemovalRejectsUnexpectedJoinObjectsBeforeDrop() throws {
-        let owner = Schema.Entity(
-            name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)])
-        let source = Schema([owner, Schema.Entity(name: "Tag")])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Tag")])
+        let owner = SchemaDescriptor.Entity(
+            name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)])
+        let source = SchemaDescriptor([owner, SchemaDescriptor.Entity(name: "Tag")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Tag")])
         let joinTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
                 for: owner, relationship: try XCTUnwrap(owner.relationships.first), schema: source))
@@ -11286,10 +11293,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testFlatToManyRemovalRejectsMissingGeneratedIndexesAndAlteredColumns() throws {
-        let owner = Schema.Entity(
-            name: "Owner", relationships: [Schema.Relationship(name: "tags", destination: "Tag", isToMany: true)])
-        let source = Schema([owner, Schema.Entity(name: "Tag")])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Tag")])
+        let owner = SchemaDescriptor.Entity(
+            name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "tags", destination: "Tag", isToMany: true)])
+        let source = SchemaDescriptor([owner, SchemaDescriptor.Entity(name: "Tag")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Tag")])
         let joinTable = try XCTUnwrap(
             SchemaBuilder.joinTableName(
                 for: owner, relationship: try XCTUnwrap(owner.relationships.first), schema: source))
@@ -11337,9 +11344,9 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -11349,41 +11356,41 @@ final class SchemaMigrationTests: XCTestCase {
         }
         try initial.close()
 
-        let required = Schema([
-            Schema.Entity(
+        let required = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "pet", destination: "Pet", isOptional: false, inverse: nil)
                 ]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let inverse = Schema([
-            Schema.Entity(
+        let inverse = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "pet", destination: "Pet", inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Pet",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "Person", isToMany: true, inverse: "pet")
                 ]),
         ])
-        let collidingColumn = Schema([
-            Schema.Entity(
+        let collidingColumn = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "pet", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "pet", type: "String", isOptional: true),
                 ],
-                relationships: [Schema.Relationship(name: "pet", destination: "Pet")]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                relationships: [SchemaDescriptor.Relationship(name: "pet", destination: "Pet")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         for destination in [required, inverse, collidingColumn] {
             XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination))
@@ -11402,18 +11409,18 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Address",
                 attributes: [
-                    Schema.Attribute(name: "street", type: "String"),
-                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "street", type: "String"),
+                    SchemaDescriptor.Attribute(name: "code", type: "String", options: [.unique]),
                 ],
-                indexes: [Schema.Index(properties: ["street"])]),
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                indexes: [SchemaDescriptor.Index(properties: ["street"])]),
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let sourceIDs = source.entityIDsByName
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -11449,17 +11456,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testAddingFlatRootRejectsTamperedRetainedIndexBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                indexes: [Schema.Index(properties: ["name"])])
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["name"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Address",
-                attributes: [Schema.Attribute(name: "street", type: "String")],
-                indexes: [Schema.Index(properties: ["street"])]),
+                attributes: [SchemaDescriptor.Attribute(name: "street", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["street"])]),
             source.entities[0],
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "add-root-tampered-source-index"))
@@ -11492,16 +11499,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Pet", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Pet", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Kennel",
-                relationships: [Schema.Relationship(name: "pets", destination: "Pet", isToMany: true)]),
+                relationships: [SchemaDescriptor.Relationship(name: "pets", destination: "Pet", isToMany: true)]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.close()
@@ -11519,14 +11526,14 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([Schema.Entity(name: "Person")])
-        let destination = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Person")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "value", type: "Int")],
-                indexes: [Schema.Index(properties: ["value"])]),
-            Schema.Entity(name: "Owner_ZValue_INDEX"),
-            Schema.Entity(name: "Person"),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])]),
+            SchemaDescriptor.Entity(name: "Owner_ZValue_INDEX"),
+            SchemaDescriptor.Entity(name: "Person"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.close()
@@ -11554,14 +11561,14 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Aardvark", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Aardvark", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -11605,26 +11612,26 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "NewRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "NewRoot", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "NewLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "label", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", isOptional: true),
                 ],
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: true)
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: true)
                 ],
                 superentityName: "NewRoot"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -11669,20 +11676,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Aardvark",
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: true)
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: true)
                 ]),
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -11779,25 +11786,25 @@ final class SchemaMigrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(
             directory.appendingPathComponent("hierarchy-root-indexed-relationship.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Aardvark",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "code", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", isOptional: true)
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isOptional: true)
                 ],
-                indexes: [Schema.Index(properties: ["label"])]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                indexes: [SchemaDescriptor.Index(properties: ["label"])]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -11901,20 +11908,20 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Aardvark",
                 relationships: [
-                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "targets", destination: "Target", isToMany: true)
                 ]),
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -11957,16 +11964,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Puppy",
-                attributes: [Schema.Attribute(name: "collar", type: "String", isOptional: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "collar", type: "String", isOptional: true)],
                 superentityName: "Dog"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -11994,16 +12001,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let ownerRelationship = Schema.Relationship(
+        let ownerRelationship = SchemaDescriptor.Relationship(
             name: "target", destination: "Target", isToMany: false, isOptional: true)
-        let source = Schema([
-            Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", relationships: [ownerRelationship]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
-            Schema.Entity(name: "OwnerChild", superentityName: "Owner"),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", relationships: [ownerRelationship]),
+            SchemaDescriptor.Entity(name: "OwnerChild", superentityName: "Owner"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceColumns = try initial.read { try $0.rows("PRAGMA table_info(ZOWNER)") }
@@ -12031,12 +12038,12 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([Schema.Entity(name: "Animal")])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Animal")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Cat",
-                attributes: [Schema.Attribute(name: "name", type: "String", defaultValue: "Milo")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", defaultValue: "Milo")],
                 superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -12065,14 +12072,14 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([Schema.Entity(name: "Animal")])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Animal")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Cat",
                 attributes: [
-                    Schema.Attribute(name: "aColor", type: "String", isOptional: true),
-                    Schema.Attribute(name: "zUnsupported", type: "UnsupportedScalar", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "aColor", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "zUnsupported", type: "UnsupportedScalar", isOptional: true),
                 ],
                 superentityName: "Animal"),
         ])
@@ -12100,13 +12107,13 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try initial.read {
@@ -12194,29 +12201,29 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafOptionalAttributeRemovalPreservesRowsAndReopens() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -12263,35 +12270,35 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMultipleLeafAttributeRemovalsComposeAcrossRoots() throws {
-        let source = Schema([
-            Schema.Entity(name: "FirstRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "FirstRoot", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
-                    Schema.Attribute(name: "secondValue", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "secondValue", type: "String", isOptional: true),
                 ],
                 superentityName: "FirstRoot"),
-            Schema.Entity(name: "SecondRoot", attributes: [Schema.Attribute(name: "title", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "SecondRoot", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "thirdValue", type: "Bool", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "thirdValue", type: "Bool", isOptional: true),
                 ],
                 superentityName: "SecondRoot"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "FirstRoot", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "FirstRoot", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "FirstRoot"),
-            Schema.Entity(name: "SecondRoot", attributes: [Schema.Attribute(name: "title", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "SecondRoot", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
-                attributes: [Schema.Attribute(name: "title", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")],
                 superentityName: "SecondRoot"),
         ])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -12334,32 +12341,32 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMultipleLeafAttributeRemovalsComposeOnOneRoot() throws {
-        let source = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "firstValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "secondValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Root"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-multiple-leaf-removals-one-root"))
@@ -12387,30 +12394,30 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMultipleLeafAttributeRemovalPreflightsEntireBatchBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "firstValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true, options: [.encrypt]),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "secondValue", type: "Int", isOptional: true, options: [.encrypt]),
                 ],
                 superentityName: "Root"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
-                name: "FirstLeaf", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Root"
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "FirstLeaf", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Root"
             ),
-            Schema.Entity(
-                name: "SecondLeaf", attributes: [Schema.Attribute(name: "name", type: "String")],
+            SchemaDescriptor.Entity(
+                name: "SecondLeaf", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Root"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-multiple-leaf-removal-preflight"))
@@ -12430,32 +12437,32 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMultipleLeafAttributeRemovalRejectsLateDiscriminatorFailureBeforeAnyDrop() throws {
-        let source = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "firstValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "firstValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "secondValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "secondValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "FirstLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "SecondLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Root"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-late-discriminator-preflight"))
@@ -12497,24 +12504,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsRetainedFlattenedColumnCollision() throws {
-        let source = Schema([
-            Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "RemovingLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "value", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "value", type: "Int", isOptional: true),
                 ],
                 superentityName: "Root"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "RetainedLeaf",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(
                         name: "record",
                         type: "Record",
                         options: [.flattened],
-                        components: [Schema.Attribute.Component(name: "value", columnName: "value", type: "Int")]),
+                        components: [SchemaDescriptor.Attribute.Component(name: "value", columnName: "value", type: "Int")]),
                 ],
                 superentityName: "Root"),
         ])
@@ -12529,20 +12536,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyRequiredLeafAttributeRemovalFailsBeforeWrites() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-remove-required-attribute"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"), Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"), SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         XCTAssertThrowsError(
@@ -12562,29 +12569,29 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsValuesOnOtherDiscriminators() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-shared-data"))
@@ -12613,21 +12620,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsSemanticAttributeOptions() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "token", type: "String", isOptional: true, options: [.encrypt]),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "token", type: "String", isOptional: true, options: [.encrypt]),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-option-removal"))
@@ -12656,35 +12663,35 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyNonLeafAttributeRemovalFailsClosed() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 superentityName: "Child"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 superentityName: "Child"),
         ])
@@ -12715,23 +12722,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsCombinedAdditionBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "oldValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "oldValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "newValue", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "newValue", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
@@ -12762,21 +12769,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsUnknownDiscriminator() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-unknown-discriminator"))
@@ -12802,21 +12809,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyLeafAttributeRemovalRejectsUntrackedPartialIndexDependency() throws {
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-leaf-attribute-partial-index"))
@@ -12854,27 +12861,27 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchySiblingAttributeDefinitionConflictFailsBeforeWrites() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-sibling-conflict"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
-                name: "First", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
-            Schema.Entity(
-                name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Base"),
+            SchemaDescriptor.Entity(
+                name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "First",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "extra", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "extra", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Second",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "extra", type: "Int", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "extra", type: "Int", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
@@ -12897,28 +12904,28 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchySiblingCaseVariantColumnAdditionCoalesces() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-case-variant"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
-                name: "First", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
-            Schema.Entity(
-                name: "Second", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Base"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "First", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Base"),
+            SchemaDescriptor.Entity(
+                name: "Second", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "First",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Second",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "NOTE", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "NOTE", type: "String", isOptional: true),
                 ],
                 superentityName: "Base"),
         ])
@@ -12935,17 +12942,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Child", superentityName: "Base"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Child", superentityName: "Base"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Child", superentityName: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Child", superentityName: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Sibling",
                 relationships: [
-                    Schema.Relationship(name: "mentor", destination: "Base", isToMany: false, isOptional: true)
+                    SchemaDescriptor.Relationship(name: "mentor", destination: "Base", isToMany: false, isOptional: true)
                 ],
                 superentityName: "Base"),
         ])
@@ -13023,25 +13030,25 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-leaf-subtype-target.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
-            Schema.Entity(name: "OwnerBase", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "OwnerBase", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Base"),
-            Schema.Entity(name: "OwnerBase", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "OwnerBase", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "OwnerChild",
-                attributes: [Schema.Attribute(name: "label", type: "String")],
-                relationships: [Schema.Relationship(name: "favorite", destination: "Child", isOptional: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Child", isOptional: true)],
                 superentityName: "OwnerBase"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -13155,21 +13162,21 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-inverse-attachment.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
-            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "TargetBase", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
+        let destination = SchemaDescriptor([
             source.entities[0],
-            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "TargetBase", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "TargetLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "Owner", isToMany: true, inverse: "target")
                 ],
                 superentityName: "TargetBase"),
@@ -13271,21 +13278,21 @@ final class SchemaMigrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("hierarchy-inverse-rollback.sqlite"))
         let triggerError = "hierarchy metadata write failure"
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
-            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "TargetBase", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "TargetBase", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
+        let destination = SchemaDescriptor([
             source.entities[0],
-            Schema.Entity(name: "TargetBase", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "TargetBase", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "TargetLeaf",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
                 ],
                 superentityName: "TargetBase"),
         ])
@@ -13369,17 +13376,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "RequiredChild",
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: false)
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isToMany: false, isOptional: false)
                 ],
                 superentityName: "Base"),
         ])
@@ -13460,17 +13467,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "CascadeChild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", isToMany: false, isOptional: true,
                         deleteRule: .cascade)
                 ],
@@ -13551,37 +13558,37 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "TargetBase", isToMany: false, isOptional: true,
                         inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "TargetBase",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "TargetBase", isToMany: false, isOptional: true,
                         inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "TargetBase",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "TargetChild",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "target")
                 ],
                 superentityName: "TargetBase"),
         ])
@@ -13606,24 +13613,24 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "A"),
-            Schema.Entity(name: "A_ZB"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "A"),
+            SchemaDescriptor.Entity(name: "A_ZB"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "A"),
-            Schema.Entity(name: "A_ZB"),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "A"),
+            SchemaDescriptor.Entity(name: "A_ZB"),
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "B",
                 relationships: [
-                    Schema.Relationship(name: "ZLeaf1_Rel", destination: "Target", isOptional: true)
+                    SchemaDescriptor.Relationship(name: "ZLeaf1_Rel", destination: "Target", isOptional: true)
                 ],
                 superentityName: "A"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Leaf1",
-                relationships: [Schema.Relationship(name: "Rel", destination: "Target", isOptional: true)],
+                relationships: [SchemaDescriptor.Relationship(name: "Rel", destination: "Target", isOptional: true)],
                 superentityName: "A_ZB"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -13706,13 +13713,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyMigrationRejectsDestinationIndexNameCollisionBeforeDDL() throws {
-        let source = Schema([Schema.Entity(name: "Base")])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Base")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "age", type: "Int")],
-                indexes: [Schema.Index(properties: ["age"])],
+                attributes: [SchemaDescriptor.Attribute(name: "age", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["age"])],
                 superentityName: "Base"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-index-object-collision"))
@@ -13745,22 +13752,22 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyAttributeAdditionRejectsRelationshipColumnCollision() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-hierarchy-fk-collision"))
-        let source = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "Owner_target", type: "Int", isOptional: true)],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
+                attributes: [SchemaDescriptor.Attribute(name: "Owner_target", type: "Int", isOptional: true)],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         try bootstrap(source, driver: driver)
 
@@ -13782,30 +13789,30 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testHierarchyTopologyAndAttributeMovesFailClosedBeforeWrites() throws {
         let variants = [
-            Schema([
-                Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-                Schema.Entity(name: "Child", superentityName: "Root"),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+                SchemaDescriptor.Entity(name: "Child", superentityName: "Root"),
             ]),
-            Schema([
-                Schema.Entity(name: "Root"),
-                Schema.Entity(name: "Child", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Root"),
+                SchemaDescriptor.Entity(name: "Child", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
             ]),
-            Schema([
-                Schema.Entity(name: "Root"),
-                Schema.Entity(name: "First", superentityName: "Root"),
-                Schema.Entity(name: "Second"),
-                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Root"),
+                SchemaDescriptor.Entity(name: "First", superentityName: "Root"),
+                SchemaDescriptor.Entity(name: "Second"),
+                SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
             ]),
         ]
         for (index, destination) in variants.enumerated() {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "hierarchy-migration-guard-\(index)"))
-            let source = Schema([
-                Schema.Entity(name: "Root", attributes: [Schema.Attribute(name: "name", type: "String")]),
-                Schema.Entity(
-                    name: "Child", attributes: [Schema.Attribute(name: "name", type: "String")], superentityName: "Root"
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+                SchemaDescriptor.Entity(
+                    name: "Child", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")], superentityName: "Root"
                 ),
-                Schema.Entity(name: "Second"),
-                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+                SchemaDescriptor.Entity(name: "Second"),
+                SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
             ])
 
             XCTAssertThrowsError(
@@ -13826,38 +13833,38 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testHierarchyAttributeRemovalAndEntityReplacementFailClosedOnPopulatedFileStores() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", isOptional: true)]),
+            SchemaDescriptor.Entity(
                 name: "Child",
-                attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", isOptional: true)],
                 superentityName: "Root"),
-            Schema.Entity(name: "Second"),
-            Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            SchemaDescriptor.Entity(name: "Second"),
+            SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
         ])
         let destinations = [
-            Schema([
-                Schema.Entity(
-                    name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
-                Schema.Entity(name: "Child", superentityName: "Root"),
-                Schema.Entity(name: "Second"),
-                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", isOptional: true)]),
+                SchemaDescriptor.Entity(name: "Child", superentityName: "Root"),
+                SchemaDescriptor.Entity(name: "Second"),
+                SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
             ]),
-            Schema([
-                Schema.Entity(name: "Root"),
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Root"),
+                SchemaDescriptor.Entity(
                     name: "Child",
-                    attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
-                Schema.Entity(name: "Second"),
-                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+                    attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", isOptional: true)]),
+                SchemaDescriptor.Entity(name: "Second"),
+                SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
             ]),
-            Schema([
-                Schema.Entity(
-                    name: "Root", attributes: [Schema.Attribute(name: "name", type: "String", isOptional: true)]),
-                Schema.Entity(name: "First", superentityName: "Root"),
-                Schema.Entity(name: "Second"),
-                Schema.Entity(name: "Grandchild", superentityName: "Second"),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
+                    name: "Root", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", isOptional: true)]),
+                SchemaDescriptor.Entity(name: "First", superentityName: "Root"),
+                SchemaDescriptor.Entity(name: "Second"),
+                SchemaDescriptor.Entity(name: "Grandchild", superentityName: "Second"),
             ]),
         ]
         let expectedRejectionReasons = [
@@ -13966,13 +13973,13 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndexAddAndRemovalMigrateOnExistingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-index-change"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let indexed = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")],
-                indexes: [Schema.Index(properties: ["title"])])
+        let indexed = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["title"])])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -13991,34 +13998,34 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testCombinedIndexConstraintChangesApplyAsOneMigration() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-index-constraint-changes"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "a", type: "Int"),
-                    Schema.Attribute(name: "b", type: "Int"),
-                    Schema.Attribute(name: "c", type: "Int"),
-                    Schema.Attribute(name: "d", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "a", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "b", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "c", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "d", type: "Int"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["a"]),
-                    Schema.Index(properties: ["b"], isUnique: true),
-                    Schema.Index(properties: ["c", "d"]),
+                    SchemaDescriptor.Index(properties: ["a"]),
+                    SchemaDescriptor.Index(properties: ["b"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["c", "d"]),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "a", type: "Int", options: [.unique]),
-                    Schema.Attribute(name: "b", type: "Int"),
-                    Schema.Attribute(name: "c", type: "Int"),
-                    Schema.Attribute(name: "d", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "a", type: "Int", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "b", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "c", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "d", type: "Int"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["a"]),
-                    Schema.Index(properties: ["c", "d"], isUnique: true),
-                    Schema.Index(properties: ["d", "c"]),
+                    SchemaDescriptor.Index(properties: ["a"]),
+                    SchemaDescriptor.Index(properties: ["c", "d"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["d", "c"]),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -14061,17 +14068,17 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndexConstraintMigrationRollsBackAllChangesWhenLaterUniqueCreationFails() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "index-constraint-rollback"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "a", type: "Int"), Schema.Attribute(name: "b", type: "Int")],
-                indexes: [Schema.Index(properties: ["a"]), Schema.Index(properties: ["b"])])
+                attributes: [SchemaDescriptor.Attribute(name: "a", type: "Int"), SchemaDescriptor.Attribute(name: "b", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["a"]), SchemaDescriptor.Index(properties: ["b"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "a", type: "Int"), Schema.Attribute(name: "b", type: "Int")],
-                indexes: [Schema.Index(properties: ["a"], isUnique: true), Schema.Index(properties: ["b"])])
+                attributes: [SchemaDescriptor.Attribute(name: "a", type: "Int"), SchemaDescriptor.Attribute(name: "b", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["a"], isUnique: true), SchemaDescriptor.Index(properties: ["b"])])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -14101,13 +14108,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndexConstraintMigrationRejectsTamperedAndCollidingPhysicalIndexes() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "a", type: "Int")])
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "a", type: "Int")])
         ])
-        let indexed = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "a", type: "Int")],
-                indexes: [Schema.Index(properties: ["a"])])
+        let indexed = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "a", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["a"])])
         ])
 
         let tampered = try GRDBSQLiteDriver(location: .memory(name: "index-constraint-tampered"))
@@ -14153,13 +14160,13 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndexReconciliationRejectsUntrackedIndexUnderUnchangedGeneratedName() throws {
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "value", type: "Int")],
-                indexes: [Schema.Index(properties: ["value"])])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "unchanged-generated-name-impostor"))
         try bootstrap(source, driver: driver)
@@ -14182,17 +14189,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndexReconciliationAllowsValidatedScheduledNameReuse() throws {
-        let source = Schema([
-            Schema.Entity(
-                name: "A", attributes: [Schema.Attribute(name: "old", type: "String")],
-                indexes: [Schema.Index(properties: ["old"])]),
-            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "A", attributes: [SchemaDescriptor.Attribute(name: "old", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["old"])]),
+            SchemaDescriptor.Entity(name: "B", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "A", attributes: [Schema.Attribute(name: "value", type: "String", originalName: "old")],
-                indexes: [Schema.Index(properties: ["value"])]),
-            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "A", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", originalName: "old")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])]),
+            SchemaDescriptor.Entity(name: "B", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "validated-scheduled-index-reuse"))
         try bootstrap(source, driver: driver)
@@ -14210,16 +14217,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndexReconciliationRejectsTamperedSourceBeforeAttributeRename() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
+                    SchemaDescriptor.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
                 ])
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "tampered-index-rename-preflight"))
@@ -14253,13 +14260,13 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testUniqueAttributeAdditionCreatesIndexAndDuplicateFailureRollsBack() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-unique-toggle"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "email", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "email", type: "String")])
         ])
-        let unique = Schema([
-            Schema.Entity(
+        let unique = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique])])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -14287,17 +14294,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("unique-index-rollback.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "email", type: "String")])
+                attributes: [SchemaDescriptor.Attribute(name: "email", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "email", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -14352,13 +14359,13 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testUniqueAttributeRemovalDropsConstraintAndPreservesRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-unique-removal"))
-        let unique = Schema([
-            Schema.Entity(
+        let unique = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "email", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "email", type: "String")])
         ])
         try bootstrap(unique, driver: driver)
         try driver.write { connection in
@@ -14385,16 +14392,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -14431,19 +14438,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("multiple-to-one-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(name: "primary", destination: "Target"),
-                    Schema.Relationship(name: "secondary", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "primary", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "secondary", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -14478,16 +14485,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalDiscardsLinksWhilePreservingOwnerAndTargetRows() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-nonnull"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -14513,16 +14520,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalPreflightsEveryRelationshipBeforeDroppingIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-preflight"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -14550,16 +14557,16 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalRejectsCheckDependencyBeforeDroppingIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-check-dependency"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -14597,23 +14604,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRelationshipAndScalarRemovalPreservesRows() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "identity", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "identity", type: "String", options: [.unique]),
                 ],
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
-                name: "Owner", attributes: [Schema.Attribute(name: "identity", type: "String", options: [.unique])]),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "identity", type: "String", options: [.unique])]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-combined-scalar"))
         try bootstrap(source, driver: driver)
@@ -14653,23 +14660,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedScalarRelationshipRemovalUpdatesRetainedOrdinaryIndexes() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
-                indexes: [Schema.Index(properties: ["retained", "obsolete"])]), Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained", "obsolete"])]), SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "retained", type: "String")],
-                indexes: [Schema.Index(properties: ["retained"])],
+                attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])],
             ),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-index-update"))
         try bootstrap(source, driver: driver)
@@ -14690,23 +14697,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRemovalDropsSharedCompositeIndexAndAddsRetainedIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
-                indexes: [Schema.Index(properties: ["obsolete", "retained"])]), Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
+                indexes: [SchemaDescriptor.Index(properties: ["obsolete", "retained"])]), SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "retained", type: "String")],
-                indexes: [Schema.Index(properties: ["retained"])],
+                attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])],
             ),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-composite-index"))
         try bootstrap(source, driver: driver)
@@ -14731,16 +14738,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("combined-removal-open.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target",
                         destination: "Target",
                         isToMany: false,
@@ -14749,9 +14756,9 @@ final class SchemaMigrationTests: XCTestCase {
                         deleteRule: .nullify)
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "retained", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -14810,15 +14817,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("combined-removal-later-failure.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "ARecord",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "Int32", isOptional: true),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "Int32", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target",
                         destination: "Target",
                         isToMany: false,
@@ -14826,13 +14833,13 @@ final class SchemaMigrationTests: XCTestCase {
                         inverse: nil,
                         deleteRule: .nullify)
                 ]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int64")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZNumber", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "ARecord", attributes: [Schema.Attribute(name: "retained", type: "String")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "ARecord", attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZNumber", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -14906,12 +14913,12 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("inverse-pair-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target",
                         destination: "ZTarget",
                         isToMany: false,
@@ -14919,11 +14926,11 @@ final class SchemaMigrationTests: XCTestCase {
                         inverse: "owners",
                         deleteRule: .nullify)
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
-                attributes: [Schema.Attribute(name: "label", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners",
                         destination: "AOwner",
                         isToMany: true,
@@ -14931,9 +14938,9 @@ final class SchemaMigrationTests: XCTestCase {
                         inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "ZTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZTarget", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -14975,26 +14982,26 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInverseRelationshipPairRemovalRejectsSingleEndpointRemoval() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"),
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
@@ -15017,44 +15024,44 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInverseRelationshipPairRemovalRejectsChangedInverseAndManyToMany() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let changedInverse = Schema([
-            Schema.Entity(name: "AOwner"),
-            Schema.Entity(
+        let changedInverse = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"),
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true)
                 ]),
         ])
-        let manyToManySource = Schema([
-            Schema.Entity(
+        let manyToManySource = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "targets", destination: "ZTarget", isToMany: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "targets")
                 ]),
         ])
-        let manyToManyDestination = Schema([Schema.Entity(name: "AOwner"), Schema.Entity(name: "ZTarget")])
+        let manyToManyDestination = SchemaDescriptor([SchemaDescriptor.Entity(name: "AOwner"), SchemaDescriptor.Entity(name: "ZTarget")])
         for (name, source, destination) in [
             ("changed-inverse", source, changedInverse),
             ("many-to-many", manyToManySource, manyToManyDestination),
@@ -15075,21 +15082,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInversePairRemovalRejectsWhenToOneDoesNotOwnStorage() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "ACollection",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "ZOwner", isToMany: true, inverse: "collection")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "collection", destination: "ACollection", isOptional: true, inverse: "owners")
                 ]),
         ])
-        let destination = Schema([Schema.Entity(name: "ACollection"), Schema.Entity(name: "ZOwner")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "ACollection"), SchemaDescriptor.Entity(name: "ZOwner")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-wrong-owner-reject"))
         try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
@@ -15111,26 +15118,26 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInversePairRemovalRejectsDestinationOriginalNameClaim() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner"),
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "renamedOwners",
                         destination: "AOwner",
                         isToMany: true,
@@ -15159,28 +15166,28 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInversePairRemovalRejectsCaseVariantRetainedEndpoint() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "TARGET", destination: "ZTarget", isOptional: true)
                 ]),
-            Schema.Entity(name: "ZTarget"),
+            SchemaDescriptor.Entity(name: "ZTarget"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-case-variant-endpoint-reject"))
         try bootstrap(source, driver: driver)
@@ -15204,21 +15211,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInversePairRemovalRejectsTamperedOwnerForeignKeyIndex() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([Schema.Entity(name: "AOwner"), Schema.Entity(name: "ZTarget")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "AOwner"), SchemaDescriptor.Entity(name: "ZTarget")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-tampered-owner-index"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -15255,27 +15262,27 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("inverse-pair-later-failure.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "BTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "BTarget",
-                attributes: [Schema.Attribute(name: "label", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
-            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int64")]),
+            SchemaDescriptor.Entity(name: "ZNumber", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "AOwner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "BTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "ZNumber", attributes: [Schema.Attribute(name: "value", type: "Int32")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "AOwner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "BTarget", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZNumber", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int32")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -15343,30 +15350,30 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testInversePairRemovalRejectsCombinedAttributeEdit() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
-                attributes: [Schema.Attribute(name: "retained", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "ZTarget", isOptional: true, inverse: "owners")
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "ZTarget",
-                attributes: [Schema.Attribute(name: "label", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "AOwner", isToMany: true, inverse: "target")
                 ]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "AOwner",
                 attributes: [
-                    Schema.Attribute(name: "retained", type: "String"),
-                    Schema.Attribute(name: "added", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "added", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(name: "ZTarget", attributes: [Schema.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZTarget", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "inverse-pair-attribute-edit-reject"))
         try bootstrap(source, driver: driver)
@@ -15392,23 +15399,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRemovalRejectsCustomCompositeIndexOnRelationshipColumn() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
-                indexes: [Schema.Index(properties: ["retained"])]), Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])]), SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "retained", type: "String")],
-                indexes: [Schema.Index(properties: ["retained"])],
+                attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])],
             ),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-remove-custom-relationship-index"))
         try bootstrap(source, driver: driver)
@@ -15443,19 +15450,19 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRemovalRejectsTamperedGeneratedIndexBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "obsolete", type: "String"),
-                    Schema.Attribute(name: "retained", type: "String"),
+                    SchemaDescriptor.Attribute(name: "obsolete", type: "String"),
+                    SchemaDescriptor.Attribute(name: "retained", type: "String"),
                 ],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")],
-                indexes: [Schema.Index(properties: ["retained"])]), Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")],
+                indexes: [SchemaDescriptor.Index(properties: ["retained"])]), SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "retained", type: "String")]),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "retained", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-tampered-generated-index"))
         try bootstrap(source, driver: driver)
@@ -15494,14 +15501,14 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRemovalRejectsUniqueIndexOnRemovedScalarBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String", options: [.unique])],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String", options: [.unique])],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-unique-reject"))
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -15524,24 +15531,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedScalarRelationshipRemovalRejectsHierarchyBeforeDDL() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(
                 name: "OwnerSubtype",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
                 superentityName: "Owner"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(
                 name: "OwnerSubtype",
-                attributes: [Schema.Attribute(name: "obsolete", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "obsolete", type: "String")],
                 superentityName: "Owner"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "combined-removal-hierarchy"))
         try bootstrap(source, driver: driver)
@@ -15559,23 +15566,23 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalRejectsChangedRetainedRelationshipMetadata() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "removedA", destination: "Target"),
-                    Schema.Relationship(name: "removedB", destination: "Target"),
-                    Schema.Relationship(name: "retained", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "removedA", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "removedB", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "retained", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "retained", destination: "Target", deleteRule: .noAction)
+                    SchemaDescriptor.Relationship(name: "retained", destination: "Target", deleteRule: .noAction)
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-retained-change"))
         try bootstrap(source, driver: driver)
@@ -15596,20 +15603,20 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalRejectsRenameFromRemovedRelationship() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "renamed", destination: "Target", originalName: "first")]),
-            Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "renamed", destination: "Target", originalName: "first")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-removed-rename"))
         try bootstrap(source, driver: driver)
@@ -15630,24 +15637,24 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMultipleToOneRemovalRejectsInverseDeclaredOutsideTargetEntity() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "first", destination: "Target"),
-                    Schema.Relationship(name: "second", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "first", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "second", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "Unrelated",
-                relationships: [Schema.Relationship(name: "back", destination: "Owner", inverse: "first")]),
+                relationships: [SchemaDescriptor.Relationship(name: "back", destination: "Owner", inverse: "first")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Owner"),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner"),
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "Unrelated",
-                relationships: [Schema.Relationship(name: "back", destination: "Owner", inverse: "first")]),
+                relationships: [SchemaDescriptor.Relationship(name: "back", destination: "Owner", inverse: "first")]),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-to-one-external-inverse"))
         try bootstrap(source, driver: driver)
@@ -15670,19 +15677,19 @@ final class SchemaMigrationTests: XCTestCase {
         let location = StoreLocation.file(
             FileManager.default.temporaryDirectory.appendingPathComponent(
                 "migration-composed-additions-\(UUID().uuidString).sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int", defaultValue: "7"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int", defaultValue: "7"),
                 ],
-                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -15716,16 +15723,16 @@ final class SchemaMigrationTests: XCTestCase {
         let storeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
             "migration-optional-to-one-addition-\(UUID().uuidString).sqlite")
         let location = StoreLocation.file(storeURL)
-        let source = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "favorite", destination: "Target", isOptional: true)]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target", isOptional: true)]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let ownerEntityID = try XCTUnwrap(source.entityIDsByName["Owner"])
         let targetEntityID = try XCTUnwrap(source.entityIDsByName["Target"])
@@ -15776,29 +15783,29 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testRelationshipRemovalRejectsRequiredCascadeAndInverseLinks() throws {
-        let cases: [(String, Schema.Relationship, Schema.Relationship?)] = [
+        let cases: [(String, SchemaDescriptor.Relationship, SchemaDescriptor.Relationship?)] = [
             (
                 "required",
-                Schema.Relationship(name: "favorite", destination: "Target", isOptional: false),
+                SchemaDescriptor.Relationship(name: "favorite", destination: "Target", isOptional: false),
                 nil
             ),
             (
                 "cascade",
-                Schema.Relationship(name: "favorite", destination: "Target", deleteRule: .cascade),
+                SchemaDescriptor.Relationship(name: "favorite", destination: "Target", deleteRule: .cascade),
                 nil
             ),
             (
                 "inverse",
-                Schema.Relationship(name: "favorite", destination: "Target", inverse: "owner"),
-                Schema.Relationship(name: "owner", destination: "Owner", inverse: "favorite")
+                SchemaDescriptor.Relationship(name: "favorite", destination: "Target", inverse: "owner"),
+                SchemaDescriptor.Relationship(name: "owner", destination: "Owner", inverse: "favorite")
             ),
         ]
         for (caseName, ownerRelationship, targetRelationship) in cases {
-            let source = Schema([
-                Schema.Entity(name: "Owner", relationships: [ownerRelationship]),
-                Schema.Entity(name: "Target", relationships: targetRelationship.map { [$0] } ?? []),
+            let source = SchemaDescriptor([
+                SchemaDescriptor.Entity(name: "Owner", relationships: [ownerRelationship]),
+                SchemaDescriptor.Entity(name: "Target", relationships: targetRelationship.map { [$0] } ?? []),
             ])
-            let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+            let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
             let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-\(caseName)"))
             try bootstrap(source, driver: driver)
             XCTAssertThrowsError(
@@ -15824,13 +15831,13 @@ final class SchemaMigrationTests: XCTestCase {
             ("view", "CREATE VIEW USER_FAVORITE_VIEW AS SELECT ZFAVORITE FROM ZOWNER"),
             ("foreign-key", "CREATE TABLE USER_FAVORITE_FK (owner_id INTEGER REFERENCES ZOWNER(ZFAVORITE))"),
         ]
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+                relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Owner"), Schema.Entity(name: "Target")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Owner"), SchemaDescriptor.Entity(name: "Target")])
         for (name, statement) in sideObjects {
             let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-side-object-\(name)"))
             try bootstrap(source, driver: driver)
@@ -15852,22 +15859,22 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testRelationshipRemovalCannotCombineWithRename() throws {
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "favorite", destination: "Target"),
-                    Schema.Relationship(name: "backup", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "favorite", destination: "Target"),
+                    SchemaDescriptor.Relationship(name: "backup", destination: "Target"),
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "fallback", destination: "Target", originalName: "backup")
+                    SchemaDescriptor.Relationship(name: "fallback", destination: "Target", originalName: "backup")
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "relationship-removal-plus-rename"))
         try bootstrap(source, driver: driver)
@@ -15891,16 +15898,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "code", type: "Int")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "code", type: "Int")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "Int"),
-                    Schema.Attribute(name: "rank", type: "Int", defaultValue: "0"),
-                    Schema.Attribute(name: "token", type: "Int", defaultValue: "0", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "code", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int", defaultValue: "0"),
+                    SchemaDescriptor.Attribute(name: "token", type: "Int", defaultValue: "0", options: [.unique]),
                 ])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -15964,16 +15971,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "ZRemoved",
-                attributes: [Schema.Attribute(name: "value", type: "String")],
-                indexes: [Schema.Index(properties: ["value"])]),
-            Schema.Entity(name: "ZZRemoved", attributes: [Schema.Attribute(name: "value", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])]),
+            SchemaDescriptor.Entity(name: "ZZRemoved", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         let sourceRetainedID = try XCTUnwrap(source.entityIDsByName["Retained"])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
@@ -16010,9 +16017,9 @@ final class SchemaMigrationTests: XCTestCase {
             [[.int(1), .text("preserved")]])
         try reopened.close()
 
-        let addedSchema = Schema([
-            Schema.Entity(name: "Newcomer"),
-            Schema.Entity(name: "Retained", attributes: [Schema.Attribute(name: "name", type: "String")]),
+        let addedSchema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Newcomer"),
+            SchemaDescriptor.Entity(name: "Retained", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
         let added = try LightweightMigration.openStore(location: location, schema: addedSchema)
         XCTAssertEqual(
@@ -16022,10 +16029,10 @@ final class SchemaMigrationTests: XCTestCase {
         try added.close()
 
         let emptyLocation = StoreLocation.file(directory.appendingPathComponent("empty-schema.sqlite"))
-        let onlyEntity = Schema([
-            Schema.Entity(name: "Only", attributes: [Schema.Attribute(name: "value", type: "String")])
+        let onlyEntity = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Only", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")])
         ])
-        let emptySchema = Schema([])
+        let emptySchema = SchemaDescriptor([])
         let onlyInitial = try LightweightMigration.openStore(location: emptyLocation, schema: onlyEntity)
         try onlyInitial.write { connection in
             try connection.execute("INSERT INTO ZONLY (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 1, 'removed')")
@@ -16045,15 +16052,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("owner-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -16088,12 +16095,12 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testIndependentRootRemovalRejectsOutgoingLinkToAnotherRemovedRoot() throws {
-        let source = Schema([
-            Schema.Entity(name: "Retained"),
-            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained"),
+            SchemaDescriptor.Entity(name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([Schema.Entity(name: "Retained")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "Retained")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-removal-two-linked-roots"))
         try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
@@ -16120,15 +16127,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("mixed-owner-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Alpha"),
-            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Alpha"),
+            SchemaDescriptor.Entity(name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Alpha"),
-            Schema.Entity(name: "NewRoot"),
-            Schema.Entity(name: "Target"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Alpha"),
+            SchemaDescriptor.Entity(name: "NewRoot"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -16152,17 +16159,17 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMixedRelationshipOwnerRemovalRejectsGeneratedIndexTableCollision() throws {
-        let source = Schema([
-            Schema.Entity(name: "Retained"),
-            Schema.Entity(name: "Owner", relationships: [Schema.Relationship(name: "favorite", destination: "Target")]),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Retained"),
+            SchemaDescriptor.Entity(name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "favorite", destination: "Target")]),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let nextID = try XCTUnwrap(source.entityIDsByName.values.max()) + 1
-        let destination = try Schema(
+        let destination = try SchemaDescriptor(
             [
-                Schema.Entity(name: "Retained"),
-                Schema.Entity(name: "Target"),
-                Schema.Entity(name: "OWNER_ZFAVORITE_INDEX"),
+                SchemaDescriptor.Entity(name: "Retained"),
+                SchemaDescriptor.Entity(name: "Target"),
+                SchemaDescriptor.Entity(name: "OWNER_ZFAVORITE_INDEX"),
             ],
             entityIDs: [
                 "Retained": try XCTUnwrap(source.entityIDsByName["Retained"]),
@@ -16194,115 +16201,115 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndependentRootRemovalRejectsUnsafeOutgoingAndInboundRelationships() throws {
         let unsafeRelationshipReason = "Entity removal is limited to unreferenced flat roots without relationships"
-        let cases: [(String, Schema, Schema, String)] = [
+        let cases: [(String, SchemaDescriptor, SchemaDescriptor, String)] = [
             (
                 "required",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
-                        relationships: [Schema.Relationship(name: "target", destination: "Target", isOptional: false)]),
-                    Schema.Entity(name: "Target"),
+                        relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target", isOptional: false)]),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "cascade",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
                         relationships: [
-                            Schema.Relationship(name: "target", destination: "Target", deleteRule: .cascade)
+                            SchemaDescriptor.Relationship(name: "target", destination: "Target", deleteRule: .cascade)
                         ]),
-                    Schema.Entity(name: "Target"),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "inbound",
-                Schema([
-                    Schema.Entity(name: "Owner"),
-                    Schema.Entity(
-                        name: "Target", relationships: [Schema.Relationship(name: "owner", destination: "Owner")]),
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(name: "Owner"),
+                    SchemaDescriptor.Entity(
+                        name: "Target", relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner")]),
                 ]),
-                Schema([
-                    Schema.Entity(
-                        name: "Target", relationships: [Schema.Relationship(name: "owner", destination: "Owner")])
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
+                        name: "Target", relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner")])
                 ]),
                 unsafeRelationshipReason
             ),
             (
                 "to-many",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
-                        relationships: [Schema.Relationship(name: "targets", destination: "Target", isToMany: true)]),
-                    Schema.Entity(name: "Target"),
+                        relationships: [SchemaDescriptor.Relationship(name: "targets", destination: "Target", isToMany: true)]),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "inverse",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
-                        relationships: [Schema.Relationship(name: "target", destination: "Target", inverse: "owner")]),
-                    Schema.Entity(
+                        relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target", inverse: "owner")]),
+                    SchemaDescriptor.Entity(
                         name: "Target",
-                        relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "target")]),
+                        relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner", inverse: "target")]),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "minimum-count",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
                         relationships: [
-                            Schema.Relationship(name: "target", destination: "Target", minimumModelCount: 1)
+                            SchemaDescriptor.Relationship(name: "target", destination: "Target", minimumModelCount: 1)
                         ]),
-                    Schema.Entity(name: "Target"),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "maximum-count",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
                         relationships: [
-                            Schema.Relationship(name: "target", destination: "Target", maximumModelCount: 2)
+                            SchemaDescriptor.Relationship(name: "target", destination: "Target", maximumModelCount: 2)
                         ]),
-                    Schema.Entity(name: "Target"),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "deny",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
-                        relationships: [Schema.Relationship(name: "target", destination: "Target", deleteRule: .deny)]),
-                    Schema.Entity(name: "Target"),
+                        relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target", deleteRule: .deny)]),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
             (
                 "external-storage",
-                Schema([
-                    Schema.Entity(
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(
                         name: "Owner",
-                        attributes: [Schema.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
-                        relationships: [Schema.Relationship(name: "target", destination: "Target")]),
-                    Schema.Entity(name: "Target"),
+                        attributes: [SchemaDescriptor.Attribute(name: "payload", type: "Data", options: [.externalStorage])],
+                        relationships: [SchemaDescriptor.Relationship(name: "target", destination: "Target")]),
+                    SchemaDescriptor.Entity(name: "Target"),
                 ]),
-                Schema([Schema.Entity(name: "Target")]),
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Target")]),
                 unsafeRelationshipReason
             ),
         ]
@@ -16340,15 +16347,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("inbound-owner-removal.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Owner", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Owner", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Target",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
-                relationships: [Schema.Relationship(name: "owner", destination: "Owner")]),
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
+                relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -16405,15 +16412,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Alpha", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "Beta", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "ZRemoved", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Alpha", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "Beta", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "ZRemoved", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Alpha", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "Beta", attributes: [Schema.Attribute(name: "label", type: "String")]),
-            Schema.Entity(name: "Newcomer", attributes: [Schema.Attribute(name: "label", type: "String")]),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Alpha", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "Beta", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
+            SchemaDescriptor.Entity(name: "Newcomer", attributes: [SchemaDescriptor.Attribute(name: "label", type: "String")]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -16448,12 +16455,12 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMixedRootRemovalAndAdditionRejectsCollisionWithRetainedTable() throws {
-        let source = Schema([
-            Schema.Entity(name: "A"),
-            Schema.Entity(name: "B"),
-            Schema.Entity(name: "Removed"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "A"),
+            SchemaDescriptor.Entity(name: "B"),
+            SchemaDescriptor.Entity(name: "Removed"),
         ])
-        let destination = Schema([Schema.Entity(name: "A"), Schema.Entity(name: "b")])
+        let destination = SchemaDescriptor([SchemaDescriptor.Entity(name: "A"), SchemaDescriptor.Entity(name: "b")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "mixed-root-retained-table-collision"))
         try bootstrap(source, driver: driver)
         XCTAssertThrowsError(
@@ -16476,41 +16483,41 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRootChangesRejectRelationshipReferencesAndObjectNameReuse() throws {
-        let relationshipSource = Schema([
-            Schema.Entity(
+        let relationshipSource = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "target", destination: "RemovedTarget")]),
-            Schema.Entity(name: "RemovedTarget"),
-            Schema.Entity(name: "ZRemoved"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "RemovedTarget")]),
+            SchemaDescriptor.Entity(name: "RemovedTarget"),
+            SchemaDescriptor.Entity(name: "ZRemoved"),
         ])
-        let relationshipDestination = Schema([
-            Schema.Entity(
+        let relationshipDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "target", destination: "RemovedTarget")]),
-            Schema.Entity(name: "Newcomer"),
+                relationships: [SchemaDescriptor.Relationship(name: "target", destination: "RemovedTarget")]),
+            SchemaDescriptor.Entity(name: "Newcomer"),
         ])
 
-        let nameReuseSource = Schema([
-            Schema.Entity(
+        let nameReuseSource = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "A",
-                attributes: [Schema.Attribute(name: "B_ZC", type: "Int")],
-                indexes: [Schema.Index(properties: ["B_ZC"])]),
-            Schema.Entity(name: "Keep"),
+                attributes: [SchemaDescriptor.Attribute(name: "B_ZC", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["B_ZC"])]),
+            SchemaDescriptor.Entity(name: "Keep"),
         ])
         let appendedEntityID = try XCTUnwrap(nameReuseSource.entityIDsByName.values.max()) + 1
-        let nameReuseDestination = try Schema(
+        let nameReuseDestination = try SchemaDescriptor(
             [
-                Schema.Entity(name: "Keep"),
-                Schema.Entity(
+                SchemaDescriptor.Entity(name: "Keep"),
+                SchemaDescriptor.Entity(
                     name: "A_ZB",
-                    attributes: [Schema.Attribute(name: "C", type: "Int")],
-                    indexes: [Schema.Index(properties: ["C"])]),
+                    attributes: [SchemaDescriptor.Attribute(name: "C", type: "Int")],
+                    indexes: [SchemaDescriptor.Index(properties: ["C"])]),
             ],
             entityIDs: [
                 "Keep": try XCTUnwrap(nameReuseSource.entityIDsByName["Keep"]),
                 "A_ZB": appendedEntityID,
             ])
-        let cases: [(String, Schema, Schema)] = [
+        let cases: [(String, SchemaDescriptor, SchemaDescriptor)] = [
             ("relationship", relationshipSource, relationshipDestination),
             ("index-object", nameReuseSource, nameReuseDestination),
         ]
@@ -16545,10 +16552,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testCombinedRootChangesRejectCaseInsensitiveTableNameReuse() throws {
-        let source = Schema([Schema.Entity(name: "Foo"), Schema.Entity(name: "Keep")])
+        let source = SchemaDescriptor([SchemaDescriptor.Entity(name: "Foo"), SchemaDescriptor.Entity(name: "Keep")])
         let nextID = try XCTUnwrap(source.entityIDsByName.values.max()) + 1
-        let destination = try Schema(
-            [Schema.Entity(name: "Keep"), Schema.Entity(name: "foo")],
+        let destination = try SchemaDescriptor(
+            [SchemaDescriptor.Entity(name: "Keep"), SchemaDescriptor.Entity(name: "foo")],
             entityIDs: [
                 "Keep": try XCTUnwrap(source.entityIDsByName["Keep"]),
                 "foo": nextID,
@@ -16572,15 +16579,15 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testRenamedUniqueAttributeReconcilesGeneratedIndexName() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-unique-index"))
-        let source = Schema([
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
+                    SchemaDescriptor.Attribute(name: "address", type: "String", options: [.unique], originalName: "email")
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16598,21 +16605,21 @@ final class SchemaMigrationTests: XCTestCase {
     func testRenamedAndAddedToOneRelationshipsReconcileForeignKeyIndexesOnReopen() throws {
         let location = StoreLocation.memory(name: "migration-rename-relationship-index")
         let driver = try GRDBSQLiteDriver(location: location)
-        let source = Schema([
-            Schema.Entity(
-                name: "Owner", relationships: [Schema.Relationship(name: "child", destination: "Child")]),
-            Schema.Entity(name: "Child"),
-            Schema.Entity(name: "Pet"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Owner", relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child")]),
+            SchemaDescriptor.Entity(name: "Child"),
+            SchemaDescriptor.Entity(name: "Pet"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
                 relationships: [
-                    Schema.Relationship(name: "offspring", destination: "Child", originalName: "child"),
-                    Schema.Relationship(name: "pet", destination: "Pet"),
+                    SchemaDescriptor.Relationship(name: "offspring", destination: "Child", originalName: "child"),
+                    SchemaDescriptor.Relationship(name: "pet", destination: "Pet"),
                 ]),
-            Schema.Entity(name: "Child"),
-            Schema.Entity(name: "Pet"),
+            SchemaDescriptor.Entity(name: "Child"),
+            SchemaDescriptor.Entity(name: "Pet"),
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -16634,21 +16641,21 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndexMigrationDoesNotCreateForeignKeyIndexForNonOwningToOne() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-nonowner-fk-index"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Alpha",
-                relationships: [Schema.Relationship(name: "beta", destination: "Beta", inverse: "alpha")]),
-            Schema.Entity(
+                relationships: [SchemaDescriptor.Relationship(name: "beta", destination: "Beta", inverse: "alpha")]),
+            SchemaDescriptor.Entity(
                 name: "Beta",
-                relationships: [Schema.Relationship(name: "alpha", destination: "Alpha", inverse: "beta")]),
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")]),
+                relationships: [SchemaDescriptor.Relationship(name: "alpha", destination: "Alpha", inverse: "beta")]),
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")]),
         ])
-        let destination = Schema([
+        let destination = SchemaDescriptor([
             source.entities[0],
             source.entities[1],
-            Schema.Entity(
-                name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")],
-                indexes: [Schema.Index(properties: ["title"])]),
+            SchemaDescriptor.Entity(
+                name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["title"])]),
         ])
         try bootstrap(source, driver: driver)
 
@@ -16662,20 +16669,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIndexRenameAcrossEntitiesDropsBeforeCreatingReusedName() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-global-index-transition"))
-        let source = Schema([
-            Schema.Entity(
-                name: "A", attributes: [Schema.Attribute(name: "old", type: "String")],
-                indexes: [Schema.Index(properties: ["old"])]),
-            Schema.Entity(
-                name: "B", attributes: [Schema.Attribute(name: "value", type: "String")],
-                indexes: [Schema.Index(properties: ["value"])]),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "A", attributes: [SchemaDescriptor.Attribute(name: "old", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["old"])]),
+            SchemaDescriptor.Entity(
+                name: "B", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])]),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "A",
-                attributes: [Schema.Attribute(name: "value", type: "String", originalName: "old")],
-                indexes: [Schema.Index(properties: ["value"])]),
-            Schema.Entity(name: "B", attributes: [Schema.Attribute(name: "value", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "String", originalName: "old")],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])]),
+            SchemaDescriptor.Entity(name: "B", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -16692,13 +16699,13 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testLightweightMigrationRenamesAttributeAndPreservesRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "name", type: "String", originalName: "title")])
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String", originalName: "title")])
         ])
         try bootstrap(source, driver: driver)
         try driver.write { connection in
@@ -16711,11 +16718,11 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAttributeRenameRequiresOriginalNameMetadata() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-explicit"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let inferredRename = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let inferredRename = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         try bootstrap(source, driver: driver)
 
@@ -16736,20 +16743,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAttributeRenamePreservesOtherAttributes() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-other"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "second", type: "String"),
-                    Schema.Attribute(name: "renamed", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "renamed", type: "String", originalName: "first"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16769,20 +16776,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testExplicitOriginalNameClaimTakesPrecedenceOverSameNameDestination() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-explicit-claim-chain"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "second", type: "String", originalName: "first"),
-                    Schema.Attribute(name: "final", type: "String", originalName: "second"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "final", type: "String", originalName: "second"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16800,18 +16807,18 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testPersistedOriginalNameFallsBackToCurrentNameWhenOldColumnIsGone() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-original-name-fallback"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "renamed", type: "String")
+                    SchemaDescriptor.Attribute(name: "renamed", type: "String")
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "renamed", type: "String", originalName: "oldName")
+                    SchemaDescriptor.Attribute(name: "renamed", type: "String", originalName: "oldName")
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16825,20 +16832,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAttributeRenameChainPreservesSourceValues() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-chain"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "second", type: "String", originalName: "first"),
-                    Schema.Attribute(name: "final", type: "String", originalName: "second"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "final", type: "String", originalName: "second"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16858,20 +16865,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testDuplicateOriginalNameClaimsFailBeforeChangingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-duplicate-claim"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "other", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "other", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "one", type: "String", originalName: "first"),
-                    Schema.Attribute(name: "two", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "one", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "two", type: "String", originalName: "first"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16898,20 +16905,20 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testAttributeRenameSwapFailsBeforeChangingRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rename-swap"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String"),
-                    Schema.Attribute(name: "second", type: "String"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String"),
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String", originalName: "second"),
-                    Schema.Attribute(name: "second", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "first", type: "String", originalName: "second"),
+                    SchemaDescriptor.Attribute(name: "second", type: "String", originalName: "first"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16933,19 +16940,19 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testSQLiteCaseInsensitiveDestinationCollisionFails() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-case-fold-collision"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "first", type: "String")
+                    SchemaDescriptor.Attribute(name: "first", type: "String")
                 ])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "String", originalName: "first"),
-                    Schema.Attribute(name: "VALUE", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "value", type: "String", originalName: "first"),
+                    SchemaDescriptor.Attribute(name: "VALUE", type: "String", isOptional: true),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -16960,21 +16967,21 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testMigrationMetadataRoundTripsCanonicalSchema() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "payload", type: "Payload", isOptional: true, defaultValue: "a|b\nc",
                         options: [.transformable(by: "Transform|er")], originalName: "oldPayload")
                 ],
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "parent", destination: "Parent", isToMany: false, inverse: "children",
                         deleteRule: .nullify, minimumModelCount: 0, maximumModelCount: 1)
                 ],
-                indexes: [Schema.Index(properties: ["payload", "createdAt"], isUnique: true)]),
-            Schema.Entity(name: "Parent"),
+                indexes: [SchemaDescriptor.Index(properties: ["payload", "createdAt"], isUnique: true)]),
+            SchemaDescriptor.Entity(name: "Parent"),
         ])
 
         let decoded = try SchemaHash.decodeCanonicalDescription(SchemaHash.canonicalDescription(of: schema))
@@ -16983,10 +16990,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityIDMapCodecUsesDeterministicVersionedEncoding() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Zebra", superentityName: "Animal"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Zebra", superentityName: "Animal"),
         ])
         let first = try EntityIDMapCodec.encode(["Zebra": 3, "Animal": 1, "Dog": 2], for: schema)
         let second = try EntityIDMapCodec.encode(["Dog": 2, "Zebra": 3, "Animal": 1], for: schema)
@@ -16999,10 +17006,10 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityIDMapMetadataRoundTripsWithoutChangingSchemaHash() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Zebra", superentityName: "Animal"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Zebra", superentityName: "Animal"),
         ])
         let reconciled = try schema.reconciled(with: ["Animal": 4, "Dog": 7, "Zebra": 9])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-id-map-roundtrip"))
@@ -17022,7 +17029,7 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityIDMapMetadataRejectsInvalidStorageType() throws {
-        let schema = Schema([Schema.Entity(name: "Record")])
+        let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "entity-id-map-invalid-storage-type"))
         try driver.write { connection in
             try connection.execute("CREATE TABLE _osd_meta (key TEXT PRIMARY KEY, value BLOB);")
@@ -17042,9 +17049,9 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testOpeningStoreWritesEntityIDMapAndBackfillsLegacyMetadata() throws {
         let location = StoreLocation.memory(name: "entity-id-map-open-backfill")
-        let schema = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
         let initialIDs = try initial.read {
@@ -17078,11 +17085,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Dog",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Animal"),
         ])
         let driver = try LightweightMigration.openStore(location: location, schema: schema)
@@ -17208,11 +17215,11 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([
-            Schema.Entity(name: "Animal", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Dog",
-                attributes: [Schema.Attribute(name: "name", type: "String")],
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")],
                 superentityName: "Animal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
@@ -17357,8 +17364,8 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "name", type: "String")])
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: schema)
         try initial.write { connection in
@@ -17484,16 +17491,16 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Vehicle",
-                relationships: [Schema.Relationship(name: "owner", destination: "Animal", isOptional: false)]),
+                relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Animal", isOptional: false)]),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let originalIDs = try initial.read {
@@ -17518,19 +17525,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Target"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Target"),
+            SchemaDescriptor.Entity(
                 name: "Vehicle",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "targets", destination: "Target", isToMany: true, maximumModelCount: 1)
                 ]),
         ])
@@ -17557,19 +17564,19 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(
                 name: "Aardvark",
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", isOptional: true)
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", isOptional: true)
                 ]),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try initial.read {
@@ -17594,15 +17601,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Mammal", superentityName: "Animal"),
-            Schema.Entity(name: "Cat", superentityName: "Mammal"),
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Mammal", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Cat", superentityName: "Mammal"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try initial.read {
@@ -17623,9 +17630,9 @@ final class SchemaMigrationTests: XCTestCase {
     }
 
     func testEntityIDMapCodecRejectsMalformedOrIncompatibleMaps() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
         ])
         let invalidDocuments = [
             "{\"entries\":[],\"format\":\"entity-id-map.v2\"}",
@@ -17650,15 +17657,15 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "notes", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "notes", type: "String", isOptional: true),
                 ])
         ])
         let first = try LightweightMigration.openStore(location: location, schema: source)
@@ -17682,17 +17689,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("numeric-rebuild-trigger.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Int64", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int64", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "value", type: "Double", isOptional: true)],
-                indexes: [Schema.Index(properties: ["value"])])
+                attributes: [SchemaDescriptor.Attribute(name: "value", type: "Double", isOptional: true)],
+                indexes: [SchemaDescriptor.Index(properties: ["value"])])
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         try initial.write { connection in
@@ -17766,7 +17773,7 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([Schema.Entity(name: "Record")])
+        let schema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")])
         let driver = try LightweightMigration.openStore(location: location, schema: schema)
         try driver.write { connection in
             try connection.execute(
@@ -17776,7 +17783,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
 
         XCTAssertThrowsError(
-            try LightweightMigration.openStore(location: location, schema: Schema([Schema.Entity(name: "Other")]))
+            try LightweightMigration.openStore(location: location, schema: SchemaDescriptor([SchemaDescriptor.Entity(name: "Other")]))
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
                 XCTFail("Expected migrationUnsupported, got \(error)")
@@ -17790,8 +17797,8 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
         let driver = try LightweightMigration.openStore(location: location, schema: schema)
         try driver.write { connection in
@@ -17812,10 +17819,10 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
-                attributes: [Schema.Attribute(name: "email", type: "String", options: [.unique])])
+                attributes: [SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique])])
         ])
         let driver = try LightweightMigration.openStore(location: location, schema: schema)
         try driver.write { try $0.execute("DROP INDEX ZRECORD_ZEMAIL_UNIQUE_INDEX") }
@@ -17835,7 +17842,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertThrowsError(
             try driver.write { connection in
                 try LightweightMigration.openOrMigrate(
-                    to: Schema([Schema.Entity(name: "Record")]), connection: connection)
+                    to: SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")]), connection: connection)
             }
         ) { error in
             guard case SwiftDataError.migrationUnsupported = error else {
@@ -17854,17 +17861,17 @@ final class SchemaMigrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let location = StoreLocation.file(directory.appendingPathComponent("store.sqlite"))
-        let source = Schema([
-            Schema.Entity(
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "child", destination: "Child", isToMany: false)]),
-            Schema.Entity(name: "Child"),
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child", isToMany: false)]),
+            SchemaDescriptor.Entity(name: "Child"),
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Owner",
-                relationships: [Schema.Relationship(name: "child", destination: "Child", isToMany: true)]),
-            Schema.Entity(name: "Child"),
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child", isToMany: true)]),
+            SchemaDescriptor.Entity(name: "Child"),
         ])
         let initial = try LightweightMigration.openStore(location: location, schema: source)
         let sourceIDs = try XCTUnwrap(
@@ -17952,15 +17959,15 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testFailedMigrationRollsBackSchemaAndRows() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-rollback"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "requiredValue", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "requiredValue", type: "Int"),
                 ])
         ])
         try bootstrap(source, driver: driver)
@@ -17981,11 +17988,11 @@ final class SchemaMigrationTests: XCTestCase {
 
     func testIncompatibleTypeChangeFailsWithoutChangingSchema() throws {
         let driver = try GRDBSQLiteDriver(location: .memory(name: "migration-invalid-type"))
-        let source = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "String")])
+        let source = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")])
         ])
-        let destination = Schema([
-            Schema.Entity(name: "Record", attributes: [Schema.Attribute(name: "title", type: "Int")])
+        let destination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Record", attributes: [SchemaDescriptor.Attribute(name: "title", type: "Int")])
         ])
         try bootstrap(source, driver: driver)
 
@@ -17998,7 +18005,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    private func bootstrap(_ schema: Schema, driver: GRDBSQLiteDriver) throws {
+    private func bootstrap(_ schema: SchemaDescriptor, driver: GRDBSQLiteDriver) throws {
         let built = try SchemaBuilder.build(schema)
         try driver.write { connection in
             for statement in built.statements { try connection.execute(statement) }

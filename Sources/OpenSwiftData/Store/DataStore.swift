@@ -38,7 +38,7 @@ public extension DataStore {
 /// Creates a configured custom data store for a schema.
 public protocol DataStoreConfiguration: Sendable {
     /// Creates the store that will back a model container.
-    func makeStore(schema: Schema) throws -> any DataStore
+    func makeStore(schema: SchemaDescriptor) throws -> any DataStore
 }
 
 /// A value snapshot of one model row.
@@ -74,13 +74,13 @@ public struct DataStoreFetchRequest<Model: PersistentModel> {
     /// The typed fetch descriptor, including predicate, ordering, and bounds.
     public let descriptor: FetchDescriptor<Model>
     /// The schema entity selected by the model container.
-    public let entity: Schema.Entity
+    public let entity: SchemaDescriptor.Entity
     /// The concrete entity names included by the requested entity's inheritance subtree.
     public let includedEntityNames: Set<String>
 
     /// Creates a fetch request. Omitting `includedEntityNames` requests only `entity.name`.
     public init(
-        descriptor: FetchDescriptor<Model>, entity: Schema.Entity,
+        descriptor: FetchDescriptor<Model>, entity: SchemaDescriptor.Entity,
         includedEntityNames: Set<String>? = nil
     ) {
         self.descriptor = descriptor
@@ -148,7 +148,7 @@ public struct ExistingDataStoreConfiguration: DataStoreConfiguration {
     }
 
     /// Returns the configured store; the store is responsible for validating the supplied schema.
-    public func makeStore(schema: Schema) throws -> any DataStore {
+    public func makeStore(schema: SchemaDescriptor) throws -> any DataStore {
         _ = schema
         return store
     }
@@ -156,16 +156,16 @@ public struct ExistingDataStoreConfiguration: DataStoreConfiguration {
 
 /// A custom store configuration aligned with Apple's associated-store configuration shape.
 ///
-/// This prefixed API uses OpenSwiftData's current `Schema` type and remains separate from `DataStoreConfiguration`.
+/// This prefixed API uses OpenSwiftData's current `SchemaDescriptor` type and remains separate from `DataStoreConfiguration`.
 public protocol AppleDataStoreConfiguration: Sendable {
     /// The custom store type created from this configuration.
     associatedtype Store: AppleDataStore
     /// The configuration's stable name.
     var name: String { get }
     /// The schema assigned by the model container, when available.
-    var schema: Schema? { get set }
+    var schema: SchemaDescriptor? { get set }
     /// Creates the configured store with the resolved schema and migration plan.
-    func makeStore(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore
+    func makeStore(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore
     /// Validates configuration values before opening the store.
     func validate() throws
 }
@@ -240,7 +240,7 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
 extension AppleDefaultSnapshot {
     /// Converts this snapshot to the current OpenSwiftData context representation.
     /// Converts this snapshot to the context's stored representation after validating its entity.
-    public func makeBackendSnapshot(in schema: Schema) throws -> DataStoreSnapshot {
+    public func makeBackendSnapshot(in schema: SchemaDescriptor) throws -> DataStoreSnapshot {
         guard schema.entity(forName: entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(entityName)' is not in the schema.")
         }
@@ -251,7 +251,7 @@ extension AppleDefaultSnapshot {
 
     /// Creates a snapshot from an OpenSwiftData context snapshot.
     /// Recreates a snapshot after validating its entity against the schema.
-    public static func makeAppleSnapshot(from snapshot: DataStoreSnapshot, in schema: Schema) throws -> Self {
+    public static func makeAppleSnapshot(from snapshot: DataStoreSnapshot, in schema: SchemaDescriptor) throws -> Self {
         guard schema.entity(forName: snapshot.entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(snapshot.entityName)' is not in the schema.")
         }
@@ -335,7 +335,7 @@ public struct AppleDataStoreSaveChangesResult: Sendable {
 
 /// A store that can provide its own adapter for the current OpenSwiftData context engine.
 public protocol AppleDataStoreBackendProviding: AppleDataStore {
-    func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore
+    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore
 }
 
 /// A custom store using the Apple-shaped API under nonconflicting prefixed names.
@@ -346,7 +346,7 @@ public protocol AppleDataStore: AnyObject, Sendable {
     init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws
     var configuration: Configuration { get }
     var identifier: String { get }
-    var schema: Schema { get }
+    var schema: SchemaDescriptor { get }
     var supportsInheritance: Bool { get }
 
     func fetch<Model: PersistentModel>(

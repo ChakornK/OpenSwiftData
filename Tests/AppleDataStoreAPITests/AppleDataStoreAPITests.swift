@@ -32,9 +32,9 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
     typealias Store = FixtureAppleStore
     let name: String
-    var schema: Schema?
+    var schema: SchemaDescriptor?
 
-    func makeStore(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
+    func makeStore(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
         FixtureAppleStore(self, schema: schema)
     }
 }
@@ -42,7 +42,7 @@ private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
 private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecked Sendable {
     let configuration: FixtureAppleConfiguration
     let identifier = "apple.fixture"
-    let schema: Schema
+    let schema: SchemaDescriptor
 
     required init(_ configuration: FixtureAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
         guard let schema = configuration.schema else { throw SwiftDataError.unsupportedStore("Missing schema") }
@@ -50,7 +50,7 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
         self.schema = schema
     }
 
-    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: Schema) {
+    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: SchemaDescriptor) {
         self.configuration = configuration
         self.schema = schema
     }
@@ -65,7 +65,7 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
         AppleDataStoreSaveChangesResult(for: identifier)
     }
 
-    func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
+    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
         _ = (schema, migrationPlan)
         return FixtureLegacyBackend()
     }
@@ -84,7 +84,7 @@ private struct FixtureLegacyBackend: DataStore {
 struct AppleDataStoreAPITests {
     @Test
     func testAppleStoreConformanceCompiles() throws {
-        let schema = Schema([AppleStoreFixture.self])
+        let schema = SchemaDescriptor([AppleStoreFixture.self])
         let config = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let store = try FixtureAppleStore(config, migrationPlan: nil)
         #expect(store.schema == schema)
@@ -115,7 +115,7 @@ struct AppleDataStoreAPITests {
 
     @Test @MainActor
     func testContainerRoutesAppleStoreConfigurationToBackend() throws {
-        let schema = Schema([AppleStoreFixture.self])
+        let schema = SchemaDescriptor([AppleStoreFixture.self])
         let configuration = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let container = try ModelContainer(
             for: [AppleStoreFixture.self],

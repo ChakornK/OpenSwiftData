@@ -46,7 +46,7 @@ private final class LegacyModel: PersistentModel {
     }
 
     init(backingData: any BackingData<LegacyModel>) {}
-    static func schemaMetadata() -> [Schema.PropertyMetadata] { [] }
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] { [] }
     static func createBackingData() -> DetachedBackingData<LegacyModel> {
         DetachedBackingData(metadata: [])
     }

@@ -1921,7 +1921,7 @@ class InheritanceBaseFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    class func schemaMetadata() -> [Schema.PropertyMetadata] { [] }
+    class func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] { [] }
 }
 
 final class InheritanceChildFixture: InheritanceBaseFixture {
@@ -2598,7 +2598,7 @@ final class PersistentModelTests: XCTestCase {
         let childEntity = try XCTUnwrap(container.schema.entity(forName: "SubtypeUniqueChildFixture"))
         XCTAssertTrue(
             childEntity.attributes.first(where: { $0.name == "scopedKey" })?.options.contains(.unique) == true)
-        XCTAssertTrue(childEntity.indexes.contains(Schema.Index(properties: ["scopedKey"], isUnique: true)))
+        XCTAssertTrue(childEntity.indexes.contains(SchemaDescriptor.Index(properties: ["scopedKey"], isUnique: true)))
         let before = try container.store?.read {
             try $0.rows(
                 "SELECT Z_PK, Z_ENT, ZTOKEN, ZSCOPEDKEY, ZTENANT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE",
@@ -2946,7 +2946,7 @@ final class PersistentModelTests: XCTestCase {
         let item = InverseCollectionLifecycleItemFixture(value: "detached item", owner: nil)
         XCTAssertEqual(
             (InverseCollectionLifecycleItemFixture.schemaMetadata()
-                .first(where: { $0.name == "owner" })?.metadata?.base as? Schema.Relationship)?.inverse,
+                .first(where: { $0.name == "owner" })?.metadata?.base as? SchemaDescriptor.Relationship)?.inverse,
             "items")
         XCTAssertEqual(
             InverseCollectionLifecycleOwnerFixture.relationshipAdapterCandidatesForMutation().map(\.name), ["items"])
@@ -2993,7 +2993,7 @@ final class PersistentModelTests: XCTestCase {
         let right = InferredToOneRightFixture(name: "right")
         let rightMetadata =
             InferredToOneLeftFixture.schemaMetadata()
-            .first(where: { $0.name == "right" })?.metadata?.base as? Schema.Relationship
+            .first(where: { $0.name == "right" })?.metadata?.base as? SchemaDescriptor.Relationship
         XCTAssertEqual(rightMetadata?.inverse, "left")
         right.left = left
         XCTAssertTrue(left.right === right)
@@ -3008,7 +3008,7 @@ final class PersistentModelTests: XCTestCase {
         let right = DetachedManyToManyRightFixture(name: "right")
         let rightsMetadata =
             DetachedManyToManyLeftFixture.schemaMetadata()
-            .first(where: { $0.name == "rights" })?.metadata?.base as? Schema.Relationship
+            .first(where: { $0.name == "rights" })?.metadata?.base as? SchemaDescriptor.Relationship
         XCTAssertEqual(rightsMetadata?.inverse, "lefts")
         let reciprocal = try XCTUnwrap(
             DetachedManyToManyRightFixture.relationshipAdapterCandidatesForMutation().first {
@@ -6467,7 +6467,7 @@ final class PersistentModelTests: XCTestCase {
             configurations: [.sqliteMemory("inherited-many-to-many-inverse")])
         let tagsMetadata = try XCTUnwrap(
             InheritedManyToManyChildFixture.schemaMetadata().first(where: { $0.name == "tags" }))
-        let tagsRelationship = try XCTUnwrap(tagsMetadata.metadata?.base as? Schema.Relationship)
+        let tagsRelationship = try XCTUnwrap(tagsMetadata.metadata?.base as? SchemaDescriptor.Relationship)
         XCTAssertEqual(tagsRelationship.inverse, "owners")
         XCTAssertEqual(
             container.schema.entity(forName: "InheritedManyToManyTagFixture")?.relationships

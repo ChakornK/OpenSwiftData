@@ -1,6 +1,6 @@
 import OSDCore
 
-extension Schema {
+extension SchemaDescriptor {
     /// Creates a schema describing the given model types and their ancestors.
     ///
     /// Entities appear in name order. Invalid model declarations produce an empty entity list here and

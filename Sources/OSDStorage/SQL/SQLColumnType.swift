@@ -11,7 +11,7 @@ package enum SQLColumnType: String, Sendable {
     package static func resolve(
         _ typeName: String,
         property: String,
-        options: Set<Schema.Attribute.Option> = []
+        options: Set<SchemaDescriptor.Attribute.Option> = []
     ) throws -> SQLColumnType {
         if options.contains(where: { if case .transformable = $0 { true } else { false } }) {
             return .blob

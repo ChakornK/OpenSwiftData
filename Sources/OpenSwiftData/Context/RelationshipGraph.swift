@@ -15,7 +15,7 @@ public protocol RelationshipPropertyAdapter<Model> {
     /// The key path to an explicitly declared inverse, when present.
     var explicitInverseKeyPath: AnyKeyPath? { get }
     /// Establishes the schema-resolved relationship metadata.
-    func resolved(with relationship: Schema.Relationship) -> any RelationshipPropertyAdapter<Model>
+    func resolved(with relationship: SchemaDescriptor.Relationship) -> any RelationshipPropertyAdapter<Model>
     /// Reads the current related endpoint values.
     func read(_ model: Model) -> [any PersistentModel]
     /// Writes a typed relationship value and reports old and new values synchronously.
@@ -187,7 +187,7 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     /// The key path to an explicitly declared inverse, when present.
     public let explicitInverseKeyPath: AnyKeyPath?
     /// The schema metadata for this relationship, when specified.
-    public let metadata: Schema.Relationship?
+    public let metadata: SchemaDescriptor.Relationship?
     private let readValue: (Owner) -> [any PersistentModel]
     private let readOwnerValue: (Owner) -> Value
     private let endpointValues: (Value) -> [Destination]
@@ -199,7 +199,7 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     public init(
         _ name: String,
         keyPath: KeyPath<Owner, Value>,
-        metadata: Schema.Relationship? = nil,
+        metadata: SchemaDescriptor.Relationship? = nil,
         read: @escaping (Owner) -> Value,
         endpoints: @escaping (Value) -> [Destination],
         build: @escaping ([Destination]) throws -> Value,
@@ -239,7 +239,7 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     public init(
         _ name: String,
         keyPath: KeyPath<Owner, Value>,
-        metadata: Schema.Relationship? = nil,
+        metadata: SchemaDescriptor.Relationship? = nil,
         read: @escaping (Owner) -> Value,
         endpoints: @escaping (Value) -> [Destination],
         isToMany: Bool = true,
@@ -260,7 +260,7 @@ public struct TypedRelationshipPropertyAdapter<Owner: PersistentModel, Value, De
     }
 
     /// Creates a copy carrying the resolved schema relationship metadata.
-    public func resolved(with relationship: Schema.Relationship) -> any RelationshipPropertyAdapter<Owner> {
+    public func resolved(with relationship: SchemaDescriptor.Relationship) -> any RelationshipPropertyAdapter<Owner> {
         let copy = Self(
             name, keyPath: typedKeyPath, metadata: relationship, read: readOwnerValue, endpoints: endpointValues,
             build: buildValue, inverseBuild: buildInverseValue,

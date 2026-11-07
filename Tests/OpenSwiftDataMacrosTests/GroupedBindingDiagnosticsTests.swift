@@ -62,7 +62,7 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         }
                     }
 
-                    public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+                    public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                         return []
                     }
 
@@ -144,7 +144,7 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         }
                     }
 
-                    public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+                    public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                         return []
                     }
 
@@ -265,10 +265,10 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         }
                     }
 
-                    public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+                    public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                         return [
-                            Schema.PropertyMetadata(name: "title", keypath: \Example.title, defaultValue: nil, metadata: nil, isExplicitRelationship: false),
-                            Schema.PropertyMetadata(name: "pets", keypath: \Example.pets, defaultValue: nil, metadata: nil, isExplicitRelationship: true)
+                            OSDCore.SchemaDescriptor.PropertyMetadata(name: "title", keypath: \Example.title, defaultValue: nil, metadata: nil, isExplicitRelationship: false),
+                            OSDCore.SchemaDescriptor.PropertyMetadata(name: "pets", keypath: \Example.pets, defaultValue: nil, metadata: nil, isExplicitRelationship: true)
                         ]
                     }
 
@@ -375,7 +375,7 @@ final class GroupedBindingDiagnosticsTests: XCTestCase {
                         }
                     }
 
-                    public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+                    public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                         return []
                     }
 

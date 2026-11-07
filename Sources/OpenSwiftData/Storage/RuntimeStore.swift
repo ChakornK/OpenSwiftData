@@ -22,7 +22,7 @@ public protocol RuntimeStore: Sendable {
 }
 
 package protocol RuntimeSchemaProvidingStore: RuntimeStore {
-    var runtimeSchema: Schema { get }
+    var runtimeSchema: SchemaDescriptor { get }
 }
 
 public extension RuntimeStore {
@@ -283,9 +283,9 @@ public enum RuntimeStoreLocation: Sendable {
 }
 
 /// Creates a runtime store for a location.
-public typealias RuntimeStoreFactory = @Sendable (RuntimeStoreLocation, Schema) throws -> any RuntimeStore
+public typealias RuntimeStoreFactory = @Sendable (RuntimeStoreLocation, SchemaDescriptor) throws -> any RuntimeStore
 
 /// Reads schema version metadata at a runtime store location without migrating it.
 public typealias RuntimeSchemaVersionReader = @Sendable (RuntimeStoreLocation) throws -> RuntimeSchemaVersionState
 
-package typealias RuntimeSchemaCompatibilityReader = @Sendable (RuntimeStoreLocation, Schema) throws -> Bool
+package typealias RuntimeSchemaCompatibilityReader = @Sendable (RuntimeStoreLocation, SchemaDescriptor) throws -> Bool

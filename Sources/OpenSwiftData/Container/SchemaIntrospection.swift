@@ -1,7 +1,7 @@
 import Foundation
 import OSDCore
 
-extension Schema {
+extension SchemaDescriptor {
     /// Entities whose superentity is the given entity.
     public func subentities(of entity: Entity) -> [Entity] {
         entities.filter { $0.superentityName == entity.name }
@@ -22,7 +22,7 @@ extension Schema {
     /// Reads a schema previously written by `save(to:)`.
     ///
     /// The loaded schema describes entities only; it isn't linked to model types.
-    public static func load(from url: URL) throws -> Schema {
-        try JSONDecoder().decode(Schema.self, from: Data(contentsOf: url))
+    public static func load(from url: URL) throws -> SchemaDescriptor {
+        try JSONDecoder().decode(SchemaDescriptor.self, from: Data(contentsOf: url))
     }
 }

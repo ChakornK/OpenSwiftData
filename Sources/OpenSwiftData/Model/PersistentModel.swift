@@ -198,12 +198,12 @@ public protocol PersistentModel: AnyObject, Observable, Hashable, Identifiable {
     var hasChanges: Bool { get }
     var persistentBackingData: any BackingData<Model> { get set }
     init(backingData: any BackingData<Model>)
-    static func schemaMetadata() -> [Schema.PropertyMetadata]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata]
     /// Returns the persisted property name associated with a model-rooted key path.
     static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String?
     /// Returns property descriptors keyed by paths rooted at this model's dynamic class.
     static func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor]
-    static func schemaIndexes() -> [Schema.Index]
+    static func schemaIndexes() -> [SchemaDescriptor.Index]
     /// The generated, declaration-ordered property descriptor table.
     static var propertyDescriptors: [PropertyDescriptor] { get }
     /// Returns the slot associated with a property key path, if one exists.
@@ -249,7 +249,7 @@ public extension PersistentModel {
         if let backing = persistentBackingData as? any AnyBackingData { return backing }
         return persistentBackingData.erasedBackingData()
     }
-    static func schemaIndexes() -> [Schema.Index] { [] }
+    static func schemaIndexes() -> [SchemaDescriptor.Index] { [] }
     static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String? {
         propertyDescriptorsByKeyPath()[keyPath]?.name
             ?? schemaMetadata().first(where: { $0.keypath == keyPath })?.name
@@ -458,7 +458,7 @@ private enum DetachedRelationshipGraph {
         let original = sourceHasValue ? unique(adapter.read(owner) ?? []) : []
         let declaredRelationship =
             ownerType.schemaMetadata()
-            .first(where: { $0.name == adapter.name })?.metadata?.base as? Schema.Relationship
+            .first(where: { $0.name == adapter.name })?.metadata?.base as? SchemaDescriptor.Relationship
         let explicitInverseName = adapter.explicitInverseKeyPath.flatMap { inverseKeyPath in
             (original + endpoints).compactMap { endpoint in
                 type(of: endpoint).schemaMetadata().first(where: { $0.keypath == inverseKeyPath })?.name
@@ -566,7 +566,7 @@ private enum DetachedRelationshipGraph {
         var inverseNames = Set<String>()
         for model in relatedModels {
             let matches = type(of: model).schemaMetadata().compactMap { metadata -> String? in
-                guard let relationship = metadata.metadata?.base as? Schema.Relationship,
+                guard let relationship = metadata.metadata?.base as? SchemaDescriptor.Relationship,
                     relationship.inverse == adapter.name
                 else { return nil }
                 return metadata.name

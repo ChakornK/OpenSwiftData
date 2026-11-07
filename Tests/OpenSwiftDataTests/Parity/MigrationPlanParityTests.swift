@@ -3,7 +3,7 @@ import OpenSwiftData
 import Testing
 
 enum ParityTripsV1: VersionedSchema {
-    static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+    static var versionIdentifier: SchemaDescriptor.Version { SchemaDescriptor.Version(1, 0, 0) }
     static var models: [any PersistentModel.Type] { [Trip.self] }
 
     @Model final class Trip {
@@ -13,7 +13,7 @@ enum ParityTripsV1: VersionedSchema {
 }
 
 enum ParityTripsV2: VersionedSchema {
-    static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
+    static var versionIdentifier: SchemaDescriptor.Version { SchemaDescriptor.Version(2, 0, 0) }
     static var models: [any PersistentModel.Type] { [Trip.self] }
 
     @Model final class Trip {
@@ -40,10 +40,10 @@ enum ParityTripsPlan: SchemaMigrationPlan {
 /// Versioned schemas and migration plans written as for Apple's SwiftData.
 @MainActor @Suite struct MigrationPlanParityTests {
     @Test func `versioned schemas need only models and a version`() {
-        let schema = Schema(versionedSchema: ParityTripsV2.self)
-        #expect(schema.version == Schema.Version(2, 0, 0))
+        let schema = SchemaDescriptor(versionedSchema: ParityTripsV2.self)
+        #expect(schema.version == SchemaDescriptor.Version(2, 0, 0))
         #expect(schema.entities.map(\.name) == ["Trip"])
-        #expect(ParityTripsV1.schema.version == Schema.Version(1, 0, 0))
+        #expect(ParityTripsV1.schema.version == SchemaDescriptor.Version(1, 0, 0))
     }
 
     @Test func `migration stages are enum cases`() {
@@ -52,8 +52,8 @@ enum ParityTripsPlan: SchemaMigrationPlan {
             Issue.record("expected a lightweight stage")
             return
         }
-        #expect(from.versionIdentifier == Schema.Version(1, 0, 0))
-        #expect(to.versionIdentifier == Schema.Version(2, 0, 0))
+        #expect(from.versionIdentifier == SchemaDescriptor.Version(1, 0, 0))
+        #expect(to.versionIdentifier == SchemaDescriptor.Version(2, 0, 0))
         guard case .custom(_, _, let willMigrate, let didMigrate) = ParityTripsPlan.stages[0] else {
             Issue.record("expected a custom stage")
             return
@@ -73,7 +73,7 @@ enum ParityTripsPlan: SchemaMigrationPlan {
         defer { try? FileManager.default.removeItem(at: url) }
         do {
             let v1 = try ModelContainer(
-                for: Schema(versionedSchema: ParityTripsV1.self), configurations: ModelConfiguration(url: url))
+                for: SchemaDescriptor(versionedSchema: ParityTripsV1.self), configurations: ModelConfiguration(url: url))
             v1.mainContext.insert(ParityTripsV1.Trip(name: "coast"))
             try v1.mainContext.save()
         }

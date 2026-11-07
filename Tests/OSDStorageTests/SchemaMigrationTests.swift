@@ -13910,7 +13910,9 @@ final class SchemaMigrationTests: XCTestCase {
             try initial.close()
 
             XCTAssertThrowsError(try LightweightMigration.openStore(location: location, schema: destination)) { error in
-                guard case let SwiftDataError.migrationUnsupported(reason) = error else {
+                guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                    let reason = dataError.explanation
+                else {
                     return XCTFail("Expected migrationUnsupported for variant \(index), got \(error)")
                 }
                 XCTAssertTrue(
@@ -16312,7 +16314,9 @@ final class SchemaMigrationTests: XCTestCase {
                     try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
                 }
             ) { error in
-                guard case let SwiftDataError.migrationUnsupported(reason) = error else {
+                guard let dataError = error as? SwiftDataError, dataError == .migrationUnsupported,
+                    let reason = dataError.explanation
+                else {
                     return XCTFail("Expected \(name) relationship removal to fail closed, got \(error)")
                 }
                 XCTAssertTrue(

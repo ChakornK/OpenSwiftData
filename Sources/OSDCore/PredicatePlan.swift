@@ -25,12 +25,16 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case localizedStandardContains(PredicatePlan, PredicatePlan)
     case stringContains(PredicatePlan, PredicatePlan)
     case stringStartsWith(PredicatePlan, PredicatePlan)
+    /// The number of `Character`s in a string operand.
+    case stringCount(PredicatePlan)
     case collectionContains(String, String, PredicatePlan)
     case collectionAllEqual(String, String, PredicatePlan)
     case collectionAllNil(String)
     case collectionAllCompare(String, String, PredicateComparisonOperator, PredicatePlan)
     case codableCollectionIsEmpty(String)
     case codableCollectionCount(String)
+    /// A JSON member path inside a Codable attribute, such as `address.city`.
+    case codableMember(String, [String])
     case relationshipContains(String, PredicatePlan)
     case collectionCount(String)
 }

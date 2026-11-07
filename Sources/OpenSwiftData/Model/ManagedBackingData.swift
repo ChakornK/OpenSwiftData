@@ -370,7 +370,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
             identifier = detachedIdentifier
             deleted = false
             changed = false
-            storeIdentifier = detachedIdentifier.storeIdentifier
+            storeIdentifier = detachedIdentifier.resolvedStoreIdentifier
             primaryKey = nil
             entityID = 0
             version = 0
@@ -420,10 +420,10 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
         lock.lock()
         if let primaryKey = identifier.primaryKey {
             identifier = PersistentIdentifier(
-                storeIdentifier: identifier.storeIdentifier, entityName: entityName, primaryKey: primaryKey)
+                storeIdentifier: identifier.resolvedStoreIdentifier, entityName: entityName, primaryKey: primaryKey)
         } else if let temporaryIdentifier = identifier.temporaryIdentifier {
             identifier = PersistentIdentifier(
-                storeIdentifier: identifier.storeIdentifier,
+                storeIdentifier: identifier.resolvedStoreIdentifier,
                 entityName: entityName,
                 temporaryIdentifier: temporaryIdentifier)
         }
@@ -478,7 +478,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
             identifier = detachedIdentifier
             deleted = false
             changed = false
-            storeIdentifier = detachedIdentifier.storeIdentifier
+            storeIdentifier = detachedIdentifier.resolvedStoreIdentifier
             primaryKey = nil
             entityID = 0
             version = 0

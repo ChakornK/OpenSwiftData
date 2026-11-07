@@ -29,6 +29,10 @@ package indirect enum PredicateIR: Sendable, Equatable {
     case collectionAllCompare(String, String, ComparisonOperator, PredicateIR)
     case codableCollectionIsEmpty(String)
     case codableCollectionCount(String)
+    /// A JSON member path inside a Codable attribute, such as `address.city`.
+    case codableMember(String, [String])
+    /// The number of `Character`s in a string operand.
+    case stringCount(PredicateIR)
     case relationshipContains(String, PredicateIR)
     case relationshipCount(String)
     case localizedStandardContains(PredicateIR, PredicateIR)
@@ -538,6 +542,21 @@ package enum PredicateIRBuilder {
                         "Codable collection count requires a direct scalar collection attribute.")
                 }
                 return .codableCollectionCount(path[0])
+            case "OSDCodableMember":
+                guard
+                    case let .keyPath(path) = try field("value", from: fields), path.count == 1,
+                    case let .expression(name: "OSDCodableMember", children: children) = node,
+                    case let .capture(_, members)? = children.first(where: { $0.0 == "member" })?.1
+                else {
+                    throw SwiftDataError.unsupportedPredicate(
+                        "Codable member predicates require a direct Codable attribute.")
+                }
+                return .codableMember(path[0], members.split(separator: ".").map(String.init))
+            case "OSDStringIsEmpty", "OSDStringCount":
+                let string = try field("string", from: fields)
+                try validateStringOperand(string, attributeTypes: attributeTypes)
+                let count = PredicateIR.stringCount(string)
+                return name == "OSDStringCount" ? count : .comparison(.equal, count, .value(.int(0)))
             case "OSDSequenceAllSatisfy":
                 guard
                     case let .keyPath(path) = try field(
@@ -669,6 +688,9 @@ package enum PredicateIRBuilder {
                 try prefixRelationshipPath(test, relationships: relationships, attributeTypes: attributeTypes),
                 try prefixRelationshipPath(trueBranch, relationships: relationships, attributeTypes: attributeTypes),
                 try prefixRelationshipPath(falseBranch, relationships: relationships, attributeTypes: attributeTypes))
+        case let .stringCount(string):
+            return .stringCount(
+                try prefixRelationshipPath(string, relationships: relationships, attributeTypes: attributeTypes))
         case let .localizedStandardContains(lhs, rhs):
             return .localizedStandardContains(
                 try prefixRelationshipPath(lhs, relationships: relationships, attributeTypes: attributeTypes),
@@ -727,6 +749,12 @@ package enum PredicateIRBuilder {
             return .codableCollectionIsEmpty(name)
         case let .codableCollectionCount(name):
             return .codableCollectionCount(name)
+        case let .codableMember(name, members):
+            guard relationships.isEmpty else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable attribute members inside relationship predicates are unsupported.")
+            }
+            return .codableMember(name, members)
         case let .relationshipCount(name):
             let relationshipParts = name.split(separator: ".").map(String.init)
             let fullName =
@@ -800,6 +828,8 @@ package enum PredicateIRBuilder {
             let .stringStartsWith(lhs, rhs), let .conjunction(lhs, rhs), let .disjunction(lhs, rhs):
             return referencesDecimal(lhs, attributeTypes: attributeTypes)
                 || referencesDecimal(rhs, attributeTypes: attributeTypes)
+        case .stringCount:
+            return false
         case let .unaryNegation(value, _):
             return referencesDecimal(value, attributeTypes: attributeTypes)
         case let .floatNegation(value):
@@ -822,7 +852,7 @@ package enum PredicateIRBuilder {
             return referencesDecimal(element, attributeTypes: attributeTypes)
         case .codableCollectionIsEmpty:
             return false
-        case .codableCollectionCount:
+        case .codableCollectionCount, .codableMember:
             return false
         case .sequenceContains, .relationshipIsPresent, .relationshipCount, .persistentIdentifier,
             .identifierValue, .persistentIdentifierComparison, .value:
@@ -924,6 +954,9 @@ package enum PredicateIRBuilder {
         case let .keyPath(path):
             let name = path.joined(separator: ".")
             return optionalAttributeNames.contains(name) || attributeTypes[name]?.hasSuffix("?") == true
+        case .codableMember:
+            // A missing member or JSON `null` reads as NULL, so comparisons need IS semantics.
+            return true
         case .value(.null):
             return true
         case let .arithmetic(_, lhs, rhs), let .realArithmetic(_, lhs, rhs),
@@ -949,6 +982,9 @@ package enum PredicateIRBuilder {
                 trueBranch, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
                 || isNullablePredicateValue(
                     falseBranch, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
+        case let .stringCount(string):
+            return isNullablePredicateValue(
+                string, attributeTypes: attributeTypes, optionalAttributeNames: optionalAttributeNames)
         case let .localizedStandardContains(lhs, rhs), let .stringContains(lhs, rhs),
             let .stringStartsWith(lhs, rhs):
             return isNullablePredicateValue(
@@ -1061,6 +1097,10 @@ package enum PredicateIRBuilder {
         case let .negation(value):
             return .negation(
                 try elementPredicate(value, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
+        case let .stringCount(string):
+            try validateElementStringOperand(string, relationship: relationship, attributeTypes: attributeTypes)
+            return .stringCount(
+                try elementPredicate(string, relationship: relationship, attributeTypes: attributeTypes, depth: depth))
         case let .localizedStandardContains(lhs, rhs):
             try validateElementStringOperand(lhs, relationship: relationship, attributeTypes: attributeTypes)
             return .localizedStandardContains(
@@ -1409,6 +1449,8 @@ package enum PredicateIRBuilder {
         case "OSDSequenceCount": ["sequence"]
         case "OSDCodableCollectionIsEmpty": ["collection"]
         case "OSDCodableCollectionCount": ["collection"]
+        case "OSDCodableMember": ["value", "member"]
+        case "OSDStringIsEmpty", "OSDStringCount": ["string"]
         case "RangeExpressionContains": ["range", "element"]
         case "ClosedRange", "Range": ["lower", "upper"]
         case "PartialRangeFrom": ["lowerBound"]

@@ -8,9 +8,29 @@ final class HistoryFixture {
     init(name: String) { self.name = name }
 }
 
+private typealias Transactions = HistoryDescriptor<DefaultHistoryTransaction>
+
+private extension HistoryChange {
+    var kind: HistoryChangeType {
+        switch self {
+        case .insert: .insert
+        case .update: .update
+        case .delete: .delete
+        }
+    }
+}
+
+private extension ModelContext {
+    func allHistory() throws -> [DefaultHistoryTransaction] { try fetchHistory(Transactions()) }
+
+    func history(after token: DefaultHistoryToken) throws -> [DefaultHistoryTransaction] {
+        try fetchHistory(Transactions(predicate: #Predicate { $0.token > token }))
+    }
+}
+
 final class HistoryTests: XCTestCase {
     @MainActor
-    func testHistoryRecordsInsertUpdateDeleteAndPrunesByToken() throws {
+    func testHistoryRecordsInsertUpdateDeleteAndPrunesByToken() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataHistory-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -24,15 +44,10 @@ final class HistoryTests: XCTestCase {
         let model = HistoryFixture(name: "first")
         context.insert(model)
         try context.save()
-        let inserted = try XCTUnwrap(context.fetchHistory().first)
+        let inserted = try XCTUnwrap(context.allHistory().first)
         XCTAssertEqual(inserted.author, "seed")
-        XCTAssertEqual(
-            inserted.changes,
-            [
-                HistoryChange(
-                    type: .insert, entityName: "HistoryFixture",
-                    primaryKey: try XCTUnwrap(model.persistentModelID.primaryKey), ordinal: 0)
-            ])
+        XCTAssertEqual(inserted.changes.map(\.kind), [.insert])
+        XCTAssertEqual(inserted.changes.map(\.changedPersistentIdentifier), [model.persistentModelID])
 
         context.historyAuthor = "editor"
         try context.transaction {
@@ -40,30 +55,33 @@ final class HistoryTests: XCTestCase {
             try context.save()
             model.name = "updated"
         }
-        let update = try XCTUnwrap(context.fetchHistory(HistoryDescriptor(after: inserted.token)).first)
+        let update = try XCTUnwrap(context.history(after: inserted.token).first)
         XCTAssertEqual(update.author, "editor")
-        XCTAssertEqual(update.changes.first?.type, .update)
+        XCTAssertEqual(update.changes.first?.kind, .update)
 
         context.historyAuthor = "cleanup"
         context.delete(model)
         try context.save()
-        let delete = try XCTUnwrap(context.fetchHistory(HistoryDescriptor(after: update.token)).first)
+        let delete = try XCTUnwrap(context.history(after: update.token).first)
         XCTAssertEqual(delete.author, "cleanup")
-        XCTAssertEqual(delete.changes.first?.type, .delete)
+        XCTAssertEqual(delete.changes.first?.kind, .delete)
 
-        XCTAssertEqual(try context.fetchHistory(HistoryDescriptor(fetchLimit: 1)).count, 1)
-        XCTAssertEqual(try context.fetchHistory(HistoryDescriptor(fetchLimit: 0)), [])
-        XCTAssertEqual(try context.deleteHistory(before: update.token), 2)
-        XCTAssertEqual(try context.fetchHistory().map(\.token), [delete.token])
+        var limited = Transactions()
+        limited.fetchLimit = 1
+        XCTAssertEqual(try context.fetchHistory(limited).count, 1)
+        let updateToken = update.token
+        try context.deleteHistory(Transactions(predicate: #Predicate { $0.token <= updateToken }))
+        XCTAssertEqual(try context.allHistory().map(\.token), [delete.token])
 
         let reopened = try ModelContainer(
             for: HistoryFixture.self,
             configurations: .sqliteFile("history-reopened", url: directory.appendingPathComponent("store.sqlite")))
-        XCTAssertEqual(try reopened.makeContext().fetchHistory().map(\.token), [delete.token])
+        XCTAssertEqual(
+            try reopened.makeContext().allHistory().map(\.transactionIdentifier), [delete.transactionIdentifier])
     }
 
     @MainActor
-    func testFailedModelWriteDoesNotCommitHistory() throws {
+    func testFailedModelWriteDoesNotCommitHistory() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataHistoryRollback-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -80,11 +98,11 @@ final class HistoryTests: XCTestCase {
         }
         context.insert(HistoryFixture(name: "rejected"))
         XCTAssertThrowsError(try context.save())
-        XCTAssertEqual(try context.fetchHistory(), [])
+        XCTAssertEqual(try context.allHistory(), [])
     }
 
     @MainActor
-    func testUniqueInsertReplacementIsRecordedAsUpdate() throws {
+    func testUniqueInsertReplacementIsRecordedAsUpdate() async throws {
         let container = try ModelContainer(
             for: HistoryFixture.self, configurations: .sqliteMemory("history-upsert"))
         let context = container.mainContext
@@ -93,8 +111,8 @@ final class HistoryTests: XCTestCase {
         let replacement = HistoryFixture(name: "same")
         context.insert(replacement)
         try context.save()
-        let transactions = try context.fetchHistory()
-        XCTAssertEqual(transactions.map { $0.changes.first?.type }, [.insert, .update])
+        let transactions = try context.allHistory()
+        XCTAssertEqual(transactions.map { $0.changes.first?.kind }, [.insert, .update])
         XCTAssertEqual(try context.fetch(FetchDescriptor<HistoryFixture>()).count, 1)
     }
 }

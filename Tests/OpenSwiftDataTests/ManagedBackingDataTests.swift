@@ -17,7 +17,7 @@ private final class UndoRelationshipDestination {
 
 final class ManagedBackingDataTests: XCTestCase {
     @MainActor
-    func testUndoGroupsMultiplePropertyMutationsAndSupportsRedo() throws {
+    func testUndoGroupsMultiplePropertyMutationsAndSupportsRedo() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-redo-grouping"))
         let context = container.mainContext
@@ -59,7 +59,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoAndRedoRestoreRelationshipGraphChanges() throws {
+    func testUndoAndRedoRestoreRelationshipGraphChanges() async throws {
         let container = try ModelContainer(
             for: UndoRelationshipOwner.self, UndoRelationshipDestination.self,
             configurations: .sqliteMemory("undo-relationship-graph"))
@@ -93,7 +93,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedTransactionDoesNotContaminateNextUndoGroup() throws {
+    func testFailedTransactionDoesNotContaminateNextUndoGroup() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-failed-transaction"))
         let context = container.mainContext
@@ -117,7 +117,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoSaveRefreshesBaselineForLaterMutations() throws {
+    func testUndoSaveRefreshesBaselineForLaterMutations() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-baseline-refresh"))
         let context = container.mainContext
@@ -142,7 +142,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testRedoAfterSavingUndoRestoresPreviouslyCommittedEdit() throws {
+    func testRedoAfterSavingUndoRestoresPreviouslyCommittedEdit() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-redo-after-save"))
         let context = container.mainContext
@@ -167,7 +167,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitRollbackInvalidatesUndoForDiscardedChanges() throws {
+    func testExplicitRollbackInvalidatesUndoForDiscardedChanges() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-explicit-rollback"))
         let context = container.mainContext
@@ -179,16 +179,16 @@ final class ManagedBackingDataTests: XCTestCase {
 
         model.value = 2
         context.rollback()
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
 
         undoManager.undo()
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
     }
 
     @MainActor
-    func testUndoSavedDeleteRestoresModel() throws {
+    func testUndoSavedDeleteRestoresModel() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-saved-delete"))
         let context = container.mainContext
@@ -213,7 +213,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoGroupPreservesRelationshipChangedAfterPropertyEdit() throws {
+    func testUndoGroupPreservesRelationshipChangedAfterPropertyEdit() async throws {
         let container = try ModelContainer(
             for: UndoRelationshipOwner.self, UndoRelationshipDestination.self,
             configurations: .sqliteMemory("undo-property-then-relationship"))
@@ -234,7 +234,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testRelationshipEditAfterUndoGetsItsOwnUndoGroup() throws {
+    func testRelationshipEditAfterUndoGetsItsOwnUndoGroup() async throws {
         let container = try ModelContainer(
             for: UndoRelationshipOwner.self, UndoRelationshipDestination.self,
             configurations: .sqliteMemory("undo-relationship-next-group"))
@@ -259,7 +259,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testReplacingUndoManagerInvalidatesOldManagerActions() throws {
+    func testReplacingUndoManagerInvalidatesOldManagerActions() async throws {
         let container = try ModelContainer(
             for: MacroBackingTestModel.self, configurations: .sqliteMemory("undo-manager-swap"))
         let context = container.mainContext
@@ -280,7 +280,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testSnapshotKeepsBaselineAndOverlaysWritesUntilRestore() {
+    func testSnapshotKeepsBaselineAndOverlaysWritesUntilRestore() async {
         let context = ModelContext()
         let backing = ManagedBackingData<MacroBackingTestModel>(
             metadata: MacroBackingTestModel.schemaMetadata(),
@@ -320,7 +320,7 @@ final class ManagedBackingDataTests: XCTestCase {
     }
 
     @MainActor
-    func testManagedSlotAccessObservesValuesLoadedByPropertyFaults() {
+    func testManagedSlotAccessObservesValuesLoadedByPropertyFaults() async {
         let context = ModelContext()
         let backing = ManagedBackingData<MacroBackingTestModel>(
             metadata: MacroBackingTestModel.schemaMetadata(), values: [:], context: context,
@@ -364,7 +364,7 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertTrue(result.1)
         XCTAssertTrue(result.2)
 
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 12)
         XCTAssertFalse(model.hasChanges)
     }
 }

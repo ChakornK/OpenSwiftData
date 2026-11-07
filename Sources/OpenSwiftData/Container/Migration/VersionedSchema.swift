@@ -6,8 +6,13 @@ public protocol VersionedSchema: Sendable {
     static var versionIdentifier: Schema.Version { get }
     /// The model types used to materialize values during migration stages.
     static var models: [any PersistentModel.Type] { get }
-    /// The schema layout for this version.
+    /// The schema layout for this version; defaults to the schema inferred from `models`.
     static var schema: Schema { get }
+}
+
+extension VersionedSchema {
+    /// A schema of `models` at `versionIdentifier`.
+    public static var schema: Schema { Schema(models, version: versionIdentifier) }
 }
 
 /// Declares the ordered schemas and transitions used to migrate a model container.
@@ -19,67 +24,52 @@ public protocol SchemaMigrationPlan: Sendable {
 }
 
 /// Describes one migration transition between two versioned schemas.
-public struct MigrationStage: @unchecked Sendable {
-    /// The transition strategy.
-    public enum Strategy {
-        /// Applies the supported schema changes without custom callbacks.
+public enum MigrationStage: @unchecked Sendable {
+    /// Applies the supported schema changes without custom callbacks.
+    case lightweight(fromVersion: any VersionedSchema.Type, toVersion: any VersionedSchema.Type)
+    /// Runs context callbacks around the schema change.
+    ///
+    /// `willMigrate` runs transactionally with a context using the source schema before the change, and
+    /// `didMigrate` with a context using the destination schema after it. Structural changes still use the
+    /// lightweight engine; unsupported table-layout changes fail closed.
+    case custom(
+        fromVersion: any VersionedSchema.Type,
+        toVersion: any VersionedSchema.Type,
+        willMigrate: (@Sendable (_ context: ModelContext) throws -> Void)? = nil,
+        didMigrate: (@Sendable (_ context: ModelContext) throws -> Void)? = nil
+    )
+
+    /// How a stage applies its schema change.
+    enum Strategy {
         case lightweight
-        /// Runs custom context callbacks around schema changes supported by the lightweight engine.
         case custom
     }
 
-    /// The source schema version.
-    public let sourceVersion: Schema.Version
-    /// The destination schema version.
-    public let destinationVersion: Schema.Version
-    /// The strategy for this transition.
-    public let strategy: Strategy
-    /// Runs transactionally with a context using the source schema before the transition.
-    public let willMigrate: (@Sendable (ModelContext) throws -> Void)?
-    /// Runs transactionally with a context using the destination schema after the transition.
-    public let didMigrate: (@Sendable (ModelContext) throws -> Void)?
-
-    /// Creates a lightweight transition.
-    public static func lightweight<Source: VersionedSchema, Destination: VersionedSchema>(
-        fromVersion source: Source.Type,
-        toVersion destination: Destination.Type
-    ) -> Self {
-        Self(
-            sourceVersion: Source.versionIdentifier,
-            destinationVersion: Destination.versionIdentifier,
-            strategy: .lightweight,
-            willMigrate: nil,
-            didMigrate: nil)
+    var sourceVersion: Schema.Version {
+        switch self {
+        case .lightweight(let from, _), .custom(let from, _, _, _): from.versionIdentifier
+        }
     }
 
-    /// Creates a transition with source and destination context callbacks. Structural changes still use the
-    /// lightweight engine; unsupported table-layout changes fail closed.
-    public static func custom<Source: VersionedSchema, Destination: VersionedSchema>(
-        fromVersion source: Source.Type,
-        toVersion destination: Destination.Type,
-        willMigrate: (@Sendable (ModelContext) throws -> Void)? = nil,
-        didMigrate: (@Sendable (ModelContext) throws -> Void)? = nil
-    ) -> Self {
-        Self(
-            sourceVersion: Source.versionIdentifier,
-            destinationVersion: Destination.versionIdentifier,
-            strategy: .custom,
-            willMigrate: willMigrate,
-            didMigrate: didMigrate)
+    var destinationVersion: Schema.Version {
+        switch self {
+        case .lightweight(_, let to), .custom(_, let to, _, _): to.versionIdentifier
+        }
     }
 
-    private init(
-        sourceVersion: Schema.Version,
-        destinationVersion: Schema.Version,
-        strategy: Strategy,
-        willMigrate: (@Sendable (ModelContext) throws -> Void)?,
-        didMigrate: (@Sendable (ModelContext) throws -> Void)?
-    ) {
-        self.sourceVersion = sourceVersion
-        self.destinationVersion = destinationVersion
-        self.strategy = strategy
-        self.willMigrate = willMigrate
-        self.didMigrate = didMigrate
+    var strategy: Strategy {
+        if case .custom = self { return .custom }
+        return .lightweight
+    }
+
+    var willMigrate: (@Sendable (ModelContext) throws -> Void)? {
+        if case .custom(_, _, let willMigrate, _) = self { return willMigrate }
+        return nil
+    }
+
+    var didMigrate: (@Sendable (ModelContext) throws -> Void)? {
+        if case .custom(_, _, _, let didMigrate) = self { return didMigrate }
+        return nil
     }
 }
 
@@ -87,11 +77,11 @@ struct MigrationPlanDescriptor: @unchecked Sendable {
     let schemas: [(version: Schema.Version, schema: Schema, models: [any PersistentModel.Type])]
     let stages: [MigrationStage]
 
-    init<Plan: SchemaMigrationPlan>(_ plan: Plan.Type) throws {
-        schemas = Plan.schemas.map { versioned in
+    init(_ plan: any SchemaMigrationPlan.Type) throws {
+        schemas = plan.schemas.map { versioned in
             (version: versioned.versionIdentifier, schema: versioned.schema, models: versioned.models)
         }
-        stages = Plan.stages
+        stages = plan.stages
         try validate()
     }
 
@@ -101,7 +91,7 @@ struct MigrationPlanDescriptor: @unchecked Sendable {
         }
         var identifiers: Set<String> = []
         for schema in schemas {
-            guard schema.schema.version == schema.version else {
+            guard schema.schema.declaredVersion == schema.version else {
                 throw SwiftDataError.migrationUnsupported(
                     "Versioned schema '\(schema.version.identifier)' must carry its declared schema version.")
             }

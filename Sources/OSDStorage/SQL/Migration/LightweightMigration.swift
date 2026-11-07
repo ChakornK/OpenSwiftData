@@ -9,6 +9,26 @@ package enum LightweightMigration {
     package static let entityIDsKey = "schema.entity-ids.v1"
     package static let entityIDHighWatermarkKey = "schema.entity-id-next.v1"
     package static let pendingMigrationKey = "schema.migration.pending.v1"
+    package static let storeIdentifierKey = "store.identifier.v1"
+
+    /// Returns the store's persistent UUID string, creating and saving one the first time a store is opened.
+    package static func storeIdentifier(connection: SQLConnection) throws -> String {
+        if let row = try connection.rows(
+            "SELECT value FROM _osd_meta WHERE key = ?", [.text(storeIdentifierKey)]
+        ).first {
+            guard case let .blob(bytes)? = row.first, let text = String(bytes: bytes, encoding: .utf8),
+                UUID(uuidString: text) != nil
+            else {
+                throw SwiftDataError.unsupportedStore("Stored store identifier is invalid.")
+            }
+            return text
+        }
+        let identifier = UUID().uuidString
+        try connection.execute(
+            "INSERT INTO _osd_meta (key, value) VALUES (?, ?)",
+            [.text(storeIdentifierKey), .blob(Array(identifier.utf8))])
+        return identifier
+    }
 
     package static func storedEntityIDs(schema: Schema, connection: SQLConnection) throws -> [String: Int]? {
         guard
@@ -207,7 +227,7 @@ package enum LightweightMigration {
                     throw error
                 }
             } else {
-                try writeSchemaVersion(destination.version, connection: connection)
+                try writeSchemaVersion(destination.declaredVersion, connection: connection)
                 try writeEntityIDHighWatermark(
                     max(
                         minimumNextEntityID,
@@ -276,6 +296,17 @@ package enum LightweightMigration {
         try connection.execute(
             "CREATE INDEX IF NOT EXISTS _osd_history_changes_transaction "
                 + "ON _osd_history_changes (transaction_id)")
+        // Columns added after the tables' first release; stores created earlier gain them on open.
+        let additions = [
+            ("_osd_history_transactions", "bundle_identifier", "TEXT"),
+            ("_osd_history_transactions", "process_identifier", "TEXT"),
+            ("_osd_history_changes", "details", "BLOB"),
+        ]
+        for (table, column, type) in additions {
+            let existing = try connection.rows("PRAGMA table_info(\(table))", [])
+            guard !existing.contains(where: { $0.count > 1 && $0[1] == .text(column) }) else { continue }
+            try connection.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(type)")
+        }
     }
 
     package static func migrate(
@@ -571,7 +602,7 @@ package enum LightweightMigration {
         try writeEntityIDHighWatermark(
             max(minimumNextEntityID ?? 1, try nextEntityIdentifier(after: schema.entityIDsByName.values)),
             connection: connection)
-        try writeSchemaVersion(schema.version, connection: connection)
+        try writeSchemaVersion(schema.declaredVersion, connection: connection)
     }
 
     private static func writeEntityIDHighWatermark(_ nextIdentifier: Int, connection: SQLConnection) throws {
@@ -1185,7 +1216,7 @@ package enum LightweightMigration {
         }
         let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
         let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
-        let retainedSchema = try Schema(retainedEntities, version: source.version, entityIDs: retainedIDs)
+        let retainedSchema = try Schema(retainedEntities, version: source.declaredVersion, entityIDs: retainedIDs)
         let retainedIndexNames = Set(
             retainedSchema.entities.flatMap { indexDefinitions(for: $0, schema: retainedSchema) }
                 .map { $0.name.uppercased() })
@@ -4740,35 +4771,36 @@ package enum LightweightMigration {
                     && !(index.properties.count == 1 && index.properties.first == removableAttributeUniqueIndex)
             }
             let destinationUniqueIndexes = destinationEntity.indexes.filter(\.isUnique)
-            return sourceEntity.superentityName == destinationEntity.superentityName
-                && sourceEntity.relationships == destinationEntity.relationships
-                && retainedSourceAttributes.count + additions.count == destinationAttributes.count
-                && retainedSourceAttributes.allSatisfy({ old in
-                    guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else { return false }
-                    return destinationAttributes.contains(mapping.destination)
-                        && (old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
-                            ? old == mapping.destination
-                            : renameMappings.contains(where: {
-                                $0.source?.name == old.name && $0.destination == mapping.destination
-                            }))
-                })
-                && additions.allSatisfy({ destinationAttributes.contains($0) })
-                && sourceUniqueIndexes.count == destinationUniqueIndexes.count
-                && sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
-                && (!additions.isEmpty
-                    ? Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                        == Set(destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                    : true)
-                && sourceEntity.indexes.allSatisfy({ index in
-                    !index.properties.contains(where: { property in
-                        renameIndexPropertyNames.contains(property.uppercased())
-                    }) || (!index.isUnique && index.properties.count == 1)
-                })
-                && destinationEntity.indexes.allSatisfy({ index in
-                    !index.properties.contains(where: { property in
-                        renameIndexPropertyNames.contains(property.uppercased())
-                    }) || (!index.isUnique && index.properties.count == 1)
-                })
+            guard sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.relationships == destinationEntity.relationships,
+                retainedSourceAttributes.count + additions.count == destinationAttributes.count
+            else { return false }
+            let retainedAttributesMatch: Bool = retainedSourceAttributes.allSatisfy { old in
+                guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else { return false }
+                guard destinationAttributes.contains(mapping.destination) else { return false }
+                if old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame {
+                    return old == mapping.destination
+                }
+                return renameMappings.contains { $0.source?.name == old.name && $0.destination == mapping.destination }
+            }
+            guard retainedAttributesMatch,
+                additions.allSatisfy({ destinationAttributes.contains($0) }),
+                sourceUniqueIndexes.count == destinationUniqueIndexes.count,
+                sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
+            else { return false }
+            if !additions.isEmpty {
+                let sourceUnique: Set<String> = Set(
+                    sourceEntity.attributes.filter { $0.options.contains(.unique) }.map(\.name))
+                let destinationUnique: Set<String> = Set(
+                    destinationEntity.attributes.filter { $0.options.contains(.unique) }.map(\.name))
+                guard sourceUnique == destinationUnique else { return false }
+            }
+            func indexAllowsRenames(_ index: Schema.Index) -> Bool {
+                !index.properties.contains { renameIndexPropertyNames.contains($0.uppercased()) }
+                    || (!index.isUnique && index.properties.count == 1)
+            }
+            return sourceEntity.indexes.allSatisfy(indexAllowsRenames)
+                && destinationEntity.indexes.allSatisfy(indexAllowsRenames)
         })
         guard targetEntityMatches else {
             throw SwiftDataError.migrationUnsupported(

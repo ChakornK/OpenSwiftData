@@ -6,7 +6,7 @@ import SwiftDiagnostics
 enum CodeGen {
     static func modelActorMemberSources(actorName: String) -> [String] {
         return [
-            "nonisolated let modelExecutor: DefaultSerialModelExecutor",
+            "nonisolated let modelExecutor: any ModelExecutor",
             "nonisolated let modelContainer: ModelContainer",
             "init(modelContainer: ModelContainer) {\n    self.modelContainer = modelContainer\n    self.modelExecutor = DefaultSerialModelExecutor.make(container: modelContainer)\n}",
         ]
@@ -35,28 +35,34 @@ enum CodeGen {
         }
     }
 
+    /// Returns one property-name group per directive argument; each argument is an array of key paths.
     static func schemaDirectiveProperties(
         _ node: some FreestandingMacroExpansionSyntax,
         kind: SchemaDirectiveKind
-    ) throws -> [String] {
+    ) throws -> [[String]] {
         let arguments = node.arguments
         guard !arguments.isEmpty else {
-            throw SchemaDirectiveDiagnostic("#\(kind.name) requires at least one direct property key path.")
+            throw SchemaDirectiveDiagnostic("#\(kind.name) requires at least one array of property key paths.")
         }
-        var properties: [String] = []
-        for argument in arguments {
-            guard let keyPath = argument.expression.as(KeyPathExprSyntax.self),
-                keyPath.components.count == 1,
-                let component = keyPath.components.first?.component.as(KeyPathPropertyComponentSyntax.self)
-            else {
-                throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be direct property key paths.")
+        return try arguments.map { argument in
+            guard let array = argument.expression.as(ArrayExprSyntax.self), !array.elements.isEmpty else {
+                throw SchemaDirectiveDiagnostic(
+                    "#\(kind.name) arguments must be non-empty arrays of property key paths.")
             }
-            properties.append(component.declName.baseName.text.trimmingCharacters(in: CharacterSet(charactersIn: "`")))
+            let properties = try array.elements.map { element -> String in
+                guard let keyPath = element.expression.as(KeyPathExprSyntax.self),
+                    keyPath.components.count == 1,
+                    let component = keyPath.components.first?.component.as(KeyPathPropertyComponentSyntax.self)
+                else {
+                    throw SchemaDirectiveDiagnostic("#\(kind.name) arguments must be direct property key paths.")
+                }
+                return component.declName.baseName.text.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+            }
+            guard Set(properties).count == properties.count else {
+                throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path in one group.")
+            }
+            return properties
         }
-        guard Set(properties).count == properties.count else {
-            throw SchemaDirectiveDiagnostic("#\(kind.name) cannot repeat a property key path.")
-        }
-        return properties
     }
 
     static func validateSchemaDirectiveTargets(
@@ -83,13 +89,14 @@ enum CodeGen {
             case "Unique": kind = .unique
             default: continue
             }
-            let properties = try schemaDirectiveProperties(directive, kind: kind)
-            try validateSchemaDirectiveTargets(properties, kind: kind, in: declaration)
-            let key = properties.joined(separator: "\u{0}")
-            if kind.isUnique {
-                if seenUnique.insert(key).inserted { uniqueIndexes.append(properties) }
-            } else if seenIndexes.insert(key).inserted {
-                indexes.append(properties)
+            for properties in try schemaDirectiveProperties(directive, kind: kind) {
+                try validateSchemaDirectiveTargets(properties, kind: kind, in: declaration)
+                let key = properties.joined(separator: "\u{0}")
+                if kind.isUnique {
+                    if seenUnique.insert(key).inserted { uniqueIndexes.append(properties) }
+                } else if seenIndexes.insert(key).inserted {
+                    indexes.append(properties)
+                }
             }
         }
         let rows = (uniqueIndexes.map { ($0, true) } + indexes.map { ($0, false) }).map { properties, unique in
@@ -322,23 +329,33 @@ enum CodeGen {
             guard !isRelationshipProperty else { return nil }
             let isOptionalScalar =
                 type.as(OptionalTypeSyntax.self).map { isSupportedScalarType($0.wrappedType) } ?? false
+            let typeName = type.trimmedDescription
             guard
                 isExplicitAttribute || isSupportedScalarType(type) || isOptionalScalar
                     || isCodableScalarCollectionType(type)
-            else { return nil }
-            let typeName = type.trimmedDescription
+            else {
+                // The type might be a model or a Codable value, so the adapter decides at runtime.
+                guard !property.isTransient, !property.isComputed, !property.isStatic, !property.isLazy else {
+                    return nil
+                }
+                return
+                    "        TypedPropertyAdapter<\(modelName), \(typeName)>.codableIfPossible(\"\(property.name)\", keyPath: \\\(modelName).\(property.escapedName), get: { model in model.\(property.escapedName) }, set: { model, value in model.\(property.escapedName) = value })"
+            }
             return
                 "        TypedPropertyAdapter<\(modelName), \(typeName)>(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), encode: { model in try PersistentValue.encode(model.\(property.name)) }, decode: { value, model in model.\(property.name) = try PersistentValue.decode(\(typeName).self, from: value) }, decodeValue: { value in (try PersistentValue.decode(\(typeName).self, from: value)) as Any })"
         }
+        let adapterList =
+            adapterRows.contains(where: isRuntimeCodableAdapterRow)
+            ? "([\n\(adapterRows.joined(separator: ",\n"))\n    ] as [(any PersistencePropertyAdapter<\(modelName)>)?]).compactMap { $0 }"
+            : "[\n\(adapterRows.joined(separator: ",\n"))\n    ]"
         let adapterSource: String? =
             isSubclass || (adapterRows.isEmpty && isFinal)
             ? nil
-            : "\(typeDeclarationAccess) func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
-        let erasedAdapterRows = adapterRows.map { "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))" }
+            : "\(typeDeclarationAccess) func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    \(adapterList)\n}"
         let erasedAdapterSource: String = {
             if isSubclass {
                 return
-                    "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(erasedAdapterRows.joined(separator: ", "))] }"
+                    "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + \(erasedAdapterList(adapterRows)) }"
             }
             return
                 "\(typeDeclarationAccess) func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { persistenceAdapters().map(ErasedPersistencePropertyAdapter.init) }"
@@ -548,7 +565,7 @@ enum CodeGen {
             guard isSubclass || !isFinal else { return nil }
             let inherited =
                 superclassIdentifier.map {
-                    "var descriptors = \($0).__\($0.replacingOccurrences(of: "`", with: ""))PropertyDescriptors(Root.self)\n"
+                    "var descriptors = \($0).__\($0.replacingOccurrences(of: "`", with: ""))PropertyDescriptors(_OSDRoot.self)\n"
                 } ?? "var descriptors: [AnyKeyPath: PropertyDescriptor] = [:]\n"
             let additions = properties.enumerated().map { slot, property in
                 let typeName = propertyType(property.name, in: declaration)?.trimmedDescription ?? "Any"
@@ -566,10 +583,10 @@ enum CodeGen {
                     superclassIdentifier.map { "\($0).propertyDescriptors.count + \(slot)" }
                     ?? String(slot)
                 return
-                    "        descriptors[\\Root.\(property.escapedName) as AnyKeyPath] = PropertyDescriptor(slot: \(slotExpression), name: \"\(escapeSwiftString(property.name))\", keyPath: \\Root.\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
+                    "        descriptors[\\_OSDRoot.\(property.escapedName) as AnyKeyPath] = PropertyDescriptor(slot: \(slotExpression), name: \"\(escapeSwiftString(property.name))\", keyPath: \\_OSDRoot.\(property.escapedName), kind: \(kind), codec: \(typeName).self, options: [\(options)])"
             }.joined(separator: "\n")
             return
-                "\(tableAccess)static func \(keyPathTableName)<Root: \(modelName)>(_: Root.Type) -> [AnyKeyPath: PropertyDescriptor] {\n    \(inherited)\(additions)\n        return descriptors\n    }"
+                "\(tableAccess)static func \(keyPathTableName)<_OSDRoot: \(modelName)>(_: _OSDRoot.Type) -> [AnyKeyPath: PropertyDescriptor] {\n    \(inherited)\(additions)\n        return descriptors\n    }"
         }()
         let keyPathNameResolver =
             isSubclass
@@ -619,8 +636,8 @@ enum CodeGen {
                 : "\(instanceMemberAccess) func prepareForPersistence() {}",
             backingInitializer,
             "@Transient\n\(registrarAccess) let _$observationRegistrar = Observation.ObservationRegistrar()",
-            "\(isPublic ? "public " : "internal ")nonisolated func access<Root: \(modelName), _M>(keyPath: KeyPath<Root, _M>) where Root: Observable {\n    guard let subject = self as? Root else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
-            "\(isPublic ? "public " : "internal ")nonisolated func withMutation<Root: \(modelName), _M, _MR>(keyPath: KeyPath<Root, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where Root: Observable {\n    guard let subject = self as? Root else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
+            "\(isPublic ? "public " : "internal ")nonisolated func access<_OSDRoot: \(modelName), _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
+            "\(isPublic ? "public " : "internal ")nonisolated func withMutation<_OSDRoot: \(modelName), _M, _MR>(keyPath: KeyPath<_OSDRoot, _M>, _ mutation: () throws -> _MR) rethrows -> _MR where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return try mutation() }\n    return try _$observationRegistrar.withMutation(of: subject, keyPath: keyPath, mutation)\n}",
             "struct _SwiftDataNoType {}",
         ].compactMap { $0 }
     }
@@ -645,11 +662,8 @@ enum CodeGen {
         let ownDescriptors = "[\(descriptorRows.joined(separator: ", "))]"
         let descriptors =
             "\(typeOverrideAccess) class var propertyDescriptors: [PropertyDescriptor] { super.propertyDescriptors + \(ownDescriptors) }"
-        let ownErasedAdapters = erasedAdapterRows.map {
-            "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))"
-        }
         let erasedAdapters =
-            "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(ownErasedAdapters.joined(separator: ", "))] }"
+            "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + \(erasedAdapterList(erasedAdapterRows)) }"
         let ownFlattenedAdapters =
             flattenedAdapterRows.isEmpty
             ? "[]"
@@ -780,6 +794,22 @@ enum CodeGen {
                 return normalized == name
             })?.typeAnnotation?.type
         }.first
+    }
+
+    /// Builds an erased adapter array expression from generated typed adapter rows.
+    static func erasedAdapterList(_ rows: [String]) -> String {
+        let erased = rows.map { row in
+            isRuntimeCodableAdapterRow(row)
+                ? "(\(row.trimmingWhitespace())).map { ErasedPersistencePropertyAdapter($0) }"
+                : "ErasedPersistencePropertyAdapter(\(row.trimmingWhitespace()))"
+        }
+        guard rows.contains(where: isRuntimeCodableAdapterRow) else { return "[\(erased.joined(separator: ", "))]" }
+        return "([\(erased.joined(separator: ", "))] as [(any AnyPersistencePropertyAdapter)?]).compactMap { $0 }"
+    }
+
+    /// Whether a generated adapter row returns an optional adapter resolved at runtime.
+    static func isRuntimeCodableAdapterRow(_ row: String) -> Bool {
+        row.contains(">.codableIfPossible(")
     }
 
     static func isInferredRelationshipCandidate(_ type: TypeSyntax) -> Bool {

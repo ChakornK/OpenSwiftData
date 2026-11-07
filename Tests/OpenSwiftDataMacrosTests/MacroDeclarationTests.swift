@@ -40,7 +40,7 @@ final class MacroDeclarationTests: XCTestCase {
     }
 
     @MainActor
-    func testQualifiedRelationshipMacroGeneratesRelationshipMetadata() throws {
+    func testQualifiedRelationshipMacroGeneratesRelationshipMetadata() async throws {
         let container = try ModelContainer(
             for: [QualifiedRelationshipMacroFixture.self, OtherModel.self], configurations: [])
         let relationship = try XCTUnwrap(
@@ -53,11 +53,13 @@ final class MacroDeclarationTests: XCTestCase {
             QualifiedRelationshipMacroFixture.relationshipAdapterCandidates().contains { $0.name == "target" })
     }
 
-    func testModuleSelectedPropertyMacroGeneratesUniqueMetadata() {
-        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.name), ["key"])
-        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.options), [["unique"]])
-        XCTAssertEqual(ModuleSelectedPropertyMacroFixture.schemaMetadata().map(\.name), ["key"])
-    }
+    #if compiler(>=6.3)
+        func testModuleSelectedPropertyMacroGeneratesUniqueMetadata() {
+            XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.name), ["key"])
+            XCTAssertEqual(ModuleSelectedPropertyMacroFixture.propertyDescriptors.map(\.options), [["unique"]])
+            XCTAssertEqual(ModuleSelectedPropertyMacroFixture.schemaMetadata().map(\.name), ["key"])
+        }
+    #endif
 
     func testGeneratedSlotAccessWorksWithDetachedBackingSnapshots() {
         let model = ExampleModel(title: "before")
@@ -95,14 +97,17 @@ final class QualifiedRelationshipMacroFixture {
     }
 }
 
-@Model
-final class ModuleSelectedPropertyMacroFixture {
-    @OpenSwiftData::Attribute(.unique) var key: String
+// Module selectors (`Module::name`) need Swift 6.3 or later.
+#if compiler(>=6.3)
+    @Model
+    final class ModuleSelectedPropertyMacroFixture {
+        @OpenSwiftData::Attribute(.unique) var key: String
 
-    init(key: String) {
-        self.key = key
+        init(key: String) {
+            self.key = key
+        }
     }
-}
+#endif
 
 @Model
 final class QualifiedPropertyMacroFixture {

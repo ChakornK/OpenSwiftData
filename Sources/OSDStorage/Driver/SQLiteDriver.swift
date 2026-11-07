@@ -141,6 +141,7 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
         configuration.label = name.map { "OpenSwiftData.\($0)" } ?? "OpenSwiftData.SQLiteDriver"
         configuration.prepareDatabase { database in
             database.add(collation: .localizedStandardCompare)
+            database.add(collation: .localizedCompare)
             database.add(collation: DatabaseCollation("OSD_DECIMAL", function: DecimalText.compare))
             database.add(
                 function: DatabaseFunction("osd_localized_standard_contains", argumentCount: 2, pure: true) { values in
@@ -155,6 +156,11 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                         let needle = String.fromDatabaseValue(values[1])
                     else { return nil }
                     return OSDStringMatch.contains(haystack, needle) ? 1 : 0
+                })
+            database.add(
+                function: DatabaseFunction("osd_string_count", argumentCount: 1, pure: true) { values in
+                    // SQLite's length() counts code points; Swift predicates count grapheme clusters.
+                    String.fromDatabaseValue(values[0])?.count
                 })
             database.add(
                 function: DatabaseFunction("osd_string_starts_with", argumentCount: 2, pure: true) { values in
@@ -192,6 +198,21 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                         let array = try? JSONSerialization.jsonObject(with: data) as? [Any]
                     else { return nil }
                     return array.count
+                })
+            database.add(
+                function: DatabaseFunction("osd_json_member", argumentCount: 2, pure: true) { values in
+                    guard values.count == 2, let data = Data.fromDatabaseValue(values[0]),
+                        let path = String.fromDatabaseValue(values[1])
+                    else { return nil }
+                    switch CodableMemberValue.extract(
+                        from: Array(data), members: path.split(separator: ".").map(String.init))
+                    {
+                    case .null: return nil
+                    case let .int(value): return value
+                    case let .double(value): return value
+                    case let .text(value): return value
+                    case let .blob(value): return Data(value)
+                    }
                 })
             for (name, operation) in [
                 ("osd_int_add", IntegerOperation.add),

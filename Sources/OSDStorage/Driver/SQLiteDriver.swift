@@ -158,6 +158,11 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     return OSDStringMatch.contains(haystack, needle) ? 1 : 0
                 })
             database.add(
+                function: DatabaseFunction("osd_string_count", argumentCount: 1, pure: true) { values in
+                    // SQLite's length() counts code points; Swift predicates count grapheme clusters.
+                    String.fromDatabaseValue(values[0])?.count
+                })
+            database.add(
                 function: DatabaseFunction("osd_string_starts_with", argumentCount: 2, pure: true) { values in
                     guard let value = String.fromDatabaseValue(values[0]),
                         let prefix = String.fromDatabaseValue(values[1])

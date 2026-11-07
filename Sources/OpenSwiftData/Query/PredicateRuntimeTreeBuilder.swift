@@ -695,7 +695,11 @@ package enum PredicateRuntimeTreeBuilder {
                                 (operation.operandLabel, operandNode),
                             ])
                     }
-                    if ["Comparison", "Equal", "NotEqual"].contains(transformMetadata.name) {
+                    if ["Comparison", "Equal", "NotEqual"].contains(transformMetadata.name),
+                        Mirror(reflecting: transform).children.contains(where: {
+                            variableIdentifier($0.value) == variableID
+                        })
+                    {
                         let transformChildren = Array(Mirror(reflecting: transform).children)
                         let transformLabels = transformChildren.compactMap(\.label)
                         guard transformLabels.count == transformChildren.count,
@@ -732,6 +736,43 @@ package enum PredicateRuntimeTreeBuilder {
                         }
                         return .expression(name: transformMetadata.name, children: rewritten)
                     }
+                }
+                if case let .property(reference) = wrappedNode, !reference.name.contains("."),
+                    let wrappedAttribute = activeEntity.attributes.first(where: { $0.name == reference.name }),
+                    !wrappedAttribute.options.contains(.codable),
+                    !wrappedAttribute.options.contains(.flattened)
+                {
+                    // Lowered to `wrapped == nil ? nil : transform(wrapped)`, so a nil attribute yields nil even
+                    // when the transform would treat NULL operands as values (as optional comparisons do).
+                    var scopedBindings = bindings
+                    scopedBindings[variableID] = ExpressionBinding(
+                        value: wrapped, outerBindings: bindings, capturePathRewrites: capturePathRewrites)
+                    let captureRewrite = CapturePathRewrite(
+                        sourcePrefix: path + ["transform"], destinationPrefix: path + ["falseBranch"])
+                    let transformNode = try visit(
+                        transform, path: path + ["transform"], bindings: scopedBindings,
+                        capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                    let wrappedTypeName =
+                        activeModelType.schemaMetadata().first(where: { $0.name == reference.name })?.keypath
+                        .map { String(reflecting: type(of: $0).valueType) } ?? "Swift.Optional<Swift.String>"
+                    func nilValue(at nodePath: [String]) -> RuntimePredicateNode {
+                        captures[RuntimePredicatePath(labels: capturePathRewrites.reduce(nodePath) { $1.apply(to: $0) })] =
+                            .null
+                        return .expression(
+                            name: "Value", children: [("value", .capture(typeName: wrappedTypeName, description: "nil"))])
+                    }
+                    return .expression(
+                        name: "Conditional",
+                        children: [
+                            (
+                                "test",
+                                .expression(
+                                    name: "Equal",
+                                    children: [("lhs", wrappedNode), ("rhs", nilValue(at: path + ["test", "rhs"]))])
+                            ),
+                            ("trueBranch", nilValue(at: path + ["trueBranch"])),
+                            ("falseBranch", transformNode),
+                        ])
                 }
                 if codableCollectionName(wrappedNode, entity: activeEntity) != nil {
                     var scopedBindings = bindings
@@ -885,6 +926,20 @@ package enum PredicateRuntimeTreeBuilder {
                 {
                     return .expression(name: "OSDSequenceCount", children: [("sequence", rootNode)])
                 }
+            }
+            if name == "KeyPath",
+                let keyPath = children.first(where: { $0.label == "keyPath" })?.value as? AnyKeyPath,
+                keyPath == \String.isEmpty || keyPath == \String.count,
+                let root = children.first(where: { $0.label == "root" })?.value
+            {
+                let captureRewrite = CapturePathRewrite(
+                    sourcePrefix: path + ["root"], destinationPrefix: path + ["string"])
+                let rootNode = try visit(
+                    root, path: path + ["root"], bindings: bindings,
+                    capturePathRewrites: [captureRewrite] + capturePathRewrites)
+                return .expression(
+                    name: keyPath == \String.isEmpty ? "OSDStringIsEmpty" : "OSDStringCount",
+                    children: [("string", rootNode)])
             }
             if name == "KeyPath",
                 let keyPath = children.first(where: { $0.label == "keyPath" })?.value as? AnyKeyPath,

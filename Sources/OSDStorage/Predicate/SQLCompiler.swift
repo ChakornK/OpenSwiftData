@@ -116,6 +116,9 @@ package enum PredicatePlanBuilder {
             guard let test = build(test), let trueBranch = build(trueBranch), let falseBranch = build(falseBranch)
             else { return nil }
             return .conditional(test, trueBranch, falseBranch)
+        case let .stringCount(string):
+            guard let string = build(string) else { return nil }
+            return .stringCount(string)
         case let .localizedStandardContains(lhs, rhs):
             guard let lhs = build(lhs), let rhs = build(rhs) else { return nil }
             return .localizedStandardContains(lhs, rhs)
@@ -327,6 +330,10 @@ package enum SQLCompiler {
                 name,
                 resolvePersistentIdentifierComparisons(
                     body, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
+        case let .stringCount(string):
+            return .stringCount(
+                resolvePersistentIdentifierComparisons(
+                    string, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
         case let .localizedStandardContains(lhs, rhs):
             return .localizedStandardContains(
                 resolvePersistentIdentifierComparisons(
@@ -732,6 +739,9 @@ package enum SQLCompiler {
         case let .conditional(test, trueBranch, falseBranch):
             return
                 "(CASE WHEN \(try render(test, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) THEN \(try render(trueBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) ELSE \(try render(falseBranch, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)) END)"
+        case let .stringCount(string):
+            return
+                "osd_string_count(\(try render(string, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
         case let .localizedStandardContains(lhs, rhs):
             return
                 "osd_localized_standard_contains(\(try render(lhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)), \(try render(rhs, arguments: &arguments, entity: entity, relationships: relationships, tableAlias: tableAlias)))"
@@ -1025,6 +1035,7 @@ package enum SQLCompiler {
         case let .nilCoalesce(lhs, rhs): "coalesce(\(structure(lhs)),\(structure(rhs)))"
         case let .conditional(test, trueBranch, falseBranch):
             "conditional(\(structure(test)),\(structure(trueBranch)),\(structure(falseBranch)))"
+        case let .stringCount(string): "stringCount(\(structure(string)))"
         case let .localizedStandardContains(lhs, rhs): "localizedContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringContains(lhs, rhs): "stringContains(\(structure(lhs)),\(structure(rhs)))"
         case let .stringStartsWith(lhs, rhs): "stringStartsWith(\(structure(lhs)),\(structure(rhs)))"

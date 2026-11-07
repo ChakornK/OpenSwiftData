@@ -25,6 +25,8 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case localizedStandardContains(PredicatePlan, PredicatePlan)
     case stringContains(PredicatePlan, PredicatePlan)
     case stringStartsWith(PredicatePlan, PredicatePlan)
+    /// The number of `Character`s in a string operand.
+    case stringCount(PredicatePlan)
     case collectionContains(String, String, PredicatePlan)
     case collectionAllEqual(String, String, PredicatePlan)
     case collectionAllNil(String)

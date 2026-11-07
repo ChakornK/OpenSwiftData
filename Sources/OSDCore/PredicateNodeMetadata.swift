@@ -58,6 +58,8 @@ public enum PredicateNodeMetadata {
             Entry(name: "OSDCodableCollectionIsEmpty", requiredChildren: ["collection"]),
             Entry(name: "OSDCodableCollectionCount", requiredChildren: ["collection"]),
             Entry(name: "OSDCodableMember", requiredChildren: ["value", "member"]),
+            Entry(name: "OSDStringIsEmpty", requiredChildren: ["string"]),
+            Entry(name: "OSDStringCount", requiredChildren: ["string"]),
             Entry(name: "OSDSequenceCount", requiredChildren: ["sequence"]),
             Entry(name: "RangeExpressionContains", requiredChildren: ["range", "element"]),
             Entry(name: "ClosedRange", requiredChildren: ["lower", "upper"]),

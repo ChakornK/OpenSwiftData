@@ -2543,7 +2543,7 @@ public final class ModelContext {
                         let .stringContains(lhs, rhs), let .stringStartsWith(lhs, rhs):
                         try collect(lhs)
                         try collect(rhs)
-                    case let .negation(value), let .unaryNegation(value, _), let .floatNegation(value),
+                    case let .negation(value), let .stringCount(value), let .unaryNegation(value, _), let .floatNegation(value),
                         let .isNull(value, _):
                         try collect(value)
                     case let .conditional(test, yes, no):

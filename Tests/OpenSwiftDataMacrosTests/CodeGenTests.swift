@@ -706,6 +706,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertFalse(adapters.contains("TypedPropertyAdapter<Garage, [Car]>(\"cars\""))
         XCTAssertTrue(adapters.contains("storedPayload"))
         XCTAssertTrue(adapters.contains("PersistentValue.decode(Payload.self, from: value)"))
+        XCTAssertTrue(adapters.contains("TypedPropertyAdapter<Garage, Payload>.codableIfPossible(\"payload\""))
     }
 
     func testRelationshipAdaptersUseMetadataAndActualModelTypes() throws {
@@ -725,7 +726,10 @@ final class CodeGenTests: XCTestCase {
                 $0.contains("persistenceAdapters()")
             })
         XCTAssertTrue(generatedAdapters.contains("unrelatedString"))
-        XCTAssertFalse(generatedAdapters.contains("destination"))
+        // A syntactically ambiguous type only gets an adapter that decides at runtime whether it's Codable.
+        XCTAssertFalse(generatedAdapters.contains("TypedPropertyAdapter<Parcel, Destination?>(\"destination\""))
+        XCTAssertTrue(
+            generatedAdapters.contains("TypedPropertyAdapter<Parcel, Destination?>.codableIfPossible(\"destination\""))
         XCTAssertFalse(generatedAdapters.contains("explicitlyMarked"))
         XCTAssertFalse(generatedAdapters.contains("explicitlyMarkedWithEmptyArguments"))
         XCTAssertTrue(generatedAdapters.contains("payload"))

@@ -328,23 +328,33 @@ enum CodeGen {
             guard !isRelationshipProperty else { return nil }
             let isOptionalScalar =
                 type.as(OptionalTypeSyntax.self).map { isSupportedScalarType($0.wrappedType) } ?? false
+            let typeName = type.trimmedDescription
             guard
                 isExplicitAttribute || isSupportedScalarType(type) || isOptionalScalar
                     || isCodableScalarCollectionType(type)
-            else { return nil }
-            let typeName = type.trimmedDescription
+            else {
+                // The type might be a model or a Codable value, so the adapter decides at runtime.
+                guard !property.isTransient, !property.isComputed, !property.isStatic, !property.isLazy else {
+                    return nil
+                }
+                return
+                    "        TypedPropertyAdapter<\(modelName), \(typeName)>.codableIfPossible(\"\(property.name)\", keyPath: \\\(modelName).\(property.escapedName), get: { model in model.\(property.escapedName) }, set: { model, value in model.\(property.escapedName) = value })"
+            }
             return
                 "        TypedPropertyAdapter<\(modelName), \(typeName)>(\"\(property.name)\", keyPath: \\\(modelName).\(property.name), encode: { model in try PersistentValue.encode(model.\(property.name)) }, decode: { value, model in model.\(property.name) = try PersistentValue.decode(\(typeName).self, from: value) }, decodeValue: { value in (try PersistentValue.decode(\(typeName).self, from: value)) as Any })"
         }
+        let adapterList =
+            adapterRows.contains(where: isRuntimeCodableAdapterRow)
+            ? "([\n\(adapterRows.joined(separator: ",\n"))\n    ] as [(any PersistencePropertyAdapter<\(modelName)>)?]).compactMap { $0 }"
+            : "[\n\(adapterRows.joined(separator: ",\n"))\n    ]"
         let adapterSource: String? =
             isSubclass || (adapterRows.isEmpty && isFinal)
             ? nil
-            : "\(typeDeclarationAccess) func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    [\n\(adapterRows.joined(separator: ",\n"))\n    ]\n}"
-        let erasedAdapterRows = adapterRows.map { "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))" }
+            : "\(typeDeclarationAccess) func persistenceAdapters() -> [any PersistencePropertyAdapter<\(modelName)>] {\n    \(adapterList)\n}"
         let erasedAdapterSource: String = {
             if isSubclass {
                 return
-                    "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(erasedAdapterRows.joined(separator: ", "))] }"
+                    "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + \(erasedAdapterList(adapterRows)) }"
             }
             return
                 "\(typeDeclarationAccess) func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { persistenceAdapters().map(ErasedPersistencePropertyAdapter.init) }"
@@ -651,11 +661,8 @@ enum CodeGen {
         let ownDescriptors = "[\(descriptorRows.joined(separator: ", "))]"
         let descriptors =
             "\(typeOverrideAccess) class var propertyDescriptors: [PropertyDescriptor] { super.propertyDescriptors + \(ownDescriptors) }"
-        let ownErasedAdapters = erasedAdapterRows.map {
-            "ErasedPersistencePropertyAdapter(\($0.trimmingWhitespace()))"
-        }
         let erasedAdapters =
-            "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + [\(ownErasedAdapters.joined(separator: ", "))] }"
+            "\(typeOverrideAccess) class func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { super.erasedPersistenceAdapters() + \(erasedAdapterList(erasedAdapterRows)) }"
         let ownFlattenedAdapters =
             flattenedAdapterRows.isEmpty
             ? "[]"
@@ -786,6 +793,22 @@ enum CodeGen {
                 return normalized == name
             })?.typeAnnotation?.type
         }.first
+    }
+
+    /// Builds an erased adapter array expression from generated typed adapter rows.
+    static func erasedAdapterList(_ rows: [String]) -> String {
+        let erased = rows.map { row in
+            isRuntimeCodableAdapterRow(row)
+                ? "(\(row.trimmingWhitespace())).map { ErasedPersistencePropertyAdapter($0) }"
+                : "ErasedPersistencePropertyAdapter(\(row.trimmingWhitespace()))"
+        }
+        guard rows.contains(where: isRuntimeCodableAdapterRow) else { return "[\(erased.joined(separator: ", "))]" }
+        return "([\(erased.joined(separator: ", "))] as [(any AnyPersistencePropertyAdapter)?]).compactMap { $0 }"
+    }
+
+    /// Whether a generated adapter row returns an optional adapter resolved at runtime.
+    static func isRuntimeCodableAdapterRow(_ row: String) -> Bool {
+        row.contains(">.codableIfPossible(")
     }
 
     static func isInferredRelationshipCandidate(_ type: TypeSyntax) -> Bool {

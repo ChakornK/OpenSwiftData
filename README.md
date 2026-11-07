@@ -10,6 +10,27 @@
 - SQLite file-backed and in-memory stores
 - GRDB setup handled by the package
 
+## How OpenSwiftData differs from SwiftData
+
+OpenSwiftData follows SwiftData's API and behavior where the project has implemented and tested them. It is a separate persistence library: it does not use Apple's SwiftData stores, and compatibility is not complete.
+
+### Behavior differences
+
+- `rollback()` clears pending-change tracking but keeps edited values in memory. A later fetch can refresh those values from the store.
+- Deleting a model that has not been saved keeps it attached and marked deleted until save or rollback.
+- Deleting a model through a context does not enforce the `.deny` relationship rule. Related models are nullified. Batch deletes reject entities with `.deny` relationships.
+- `fetchCount` supports descriptors with an offset. The project also aims to preserve pending renames during batch deletes.
+- Predicate evaluation follows Swift semantics where SwiftData has returned inconsistent results, such as comparing `String.count`.
+- OpenSwiftData does not match nondeterministic result ordering or duplicate-selection behavior.
+
+### Platform and storage limits
+
+- The default backend is SQLite through GRDB. CloudKit is unsupported.
+- The package builds on Linux as well as Apple platforms. Some behavior differs across platforms; for example, save notifications filtered with `object: context` are not delivered on Linux.
+- The custom `DataStore` protocol API and SwiftData's class-based `Schema` API are not implemented. OpenSwiftData's schema uses value types and arrays for attributes and relationships.
+
+Check the source and tests for the current compatibility surface. OpenSwiftData is under active development, so support and known differences can change.
+
 ## Add OpenSwiftData to your app
 
 Add the package to `Package.swift`:

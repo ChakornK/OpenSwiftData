@@ -75,11 +75,16 @@ extension SortDescriptor where Compared: PersistentModel {
 
     /// The string ordering requested by the descriptor's comparator, defaulting to localized standard order.
     var stringCollation: StringSortCollation {
-        switch stringComparator {
-        case String.StandardComparator.lexical?: .lexical
-        case String.StandardComparator.localized?: .localized
-        default: .localizedStandard
-        }
+        #if canImport(Darwin)
+            switch stringComparator {
+            case String.StandardComparator.lexical?: .lexical
+            case String.StandardComparator.localized?: .localized
+            default: .localizedStandard
+            }
+        #else
+            // Linux Foundation has no `String.StandardComparator.localized`.
+            stringComparator == String.StandardComparator.lexical ? .lexical : .localizedStandard
+        #endif
     }
 
     /// The persisted property the descriptor sorts by, or `nil` when it does not sort by a key path.

@@ -18,7 +18,7 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
 
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) throws {
         _ = (backingData, relatedBackingDatas)
-        throw SwiftDataError.unsupportedStore("fixture requires explicit snapshot values")
+        throw SwiftDataError.unsupportedStore("fixture snapshot conversion is intentionally unsupported")
     }
 
     func copy(
@@ -26,6 +26,7 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
         remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
     ) -> Self {
         Self(persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier, title: title)
+    }
 }
 
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
@@ -67,6 +68,7 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
     func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
         _ = (schema, migrationPlan)
         return FixtureLegacyBackend()
+    }
 }
 
 private struct FixtureLegacyBackend: DataStore {
@@ -119,4 +121,5 @@ struct AppleDataStoreAPITests {
                 appleStore: "apple-fixture", schema: schema,
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
+    }
 }

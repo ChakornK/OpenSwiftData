@@ -4771,35 +4771,36 @@ package enum LightweightMigration {
                     && !(index.properties.count == 1 && index.properties.first == removableAttributeUniqueIndex)
             }
             let destinationUniqueIndexes = destinationEntity.indexes.filter(\.isUnique)
-            return sourceEntity.superentityName == destinationEntity.superentityName
-                && sourceEntity.relationships == destinationEntity.relationships
-                && retainedSourceAttributes.count + additions.count == destinationAttributes.count
-                && retainedSourceAttributes.allSatisfy({ old in
-                    guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else { return false }
-                    return destinationAttributes.contains(mapping.destination)
-                        && (old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame
-                            ? old == mapping.destination
-                            : renameMappings.contains(where: {
-                                $0.source?.name == old.name && $0.destination == mapping.destination
-                            }))
-                })
-                && additions.allSatisfy({ destinationAttributes.contains($0) })
-                && sourceUniqueIndexes.count == destinationUniqueIndexes.count
-                && sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
-                && (!additions.isEmpty
-                    ? Set(sourceEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                        == Set(destinationEntity.attributes.filter({ $0.options.contains(.unique) }).map(\.name))
-                    : true)
-                && sourceEntity.indexes.allSatisfy({ index in
-                    !index.properties.contains(where: { property in
-                        renameIndexPropertyNames.contains(property.uppercased())
-                    }) || (!index.isUnique && index.properties.count == 1)
-                })
-                && destinationEntity.indexes.allSatisfy({ index in
-                    !index.properties.contains(where: { property in
-                        renameIndexPropertyNames.contains(property.uppercased())
-                    }) || (!index.isUnique && index.properties.count == 1)
-                })
+            guard sourceEntity.superentityName == destinationEntity.superentityName,
+                sourceEntity.relationships == destinationEntity.relationships,
+                retainedSourceAttributes.count + additions.count == destinationAttributes.count
+            else { return false }
+            let retainedAttributesMatch: Bool = retainedSourceAttributes.allSatisfy { old in
+                guard let mapping = mappings.first(where: { $0.source?.name == old.name }) else { return false }
+                guard destinationAttributes.contains(mapping.destination) else { return false }
+                if old.name.caseInsensitiveCompare(mapping.destination.name) == .orderedSame {
+                    return old == mapping.destination
+                }
+                return renameMappings.contains { $0.source?.name == old.name && $0.destination == mapping.destination }
+            }
+            guard retainedAttributesMatch,
+                additions.allSatisfy({ destinationAttributes.contains($0) }),
+                sourceUniqueIndexes.count == destinationUniqueIndexes.count,
+                sourceUniqueIndexes.allSatisfy({ destinationUniqueIndexes.contains($0) })
+            else { return false }
+            if !additions.isEmpty {
+                let sourceUnique: Set<String> = Set(
+                    sourceEntity.attributes.filter { $0.options.contains(.unique) }.map(\.name))
+                let destinationUnique: Set<String> = Set(
+                    destinationEntity.attributes.filter { $0.options.contains(.unique) }.map(\.name))
+                guard sourceUnique == destinationUnique else { return false }
+            }
+            func indexAllowsRenames(_ index: Schema.Index) -> Bool {
+                !index.properties.contains { renameIndexPropertyNames.contains($0.uppercased()) }
+                    || (!index.isUnique && index.properties.count == 1)
+            }
+            return sourceEntity.indexes.allSatisfy(indexAllowsRenames)
+                && destinationEntity.indexes.allSatisfy(indexAllowsRenames)
         })
         guard targetEntityMatches else {
             throw SwiftDataError.migrationUnsupported(

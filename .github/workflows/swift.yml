@@ -1,4 +1,4 @@
-name: Build and test
+name: Swift build and test
 on:
   push:
     branches: [ "main" ]
@@ -6,10 +6,11 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  swift:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v7
+    - name: Checkout
+      uses: actions/checkout@v7
     - name: Build
       run: swift build -v
     - name: Run tests

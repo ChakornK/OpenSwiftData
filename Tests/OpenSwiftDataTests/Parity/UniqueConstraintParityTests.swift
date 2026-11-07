@@ -87,9 +87,22 @@ import Testing
         let duplicate = UniqueParityKeyed("k", 2)
         context.insert(duplicate)
         try context.save()
-        withKnownIssue("Merged duplicates keep their temporary identifier.") {
-            #expect(duplicate.persistentModelID.storeIdentifier != nil)
-        }
+        #expect(!duplicate.persistentModelID.isTemporary)
+        #expect((context.registeredModel(for: duplicate.persistentModelID) as UniqueParityKeyed?) === duplicate)
+        #expect(duplicate.persistentModelID.storeIdentifier != nil)
+        #expect(try duplicate.persistentModelID != context.fetch(FetchDescriptor<UniqueParityKeyed>()).first?.persistentModelID)
+    }
+
+    @Test func `deleting a merged duplicate leaves the merged row`() throws {
+        context.insert(UniqueParityKeyed("k", 1))
+        try context.save()
+        let duplicate = UniqueParityKeyed("k", 2)
+        context.insert(duplicate)
+        try context.save()
+
+        context.delete(duplicate)
+        try context.save()
+        #expect(try stored() == ["k/2/nil"])
     }
 
     @Test func `duplicates inserted in one save collapse into one row`() throws {

@@ -126,6 +126,9 @@ public final class ModelContext {
     private let autosaveHandle: AutosaveHandle
     private let autosaveContextReference: AutosaveContextReference
     private var temporaryIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:]
+    /// Permanent identifiers given to inserted models whose values a unique-constraint conflict merged into an
+    /// existing row. These identifiers have no stored row, so later saves never write them.
+    private var mergedDuplicateIdentifiers: Set<PersistentIdentifier> = []
     private var relationshipLoadVisited = Set<EntityPrimaryKey>()
 
     private func relationshipResolver() throws -> RelationshipFaultResolver? {
@@ -176,6 +179,8 @@ public final class ModelContext {
         /// Whether a unique-constraint conflict merged this model's values into another row, leaving the model
         /// without a stored row of its own.
         var mergedIntoExistingRow = false
+        /// The unused primary key that identifies an inserted model merged into an existing row.
+        var mergedDuplicatePrimaryKey: Int64?
     }
 
     private struct IdentifierQueryRow {
@@ -3955,7 +3960,10 @@ public final class ModelContext {
                 try cleanupRelationships(for: model, container: container, connection: connection)
             }
             for model in pending.deleted {
-                guard let pk = model.persistentModelID.primaryKey else { continue }
+                // A merged duplicate's identifier has no stored row, so deleting it leaves the store unchanged.
+                guard let pk = model.persistentModelID.primaryKey,
+                    !mergedDuplicateIdentifiers.contains(model.persistentModelID)
+                else { continue }
                 guard let entity = container.schema.entity(forName: model.persistentModelID.entityName) else {
                     throw SwiftDataError.unsupportedStore(
                         "No schema entity exists for deleted model '\(model.persistentModelID.entityName)'.")
@@ -4029,7 +4037,18 @@ public final class ModelContext {
                         version: result.version)
                     state.setBaseline(replacedModel, snapshot: replacedModel.snapshotLifecycle())
                 }
+                if let ghostPrimaryKey = result.mergedDuplicatePrimaryKey {
+                    model.markPersistedLifecycle(
+                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        entityID: try entityID(for: entityName), primaryKey: ghostPrimaryKey, version: 1)
+                    mergedDuplicateIdentifiers.insert(model.persistentModelID)
+                    identityMap.register(model, for: identityKey(forEntityName: entityName, primaryKey: ghostPrimaryKey))
+                    if let old = originalIdentifier, old.isTemporary {
+                        temporaryIdentifiers[old] = model.persistentModelID
+                    }
+                }
                 model.markSavedLifecycle()
+                state.setBaseline(model, snapshot: model.snapshotLifecycle())
                 continue
             }
             if let replacedModel = result.replacedModel {
@@ -4419,13 +4438,18 @@ public final class ModelContext {
                     guard connection.changesCount() == 1 else { throw SwiftDataError.optimisticLockConflict }
                     let rootKey = identityKey(for: entity, primaryKey: match.primaryKey)
                     let replaced = identityMap.liveModels().first(where: { $0.0 == rootKey })?.1
+                    // A registered instance of another subclass cannot represent the merged row, so the
+                    // conflicting model takes over the row instead.
+                    let mergedIntoExistingRow = replaced.map { type(of: $0) == Model.self } ?? true
+                    // SwiftData assigns the merged model a permanent identifier that no stored row uses.
+                    let mergedDuplicatePrimaryKey =
+                        mergedIntoExistingRow ? try Self.allocatePrimaryKey(table: table, connection: connection) : nil
                     append.append(
                         PersistedModel(
                             model: model, entityName: entity.name, primaryKey: match.primaryKey, version: version,
                             replacedModel: replaced === model ? nil : replaced,
-                            // A registered instance of another subclass cannot represent the merged row, so the
-                            // conflicting model takes over the row instead.
-                            mergedIntoExistingRow: replaced.map { type(of: $0) == Model.self } ?? true))
+                            mergedIntoExistingRow: mergedIntoExistingRow,
+                            mergedDuplicatePrimaryKey: mergedDuplicatePrimaryKey))
                     return
                 }
                 let primaryKey = try preservedPrimaryKey ?? Self.allocatePrimaryKey(table: table, connection: connection)
@@ -4441,7 +4465,9 @@ public final class ModelContext {
                     PersistedModel(
                         model: model, entityName: entity.name, primaryKey: primaryKey, version: 1,
                         replacedModel: nil))
-            } else if let pk = model.persistentModelID.primaryKey {
+            } else if let pk = model.persistentModelID.primaryKey,
+                !mergedDuplicateIdentifiers.contains(model.persistentModelID)
+            {
                 let expectedVersion = snapshot.optimisticLockVersion
                 if !columns.isEmpty,
                     let match = try uniqueMatch(

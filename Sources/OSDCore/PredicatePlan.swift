@@ -31,6 +31,8 @@ public indirect enum PredicatePlan: Sendable, Equatable {
     case collectionAllCompare(String, String, PredicateComparisonOperator, PredicatePlan)
     case codableCollectionIsEmpty(String)
     case codableCollectionCount(String)
+    /// A JSON member path inside a Codable attribute, such as `address.city`.
+    case codableMember(String, [String])
     case relationshipContains(String, PredicatePlan)
     case collectionCount(String)
 }

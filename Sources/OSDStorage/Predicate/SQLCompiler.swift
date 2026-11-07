@@ -140,6 +140,8 @@ package enum PredicatePlanBuilder {
             return .codableCollectionIsEmpty(name)
         case let .codableCollectionCount(name):
             return .codableCollectionCount(name)
+        case let .codableMember(name, members):
+            return .codableMember(name, members)
         case let .relationshipContains(name, body):
             guard let body = build(body) else { return nil }
             return .relationshipContains(name, body)
@@ -367,7 +369,7 @@ package enum SQLCompiler {
                 resolvePersistentIdentifierComparisons(
                     value, storeIdentifier: storeIdentifier, entityIDsByName: entityIDsByName))
         case .keyPath, .persistentIdentifier, .identifierValue, .relationshipIsPresent, .value,
-            .codableCollectionIsEmpty, .codableCollectionCount, .relationshipCount:
+            .codableCollectionIsEmpty, .codableCollectionCount, .codableMember, .relationshipCount:
             return ir
         }
     }
@@ -806,6 +808,12 @@ package enum SQLCompiler {
                 throw SwiftDataError.unsupportedPredicate("Invalid Codable collection property name")
             }
             return "osd_json_array_count(\(tableAlias).Z\(name.uppercased()))"
+        case let .codableMember(name, members):
+            guard Self.validIdentifier(name) else {
+                throw SwiftDataError.unsupportedPredicate("Invalid Codable attribute property name")
+            }
+            arguments.append(.text(members.joined(separator: ".")))
+            return "osd_json_member(\(tableAlias).Z\(name.uppercased()), ?)"
         case let .relationshipContains(name, body):
             let path = name.split(separator: ".").map(String.init)
             guard let collectionName = path.last else {
@@ -1030,6 +1038,7 @@ package enum SQLCompiler {
             "collectionAllCompare(\(name),\(elementType),\(operation),\(structure(element)))"
         case let .codableCollectionIsEmpty(name): "codableCollectionIsEmpty(\(name))"
         case let .codableCollectionCount(name): "codableCollectionCount(\(name))"
+        case let .codableMember(name, members): "codableMember(\(name),\(members.joined(separator: ".")))"
         case let .sequenceContains(sequence, element): "contains(\(structure(sequence)),\(structure(element)))"
         case let .relationshipContains(name, body): "relationshipContains(\(name),\(structure(body)))"
         case let .relationshipCount(name): "relationshipCount(\(name))"

@@ -194,6 +194,21 @@ package final class GRDBSQLiteDriver: SQLiteDriver, Sendable {
                     else { return nil }
                     return array.count
                 })
+            database.add(
+                function: DatabaseFunction("osd_json_member", argumentCount: 2, pure: true) { values in
+                    guard values.count == 2, let data = Data.fromDatabaseValue(values[0]),
+                        let path = String.fromDatabaseValue(values[1])
+                    else { return nil }
+                    switch CodableMemberValue.extract(
+                        from: Array(data), members: path.split(separator: ".").map(String.init))
+                    {
+                    case .null: return nil
+                    case let .int(value): return value
+                    case let .double(value): return value
+                    case let .text(value): return value
+                    case let .blob(value): return Data(value)
+                    }
+                })
             for (name, operation) in [
                 ("osd_int_add", IntegerOperation.add),
                 ("osd_int_subtract", IntegerOperation.subtract),

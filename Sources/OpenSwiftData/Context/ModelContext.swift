@@ -2555,7 +2555,8 @@ public final class ModelContext {
                         try collect(value)
                     case .collectionAllNil:
                         break
-                    case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+                    case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount,
+                        .codableMember:
                         break
                     }
                 }

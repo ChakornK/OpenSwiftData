@@ -51,7 +51,7 @@ package enum RuntimePredicateEvaluator {
             Set([name]).union(referencedProperties(in: element))
         case let .codableCollectionIsEmpty(name):
             [name]
-        case let .codableCollectionCount(name):
+        case let .codableCollectionCount(name), let .codableMember(name, _):
             [name]
         case let .conditional(test, trueBranch, falseBranch):
             referencedProperties(in: test).union(referencedProperties(in: trueBranch)).union(
@@ -83,7 +83,7 @@ package enum RuntimePredicateEvaluator {
             return relationshipProperties(in: element)
         case .codableCollectionIsEmpty:
             return [:]
-        case .codableCollectionCount:
+        case .codableCollectionCount, .codableMember:
             return [:]
         case let .collectionCount(name):
             return [name: []]
@@ -136,7 +136,8 @@ package enum RuntimePredicateEvaluator {
                 walk(value, collectionDepth: collectionDepth)
             case .collectionAllNil:
                 break
-            case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount:
+            case .property, .value, .collectionCount, .codableCollectionIsEmpty, .codableCollectionCount,
+                .codableMember:
                 break
             }
         }
@@ -163,7 +164,7 @@ package enum RuntimePredicateEvaluator {
             let .collectionAllCompare(_, _, _, value):
             return containsNestedRelationship(value, depth: depth)
         case .collectionAllNil, .property, .value, .collectionCount, .codableCollectionIsEmpty,
-            .codableCollectionCount:
+            .codableCollectionCount, .codableMember:
             return false
         }
     }
@@ -244,7 +245,7 @@ package enum RuntimePredicateEvaluator {
                     "Scalar collection membership does not evaluate to a boolean value")
             }
             return integer == 0 ? .no : .yes
-        case .property, .value, .coalesce, .collectionCount, .codableCollectionCount:
+        case .property, .value, .coalesce, .collectionCount, .codableCollectionCount, .codableMember:
             let value = try evaluateValue(plan, context: context)
             guard case let .int(integer) = value else {
                 throw SwiftDataError.unsupportedPredicate("Predicate expression does not evaluate to a boolean value")
@@ -596,6 +597,9 @@ package enum RuntimePredicateEvaluator {
                 throw SwiftDataError.unsupportedPredicate("Codable collection count received malformed JSON data")
             }
             return .int(Int64(array.count))
+        case let .codableMember(name, members):
+            guard case let .blob(bytes) = try evaluateValue(.property(name), context: context) else { return .null }
+            return runtimeValue(CodableMemberValue.extract(from: bytes, members: members))
         case let .value(value):
             return runtimeValue(value)
         case let .coalesce(lhs, rhs):

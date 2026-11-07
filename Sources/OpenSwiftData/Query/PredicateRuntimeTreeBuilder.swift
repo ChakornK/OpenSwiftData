@@ -187,6 +187,84 @@ package enum PredicateRuntimeTreeBuilder {
             return try disjunction(from: 0, at: path)
         }
 
+        /// Resolves `root.member` where `root` is a direct Codable attribute (or a member of one) to an
+        /// `OSDCodableMember` node, or returns `nil` when `root` isn't a Codable attribute.
+        func codableMember(
+            root: Any,
+            memberKeyPath: AnyKeyPath,
+            path: [String],
+            bindings: [UInt: ExpressionBinding],
+            capturePathRewrites: [CapturePathRewrite]
+        ) throws -> RuntimePredicateNode? {
+            let rootFields = Dictionary(
+                Mirror(reflecting: root).children.compactMap { child in child.label.map { ($0, child.value) } },
+                uniquingKeysWith: { first, _ in first })
+            guard let rootKeyPath = rootFields["keyPath"] as? AnyKeyPath, let rootRoot = rootFields["root"] else {
+                return nil
+            }
+            let attributeName: String
+            let parentMembers: [String]
+            let parentType: Any.Type
+            if PredicateNodeMetadata.entry(for: String(reflecting: type(of: rootRoot)))?.name == "KeyPath" {
+                guard
+                    case let .expression(name: "OSDCodableMember", children: children)? = try codableMember(
+                        root: rootRoot, memberKeyPath: rootKeyPath, path: path + ["root"], bindings: bindings,
+                        capturePathRewrites: capturePathRewrites),
+                    case let .property(reference)? = children.first(where: { $0.0 == "value" })?.1,
+                    case let .capture(typeName: _, description: members)? =
+                        children.first(where: { $0.0 == "member" })?.1
+                else { return nil }
+                attributeName = reference.name
+                parentMembers = members.split(separator: ".").map(String.init)
+                parentType = type(of: rootKeyPath).valueType
+            } else {
+                // The root must be the predicate's own model variable, not a relationship or collection element.
+                guard activeRelationshipName == nil, activeCollectionName == nil,
+                    ObjectIdentifier(type(of: rootKeyPath).rootType) == ObjectIdentifier(activePredicateRootType),
+                    let name = activeModelType.propertyName(forKeyPath: rootKeyPath),
+                    activeEntity.attributes.first(where: { $0.name == name })?.options.contains(.codable) == true
+                else { return nil }
+                attributeName = name
+                parentMembers = []
+                parentType = type(of: rootKeyPath).valueType
+            }
+            // Collections and optionals have their own predicate operators; only composite members map to JSON keys.
+            let parentTypeName = String(reflecting: parentType)
+            guard ObjectIdentifier(type(of: memberKeyPath).rootType) == ObjectIdentifier(parentType),
+                !["Swift.Array<", "Swift.Set<", "Swift.Dictionary<", "Swift.Optional<"].contains(where: {
+                    parentTypeName.hasPrefix($0)
+                })
+            else {
+                return nil
+            }
+            // `\Address.city` describes itself as "\Address.city"; the components after the root are the members.
+            let members = String(describing: memberKeyPath).split(separator: ".").dropFirst().map(String.init)
+            guard !members.isEmpty, members.allSatisfy({ !$0.contains("?") && !$0.contains("!") }) else {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable attribute member path is unsupported: \(String(describing: memberKeyPath)).")
+            }
+            let valueType = type(of: memberKeyPath).valueType
+            // JSONEncoder writes these differently from their scalar column encodings, so comparisons can't match.
+            let valueTypeName = String(reflecting: valueType)
+            if ["Foundation.UUID", "Foundation.Decimal", "Foundation.Data"].contains(where: {
+                valueTypeName == $0 || valueTypeName == "Swift.Optional<\($0)>"
+            }) {
+                throw SwiftDataError.unsupportedPredicate(
+                    "Codable attribute members of type \(valueTypeName) can't be compared in predicates.")
+            }
+            return .expression(
+                name: "OSDCodableMember",
+                children: [
+                    ("value", .property(RuntimePropertyReference(name: attributeName))),
+                    (
+                        "member",
+                        .capture(
+                            typeName: String(reflecting: valueType),
+                            description: (parentMembers + members).joined(separator: "."))
+                    ),
+                ])
+        }
+
         func visit(
             _ value: Any,
             path: [String] = [],
@@ -807,6 +885,16 @@ package enum PredicateRuntimeTreeBuilder {
                 {
                     return .expression(name: "OSDSequenceCount", children: [("sequence", rootNode)])
                 }
+            }
+            if name == "KeyPath",
+                let keyPath = children.first(where: { $0.label == "keyPath" })?.value as? AnyKeyPath,
+                let root = children.first(where: { $0.label == "root" })?.value,
+                PredicateNodeMetadata.entry(for: String(reflecting: type(of: root)))?.name == "KeyPath",
+                let member = try codableMember(
+                    root: root, memberKeyPath: keyPath, path: path, bindings: bindings,
+                    capturePathRewrites: capturePathRewrites)
+            {
+                return member
             }
             if name == "KeyPath", let keyPathValue = children.first(where: { $0.label == "keyPath" })?.value,
                 let keyPath = keyPathValue as? AnyKeyPath

@@ -182,7 +182,7 @@ public protocol AppleDataStoreSnapshot: Codable, Sendable {
     init(
         from backingData: any BackingData,
         relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
-    ) throws
+    )
     /// Returns a snapshot with remapped identifiers.
     func copy(
         persistentIdentifier: PersistentIdentifier,
@@ -213,10 +213,13 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
     public init(
         from backingData: any BackingData,
         relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
-    ) throws {
+    ) {
         _ = (backingData, relatedBackingDatas)
-        throw SwiftDataError.unsupportedStore(
-            "AppleDefaultSnapshot does not capture values from backing data; initialize it with explicit values.")
+        let identifier = backingData.persistentModelID
+        persistentIdentifier = identifier
+        entityName = identifier.entityName
+        values = [:]
+        relationships = [:]
     }
 
     public func copy(

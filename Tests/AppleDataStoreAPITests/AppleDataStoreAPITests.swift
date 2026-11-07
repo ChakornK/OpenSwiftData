@@ -16,9 +16,9 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
         self.title = title
     }
 
-    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) throws {
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
         _ = (backingData, relatedBackingDatas)
-        throw SwiftDataError.unsupportedStore("fixture snapshot conversion is intentionally unsupported")
+        self.init(persistentIdentifier: backingData.persistentModelID, title: "")
     }
 
     func copy(
@@ -103,12 +103,13 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
-    func testDefaultSnapshotBackingInitializerRejectsValueCapture() throws {
+    func testDefaultSnapshotBackingInitializerCapturesIdentityOnly() throws {
         let backing = DetachedBackingData<AppleStoreFixture>(metadata: AppleStoreFixture.schemaMetadata())
         var related: [PersistentIdentifier: any BackingData] = [:]
-        #expect(throws: SwiftDataError.self) {
-            try AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
-        }
+        let snapshot = AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
+        #expect(snapshot.persistentIdentifier == backing.persistentModelID)
+        #expect(snapshot.entityName == backing.persistentModelID.entityName)
+        #expect(snapshot.values.isEmpty)
     }
 
     @Test @MainActor

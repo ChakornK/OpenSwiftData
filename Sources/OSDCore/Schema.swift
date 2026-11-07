@@ -190,7 +190,7 @@ public struct Schema: Sendable {
         /// Whether the relationship contains multiple destinations.
         public let isToMany: Bool
         /// Whether the relationship can be empty.
-        package let isOptional: Bool
+        public let isOptional: Bool
         /// The inverse relationship property name, if known.
         public let inverse: String?
         /// The relationship's delete behavior.
@@ -655,6 +655,34 @@ public struct Schema: Sendable {
             current = self.entity(forName: parentName)
         }
         return nil
+    }
+}
+
+extension Schema.Index: Codable {}
+extension Schema.Attribute.Option: Codable {}
+extension Schema.Attribute: Codable {}
+extension Schema.Relationship: Codable {}
+extension Schema.Entity: Codable {}
+
+extension Schema: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case entities
+        case version
+    }
+
+    /// Decodes a schema's entities and declared version. Decoded schemas aren't linked to model types.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            try container.decode([Entity].self, forKey: .entities),
+            version: try container.decodeIfPresent(Version.self, forKey: .version))
+    }
+
+    /// Encodes the schema's entities and declared version.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(entities, forKey: .entities)
+        try container.encodeIfPresent(declaredVersion, forKey: .version)
     }
 }
 

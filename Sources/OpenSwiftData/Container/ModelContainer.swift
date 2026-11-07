@@ -407,7 +407,8 @@ public final class ModelContainer: Sendable {
         if let error = schema.modelTypes.inferenceError { throw error }
         let types = schema.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
         let entityNames = types.map { Self.unqualifiedTypeName(String(describing: $0)) }
-        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedDataStore = try Self.openDataStore(
+            schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
         let runtimeSchema: Schema
         let registrations: [String: ModelTypeRegistration]
@@ -488,7 +489,8 @@ public final class ModelContainer: Sendable {
     /// Creates a container for a hand-built schema that names no model types.
     private init(descriptionOnly schema: Schema, configurations: [ModelConfiguration]) throws {
         try schema.validateRelationshipStorageMappings()
-        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedDataStore = try Self.openDataStore(
+            schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
         let runtimeSchema: Schema
         do {
@@ -517,7 +519,8 @@ public final class ModelContainer: Sendable {
         configurations: [ModelConfiguration]
     ) throws {
         try schema.validateRelationshipStorageMappings()
-        let openedDataStore = try Self.openDataStore(schema: schema, configurations: configurations)
+        let openedDataStore = try Self.openDataStore(
+            schema: schema, migrationPlan: migrationPlanStorage.plan, configurations: configurations)
         let openedStore = try Self.openStore(schema: schema, configurations: configurations)
         let runtimeSchema: Schema
         let registrations: [String: ModelTypeRegistration]
@@ -894,7 +897,7 @@ public final class ModelContainer: Sendable {
         guard configuration.cloudKitDatabase.privateDatabaseName == nil else {
             throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
         }
-        if configuration.dataStoreConfiguration != nil { return nil }
+        if configuration.dataStoreConfiguration != nil || configuration.appleDataStoreConfiguration != nil { return nil }
         guard let factory = configuration.storeFactory else {
             throw SwiftDataError.unsupportedStore("The configured store backend/provider is unavailable.")
         }
@@ -927,10 +930,38 @@ public final class ModelContainer: Sendable {
         return resolved
     }
 
-    private static func openDataStore(schema: Schema, configurations: [ModelConfiguration]) throws -> (any DataStore)? {
-        guard configurations.contains(where: { $0.dataStoreConfiguration != nil }) else { return nil }
+    private static func openDataStore(
+        schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: [ModelConfiguration]
+    ) throws -> (any DataStore)? {
+        guard configurations.contains(where: {
+            $0.dataStoreConfiguration != nil || $0.appleDataStoreConfiguration != nil
+        }) else { return nil }
         guard configurations.count == 1, let configuration = configurations.first else {
             throw SwiftDataError.unsupportedStore("Exactly one custom DataStore configuration is supported.")
+        }
+        if let appleConfiguration = configuration.appleDataStoreConfiguration {
+            guard configuration.dataStoreConfiguration == nil,
+                configuration.cloudKitDatabase.privateDatabaseName == nil,
+                configuration.storeFactory == nil,
+                configuration.schemaVersionReader == nil,
+                !configuration.isStoredInMemoryOnly
+            else {
+                throw SwiftDataError.unsupportedStore(
+                    "AppleDataStore configurations cannot be combined with another backend.")
+            }
+            try appleConfiguration.validate()
+            let store = try appleConfiguration.makeStore(
+                schema: configuration.schema ?? schema, migrationPlan: migrationPlan)
+            guard store.schema == configuration.schema ?? schema else {
+                throw SwiftDataError.unsupportedStore("AppleDataStore schema does not match the configured schema.")
+            }
+            guard let bridge = store as? any AppleDataStoreBackendProviding else {
+                throw SwiftDataError.unsupportedStore(
+                    "The configured AppleDataStore does not provide the OpenSwiftData backend bridge.")
+            }
+            return try bridge.makeBackend(schema: schema, migrationPlan: migrationPlan)
         }
         guard let dataStoreConfiguration = configuration.dataStoreConfiguration else { return nil }
         guard configuration.cloudKitDatabase.privateDatabaseName == nil,

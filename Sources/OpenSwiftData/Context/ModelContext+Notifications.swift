@@ -22,10 +22,13 @@ extension ModelContext {
     }
 }
 
-extension ModelContext: Equatable {
-    /// Returns whether both operands are the same context instance.
-    public nonisolated static func == (lhs: ModelContext, rhs: ModelContext) -> Bool { lhs === rhs }
-}
+// On Linux, `NSObject` already makes contexts equatable by identity.
+#if canImport(ObjectiveC)
+    extension ModelContext: Equatable {
+        /// Returns whether both operands are the same context instance.
+        public nonisolated static func == (lhs: ModelContext, rhs: ModelContext) -> Bool { lhs === rhs }
+    }
+#endif
 
 /// Identifies one model context's edits to a data store.
 public struct EditingState: Identifiable, Sendable {

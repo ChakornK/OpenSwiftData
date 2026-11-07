@@ -30,8 +30,20 @@ package struct ModelContextQueryExecutor: @unchecked Sendable {
     }
 }
 
+#if canImport(ObjectiveC)
+    /// The superclass of `ModelContext`; it adds no behavior.
+    open class _ModelContextBase {
+        /// Creates the base object.
+        public init() {}
+    }
+#else
+    /// The superclass of `ModelContext`. Swift Foundation's `NotificationCenter` on Linux only matches
+    /// `object:` filters against `NSObject` senders, so contexts derive from it there.
+    public typealias _ModelContextBase = NSObject
+#endif
+
 /// A synchronous unit of work for inserting, fetching, and saving persistent models.
-public final class ModelContext {
+public final class ModelContext: _ModelContextBase {
     /// The container that owns this context.
     ///
     /// Traps for a context created with `init()`, which has no container.
@@ -194,7 +206,7 @@ public final class ModelContext {
     }
 
     /// Creates a context not associated with a model container.
-    public convenience init() {
+    public override convenience init() {
         self.init(container: nil, autosaveEnabled: false)
     }
 
@@ -233,6 +245,7 @@ public final class ModelContext {
         autosaveEnabledStorage = autosaveEnabled
         allowsSave = container?.configurationList.first?.allowsSave ?? true
         testSaveHook = nil
+        super.init()
         autosaveContextReference.set(self)
         subscribeToStoreChanges()
     }
@@ -252,6 +265,7 @@ public final class ModelContext {
         autosaveEnabledStorage = false
         allowsSave = true
         testSaveHook = hook
+        super.init()
         autosaveContextReference.set(self)
         subscribeToStoreChanges()
     }

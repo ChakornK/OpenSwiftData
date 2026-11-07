@@ -9,6 +9,26 @@ package enum LightweightMigration {
     package static let entityIDsKey = "schema.entity-ids.v1"
     package static let entityIDHighWatermarkKey = "schema.entity-id-next.v1"
     package static let pendingMigrationKey = "schema.migration.pending.v1"
+    package static let storeIdentifierKey = "store.identifier.v1"
+
+    /// Returns the store's persistent UUID string, creating and saving one the first time a store is opened.
+    package static func storeIdentifier(connection: SQLConnection) throws -> String {
+        if let row = try connection.rows(
+            "SELECT value FROM _osd_meta WHERE key = ?", [.text(storeIdentifierKey)]
+        ).first {
+            guard case let .blob(bytes)? = row.first, let text = String(bytes: bytes, encoding: .utf8),
+                UUID(uuidString: text) != nil
+            else {
+                throw SwiftDataError.unsupportedStore("Stored store identifier is invalid.")
+            }
+            return text
+        }
+        let identifier = UUID().uuidString
+        try connection.execute(
+            "INSERT INTO _osd_meta (key, value) VALUES (?, ?)",
+            [.text(storeIdentifierKey), .blob(Array(identifier.utf8))])
+        return identifier
+    }
 
     package static func storedEntityIDs(schema: Schema, connection: SQLConnection) throws -> [String: Int]? {
         guard

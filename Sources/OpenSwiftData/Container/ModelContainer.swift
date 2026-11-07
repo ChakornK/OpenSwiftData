@@ -21,6 +21,11 @@ public final class ModelContainer: Sendable {
     public var migrationPlan: (any SchemaMigrationPlan.Type)? { migrationPlanStorage.plan }
     private let migrationPlanStorage = MigrationPlanStorage()
     package let store: (any RuntimeStore)?
+    /// The store identifier recorded in persistent identifiers: a UUID string saved with the store, as in
+    /// Apple's SwiftData, falling back to the configuration name for stores that don't provide one.
+    package var storeIdentifier: String {
+        dataStore?.identifier ?? store?.persistentStoreIdentifier ?? configurationList.first?.name ?? "default"
+    }
     package let dataStore: (any DataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]

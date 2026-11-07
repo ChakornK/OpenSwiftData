@@ -221,7 +221,7 @@ public final class ModelContext {
         }
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.dataStore?.identifier ?? container?.configurationList.first?.name ?? "default",
+            storeIdentifier: container?.storeIdentifier ?? "default",
             entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }),
             onLocalChange: { [autosaveHandle] in autosaveHandle.changed() })
@@ -241,7 +241,7 @@ public final class ModelContext {
         autosaveHandle = AutosaveHandle(trigger: autosaveTrigger, enabled: false, schedule: {})
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
-            storeIdentifier: container?.dataStore?.identifier ?? container?.configurationList.first?.name ?? "default",
+            storeIdentifier: container?.storeIdentifier ?? "default",
             entityIDsByName: container?.schema.entityIDsByName ?? [:],
             entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }))
         autosaveEnabledStorage = false
@@ -2061,7 +2061,7 @@ public final class ModelContext {
     }
 
     private var storeIdentifier: String {
-        optionalContainer?.dataStore?.identifier ?? optionalContainer?.configurationList.first?.name ?? "default"
+        optionalContainer?.storeIdentifier ?? "default"
     }
 
     private func canonicalAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {

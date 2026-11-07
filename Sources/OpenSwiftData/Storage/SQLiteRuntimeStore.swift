@@ -6,6 +6,7 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
     let driver: GRDBSQLiteDriver
     let externalDataColumns: Set<String>
     let runtimeSchema: Schema
+    let persistentStoreIdentifier: String?
 
     func read<T>(_ body: (any RuntimeConnection) throws -> T) throws -> T {
         try driver.read { connection in
@@ -384,8 +385,10 @@ package enum SQLiteStoreProvider {
             }
             let runtimeSchema = try schema.reconciled(
                 with: entityIDs ?? [:], minimumNextIdentifier: minimumNextIdentifier)
+            let storeIdentifier = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
             return SQLiteRuntimeStore(
-                driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema)
+                driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema,
+                persistentStoreIdentifier: storeIdentifier)
         } catch {
             try? driver.close()
             throw error

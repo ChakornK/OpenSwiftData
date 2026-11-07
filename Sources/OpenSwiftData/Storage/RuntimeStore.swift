@@ -15,6 +15,10 @@ public protocol RuntimeStore: Sendable {
     func writeWithExternalData<T>(
         _ body: (RuntimeConnection, ExternalDataWriteSession) throws -> T
     ) throws -> T
+    /// A stable identifier for the store's contents, used as the persistent identifiers' store identifier.
+    ///
+    /// Return `nil` to use the configuration name instead.
+    var persistentStoreIdentifier: String? { get }
 }
 
 package protocol RuntimeSchemaProvidingStore: RuntimeStore {
@@ -22,6 +26,7 @@ package protocol RuntimeSchemaProvidingStore: RuntimeStore {
 }
 
 public extension RuntimeStore {
+    var persistentStoreIdentifier: String? { nil }
     func dataVersion() throws -> Int64? { nil }
     func writeWithExternalData<T>(
         _ body: (RuntimeConnection, ExternalDataWriteSession) throws -> T

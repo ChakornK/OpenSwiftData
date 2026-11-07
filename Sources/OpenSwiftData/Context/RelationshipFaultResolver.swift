@@ -33,7 +33,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         self.identityMap = identityMap
         self.store = store
         schema = container.schema
-        storeIdentifier = container.configurationList.first?.name ?? "default"
+        storeIdentifier = container.storeIdentifier
     }
 
     func install<Model: PersistentModel>(on model: Model, entity: Schema.Entity) {

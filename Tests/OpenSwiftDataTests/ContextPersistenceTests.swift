@@ -1163,7 +1163,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         XCTAssertFalse(model.persistentModelID.isTemporary)
         XCTAssertNotEqual(model.persistentModelID, temporaryID)
-        XCTAssertEqual(model.persistentModelID.storeIdentifier, "context-test")
+        XCTAssertNotNil(model.persistentModelID.storeIdentifier.flatMap(UUID.init(uuidString:)))
         let fetched = try context.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertTrue(fetched.first === model)
         XCTAssertTrue(try context.model(for: model.persistentModelID) as PersistenceTestModel? === model)

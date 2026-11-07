@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenSwiftData
 
@@ -95,6 +96,27 @@ import Testing
         stack.register {}
         stack.finishUndo()
         stack.removeAll()
+        #expect(!stack.canUndo)
+        #expect(!stack.canRedo)
+    }
+
+    @Test func `removing actions for one target preserves other targets undo and redo`() {
+        let firstTarget = NSObject()
+        let secondTarget = NSObject()
+        var stack = UndoActionStack()
+        stack.register(target: ObjectIdentifier(firstTarget)) {}
+        stack.register(target: ObjectIdentifier(secondTarget)) {}
+
+        stack.removeAll(target: ObjectIdentifier(firstTarget))
+        #expect(stack.canUndo)
+        #expect(!stack.canRedo)
+
+        _ = stack.beginUndo()
+        stack.register(target: ObjectIdentifier(secondTarget)) {}
+        stack.finishUndo()
+        #expect(stack.canRedo)
+
+        stack.removeAll(target: ObjectIdentifier(secondTarget))
         #expect(!stack.canUndo)
         #expect(!stack.canRedo)
     }

@@ -105,6 +105,7 @@ public final class ModelContext {
         }
     }
     private var undoManagerStorage: UndoManager?
+    private lazy var undoOperationTarget = UndoOperationTarget(context: self)
     private var undoRegisteredModels = Set<ObjectIdentifier>()
     private var currentUndoGroup: UndoGroupOperation?
     private var isApplyingUndoGroup = false
@@ -1860,6 +1861,7 @@ public final class ModelContext {
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
+            undoManagerStorage?.removeAllActions(withTarget: undoOperationTarget)
         }
     }
 
@@ -1964,16 +1966,20 @@ public final class ModelContext {
     func registerUndoOperation(_ operation: UndoGroupOperation) {
         guard let manager = undoManagerStorage else { return }
         #if canImport(ObjectiveC)
-            let handle = UndoOperationHandle(operation)
             MainActor.assumeIsolated {
-                // UndoManager does not retain its target, so the handler keeps the handle alive.
-                manager.registerUndo(withTarget: manager) { [handle] _ in
-                    MainActor.assumeIsolated { handle.perform() }
+                manager.registerUndo(withTarget: undoOperationTarget) { [operation] target in
+                    MainActor.assumeIsolated { target.perform(operation) }
                 }
             }
         #else
-            manager.registerUndo(withTarget: operation) { $0.perform() }
+            manager.registerUndo(withTarget: undoOperationTarget) { target in
+                target.perform(operation)
+            }
         #endif
+    }
+
+    func performUndoOperation(_ operation: UndoGroupOperation) {
+        operation.perform()
     }
 
     func endCurrentUndoGroup() {

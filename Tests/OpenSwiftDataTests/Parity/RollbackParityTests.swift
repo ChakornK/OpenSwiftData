@@ -76,6 +76,26 @@ import Testing
         #expect(!context.hasChanges)
     }
 
+    @Test func `rollback detaches related insertions and restores saved graph`() throws {
+        let owner = RollbackParityOwner(name: "a", age: 1)
+        context.insert(owner)
+        try context.save()
+
+        let item = RollbackParityItem(value: 2)
+        owner.items.append(item)
+        #expect(item.modelContext === context)
+        #expect(item.owner === owner)
+
+        context.rollback()
+
+        #expect(owner.items.isEmpty)
+        #expect(item.modelContext == nil)
+        #expect(item.owner == nil)
+        #expect(!owner.hasChanges)
+        #expect(!context.hasChanges)
+        #expect(try context.fetchCount(FetchDescriptor<RollbackParityItem>()) == 0)
+    }
+
     @Test func `rollback restores first committed values after repeated edits`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)

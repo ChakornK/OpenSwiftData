@@ -105,14 +105,14 @@ final class UndoGroupOperation {
     }
 }
 
-final class UndoOperationHandle: @unchecked Sendable {
-    private let operation: UndoGroupOperation
+final class UndoOperationTarget: @unchecked Sendable {
+    private weak var context: ModelContext?
 
-    init(_ operation: UndoGroupOperation) {
-        self.operation = operation
+    init(context: ModelContext) {
+        self.context = context
     }
 
-    func perform() {
-        operation.perform()
+    func perform(_ operation: UndoGroupOperation) {
+        context?.performUndoOperation(operation)
     }
 }

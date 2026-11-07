@@ -1,63 +1,37 @@
 # OpenSwiftData
 
-**SwiftData-style persistence for apps built with Xcode or xtool.** OpenSwiftData uses the open-source GRDB and SQLite stack, so your app can work with models and contexts without depending on Apple’s proprietary SwiftData framework.
+OpenSwiftData is an open-source, cross-platform implementation of SwiftData’s persistence APIs that lets SwiftData apps build with xtool on Linux, where Apple’s SwiftData framework is unavailable. It uses GRDB and SQLite for storage.
 
-> OpenSwiftData is under active development. Follow the `main` branch for current changes.
+OpenSwiftData is under active development. See [Compatibility](#compatibility) for behavior that differs from Apple’s SwiftData implementation.
 
-## What you get
+## Requirements
 
-- Familiar `@Model`, `ModelContainer`, and `ModelContext` APIs
-- SQLite file-backed and in-memory stores
-- GRDB setup handled by the package
+- Swift 6.0 or later
+- iOS 17, macOS 14, tvOS 17, or watchOS 10
+- Xcode or xtool to build Apple platform apps
 
-## How OpenSwiftData differs from SwiftData
+## Add the package
 
-OpenSwiftData follows SwiftData's API and behavior where the project has implemented and tested them. It is a separate persistence library: it does not use Apple's SwiftData stores, and compatibility is not complete.
-
-### Behavior differences
-
-- `rollback()` clears pending-change tracking but keeps edited values in memory. A later fetch can refresh those values from the store.
-- Deleting a model that has not been saved keeps it attached and marked deleted until save or rollback.
-- Deleting a model through a context does not enforce the `.deny` relationship rule. Related models are nullified. Batch deletes reject entities with `.deny` relationships.
-- `fetchCount` supports descriptors with an offset. The project also aims to preserve pending renames during batch deletes.
-- Predicate evaluation follows Swift semantics where SwiftData has returned inconsistent results, such as comparing `String.count`.
-- OpenSwiftData does not match nondeterministic result ordering or duplicate-selection behavior.
-
-### Platform and storage limits
-
-- The default backend is SQLite through GRDB. CloudKit is unsupported.
-- The package builds on Linux as well as Apple platforms. Some behavior differs across platforms; for example, save notifications filtered with `object: context` are not delivered on Linux.
-- The custom `DataStore` protocol API and SwiftData's class-based `Schema` API are not implemented. OpenSwiftData's schema uses value types and arrays for attributes and relationships.
-
-Check the source and tests for the current compatibility surface. OpenSwiftData is under active development, so support and known differences can change.
-
-## Add OpenSwiftData to your app
-
-Add the package to `Package.swift`:
+Add the package dependency and products to your app target in `Package.swift`:
 
 ```swift
 .package(url: "https://github.com/ChakornK/OpenSwiftData", branch: "main")
 ```
-
-Add both products to your app target:
 
 ```swift
 .product(name: "OpenSwiftData", package: "OpenSwiftData"),
 .product(name: "OpenSwiftDataSQLite", package: "OpenSwiftData"),
 ```
 
-Import both modules in the file that configures persistence:
-
-```swift
-import OpenSwiftData
-import OpenSwiftDataSQLite
-```
-
 ## Quick start
 
-### 1. Define a model
+Create a model and a file-backed store. Insert a note, save it, then fetch it:
 
 ```swift
+import Foundation
+import OpenSwiftData
+import OpenSwiftDataSQLite
+
 @Model
 final class Note {
     var text: String
@@ -66,26 +40,10 @@ final class Note {
         self.text = text
     }
 }
-```
-
-### 2. Choose a store
-
-Use a file-backed store for data you want to keep, or an in-memory store for temporary data:
-
-```swift
-import Foundation
 
 let storeURL = URL.applicationSupportDirectory
     .appending(path: "Notes.sqlite")
 let configuration = ModelConfiguration.sqliteFile("notes", url: storeURL)
-
-// For temporary data, use this instead:
-// let configuration = ModelConfiguration.sqliteMemory("notes")
-```
-
-### 3. Create, save, and fetch
-
-```swift
 let container = try ModelContainer(
     for: Note.self,
     configurations: configuration
@@ -98,10 +56,51 @@ try context.save()
 let notes = try context.fetch(FetchDescriptor<Note>())
 ```
 
-## Requirements
+For temporary data, replace the file configuration with:
 
-- Xcode or xtool
+```swift
+let configuration = ModelConfiguration.sqliteMemory("notes")
+```
+
+## Build iOS apps from Linux
+
+When you build an iOS app from Linux, Swift's `#Predicate` macro may refer to `FoundationEssentials` types that Apple's SDK normally exposes through `Foundation`. Add the [FoundationEssentials shim](https://github.com/ChakornK/FoundationEssentialsShim) package to your app's `Package.swift`, then add its `FoundationEssentials` product to the iOS app target:
+
+```swift
+.package(url: "https://github.com/ChakornK/FoundationEssentialsShim", branch: "main")
+```
+
+```swift
+.product(name: "FoundationEssentials", package: "FoundationEssentialsShim"),
+```
+
+Import `FoundationEssentials` in files that need its declarations. The shim re-exports `Foundation`:
+
+```swift
+import FoundationEssentials
+```
+
+For builds on macOS, use Apple's `Foundation` directly.
+
+## Compatibility
+
+OpenSwiftData uses its own SQLite store and cannot open Apple's SwiftData stores. It implements selected SwiftData APIs and behaviors. The source and tests show the supported surface.
+
+### Behavior differences
+
+- `rollback()` clears pending-change tracking but keeps edited values in memory. A later fetch can refresh those values from the store.
+- Deleting an unsaved model keeps it attached and marked deleted until save or rollback.
+- Context deletes do not enforce the `.deny` relationship rule and nullify related models. Batch deletes reject entities with `.deny` relationships.
+- `fetchCount` supports descriptors with an offset. Batch deletes leave pending changes and registered model instances intact.
+- Predicate evaluation follows Swift semantics in cases where SwiftData has returned inconsistent results, such as comparisons involving `String.count`.
+- When SwiftData returns nondeterministic result order or duplicate selection, OpenSwiftData may return a different result.
+
+### Platform and storage limits
+
+- SQLite through GRDB is the default backend. CloudKit is unsupported.
+- The package builds on Linux and Apple platforms. On Linux, `NotificationCenter` observers filtered with `object: context` do not receive save notifications.
+- The custom `DataStore` protocol API and SwiftData's class-based `Schema` API are not implemented. OpenSwiftData schemas use value types and arrays for attributes and relationships.
 
 ## License
 
-OpenSwiftData is available under the [Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE)

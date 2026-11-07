@@ -47,7 +47,7 @@ private final class ExternalDataCompositionFixture {
 
 final class SQLiteCompositionTests: XCTestCase {
     @MainActor
-    func testSQLiteCompositionExternalizesMarkedDataAndRestoresItOnFetch() throws {
+    func testSQLiteCompositionExternalizesMarkedDataAndRestoresItOnFetch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("osd-external-data-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -135,7 +135,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testExternalDataAtThresholdRemainsInlineInSQLite() throws {
+    func testExternalDataAtThresholdRemainsInlineInSQLite() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("osd-external-boundary-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -157,7 +157,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testIndexedPredicateFetchPlanUsesSQLiteIndex() throws {
+    func testIndexedPredicateFetchPlanUsesSQLiteIndex() async throws {
         let container = try ModelContainer(
             for: IndexedPredicateFixture.self, configurations: .sqliteMemory("predicate-query-plan"))
         guard let store = container.store as? any RuntimeQueryStore else {
@@ -265,7 +265,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testIndexedRangePredicateFetchPlanUsesSQLiteIndex() throws {
+    func testIndexedRangePredicateFetchPlanUsesSQLiteIndex() async throws {
         let container = try ModelContainer(
             for: IndexedPredicateFixture.self, configurations: .sqliteMemory("range-query-plan"))
         guard let store = container.store as? any RuntimeQueryStore else {
@@ -321,7 +321,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testIndexedNumericSortPlanAvoidsTemporaryOrderByTree() throws {
+    func testIndexedNumericSortPlanAvoidsTemporaryOrderByTree() async throws {
         let container = try ModelContainer(
             for: IndexedPredicateFixture.self, configurations: .sqliteMemory("numeric-sort-query-plan"))
         guard let store = container.store as? any RuntimeQueryStore else {
@@ -367,7 +367,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalIndexedEqualityPlanUsesSQLiteIndex() throws {
+    func testOptionalIndexedEqualityPlanUsesSQLiteIndex() async throws {
         let container = try ModelContainer(
             for: OptionalIndexedPredicateFixture.self, configurations: .sqliteMemory("optional-query-plan"))
         guard let store = container.store as? any RuntimeQueryStore else {
@@ -517,7 +517,7 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitDataVersionPollingRefreshesExternalFileChanges() throws {
+    func testExplicitDataVersionPollingRefreshesExternalFileChanges() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("osd-data-version-\(UUID().uuidString).sqlite")
         defer {

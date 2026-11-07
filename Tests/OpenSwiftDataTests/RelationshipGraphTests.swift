@@ -3,7 +3,7 @@ import XCTest
 
 final class RelationshipGraphTests: XCTestCase {
     @MainActor
-    func testTypedAdapterWritesOnceAndJournalsOrderedEndpoints() throws {
+    func testTypedAdapterWritesOnceAndJournalsOrderedEndpoints() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let second = GraphPet(name: "Luna")
@@ -39,7 +39,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testGeneratedRelationshipSetterSynchronouslyPropagatesInverse() throws {
+    func testGeneratedRelationshipSetterSynchronouslyPropagatesInverse() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -59,7 +59,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testInverseToOneReplacementRemovesFromDisplacedOwner() throws {
+    func testInverseToOneReplacementRemovesFromDisplacedOwner() async throws {
         let personA = GraphPerson(name: "A")
         let personB = GraphPerson(name: "B")
         let pet = GraphPet(name: "Milo")
@@ -83,7 +83,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testToManyReplacementClearsOldInverse() throws {
+    func testToManyReplacementClearsOldInverse() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "First")
         let second = GraphPet(name: "Second")
@@ -103,7 +103,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testNilRemovalBothDirections() throws {
+    func testNilRemovalBothDirections() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -124,7 +124,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateAndRepeatedAssignmentIsIdempotent() throws {
+    func testDuplicateAndRepeatedAssignmentIsIdempotent() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -143,7 +143,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateRelationshipAssignmentRejectsCrossContextEndpoint() throws {
+    func testDuplicateRelationshipAssignmentRejectsCrossContextEndpoint() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let first = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -163,7 +163,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateNoOpAssignmentStillRejectsCrossContextEndpoint() throws {
+    func testDuplicateNoOpAssignmentStillRejectsCrossContextEndpoint() async throws {
         let pet = GraphPet(name: "Milo")
         let first = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let second = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -180,7 +180,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testSelfReferentialCycle() throws {
+    func testSelfReferentialCycle() async throws {
         let a = GraphNode(name: "A")
         let b = GraphNode(name: "B")
         let container = try ModelContainer(for: [GraphNode.self], configurations: [])
@@ -201,7 +201,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testNonoptionalToOneCannotBeCleared() throws {
+    func testNonoptionalToOneCannotBeCleared() async throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
         let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
@@ -230,7 +230,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testGeneratedSetterRejectsNonoptionalInverseConflictWithoutMutation() throws {
+    func testGeneratedSetterRejectsNonoptionalInverseConflictWithoutMutation() async throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
         let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
@@ -248,7 +248,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testCrossContextEndpointRejectedWithoutMutation() throws {
+    func testCrossContextEndpointRejectedWithoutMutation() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -271,7 +271,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOwnerWritesOnlyOwner() throws {
+    func testDetachedOwnerWritesOnlyOwner() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -285,7 +285,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresAllAffectedEndpoints() throws {
+    func testRollbackRestoresAllAffectedEndpoints() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "First")
         let second = GraphPet(name: "Second")
@@ -311,7 +311,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedWriteRestoresStateAndJournal() throws {
+    func testFailedWriteRestoresStateAndJournal() async throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
         let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
@@ -332,7 +332,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testInverseConsistencyAcrossFixedSequences() throws {
+    func testInverseConsistencyAcrossFixedSequences() async throws {
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let people = [GraphPerson(name: "P1"), GraphPerson(name: "P2")]
         let pets = [GraphPet(name: "E1"), GraphPet(name: "E2"), GraphPet(name: "E3")]
@@ -370,7 +370,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testInverseAssignmentUpdatesToManyAndJournalsOnlyChangedProperties() throws {
+    func testInverseAssignmentUpdatesToManyAndJournalsOnlyChangedProperties() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -389,7 +389,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testToOneCardinalityRejectsMultipleEndpointsWithoutMutation() throws {
+    func testToOneCardinalityRejectsMultipleEndpointsWithoutMutation() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let second = GraphPet(name: "Luna")
@@ -403,7 +403,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testManualSchemaBindsExplicitRelationshipCandidate() throws {
+    func testManualSchemaBindsExplicitRelationshipCandidate() async throws {
         let schema = Schema([
             Schema.Entity(
                 name: "GraphPerson",
@@ -422,7 +422,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testManualSchemaRejectsRelationshipWithoutCompatibleCandidate() {
+    func testManualSchemaRejectsRelationshipWithoutCompatibleCandidate() async {
         let schema = Schema([
             Schema.Entity(
                 name: "GraphPerson",
@@ -447,7 +447,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testAdapterBoxRejectsMismatchedOwnerType() throws {
+    func testAdapterBoxRejectsMismatchedOwnerType() async throws {
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
         let adapter = try XCTUnwrap(container.relationshipAdapters(for: GraphPerson.self).first { $0.name == "pets" })
         let wrongOwner = GraphPet(name: "Milo")
@@ -457,7 +457,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testManualModelExplicitInverseCandidateBinds() throws {
+    func testManualModelExplicitInverseCandidateBinds() async throws {
         let container = try ModelContainer(
             for: [ManualInverseSource.self, ManualInverseDestination.self], configurations: [])
         XCTAssertEqual(container.relationshipAdapters(for: ManualInverseSource.self).map(\.name), ["destination"])
@@ -471,14 +471,14 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testLegacyPersistentModelWithoutRefinementUsesEmptyCandidates() throws {
+    func testLegacyPersistentModelWithoutRefinementUsesEmptyCandidates() async throws {
         let modelType: any PersistentModel.Type = LegacyPersistentOwner.self
         let container = try ModelContainer(for: [modelType, InferredTarget.self], configurations: [])
         XCTAssertTrue(container.relationshipAdapters(for: LegacyPersistentOwner.self).isEmpty)
     }
 
     @MainActor
-    func testManualModelRelationshipWithoutCandidateThrows() {
+    func testManualModelRelationshipWithoutCandidateThrows() async {
         XCTAssertThrowsError(
             try ModelContainer(for: [MissingCandidateOwner.self, InferredTarget.self], configurations: [])
         ) { error in
@@ -493,7 +493,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testManualModelDuplicateCandidatesThrow() {
+    func testManualModelDuplicateCandidatesThrow() async {
         XCTAssertThrowsError(
             try ModelContainer(for: [DuplicateCandidateOwner.self, InferredTarget.self], configurations: [])
         ) { error in
@@ -507,7 +507,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testInferredRelationshipCollectionsBindAndScalarCollectionsDoNot() throws {
+    func testInferredRelationshipCollectionsBindAndScalarCollectionsDoNot() async throws {
         let container = try ModelContainer(
             for: [InferredOwner.self, InferredTarget.self, ScalarCollections.self], configurations: [])
         XCTAssertEqual(container.relationshipAdapters(for: InferredOwner.self).map(\.name), ["targets"])
@@ -519,7 +519,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackDiscardsRelationshipEventsAndAttributeChanges() throws {
+    func testRollbackDiscardsRelationshipEventsAndAttributeChanges() async throws {
         let person = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -538,7 +538,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testNonInverseRelationshipJournalsOneEvent() throws {
+    func testNonInverseRelationshipJournalsOneEvent() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let friend = GraphPet(name: "Luna")
@@ -562,7 +562,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresRelationshipEventSnapshot() throws {
+    func testRollbackRestoresRelationshipEventSnapshot() async throws {
         let person = GraphPerson(name: "Ada")
         let pet = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -585,7 +585,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalNilClearsAndInvalidValueDoesNotMutateOrJournal() throws {
+    func testOptionalNilClearsAndInvalidValueDoesNotMutateOrJournal() async throws {
         let person = GraphPerson(name: "Ada")
         let first = GraphPet(name: "Milo")
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], configurations: [])
@@ -616,7 +616,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testAttachedRelationshipSetterAutoInsertsDetachedDestination() throws {
+    func testAttachedRelationshipSetterAutoInsertsDetachedDestination() async throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -630,7 +630,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOwnerAssignmentDoesNotAutoInsertDestination() throws {
+    func testDetachedOwnerAssignmentDoesNotAutoInsertDestination() async throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -645,7 +645,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedGeneratedRelationshipAssignmentSurvivesInsertion() throws {
+    func testDetachedGeneratedRelationshipAssignmentSurvivesInsertion() async throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -665,7 +665,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testAutoInsertedRelationshipDestinationRollsBackWithTransaction() throws {
+    func testAutoInsertedRelationshipDestinationRollsBackWithTransaction() async throws {
         let owner = RetentionPerson(name: "Ada")
         let pet = RetentionPet(name: "Milo")
         let container = try ModelContainer(for: [RetentionPerson.self, RetentionPet.self], configurations: [])
@@ -684,7 +684,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testRelationshipAutoInsertPreflightsContextAndCardinalityBeforeMutation() throws {
+    func testRelationshipAutoInsertPreflightsContextAndCardinalityBeforeMutation() async throws {
         let owner = GraphPerson(name: "Ada")
         let attachedPet = GraphPet(name: "Attached")
         let foreignPet = GraphPet(name: "Foreign")
@@ -702,7 +702,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteCascadeSchedulesRelatedModel() throws {
+    func testDeleteCascadeSchedulesRelatedModel() async throws {
         let owner = CascadeOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
         let container = try ModelContainer(for: [CascadeOwner.self, DeleteRuleChild.self], configurations: [])
@@ -728,7 +728,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteRuleProcessingIsIdempotent() throws {
+    func testDeleteRuleProcessingIsIdempotent() async throws {
         let owner = NoActionOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
         let container = try ModelContainer(for: [NoActionOwner.self, DeleteRuleChild.self], configurations: [])
@@ -749,7 +749,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testCascadeDeleteRollsBackAllEndpointsInFailedTransaction() throws {
+    func testCascadeDeleteRollsBackAllEndpointsInFailedTransaction() async throws {
         let owner = CascadeOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
         let container = try ModelContainer(for: [CascadeOwner.self, DeleteRuleChild.self], configurations: [])
@@ -776,7 +776,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteNullifyClearsInverseBeforeReturn() throws {
+    func testDeleteNullifyClearsInverseBeforeReturn() async throws {
         let owner = NullifyOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
         let container = try ModelContainer(for: [NullifyOwner.self, DeleteRuleChild.self], configurations: [])
@@ -792,7 +792,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteNullifyWriteFailureLeavesDeleteAndRelationshipUntouched() throws {
+    func testDeleteNullifyWriteFailureLeavesDeleteAndRelationshipUntouched() async throws {
         let holder = GraphHolder(name: "H")
         let badge = GraphBadge(holder: holder)
         let container = try ModelContainer(for: [GraphHolder.self, GraphBadge.self], configurations: [])
@@ -809,7 +809,7 @@ final class RelationshipGraphTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteNoActionLeavesRelationshipUntouched() throws {
+    func testDeleteNoActionLeavesRelationshipUntouched() async throws {
         let owner = NoActionOwner(name: "A")
         let child = DeleteRuleChild(name: "B")
         let container = try ModelContainer(for: [NoActionOwner.self, DeleteRuleChild.self], configurations: [])

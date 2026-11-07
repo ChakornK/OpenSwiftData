@@ -30,7 +30,7 @@ private extension ModelContext {
 
 final class HistoryTests: XCTestCase {
     @MainActor
-    func testHistoryRecordsInsertUpdateDeleteAndPrunesByToken() throws {
+    func testHistoryRecordsInsertUpdateDeleteAndPrunesByToken() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataHistory-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -81,7 +81,7 @@ final class HistoryTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedModelWriteDoesNotCommitHistory() throws {
+    func testFailedModelWriteDoesNotCommitHistory() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataHistoryRollback-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -102,7 +102,7 @@ final class HistoryTests: XCTestCase {
     }
 
     @MainActor
-    func testUniqueInsertReplacementIsRecordedAsUpdate() throws {
+    func testUniqueInsertReplacementIsRecordedAsUpdate() async throws {
         let container = try ModelContainer(
             for: HistoryFixture.self, configurations: .sqliteMemory("history-upsert"))
         let context = container.mainContext

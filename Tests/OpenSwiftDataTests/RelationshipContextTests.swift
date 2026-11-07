@@ -4,7 +4,7 @@ import XCTest
 
 final class RelationshipContextTests: XCTestCase {
     @MainActor
-    func testAttachedAssignmentAutoInsertsDestinationAndRollbackDetachesIt() throws {
+    func testAttachedAssignmentAutoInsertsDestinationAndRollbackDetachesIt() async throws {
         let owner = ContextOwner(name: "Ada")
         let pet = ContextPet(name: "Milo")
         let container = try ModelContainer(for: [ContextOwner.self, ContextPet.self], configurations: [])
@@ -24,7 +24,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOwnerAssignmentDoesNotAutoInsert() throws {
+    func testDetachedOwnerAssignmentDoesNotAutoInsert() async throws {
         let owner = ContextOwner(name: "Ada")
         let pet = ContextPet(name: "Milo")
         let container = try ModelContainer(for: [ContextOwner.self, ContextPet.self], configurations: [])
@@ -39,7 +39,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testToOneCardinalityBoundaryAcceptsSingleEndpoint() throws {
+    func testToOneCardinalityBoundaryAcceptsSingleEndpoint() async throws {
         let owner = ContextSingleOwner(name: "Ada")
         let first = ContextPet(name: "First")
         let container = try ModelContainer(for: [ContextSingleOwner.self, ContextPet.self], configurations: [])
@@ -54,7 +54,7 @@ final class RelationshipContextTests: XCTestCase {
     }
 
     @MainActor
-    func testCascadeAndNullifyDeleteRulesApplySynchronously() throws {
+    func testCascadeAndNullifyDeleteRulesApplySynchronously() async throws {
         let cascadeOwner = ContextCascadeOwner(name: "A")
         let cascadePet = ContextPet(name: "Cascade")
         let cascadeContainer = try ModelContainer(for: [ContextCascadeOwner.self, ContextPet.self], configurations: [])

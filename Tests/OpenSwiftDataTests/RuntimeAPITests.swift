@@ -311,7 +311,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerPreservesOptionalCollectionRelationships() throws {
+    func testContainerPreservesOptionalCollectionRelationships() async throws {
         let container = try ModelContainer(
             for: [OptionalDestinationFixture.self, SupportedOptionalCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "SupportedOptionalCollectionFixture"))
@@ -352,7 +352,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerSupportsOptionalScalarCollectionAttributes() throws {
+    func testContainerSupportsOptionalScalarCollectionAttributes() async throws {
         let container = try ModelContainer(for: [OptionalScalarCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarCollectionFixture"))
         XCTAssertEqual(entity.attributes.map(\.name), ["strings", "integers"])
@@ -360,7 +360,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalScalarCollectionElementsPersistAndMaterialize() throws {
+    func testOptionalScalarCollectionElementsPersistAndMaterialize() async throws {
         let container = try ModelContainer(
             for: OptionalScalarCollectionFixture.self,
             configurations: .sqliteMemory("optional-scalar-collection-elements"))
@@ -385,7 +385,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalScalarCollectionPredicatesFailClosed() throws {
+    func testOptionalScalarCollectionPredicatesFailClosed() async throws {
         let container = try ModelContainer(
             for: OptionalScalarCollectionFixture.self,
             configurations: .sqliteMemory("optional-scalar-collection-predicates"))
@@ -409,7 +409,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testMainContextsAreSpecificToTheirContainers() throws {
+    func testMainContextsAreSpecificToTheirContainers() async throws {
         let firstContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])
         let secondContainer = try ModelContainer(for: [TransactionFixture.self], configurations: [])
 
@@ -419,7 +419,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsDuplicateEntityNames() {
+    func testContainerRejectsDuplicateEntityNames() async {
         XCTAssertThrowsError(
             try ModelContainer(
                 for: [FirstNamespace.SharedName.self, SecondNamespace.SharedName.self], configurations: [])
@@ -431,7 +431,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testPersistenceOperationsFailWithoutStore() {
+    func testPersistenceOperationsFailWithoutStore() async {
         let context = ModelContext()
         let descriptor = FetchDescriptor<TransactionFixture>()
         let identifier = TransactionFixture().persistentModelID
@@ -452,7 +452,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testUnsupportedPredicateDeleteDoesNotMutateInsertedModels() {
+    func testUnsupportedPredicateDeleteDoesNotMutateInsertedModels() async {
         let context = ModelContext()
         let model = TransactionFixture()
         context.insert(model)
@@ -483,7 +483,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testTransactionBlockFailureRestoresPropertyAndLifecycleState() {
+    func testTransactionBlockFailureRestoresPropertyAndLifecycleState() async {
         let context = ModelContext()
         let model = TransactionFixture()
         context.insert(model)
@@ -506,7 +506,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testTransactionFailureAfterDeletingSavedModelRestoresLifecycleAndContext() throws {
+    func testTransactionFailureAfterDeletingSavedModelRestoresLifecycleAndContext() async throws {
         let context = ModelContext(testSave: {})
         let model = TransactionFixture()
         context.insert(model)
@@ -527,7 +527,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testTransactionFailureAfterMutatingThenDeletingRestoresEntryState() throws {
+    func testTransactionFailureAfterMutatingThenDeletingRestoresEntryState() async throws {
         let context = ModelContext(testSave: {})
         let model = TransactionFixture()
         context.insert(model)
@@ -548,7 +548,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testNestedTransactionFailureRestoresOuterEntryAfterCaughtError() throws {
+    func testNestedTransactionFailureRestoresOuterEntryAfterCaughtError() async throws {
         var saveShouldFail = false
         let context = ModelContext(testSave: {
             if saveShouldFail { throw SwiftDataError.unsupportedStore("save failure") }
@@ -578,7 +578,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testTransactionFailurePreservesPreexistingInsertedChanges() {
+    func testTransactionFailurePreservesPreexistingInsertedChanges() async {
         let context = ModelContext()
         let model = TransactionFixture()
         context.insert(model)
@@ -598,7 +598,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testTransactionSaveFailureRestoresPropertyAndDetachesInsertion() {
+    func testTransactionSaveFailureRestoresPropertyAndDetachesInsertion() async {
         let context = ModelContext(testSave: { throw SwiftDataError.unsupportedStore("save failure") })
         let model = TransactionFixture()
         let originalIdentifier = model.persistentModelID
@@ -617,7 +617,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testSuccessfulSaveDetachesDeletedModelAndPreservesLastValues() throws {
+    func testSuccessfulSaveDetachesDeletedModelAndPreservesLastValues() async throws {
         let context = ModelContext(testSave: {})
         let model = TransactionFixture()
         context.insert(model)
@@ -636,7 +636,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testSuccessfulTransactionSaveDetachesDeletedModelAndPreservesLastValues() throws {
+    func testSuccessfulTransactionSaveDetachesDeletedModelAndPreservesLastValues() async throws {
         let context = ModelContext(testSave: {})
         let model = TransactionFixture()
         context.insert(model)
@@ -654,7 +654,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingUnsavedInsertionKeepsItPendingUntilSave() throws {
+    func testDeletingUnsavedInsertionKeepsItPendingUntilSave() async throws {
         let context = ModelContext()
         let model = TransactionFixture()
         model.title = "baseline"
@@ -682,7 +682,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresAndDetachesMutatedPendingInsertion() {
+    func testRollbackRestoresAndDetachesMutatedPendingInsertion() async {
         let context = ModelContext()
         let model = TransactionFixture()
         model.title = "insert-time baseline"
@@ -701,7 +701,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testFailedTransactionInsertionRestoresAndDetachesModel() {
+    func testFailedTransactionInsertionRestoresAndDetachesModel() async {
         let context = ModelContext(testSave: {})
         let model = TransactionFixture()
         model.title = "insertion baseline"
@@ -723,7 +723,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testNestedSuccessfulTransactionDefersSaveUntilOuterCommit() {
+    func testNestedSuccessfulTransactionDefersSaveUntilOuterCommit() async {
         let context = ModelContext()
         let preexistingInsertion = TransactionFixture()
         context.insert(preexistingInsertion)
@@ -749,7 +749,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testNestedSuccessfulTransactionSavesOnceAtOuterCommit() throws {
+    func testNestedSuccessfulTransactionSavesOnceAtOuterCommit() async throws {
         var saveCount = 0
         let context = ModelContext(testSave: { saveCount += 1 })
         let model = TransactionFixture()
@@ -772,7 +772,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testFailedDirectSaveRetainsPendingState() {
+    func testFailedDirectSaveRetainsPendingState() async {
         let context = ModelContext(testSave: { throw SwiftDataError.unsupportedStore("save failure") })
         let model = TransactionFixture()
         context.insert(model)
@@ -786,7 +786,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testPlainStringPropertyIsAnAttribute() throws {
+    func testPlainStringPropertyIsAnAttribute() async throws {
         let container = try ModelContainer(for: [ExplicitInverseNonRelationshipFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "ExplicitInverseNonRelationshipFixture"))
 
@@ -795,7 +795,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerAcceptsValidExplicitInverse() throws {
+    func testContainerAcceptsValidExplicitInverse() async throws {
         let container = try ModelContainer(
             for: [ExplicitInverseSourceFixture.self, ExplicitInverseDestinationFixture.self], configurations: [])
         let source = try XCTUnwrap(container.schema.entity(forName: "ExplicitInverseSourceFixture"))
@@ -803,7 +803,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsInvalidExplicitInverseNamesAndTypes() {
+    func testContainerRejectsInvalidExplicitInverseNamesAndTypes() async {
         assertSchemaError(
             try ModelContainer(
                 for: [OptionalDestinationFixture.self, InvalidInverseNameFixture.self], configurations: []))
@@ -834,7 +834,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsTypedRelationshipWithoutDestinationOrInverse() {
+    func testContainerRejectsTypedRelationshipWithoutDestinationOrInverse() async {
         XCTAssertThrowsError(
             try ModelContainer(for: [MissingDestinationWithoutInverseFixture.self], configurations: [])
         ) { error in
@@ -849,7 +849,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsMissingExplicitRelationshipDestination() {
+    func testContainerRejectsMissingExplicitRelationshipDestination() async {
         XCTAssertThrowsError(try ModelContainer(for: [MissingRelationshipDestinationFixture.self], configurations: []))
         { error in
             guard let dataError = error as? SwiftDataError, dataError == .unsupportedSchemaProperty,
@@ -863,7 +863,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsOptionalRelationshipElements() {
+    func testContainerRejectsOptionalRelationshipElements() async {
         assertOptionalModelCollectionRejected(OptionalElementCollectionFixture.self, property: "destinations")
         assertOptionalModelCollectionRejected(OptionalModelArraysFixture.self, property: "destinations")
         assertOptionalModelCollectionRejected(OptionalModelSetsFixture.self, property: "destinations")

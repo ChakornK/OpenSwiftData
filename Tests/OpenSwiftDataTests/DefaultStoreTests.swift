@@ -32,7 +32,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDefaultTypedContainerSavesAndFetches() throws {
+    func testDefaultTypedContainerSavesAndFetches() async throws {
         try withIsolatedDefaultStore {
             let container = try ModelContainer(for: DefaultStoreFixture.self)
             defer { try? container.store?.close() }
@@ -54,7 +54,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDefaultTypedContainerPersistsAcrossReopen() throws {
+    func testDefaultTypedContainerPersistsAcrossReopen() async throws {
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: DefaultStoreFixture.self)
             writer.mainContext.insert(DefaultStoreFixture(title: "durable"))
@@ -69,7 +69,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testArrayInitializerWithoutConfigurationsUsesDefaultStore() throws {
+    func testArrayInitializerWithoutConfigurationsUsesDefaultStore() async throws {
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: [DefaultStoreFixture.self])
             writer.mainContext.insert(DefaultStoreFixture(title: "array"))
@@ -84,7 +84,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSchemaInitializerWithoutConfigurationsOpensDefaultStore() throws {
+    func testSchemaInitializerWithoutConfigurationsOpensDefaultStore() async throws {
         try withIsolatedDefaultStore {
             let typed = try ModelContainer(for: DefaultStoreFixture.self)
             typed.mainContext.insert(DefaultStoreFixture(title: "schema"))
@@ -105,7 +105,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitEmptyConfigurationsRemainSchemaOnly() throws {
+    func testExplicitEmptyConfigurationsRemainSchemaOnly() async throws {
         try withIsolatedDefaultStore {
             let container = try ModelContainer(for: [DefaultStoreFixture.self], configurations: [])
             XCTAssertNil(container.store)
@@ -123,7 +123,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitMemoryConfigurationDoesNotPersistOrTouchDefaultStore() throws {
+    func testExplicitMemoryConfigurationDoesNotPersistOrTouchDefaultStore() async throws {
         let name = "default-store-memory-\(UUID().uuidString)"
         try withIsolatedDefaultStore {
             let writer = try ModelContainer(for: DefaultStoreFixture.self, configurations: .sqliteMemory(name))
@@ -140,7 +140,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitFileConfigurationPersistsAtRequestedURL() throws {
+    func testExplicitFileConfigurationPersistsAtRequestedURL() async throws {
         let url = directory.appendingPathComponent("explicit.sqlite")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try withIsolatedDefaultStore {
@@ -159,7 +159,7 @@ final class DefaultStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitPublicConfigurationOpensWithoutTouchingDefaultStore() throws {
+    func testExplicitPublicConfigurationOpensWithoutTouchingDefaultStore() async throws {
         try withIsolatedDefaultStore {
             let container = try ModelContainer(
                 for: DefaultStoreFixture.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))

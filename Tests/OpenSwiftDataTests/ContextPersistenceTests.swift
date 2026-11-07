@@ -353,7 +353,7 @@ final class LazyCascadeChildFixture {
 
 final class ContextPersistenceTests: XCTestCase {
     @MainActor
-    func testFlattenedCodableCompositePersistsAndSupportsLeafPredicate() throws {
+    func testFlattenedCodableCompositePersistsAndSupportsLeafPredicate() async throws {
         let container = try ModelContainer(
             for: FlattenedCompositeFixture.self,
             configurations: .sqliteMemory("flattened-codable-composite"))
@@ -468,7 +468,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFlattenedLeafSortMergesStoredAndPendingValues() throws {
+    func testFlattenedLeafSortMergesStoredAndPendingValues() async throws {
         let container = try ModelContainer(
             for: FlattenedCompositeFixture.self, configurations: .sqliteMemory("flattened-leaf-sort"))
         let context = container.mainContext
@@ -488,7 +488,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFlattenedDataLeafEqualityMatchesStoredAndPendingRows() throws {
+    func testFlattenedDataLeafEqualityMatchesStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: FlattenedPayloadFixture.self, configurations: .sqliteMemory("flattened-data-leaf"))
         let context = container.mainContext
@@ -512,7 +512,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testLazyRelationshipFaultLoadsFlattenedDestinationColumns() throws {
+    func testLazyRelationshipFaultLoadsFlattenedDestinationColumns() async throws {
         let container = try ModelContainer(
             for: FlattenedCompositeOwnerFixture.self, FlattenedCompositeFixture.self,
             configurations: .sqliteMemory("flattened-relationship-fault"))
@@ -541,7 +541,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUnflattenedCodableCompositeRemainsBlobBacked() throws {
+    func testUnflattenedCodableCompositeRemainsBlobBacked() async throws {
         let container = try ModelContainer(
             for: CodableBlobFallbackFixture.self, configurations: .sqliteMemory("codable-blob-fallback"))
         let attribute = try XCTUnwrap(
@@ -556,7 +556,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalFlattenedCompositeFailsSchemaValidation() {
+    func testOptionalFlattenedCompositeFailsSchemaValidation() async {
         XCTAssertThrowsError(
             try ModelContainer(
                 for: OptionalFlattenedCompositeFixture.self,
@@ -569,7 +569,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateFlattenedComponentManifestFailsSchemaValidation() {
+    func testDuplicateFlattenedComponentManifestFailsSchemaValidation() async {
         XCTAssertThrowsError(
             try ModelContainer(
                 for: DuplicateFlattenedFixture.self,
@@ -582,7 +582,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUnsupportedFlattenedLeafTypeFailsSchemaValidation() {
+    func testUnsupportedFlattenedLeafTypeFailsSchemaValidation() async {
         XCTAssertThrowsError(
             try ModelContainer(
                 for: UnsupportedFlattenedLeafFixture.self,
@@ -595,7 +595,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testMixedIntegerAndDoubleSortComparisonPreservesInt64Precision() {
+    func testMixedIntegerAndDoubleSortComparisonPreservesInt64Precision() async {
         let context = ModelContext()
         XCTAssertEqual(context.compareSortValues(.int((1 << 53) + 1), .double(0x1p53)), .orderedDescending)
         XCTAssertEqual(context.compareSortValues(.int(Int64.max), .double(0x1p63)), .orderedAscending)
@@ -723,7 +723,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalCapturedPredicateValuesCompileForNilAndSome() throws {
+    func testOptionalCapturedPredicateValuesCompileForNilAndSome() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("optional-captured-predicate"))
         let context = container.mainContext
@@ -759,7 +759,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testExpressionLowersAndExecutesAsSQLiteSQLAndEvaluator() throws {
+    func testExpressionLowersAndExecutesAsSQLiteSQLAndEvaluator() async throws {
         guard #available(macOS 15, iOS 18, tvOS 18, watchOS 11, *) else {
             throw XCTSkip("Foundation expression evaluation requires Apple OS 18-era APIs")
         }
@@ -1070,7 +1070,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFetchedDirtyModelIsReevaluatedAgainstPendingPredicate() throws {
+    func testFetchedDirtyModelIsReevaluatedAgainstPendingPredicate() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("dirty-fetched-predicate"))
         let context = container.mainContext
@@ -1090,7 +1090,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitCodableAttributeSQLiteRoundTrip() throws {
+    func testExplicitCodableAttributeSQLiteRoundTrip() async throws {
         let container = try ModelContainer(
             for: ExplicitCodableAttributeFixture.self, configurations: .sqliteMemory("codable-attribute"))
         let payload = CodablePayload(label: "round-trip", count: 37)
@@ -1103,7 +1103,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testExternalDataPersistsReopensAndCleansReplacedPayload() throws {
+    func testExternalDataPersistsReopensAndCleansReplacedPayload() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenSwiftDataExternalData-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1139,7 +1139,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testExternalStorageOptionRejectsNonDataProperty() {
+    func testExternalStorageOptionRejectsNonDataProperty() async {
         XCTAssertThrowsError(
             try ModelContainer(
                 for: InvalidExternalDataOptionFixture.self,
@@ -1152,7 +1152,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertedModelSavesFetchesAndReusesIdentity() throws {
+    func testInsertedModelSavesFetchesAndReusesIdentity() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("context-test"))
         let context = container.mainContext
@@ -1170,7 +1170,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFetchDescriptorLimitOffsetSortAndConvenienceQueries() throws {
+    func testFetchDescriptorLimitOffsetSortAndConvenienceQueries() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("fetch-descriptor"))
         let context = container.mainContext
@@ -1214,7 +1214,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testEnumerationRejectsAndRestoresModelMutationsByDefault() throws {
+    func testEnumerationRejectsAndRestoresModelMutationsByDefault() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-mutation-default"))
         let writer = container.mainContext
@@ -1299,7 +1299,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testEnumerationAllowsMutationsWhenEscapingIsEnabled() throws {
+    func testEnumerationAllowsMutationsWhenEscapingIsEnabled() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-escaping-mutations"))
         let writer = container.mainContext
@@ -1331,7 +1331,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testEnumerationRejectsAndRestoresRelationshipMutations() throws {
+    func testEnumerationRejectsAndRestoresRelationshipMutations() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("enumeration-relationship-mutation"))
@@ -1393,7 +1393,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRejectedEnumerationRestoresOnlyItsNestedTransactionFrame() throws {
+    func testRejectedEnumerationRestoresOnlyItsNestedTransactionFrame() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("enumeration-nested-transaction"))
         let writer = container.mainContext
@@ -1439,7 +1439,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateFetchAppliesPredicateToStoredRows() throws {
+    func testPredicateFetchAppliesPredicateToStoredRows() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("stored-fetch-predicate"))
         let context = container.mainContext
@@ -1458,7 +1458,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoredPredicateResultsAgreeWithFoundationEvaluatorForIntegerSemantics() throws {
+    func testStoredPredicateResultsAgreeWithFoundationEvaluatorForIntegerSemantics() async throws {
         let seeds: [(id: Int, value: Int, optionalValue: Int?)] = [
             (1, -2, nil),
             (2, 0, 0),
@@ -1518,7 +1518,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingSQLiteCountAndIdentifiersDoNotMaterializeCommittedModels() throws {
+    func testPendingSQLiteCountAndIdentifiersDoNotMaterializeCommittedModels() async throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("pending-query-values-without-materialization"))
@@ -1574,7 +1574,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingInverseToManyQueriesUseAffectedRelationshipModelsOnly() throws {
+    func testPendingInverseToManyQueriesUseAffectedRelationshipModelsOnly() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self,
             PersistentRelationshipChild.self,
@@ -1632,7 +1632,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingToOneRelationshipQueriesAvoidMaterializingUntouchedOwners() throws {
+    func testPendingToOneRelationshipQueriesAvoidMaterializingUntouchedOwners() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self,
             PersistentRelationshipChild.self,
@@ -1676,7 +1676,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingToManyCountQueriesDoNotMaterializeUntouchedOwners() throws {
+    func testPendingToManyCountQueriesDoNotMaterializeUntouchedOwners() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self,
             PersistentRelationshipChild.self,
@@ -1716,7 +1716,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingSQLiteScalarQueriesApplyDeleteAndZeroLimitAfterMerge() throws {
+    func testPendingSQLiteScalarQueriesApplyDeleteAndZeroLimitAfterMerge() async throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("pending-scalar-delete-and-limit"))
@@ -1765,7 +1765,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingScalarIdentifierSortUsesPrimaryKeyTieBreak() throws {
+    func testPendingScalarIdentifierSortUsesPrimaryKeyTieBreak() async throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("pending-identifier-sort-tie-break"))
@@ -1792,7 +1792,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingScalarIdentifierSortPreservesNilOrdering() throws {
+    func testPendingScalarIdentifierSortPreservesNilOrdering() async throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("pending-identifier-nil-sort"))
@@ -1834,7 +1834,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingDecimalIdentifierSortUsesNumericCollation() throws {
+    func testPendingDecimalIdentifierSortUsesNumericCollation() async throws {
         let container = try ModelContainer(
             for: QualifiedOptionalScalarFixture.self,
             configurations: .sqliteMemory("pending-decimal-identifier-sort"))
@@ -1882,7 +1882,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingDoubleIdentifierSortOrdersInfinitiesWithStoredRows() throws {
+    func testPendingDoubleIdentifierSortOrdersInfinitiesWithStoredRows() async throws {
         let container = try ModelContainer(
             for: PredicateDoubleFixture.self,
             configurations: .sqliteMemory("pending-double-identifier-infinity-sort"))
@@ -1932,7 +1932,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testNegativeDoubleLiteralsMatchFoundationEvaluator() throws {
+    func testNegativeDoubleLiteralsMatchFoundationEvaluator() async throws {
         let container = try ModelContainer(
             for: PredicateDoubleAgreementFixture.self,
             configurations: .sqliteMemory("foundation-negative-double-predicate"))
@@ -1965,7 +1965,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFloatArithmeticMatchesFoundationWithBinary32Rounding() throws {
+    func testFloatArithmeticMatchesFoundationWithBinary32Rounding() async throws {
         let container = try ModelContainer(
             for: PredicateFloatAgreementFixture.self,
             configurations: .sqliteMemory("foundation-float-arithmetic"))
@@ -2042,7 +2042,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUnaryMinusRejectsSignedIntegerOverflow() throws {
+    func testUnaryMinusRejectsSignedIntegerOverflow() async throws {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("unary-minus-overflow"))
@@ -2063,7 +2063,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testNegativeNarrowIntegerLiteralsMatchFoundationEvaluator() throws {
+    func testNegativeNarrowIntegerLiteralsMatchFoundationEvaluator() async throws {
         let seeds: [(id: Int, small: Int8, medium: Int16)] = [
             (1, -2, -10),
             (2, -1, 0),
@@ -2122,7 +2122,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testNegativeInt8CapturePreservesSignedValueInArithmetic() throws {
+    func testNegativeInt8CapturePreservesSignedValueInArithmetic() async throws {
         let container = try ModelContainer(
             for: NarrowIntegerPredicateFixture.self,
             configurations: .sqliteMemory("negative-int8-capture"))
@@ -2147,7 +2147,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testNarrowIntegerArithmeticMatchesFoundationAndDoesNotWrapOverflow() throws {
+    func testNarrowIntegerArithmeticMatchesFoundationAndDoesNotWrapOverflow() async throws {
         let safeSeeds: [(id: Int, small: Int8)] = [
             (1, -10),
             (2, 0),
@@ -2190,7 +2190,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDynamicNarrowUnaryNegationAndDivisionOverflowAreUnknown() throws {
+    func testDynamicNarrowUnaryNegationAndDivisionOverflowAreUnknown() async throws {
         let seeds: [(id: Int, small: Int8)] = [
             (1, -3),
             (2, 0),
@@ -2242,7 +2242,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoredNarrowAndInt64ArithmeticOverflowIsUnknown() throws {
+    func testStoredNarrowAndInt64ArithmeticOverflowIsUnknown() async throws {
         let container = try ModelContainer(
             for: NarrowIntegerPredicateFixture.self,
             configurations: .sqliteMemory("stored-integer-width-overflow"))
@@ -2290,7 +2290,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUnsignedNarrowArithmeticMatchesFoundationAndRejectsOverflow() throws {
+    func testUnsignedNarrowArithmeticMatchesFoundationAndRejectsOverflow() async throws {
         let safeContainer = try ModelContainer(
             for: UnsignedIntegerPredicateFixture.self,
             configurations: .sqliteMemory("unsigned-arithmetic-safe"))
@@ -2345,7 +2345,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testSQLitePredicateFetchCompilesAndBindsCapturedValues() throws {
+    func testSQLitePredicateFetchCompilesAndBindsCapturedValues() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("predicate-fetch"))
         let context = container.mainContext
@@ -2364,7 +2364,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testTypedPredicateCapturesPreserveDoublePrecision() throws {
+    func testTypedPredicateCapturesPreserveDoublePrecision() async throws {
         let container = try ModelContainer(
             for: PredicateDoubleFixture.self, configurations: .sqliteMemory("typed-predicate-capture"))
         let exact = 1.0000000000000002
@@ -2383,7 +2383,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingStringEqualityMatchesSQLiteBinarySemantics() throws {
+    func testPendingStringEqualityMatchesSQLiteBinarySemantics() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("string-byte-equality"))
         let context = container.mainContext
@@ -2400,7 +2400,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalizedStandardContainsMatchesStoredAndPendingRows() throws {
+    func testLocalizedStandardContainsMatchesStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("localized-contains"))
         let context = container.mainContext
@@ -2417,7 +2417,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStringContainsUsesSwiftCanonicalGraphemeSemantics() throws {
+    func testStringContainsUsesSwiftCanonicalGraphemeSemantics() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("string-contains-grapheme"))
         let context = container.mainContext
@@ -2439,7 +2439,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStringStartsWithUsesSwiftCanonicalGraphemeSemantics() throws {
+    func testStringStartsWithUsesSwiftCanonicalGraphemeSemantics() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("string-prefix-grapheme"))
         let context = container.mainContext
@@ -2456,7 +2456,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalStringContainsCoalescesNilForStoredAndPendingRows() throws {
+    func testOptionalStringContainsCoalescesNilForStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: OptionalComparisonFixture.self,
             configurations: .sqliteMemory("optional-string-contains"))
@@ -2518,7 +2518,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalStringEqualityAndNilPredicatesMatchStoredAndPendingRows() throws {
+    func testOptionalStringEqualityAndNilPredicatesMatchStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: OptionalComparisonFixture.self,
             configurations: .sqliteMemory("optional-string-equality"))
@@ -2550,7 +2550,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalToOptionalEqualityTreatsTwoNilValuesAsEqual() throws {
+    func testOptionalToOptionalEqualityTreatsTwoNilValuesAsEqual() async throws {
         let container = try ModelContainer(
             for: OptionalComparisonFixture.self,
             configurations: .sqliteMemory("optional-to-optional-equality"))
@@ -2585,7 +2585,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalDecimalComparisonPreservesNumericEqualityAndNullSemantics() throws {
+    func testOptionalDecimalComparisonPreservesNumericEqualityAndNullSemantics() async throws {
         let container = try ModelContainer(
             for: QualifiedOptionalScalarFixture.self,
             configurations: .sqliteMemory("optional-decimal-comparison"))
@@ -2630,7 +2630,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalURLAndUUIDPredicatesMatchStoredAndPendingRows() throws {
+    func testOptionalURLAndUUIDPredicatesMatchStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: QualifiedOptionalScalarFixture.self,
             configurations: .sqliteMemory("optional-url-uuid-predicates"))
@@ -2663,7 +2663,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPersistentIdentifierEqualityPredicateMatchesStoredAndPendingModels() throws {
+    func testPersistentIdentifierEqualityPredicateMatchesStoredAndPendingModels() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self,
             configurations: .sqliteMemory("persistent-identifier-predicate"))
@@ -2747,7 +2747,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalRelationshipScalarComparisonTreatsMissingDestinationAsNil() throws {
+    func testOptionalRelationshipScalarComparisonTreatsMissingDestinationAsNil() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("optional-relationship-comparison"))
@@ -2783,7 +2783,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalRelationshipPersistentIdentifierPredicateMatchesEndpoint() throws {
+    func testOptionalRelationshipPersistentIdentifierPredicateMatchesEndpoint() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("optional-relationship-identifier"))
@@ -2813,7 +2813,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testConditionalPredicateMatchesStoredAndPendingRows() throws {
+    func testConditionalPredicateMatchesStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("conditional-predicate"))
         let context = container.mainContext
@@ -2840,7 +2840,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreHubRefreshesCleanModelsOnNextContextAccess() throws {
+    func testStoreHubRefreshesCleanModelsOnNextContextAccess() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-clean-refresh"))
         let writer = container.mainContext
@@ -2869,7 +2869,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreHubPreservesDirtyModelsDuringCrossContextMerge() throws {
+    func testStoreHubPreservesDirtyModelsDuringCrossContextMerge() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-dirty-preservation"))
         let writer = container.mainContext
@@ -2889,7 +2889,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreHubPropagatesInsertedAndDeletedKeys() throws {
+    func testStoreHubPropagatesInsertedAndDeletedKeys() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-insert-delete"))
         let writer = container.mainContext
@@ -2909,7 +2909,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testCrossContextDeleteMarksHeldModelDeleted() throws {
+    func testCrossContextDeleteMarksHeldModelDeleted() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-held-delete"))
         let writer = container.mainContext
@@ -2930,7 +2930,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreHubDoesNotMergeChangesAcrossDistinctStores() throws {
+    func testStoreHubDoesNotMergeChangesAcrossDistinctStores() async throws {
         let firstContainer = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-isolation-first"))
         let secondContainer = try ModelContainer(
@@ -2952,7 +2952,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreHubPublishesRelationshipOnlyChanges() throws {
+    func testStoreHubPublishesRelationshipOnlyChanges() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("store-hub-relationship-only"))
@@ -2983,7 +2983,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedStoreWriteDoesNotPublishChangeSet() throws {
+    func testFailedStoreWriteDoesNotPublishChangeSet() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("store-hub-failed-write"))
         let writer = container.mainContext
@@ -3005,7 +3005,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testClosedIntegerRangePredicateMatchesStoredAndPendingRows() throws {
+    func testClosedIntegerRangePredicateMatchesStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("integer-range-predicate"))
         let context = container.mainContext
@@ -3035,7 +3035,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testHalfOpenIntegerRangeExcludesUpperBound() throws {
+    func testHalfOpenIntegerRangeExcludesUpperBound() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("half-open-range-predicate"))
         let context = container.mainContext
@@ -3057,7 +3057,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testCapturedPartialIntegerRangesMatchStoredAndPendingRows() throws {
+    func testCapturedPartialIntegerRangesMatchStoredAndPendingRows() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self,
             configurations: .sqliteMemory("captured-partial-integer-ranges"))
@@ -3094,7 +3094,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testCapturedPartialFloatingRangeFailsClosed() throws {
+    func testCapturedPartialFloatingRangeFailsClosed() async throws {
         let container = try ModelContainer(
             for: PredicateDoubleFixture.self,
             configurations: .sqliteMemory("captured-partial-floating-range"))
@@ -3105,7 +3105,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectiveRelationshipPrefetchFaultsOtherRelationshipsOnAccess() throws {
+    func testSelectiveRelationshipPrefetchFaultsOtherRelationshipsOnAccess() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("selective-relationship-prefetch"))
@@ -3127,7 +3127,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyRelationshipFaultResolvesInverseWithoutEagerPrefetch() throws {
+    func testManyToManyRelationshipFaultResolvesInverseWithoutEagerPrefetch() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-lazy-relationship"))
@@ -3148,7 +3148,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUnrequestedRelationshipLoadsWhenAccessedAfterFetch() throws {
+    func testUnrequestedRelationshipLoadsWhenAccessedAfterFetch() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("unrequested-lazy-relationship"))
@@ -3165,7 +3165,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingRelationshipOverlayWinsOverUnloadedRelationshipFault() throws {
+    func testPendingRelationshipOverlayWinsOverUnloadedRelationshipFault() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("pending-lazy-relationship-overlay"))
@@ -3188,7 +3188,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testLazyInverseFaultReplaysReassignmentOldAndNewEndpoints() throws {
+    func testLazyInverseFaultReplaysReassignmentOldAndNewEndpoints() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("lazy-inverse-event-replay"))
@@ -3216,7 +3216,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadingUnrelatedInverseDoesNotReplaceToOneRelationship() throws {
+    func testLoadingUnrelatedInverseDoesNotReplaceToOneRelationship() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("lazy-unrelated-to-one-inverse"))
@@ -3241,7 +3241,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteRuleReadsUnprefetchedToManyRelationshipFault() throws {
+    func testDeleteRuleReadsUnprefetchedToManyRelationshipFault() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("delete-unprefetched-relationship"))
@@ -3262,7 +3262,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testCascadeDeleteDiscoversUnprefetchedToManyEndpoints() throws {
+    func testCascadeDeleteDiscoversUnprefetchedToManyEndpoints() async throws {
         let container = try ModelContainer(
             for: LazyCascadeOwnerFixture.self, LazyCascadeChildFixture.self,
             configurations: .sqliteMemory("lazy-cascade-delete"))
@@ -3283,7 +3283,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingOptionalNilMutationIsNotReplacedByStoredValue() throws {
+    func testPendingOptionalNilMutationIsNotReplacedByStoredValue() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("pending-optional-nil"))
         let context = container.mainContext
@@ -3299,7 +3299,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialFetchMarksSqlNullOptionalValueAsLoaded() throws {
+    func testPartialFetchMarksSqlNullOptionalValueAsLoaded() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("partial-null-fault"))
         let context = container.mainContext
@@ -3316,7 +3316,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateQueriesReconcilePendingModelsBeforePagination() throws {
+    func testPredicateQueriesReconcilePendingModelsBeforePagination() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("pending-predicate-query"))
         let context = container.mainContext
@@ -3383,7 +3383,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertedThenDeletedModelIsAbsentFromPendingFetch() throws {
+    func testInsertedThenDeletedModelIsAbsentFromPendingFetch() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("insert-delete-fetch"))
         let context = container.mainContext
@@ -3402,7 +3402,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingUniqueInsertRemainsDistinctUntilSave() throws {
+    func testPendingUniqueInsertRemainsDistinctUntilSave() async throws {
         let container = try ModelContainer(
             for: FailedWritePersistenceFixture.self, configurations: .sqliteMemory("pending-unique-fetch"))
         let context = container.mainContext
@@ -3423,7 +3423,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingLogicalPredicateUsesSQLEquivalentTruthRules() throws {
+    func testPendingLogicalPredicateUsesSQLEquivalentTruthRules() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("pending-logical-predicate"))
         let context = container.mainContext
@@ -3451,7 +3451,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalPredicateAgainstNullValues() throws {
+    func testOptionalPredicateAgainstNullValues() async throws {
         let container = try ModelContainer(
             for: OptionalComparisonFixture.self, configurations: .sqliteMemory("optional-predicate"))
         let context = container.mainContext
@@ -3500,7 +3500,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingNegatedOptionalNilPredicateMatchesSql() throws {
+    func testPendingNegatedOptionalNilPredicateMatchesSql() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("pending-negated-null"))
         let context = container.mainContext
@@ -3519,7 +3519,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testLocalizedStringAndOptionalSortingIncludesPendingModels() throws {
+    func testLocalizedStringAndOptionalSortingIncludesPendingModels() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("localized-sort"))
         let context = container.mainContext
@@ -3604,7 +3604,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testMultipleSortDescriptorsKeepPerKeyDirectionAcrossPendingMerge() throws {
+    func testMultipleSortDescriptorsKeepPerKeyDirectionAcrossPendingMerge() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("multi-key-sort"))
         let context = container.mainContext
@@ -3635,7 +3635,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialFetchFaultsOmittedPropertiesOnAccess() throws {
+    func testPartialFetchFaultsOmittedPropertiesOnAccess() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-fault"))
         let context = container.mainContext
@@ -3654,7 +3654,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialFetchPredicateAndSortUseUnselectedProperty() throws {
+    func testPartialFetchPredicateAndSortUseUnselectedProperty() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-predicate-sort"))
         let writer = container.mainContext
@@ -3695,7 +3695,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testPartialFetchPreservesValuesAlreadyLoadedInIdentityMap() throws {
+    func testPartialFetchPreservesValuesAlreadyLoadedInIdentityMap() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("partial-fault-identity"))
         let writer = container.mainContext
@@ -3717,7 +3717,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUniqueInsertUpsertsIntoTheExistingInstance() throws {
+    func testUniqueInsertUpsertsIntoTheExistingInstance() async throws {
         let container = try ModelContainer(
             for: FailedWritePersistenceFixture.self, configurations: .sqliteMemory("unique-upsert"))
         let context = container.mainContext
@@ -3744,7 +3744,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUniqueUpsertPersistsRelationshipToDestinationInsertedInSameSave() throws {
+    func testUniqueUpsertPersistsRelationshipToDestinationInsertedInSameSave() async throws {
         let container = try ModelContainer(
             for: UpsertRelationshipOwnerFixture.self, UpsertRelationshipDestinationFixture.self,
             configurations: .sqliteMemory("unique-upsert-relationship"))
@@ -3770,7 +3770,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testConflictingUniqueMatchesFailAtomicallyAndRetainPendingInsert() throws {
+    func testConflictingUniqueMatchesFailAtomicallyAndRetainPendingInsert() async throws {
         let container = try ModelContainer(
             for: ConflictingUniqueKeysFixture.self, configurations: .sqliteMemory("conflicting-unique-upsert"))
         let context = container.mainContext
@@ -3798,7 +3798,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDirtyUpdatePreservesExternalChangeToUntouchedColumn() throws {
+    func testDirtyUpdatePreservesExternalChangeToUntouchedColumn() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("dirty-column-update"))
         let context = container.mainContext
@@ -3827,7 +3827,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptimisticLockConflictRollsBackAllRowsAndRetainsPendingChanges() throws {
+    func testOptimisticLockConflictRollsBackAllRowsAndRetainsPendingChanges() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("optimistic-conflict"))
         let writer = container.mainContext
@@ -3858,7 +3858,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testOptimisticLockConflictRejectsStaleRelationshipOnlyWrite() throws {
+    func testOptimisticLockConflictRejectsStaleRelationshipOnlyWrite() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("stale-relationship-write"))
@@ -3894,7 +3894,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFreshContextFetchDecodesCanonicalAttributeOrderAndOptionalValues() throws {
+    func testFreshContextFetchDecodesCanonicalAttributeOrderAndOptionalValues() async throws {
         let container = try ModelContainer(
             for: ReverseOrderPersistenceFixture.self, configurations: .sqliteMemory("ordered-fetch"))
         let writer = container.mainContext
@@ -3928,7 +3928,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackKeepsInMemoryValueUntilRefetch() throws {
+    func testRollbackKeepsInMemoryValueUntilRefetch() async throws {
         let container = try ModelContainer(for: PersistenceTestModel.self, configurations: .sqliteMemory("update-test"))
         let first = container.mainContext
         let model = PersistenceTestModel(title: "before")
@@ -3949,7 +3949,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackKeepsSavedBaselineAcrossMultipleMutations() throws {
+    func testRollbackKeepsSavedBaselineAcrossMultipleMutations() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("rollback-saved-baseline"))
         let context = container.mainContext
@@ -3972,7 +3972,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testUpdateOfExternallyDeletedRowFailsAndRetainsPendingState() throws {
+    func testUpdateOfExternallyDeletedRowFailsAndRetainsPendingState() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("missing-update-row"))
         let model = PersistenceTestModel(title: "initial")
@@ -3998,7 +3998,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testSavedDeleteRemovesIdentityMapEntry() throws {
+    func testSavedDeleteRemovesIdentityMapEntry() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("delete-identity"))
         let context = container.mainContext
@@ -4015,7 +4015,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testModelLookupRejectsForeignStoreAndMismatchedEntity() throws {
+    func testModelLookupRejectsForeignStoreAndMismatchedEntity() async throws {
         let first = try ModelContainer(for: PersistenceTestModel.self, configurations: .sqliteMemory("lookup-one"))
         let second = try ModelContainer(for: PersistenceTestModel.self, configurations: .sqliteMemory("lookup-two"))
         let model = PersistenceTestModel(title: "saved")
@@ -4028,7 +4028,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresDetachedIdentityAndClearsManagedMetadata() throws {
+    func testRollbackRestoresDetachedIdentityAndClearsManagedMetadata() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("detach-rollback"))
         let context = container.mainContext
@@ -4049,7 +4049,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedAtomicWriteRollsBackEarlierInsertAndRetainsPendingChanges() throws {
+    func testFailedAtomicWriteRollsBackEarlierInsertAndRetainsPendingChanges() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, FailedWritePersistenceFixture.self,
             configurations: .sqliteMemory("atomic-failure"))
@@ -4082,7 +4082,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testToOneAndToManyRelationshipsRoundTripWithInverseReconstruction() throws {
+    func testToOneAndToManyRelationshipsRoundTripWithInverseReconstruction() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("relationship-round-trip"))
@@ -4124,7 +4124,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testBatchedRelationshipFetchHandlesMoreThanSQLiteVariableLimit() throws {
+    func testBatchedRelationshipFetchHandlesMoreThanSQLiteVariableLimit() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("batched-relationship-fetch"))
@@ -4140,7 +4140,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testBatchedRelationshipFaultingLoadsPopulatedSiblingsInHundredRowChunks() throws {
+    func testBatchedRelationshipFaultingLoadsPopulatedSiblingsInHundredRowChunks() async throws {
         XCTAssertEqual(PersistentTagGroup.propertyName(forKeyPath: \PersistentTagGroup.tags), "tags")
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
@@ -4176,7 +4176,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyRoundTripUsesStablePrimaryKeyOrdering() throws {
+    func testManyToManyRoundTripUsesStablePrimaryKeyOrdering() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-round-trip"))
@@ -4225,7 +4225,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyIndependentFetchFromEitherEndpoint() throws {
+    func testManyToManyIndependentFetchFromEitherEndpoint() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-either-endpoint"))
@@ -4256,7 +4256,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyInitialAssignmentBeforeBothInsertionsPersistsOnce() throws {
+    func testManyToManyInitialAssignmentBeforeBothInsertionsPersistsOnce() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-initial-assignment"))
@@ -4278,7 +4278,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDirtyRegisteredRelationshipOwnerKeepsEditedValueDuringFetch() throws {
+    func testDirtyRegisteredRelationshipOwnerKeepsEditedValueDuringFetch() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("dirty-owner-fetch"))
@@ -4304,7 +4304,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertedRelationshipsUseSinglePersistencePlanWithAssignedIDs() throws {
+    func testInsertedRelationshipsUseSinglePersistencePlanWithAssignedIDs() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("inserted-relationship-values"))
@@ -4330,7 +4330,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertedRelationshipSetterChangesPersistLatestValueInSameTransaction() throws {
+    func testInsertedRelationshipSetterChangesPersistLatestValueInSameTransaction() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("inserted-relationship-mutation"))
@@ -4356,7 +4356,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRelationshipAndAttributeWriteRollbackIsAtomicAndRetainsPendingState() throws {
+    func testRelationshipAndAttributeWriteRollbackIsAtomicAndRetainsPendingState() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("relationship-atomicity"))
@@ -4399,7 +4399,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyMutationThroughInversePersistsFromStorageOwner() throws {
+    func testManyToManyMutationThroughInversePersistsFromStorageOwner() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-inverse-mutation"))
@@ -4423,7 +4423,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyInverseMutationPreservesUnchangedPairs() throws {
+    func testManyToManyInverseMutationPreservesUnchangedPairs() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-inverse-preserve"))
@@ -4472,7 +4472,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyMutationsFromBothOrientationsPersistOneConsistentGraph() throws {
+    func testManyToManyMutationsFromBothOrientationsPersistOneConsistentGraph() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-mixed-orientations"))
@@ -4539,7 +4539,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testManyToManyRemovalThroughInversePersistsEmptyStorageOwnerCollection() throws {
+    func testManyToManyRemovalThroughInversePersistsEmptyStorageOwnerCollection() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-inverse-removal"))
@@ -4560,7 +4560,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingManyToManyEndpointCleansUpJoinRelationship() throws {
+    func testDeletingManyToManyEndpointCleansUpJoinRelationship() async throws {
         let container = try ModelContainer(
             for: PersistentTagGroup.self, PersistentTag.self,
             configurations: .sqliteMemory("many-to-many-delete-endpoint"))
@@ -4582,7 +4582,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingOneToManyDestinationNullifiesPersistedForeignKey() throws {
+    func testDeletingOneToManyDestinationNullifiesPersistedForeignKey() async throws {
         let container = try ModelContainer(
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("one-to-many-delete-nullify"))
@@ -4762,7 +4762,7 @@ final class AutosaveTriggerTests: XCTestCase {
     }
 
     @MainActor
-    func testSaveNotificationsCarryCommittedIdentifiersInOrder() throws {
+    func testSaveNotificationsCarryCommittedIdentifiersInOrder() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("save-notifications"))
         let context = container.mainContext
@@ -4798,7 +4798,7 @@ final class AutosaveTriggerTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedSavePostsWillSaveButNotDidSave() throws {
+    func testFailedSavePostsWillSaveButNotDidSave() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("failed-save-notifications"))
         try container.store?.write { connection in

@@ -1940,7 +1940,7 @@ final class InheritanceChildFixture: InheritanceBaseFixture {
 
 final class PersistentModelTests: XCTestCase {
     @MainActor
-    func testModelWithManualCodableConformanceCanBeDecodedAndPersisted() throws {
+    func testModelWithManualCodableConformanceCanBeDecodedAndPersisted() async throws {
         let model = CodableMacroProtocolConformanceFixture(value: 17)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1985,7 +1985,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testModelProtocolConformancesUseRootModelGeneration() throws {
+    func testModelProtocolConformancesUseRootModelGeneration() async throws {
         let container = try ModelContainer(
             for: SingleMacroProtocolConformanceFixture.self,
             MacroProtocolConformanceFixture.self,
@@ -2114,7 +2114,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testCrossModuleOpenInheritancePersistsAndFetchesPolymorphically() throws {
+    func testCrossModuleOpenInheritancePersistsAndFetchesPolymorphically() async throws {
         let container = try ModelContainer(
             for: CrossModuleInheritanceBase.self,
             CrossModuleOpenInheritanceChildFixture.self,
@@ -2150,7 +2150,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubclassInitializerRelationshipSurvivesInsertionPreparation() throws {
+    func testSubclassInitializerRelationshipSurvivesInsertionPreparation() async throws {
         let container = try ModelContainer(
             for: [
                 InheritanceRelationshipBaseFixture.self,
@@ -2169,7 +2169,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedRelationshipStorageMappingRetainsLogicalOwner() throws {
+    func testInheritedRelationshipStorageMappingRetainsLogicalOwner() async throws {
         let container = try ModelContainer(
             for: [
                 InheritanceRelationshipBaseFixture.self,
@@ -2188,7 +2188,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToOneRelationshipsPersistInRootTableAndMaterialize() throws {
+    func testInheritedToOneRelationshipsPersistInRootTableAndMaterialize() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedToOneChildFixture.self,
@@ -2292,7 +2292,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testFlatToOneRelationshipMaterializesConcreteHierarchyDestination() throws {
+    func testFlatToOneRelationshipMaterializesConcreteHierarchyDestination() async throws {
         let container = try ModelContainer(
             for: [
                 FlatHierarchyTargetOwnerFixture.self,
@@ -2324,7 +2324,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingHierarchyToOneDestinationNullifiesFlatOwnerFK() throws {
+    func testDeletingHierarchyToOneDestinationNullifiesFlatOwnerFK() async throws {
         let container = try ModelContainer(
             for: [
                 FlatHierarchyTargetOwnerFixture.self,
@@ -2352,7 +2352,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyToOneCascadeAndDenyDeleteRules() throws {
+    func testHierarchyToOneCascadeAndDenyDeleteRules() async throws {
         let cascadeContainer = try ModelContainer(
             for: [CascadeHierarchyOwnerChildFixture.self, PlainHierarchyTargetGrandchildFixture.self],
             configurations: [.sqliteMemory("hierarchy-to-one-cascade")])
@@ -2383,7 +2383,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyToOneRelationshipMaterializesBothConcreteTypes() throws {
+    func testHierarchyToOneRelationshipMaterializesBothConcreteTypes() async throws {
         let container = try ModelContainer(
             for: [
                 HierarchyToHierarchyOwnerChildFixture.self,
@@ -2414,7 +2414,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testRootUniqueAttributeAppliesAcrossConcreteHierarchyTypes() throws {
+    func testRootUniqueAttributeAppliesAcrossConcreteHierarchyTypes() async throws {
         let container = try ModelContainer(
             for: [UniqueHierarchyChildFixture.self, UniqueHierarchySiblingFixture.self],
             configurations: [.sqliteMemory("hierarchy-root-unique")])
@@ -2475,7 +2475,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubtypeUniqueScopeExcludesSiblingsAndIncludesDescendants() throws {
+    func testSubtypeUniqueScopeExcludesSiblingsAndIncludesDescendants() async throws {
         let container = try ModelContainer(
             for: SubtypeUniqueBaseFixture.self,
             SubtypeUniqueChildFixture.self,
@@ -2582,7 +2582,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyUniqueConstraintsMatchingDifferentRowsFailAtomically() throws {
+    func testHierarchyUniqueConstraintsMatchingDifferentRowsFailAtomically() async throws {
         let container = try ModelContainer(
             for: SubtypeUniqueBaseFixture.self,
             SubtypeUniqueChildFixture.self,
@@ -2619,7 +2619,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyToHierarchyOneToManyInverseRoundTrips() throws {
+    func testHierarchyToHierarchyOneToManyInverseRoundTrips() async throws {
         let container = try ModelContainer(
             for: [HierarchyOwnerChildFixture.self, HierarchyTargetGrandchildFixture.self],
             configurations: [.sqliteMemory("hierarchy-to-hierarchy-inverse")])
@@ -2662,7 +2662,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesOptionalToOneIntoHierarchyDestination() throws {
+    func testPredicateTraversesOptionalToOneIntoHierarchyDestination() async throws {
         let container = try ModelContainer(
             for: HierarchyToHierarchyOwnerChildFixture.self,
             PlainHierarchyTargetGrandchildFixture.self,
@@ -2763,7 +2763,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateUsesSubtypeToOneDestinationDiscriminator() throws {
+    func testPredicateUsesSubtypeToOneDestinationDiscriminator() async throws {
         let container = try ModelContainer(
             for: PlainHierarchyChildTargetOwnerFixture.self,
             PlainHierarchyTargetGrandchildFixture.self,
@@ -2788,7 +2788,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingToOneStringPredicateResolvesUnloadedDestination() throws {
+    func testPendingToOneStringPredicateResolvesUnloadedDestination() async throws {
         let container = try ModelContainer(
             for: HierarchyToHierarchyOwnerChildFixture.self,
             PlainHierarchyTargetGrandchildFixture.self,
@@ -2816,7 +2816,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOneSidedInverseInfersReciprocalOptionalToOneAdapter() throws {
+    func testOneSidedInverseInfersReciprocalOptionalToOneAdapter() async throws {
         let container = try ModelContainer(
             for: InferredToOneLeftFixture.self,
             InferredToOneRightFixture.self,
@@ -2902,7 +2902,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOneSidedInverseToManyCollectionLifecycle() throws {
+    func testOneSidedInverseToManyCollectionLifecycle() async throws {
         let container = try ModelContainer(
             for: InverseCollectionLifecycleOwnerFixture.self,
             InverseCollectionLifecycleItemFixture.self,
@@ -2940,7 +2940,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOneSidedInverseToManyMutatesBothSides() throws {
+    func testDetachedOneSidedInverseToManyMutatesBothSides() async throws {
         let owner = InverseCollectionLifecycleOwnerFixture(name: "detached owner")
         XCTAssertTrue(owner.items.isEmpty)
         let item = InverseCollectionLifecycleItemFixture(value: "detached item", owner: nil)
@@ -2972,7 +2972,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedOneToOneInverseDisplacesPreviousOwner() throws {
+    func testDetachedOneToOneInverseDisplacesPreviousOwner() async throws {
         let right = InferredToOneRightFixture(name: "right")
         let first = InferredToOneLeftFixture(title: "first")
         let second = InferredToOneLeftFixture(title: "second")
@@ -2988,7 +2988,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedSetterInfersReciprocalExplicitInverseKeyPath() throws {
+    func testDetachedSetterInfersReciprocalExplicitInverseKeyPath() async throws {
         let left = InferredToOneLeftFixture(title: "left")
         let right = InferredToOneRightFixture(name: "right")
         let rightMetadata =
@@ -3003,7 +3003,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedManyToManyInverseAssignmentMutatesBothSides() throws {
+    func testDetachedManyToManyInverseAssignmentMutatesBothSides() async throws {
         let left = DetachedManyToManyLeftFixture(name: "left")
         let right = DetachedManyToManyRightFixture(name: "right")
         let rightsMetadata =
@@ -3026,7 +3026,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedArrayAppendRoutesThroughRelationshipMutation() throws {
+    func testDetachedArrayAppendRoutesThroughRelationshipMutation() async throws {
         let owner = InverseCollectionLifecycleOwnerFixture(name: "owner")
         let first = InverseCollectionLifecycleItemFixture(value: "first", owner: nil)
         owner.items.append(first)
@@ -3051,7 +3051,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedManyToManyAppendUpdatesInverseAfterExistingOwner() throws {
+    func testDetachedManyToManyAppendUpdatesInverseAfterExistingOwner() async throws {
         let firstOwner = DetachedManyToManyLeftFixture(name: "first")
         let secondOwner = DetachedManyToManyLeftFixture(name: "second")
         let right = DetachedManyToManyRightFixture(name: "right")
@@ -3064,7 +3064,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedInverseUsesExplicitKeyPathWhenMultipleOwnerLinksExist() throws {
+    func testDetachedInverseUsesExplicitKeyPathWhenMultipleOwnerLinksExist() async throws {
         let owner = DetachedInverseAmbiguityOwnerFixture(name: "owner")
         let target = DetachedInverseAmbiguityTargetFixture(name: "target")
         owner.targets = [target]
@@ -3077,7 +3077,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachedRelationshipToManagedEndpointInsertsTheModel() throws {
+    func testDetachedRelationshipToManagedEndpointInsertsTheModel() async throws {
         let container = try ModelContainer(
             for: DetachedManyToManyLeftFixture.self,
             DetachedManyToManyRightFixture.self,
@@ -3095,7 +3095,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUnregisteredCodableCollectionsRemainAttributesWithInferenceEnabled() throws {
+    func testUnregisteredCodableCollectionsRemainAttributesWithInferenceEnabled() async throws {
         let container = try ModelContainer(
             for: InferredRelationshipCodableFallbackFixture.self,
             configurations: .sqliteMemory("inferred-codable-collection-fallback"))
@@ -3117,7 +3117,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalInferredModelCollectionPreservesNilAndEmptyValues() throws {
+    func testOptionalInferredModelCollectionPreservesNilAndEmptyValues() async throws {
         let container = try ModelContainer(
             for: InferredOptionalCollectionOwnerFixture.self,
             InferredOptionalCollectionTargetFixture.self,
@@ -3153,7 +3153,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalInferredModelSetPreservesRelationshipEndpoints() throws {
+    func testOptionalInferredModelSetPreservesRelationshipEndpoints() async throws {
         let container = try ModelContainer(
             for: InferredOptionalSetOwnerFixture.self,
             InferredOptionalCollectionTargetFixture.self,
@@ -3185,7 +3185,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInferredSetRelationshipSupportsIsEmptyPredicate() throws {
+    func testInferredSetRelationshipSupportsIsEmptyPredicate() async throws {
         let container = try ModelContainer(
             for: InferredSetOwnerFixture.self,
             InferredOptionalCollectionTargetFixture.self,
@@ -3216,7 +3216,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesNestedOwningToOneRelationships() throws {
+    func testPredicateTraversesNestedOwningToOneRelationships() async throws {
         let container = try ModelContainer(
             for: NestedToOneRootFixture.self,
             NestedToOneMiddleFixture.self,
@@ -3276,7 +3276,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedOwningPathTraversesInverseToOneHop() throws {
+    func testNestedOwningPathTraversesInverseToOneHop() async throws {
         let container = try ModelContainer(
             for: NestedInverseRootFixture.self,
             NestedInverseMiddleFixture.self,
@@ -3387,7 +3387,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesNestedToOneIntoHierarchyDestination() throws {
+    func testPredicateTraversesNestedToOneIntoHierarchyDestination() async throws {
         let container = try ModelContainer(
             for: NestedHierarchyRootFixture.self,
             NestedHierarchyMiddleChildFixture.self,
@@ -3423,7 +3423,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedToOnePathTraversesHierarchyRootTables() throws {
+    func testNestedToOnePathTraversesHierarchyRootTables() async throws {
         let container = try ModelContainer(
             for: NestedHierarchyPathRootFixture.self,
             NestedHierarchyPathMiddleFixture.self,
@@ -3471,7 +3471,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesToManyCollectionThroughToOne() throws {
+    func testPredicateTraversesToManyCollectionThroughToOne() async throws {
         let container = try ModelContainer(
             for: NestedToManyRootFixture.self,
             NestedToManyMiddleFixture.self,
@@ -3546,7 +3546,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAllSatisfyTraversesToManyCollectionThroughToOne() throws {
+    func testAllSatisfyTraversesToManyCollectionThroughToOne() async throws {
         let container = try ModelContainer(
             for: NestedToManyRootFixture.self,
             NestedToManyMiddleFixture.self,
@@ -3596,7 +3596,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAllSatisfyTraversesTwoOptionalToOneHops() throws {
+    func testAllSatisfyTraversesTwoOptionalToOneHops() async throws {
         let container = try ModelContainer(
             for: MultiHopAllSatisfyRootFixture.self,
             MultiHopAllSatisfyMiddleFixture.self,
@@ -3678,7 +3678,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedThreeLevelContainsSupportsStringAndOuterScalarPredicates() throws {
+    func testNestedThreeLevelContainsSupportsStringAndOuterScalarPredicates() async throws {
         let container = try ModelContainer(
             for: ThreeLevelQuantifierOwnerFixture.self,
             ThreeLevelQuantifierGroupFixture.self,
@@ -3725,7 +3725,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedFourLevelContainsSupportsStoredAndPendingEvaluation() throws {
+    func testNestedFourLevelContainsSupportsStoredAndPendingEvaluation() async throws {
         let container = try ModelContainer(
             for: FourLevelQuantifierRootFixture.self,
             FourLevelQuantifierGroupFixture.self,
@@ -3913,7 +3913,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedFourLevelContainsSupportsMixedSetAndArrayRelationships() throws {
+    func testNestedFourLevelContainsSupportsMixedSetAndArrayRelationships() async throws {
         let container = try ModelContainer(
             for: MixedSetQuantifierRootFixture.self,
             MixedSetQuantifierGroupFixture.self,
@@ -4008,7 +4008,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedContainsTraversesInverseBackedCollection() throws {
+    func testNestedContainsTraversesInverseBackedCollection() async throws {
         let container = try ModelContainer(
             for: InverseNestedQuantifierOwnerFixture.self,
             InverseNestedQuantifierChildFixture.self,
@@ -4063,7 +4063,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingNestedInverseCollectionIdentifiersAvoidMaterializingUntouchedOwners() throws {
+    func testPendingNestedInverseCollectionIdentifiersAvoidMaterializingUntouchedOwners() async throws {
         let container = try ModelContainer(
             for: InverseNestedQuantifierOwnerFixture.self,
             InverseNestedQuantifierChildFixture.self,
@@ -4111,7 +4111,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedContainsTraversesThreeInverseBackedCollectionLevels() throws {
+    func testNestedContainsTraversesThreeInverseBackedCollectionLevels() async throws {
         let container = try ModelContainer(
             for: DeepInverseQuantifierOwnerFixture.self,
             DeepInverseQuantifierGroupFixture.self,
@@ -4191,7 +4191,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedContainsTraversesInverseManyToManyAtThirdLevel() throws {
+    func testNestedContainsTraversesInverseManyToManyAtThirdLevel() async throws {
         let container = try ModelContainer(
             for: NestedInverseManyToManyRootFixture.self,
             NestedInverseManyToManyGroupFixture.self,
@@ -4241,7 +4241,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateMatchesEmptyToManyRelationshipCollections() throws {
+    func testPredicateMatchesEmptyToManyRelationshipCollections() async throws {
         let container = try ModelContainer(
             for: NestedToManyMiddleFixture.self,
             NestedToManyItemFixture.self,
@@ -4273,7 +4273,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateAllSatisfyToManyRelationshipElements() throws {
+    func testPredicateAllSatisfyToManyRelationshipElements() async throws {
         let container = try ModelContainer(
             for: NestedToManyMiddleFixture.self,
             NestedToManyItemFixture.self,
@@ -4310,7 +4310,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateComparesToManyRelationshipCount() throws {
+    func testPredicateComparesToManyRelationshipCount() async throws {
         let container = try ModelContainer(
             for: NestedToManyMiddleFixture.self,
             NestedToManyItemFixture.self,
@@ -4359,7 +4359,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateMatchesCodableStringCollectionElements() throws {
+    func testPredicateMatchesCodableStringCollectionElements() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-string-collection-contains"))
@@ -4442,7 +4442,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testCodableScalarCollectionIsEmptyPredicates() throws {
+    func testCodableScalarCollectionIsEmptyPredicates() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-scalar-collection-empty"))
@@ -4483,7 +4483,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testCodableScalarCollectionCountPredicates() throws {
+    func testCodableScalarCollectionCountPredicates() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-scalar-collection-count"))
@@ -4520,7 +4520,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateAllSatisfyOnCodableScalarCollection() throws {
+    func testPredicateAllSatisfyOnCodableScalarCollection() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-scalar-all-satisfy"))
@@ -4559,7 +4559,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateAllSatisfyIntegerComparisonOnCodableCollection() throws {
+    func testPredicateAllSatisfyIntegerComparisonOnCodableCollection() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-integer-all-satisfy-comparison"))
@@ -4597,7 +4597,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedRelationshipContainsWhereSupportsTwoDirectLevels() throws {
+    func testNestedRelationshipContainsWhereSupportsTwoDirectLevels() async throws {
         let container = try ModelContainer(
             for: QuantifierOwnerFixture.self,
             QuantifierChildFixture.self,
@@ -4662,7 +4662,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedRelationshipContainsWhereSupportsThreeDirectLevels() throws {
+    func testNestedRelationshipContainsWhereSupportsThreeDirectLevels() async throws {
         let container = try ModelContainer(
             for: ThreeLevelQuantifierOwnerFixture.self,
             ThreeLevelQuantifierGroupFixture.self,
@@ -4726,7 +4726,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedContainsAndAllSatisfyHonorVacuousTruthAtThreeLevels() throws {
+    func testNestedContainsAndAllSatisfyHonorVacuousTruthAtThreeLevels() async throws {
         let container = try ModelContainer(
             for: ThreeLevelQuantifierOwnerFixture.self,
             ThreeLevelQuantifierGroupFixture.self,
@@ -4809,7 +4809,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNestedThreeLevelContainsMatchesSubtypeOnlyHierarchyDestinationValues() throws {
+    func testNestedThreeLevelContainsMatchesSubtypeOnlyHierarchyDestinationValues() async throws {
         let container = try ModelContainer(
             for: ThreeLevelHierarchyQuantifierOwnerFixture.self,
             ThreeLevelHierarchyQuantifierGroupFixture.self,
@@ -4874,7 +4874,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64CollectionAllSatisfyOrderingSupportsFullRange() throws {
+    func testUInt64CollectionAllSatisfyOrderingSupportsFullRange() async throws {
         let container = try ModelContainer(
             for: UInt64CollectionFixture.self,
             configurations: .sqliteMemory("uint64-collection-all-satisfy-full-range"))
@@ -4929,7 +4929,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalUInt64CollectionMembershipSupportsFullRangeAndNil() throws {
+    func testOptionalUInt64CollectionMembershipSupportsFullRangeAndNil() async throws {
         let container = try ModelContainer(
             for: OptionalUInt64CollectionFixture.self,
             configurations: .sqliteMemory("optional-uint64-collection-membership"))
@@ -5021,7 +5021,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUIntCollectionAllSatisfyOrderingUsesUnsignedComparison() throws {
+    func testUIntCollectionAllSatisfyOrderingUsesUnsignedComparison() async throws {
         let container = try ModelContainer(
             for: UIntCollectionFixture.self,
             configurations: .sqliteMemory("uint-collection-all-satisfy"))
@@ -5047,7 +5047,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUIntCollectionMembershipSupportsUnsignedRange() throws {
+    func testUIntCollectionMembershipSupportsUnsignedRange() async throws {
         let container = try ModelContainer(
             for: UIntCollectionFixture.self,
             configurations: .sqliteMemory("uint-collection-membership-full-range"))
@@ -5078,7 +5078,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64ScalarPersistsAtSQLiteSignedBoundary() throws {
+    func testUInt64ScalarPersistsAtSQLiteSignedBoundary() async throws {
         let container = try ModelContainer(
             for: UInt64ScalarFixture.self,
             configurations: .sqliteMemory("uint64-scalar-signed-boundary"))
@@ -5097,7 +5097,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64ScalarOverflowSaveRollsBackAndRetainsPendingModels() throws {
+    func testUInt64ScalarOverflowSaveRollsBackAndRetainsPendingModels() async throws {
         let container = try ModelContainer(
             for: UInt64ScalarFixture.self,
             configurations: .sqliteMemory("uint64-scalar-overflow-atomicity"))
@@ -5134,7 +5134,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64ScalarPredicateCaptureOutsideSQLiteIntegerRangeFailsClosed() throws {
+    func testUInt64ScalarPredicateCaptureOutsideSQLiteIntegerRangeFailsClosed() async throws {
         let container = try ModelContainer(
             for: UInt64ScalarFixture.self,
             configurations: .sqliteMemory("uint64-scalar-capture-overflow"))
@@ -5154,7 +5154,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalUInt64ScalarMatchesNilSomeAndPendingValues() throws {
+    func testOptionalUInt64ScalarMatchesNilSomeAndPendingValues() async throws {
         let container = try ModelContainer(
             for: OptionalUInt64ScalarFixture.self,
             configurations: .sqliteMemory("optional-uint64-scalar-values"))
@@ -5216,7 +5216,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUInt64OverflowDefaultFailsSaveWithoutLosingPendingModel() throws {
+    func testUInt64OverflowDefaultFailsSaveWithoutLosingPendingModel() async throws {
         let container = try ModelContainer(
             for: UInt64ScalarFixture.self, ZUInt64OverflowDefaultFixture.self,
             configurations: .sqliteMemory("uint64-overflow-default"))
@@ -5292,7 +5292,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInferredAndExplicitCodableCollectionsHaveEquivalentSchema() throws {
+    func testInferredAndExplicitCodableCollectionsHaveEquivalentSchema() async throws {
         let inferredContainer = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("inferred-codable-collection-parity"))
@@ -5333,7 +5333,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalInferredIntegerSetPersistsAndSupportsMembership() throws {
+    func testOptionalInferredIntegerSetPersistsAndSupportsMembership() async throws {
         let container = try ModelContainer(
             for: OptionalIntegerSetFixture.self,
             configurations: .sqliteMemory("optional-inferred-integer-set"))
@@ -5363,7 +5363,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testBoolCollectionMembershipRejectsNumericJSONPayload() throws {
+    func testBoolCollectionMembershipRejectsNumericJSONPayload() async throws {
         let container = try ModelContainer(
             for: CodableStringCollectionFixture.self,
             configurations: .sqliteMemory("codable-bool-collection-type-check"))
@@ -5388,7 +5388,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalElementCollectionsSupportContainsNilAndValue() throws {
+    func testOptionalElementCollectionsSupportContainsNilAndValue() async throws {
         let container = try ModelContainer(
             for: OptionalScalarElementsFixture.self,
             configurations: .sqliteMemory("optional-element-collection-membership"))
@@ -5575,7 +5575,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalCodableCollectionMembershipSupportsNilAndPendingValues() throws {
+    func testOptionalCodableCollectionMembershipSupportsNilAndPendingValues() async throws {
         let container = try ModelContainer(
             for: OptionalCodableStringCollectionFixture.self,
             configurations: .sqliteMemory("optional-codable-string-collection"))
@@ -5635,7 +5635,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testQualifiedOptionalScalarTypesRemainScalarAttributes() throws {
+    func testQualifiedOptionalScalarTypesRemainScalarAttributes() async throws {
         let container = try ModelContainer(
             for: QualifiedOptionalScalarFixture.self,
             configurations: .sqliteMemory("qualified-optional-scalars"))
@@ -5657,7 +5657,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalToOneIntegerPredicateSupportsCoalescingAndPendingValues() throws {
+    func testOptionalToOneIntegerPredicateSupportsCoalescingAndPendingValues() async throws {
         let container = try ModelContainer(
             for: OptionalToOneIntegerOwnerFixture.self,
             OptionalToOneIntegerTargetFixture.self,
@@ -5713,7 +5713,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalToOneDatePredicateMatchesStoredAndPendingValues() throws {
+    func testOptionalToOneDatePredicateMatchesStoredAndPendingValues() async throws {
         let container = try ModelContainer(
             for: OptionalToOneDateOwnerFixture.self,
             OptionalToOneDateTargetFixture.self,
@@ -5750,7 +5750,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOptionalToOneDecimalOrderingMatchesNumericSemanticsAcrossFetchModes() throws {
+    func testOptionalToOneDecimalOrderingMatchesNumericSemanticsAcrossFetchModes() async throws {
         let container = try ModelContainer(
             for: OptionalToOneDecimalOwnerFixture.self,
             OptionalToOneDecimalTargetFixture.self,
@@ -5840,7 +5840,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testToManyPredicateSupportsIntegerRangeOnElement() throws {
+    func testToManyPredicateSupportsIntegerRangeOnElement() async throws {
         let container = try ModelContainer(
             for: CollectionRangeOwnerFixture.self,
             CollectionRangeElementFixture.self,
@@ -5901,7 +5901,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateMatchesToManyRelationshipElements() throws {
+    func testPredicateMatchesToManyRelationshipElements() async throws {
         let container = try ModelContainer(
             for: InheritanceRelationshipBaseFixture.self,
             InheritanceRelationshipChildFixture.self,
@@ -6038,7 +6038,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesInverseManyToManyCollection() throws {
+    func testPredicateTraversesInverseManyToManyCollection() async throws {
         let container = try ModelContainer(
             for: InheritedManyToManyTagFixture.self,
             InheritedManyToManyChildFixture.self,
@@ -6104,7 +6104,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateTraversesInverseOneToManyCollection() throws {
+    func testPredicateTraversesInverseOneToManyCollection() async throws {
         let container = try ModelContainer(
             for: InheritedOneToManyTargetFixture.self,
             InheritedOneToManyChildFixture.self,
@@ -6161,7 +6161,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateMatchesInheritedNoInverseToManyRelationship() throws {
+    func testPredicateMatchesInheritedNoInverseToManyRelationship() async throws {
         let container = try ModelContainer(
             for: InheritedToManyChildFixture.self,
             InheritedToOneTargetFixture.self,
@@ -6185,7 +6185,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateIncludesGrandchildInToManyDestinationSubtree() throws {
+    func testPredicateIncludesGrandchildInToManyDestinationSubtree() async throws {
         let container = try ModelContainer(
             for: ToManyHierarchyOwnerFixture.self,
             ToManyHierarchyTargetChildFixture.self,
@@ -6213,7 +6213,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testRequiredInheritedToOneRelationshipResolvesAfterEndpointInsert() throws {
+    func testRequiredInheritedToOneRelationshipResolvesAfterEndpointInsert() async throws {
         let container = try ModelContainer(
             for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],
             configurations: [.sqliteMemory("inherited-required-to-one")])
@@ -6234,7 +6234,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testRequiredInheritedToOneRelationshipRejectsDeletedEndpoint() throws {
+    func testRequiredInheritedToOneRelationshipRejectsDeletedEndpoint() async throws {
         let container = try ModelContainer(
             for: [RequiredInheritedToOneChildFixture.self, InheritedToOneTargetFixture.self],
             configurations: [.sqliteMemory("inherited-required-to-one-delete")])
@@ -6260,7 +6260,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToOneInverseCollectionRoundTrips() throws {
+    func testInheritedToOneInverseCollectionRoundTrips() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedOneToManyChildFixture.self,
@@ -6308,7 +6308,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToManyOwnerUsesDeclaringEntityJoinTables() throws {
+    func testInheritedToManyOwnerUsesDeclaringEntityJoinTables() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedToManyChildFixture.self,
@@ -6369,7 +6369,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToManyJoinRowsCleanUpOnOwnerAndDestinationDelete() throws {
+    func testInheritedToManyJoinRowsCleanUpOnOwnerAndDestinationDelete() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedToManyChildFixture.self,
@@ -6411,7 +6411,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToManyOwnerCascadeAndDenyRules() throws {
+    func testInheritedToManyOwnerCascadeAndDenyRules() async throws {
         let cascadeContainer = try ModelContainer(
             for: [InheritedCascadeJoinChildFixture.self, InheritedToOneTargetFixture.self],
             configurations: [.sqliteMemory("inherited-to-many-cascade")])
@@ -6457,7 +6457,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedManyToManyInverseJoinTableFiltersSiblings() throws {
+    func testInheritedManyToManyInverseJoinTableFiltersSiblings() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedManyToManyChildFixture.self,
@@ -6541,7 +6541,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyToHierarchyManyToManyFiltersBothEndpoints() throws {
+    func testHierarchyToHierarchyManyToManyFiltersBothEndpoints() async throws {
         let container = try ModelContainer(
             for: [
                 MatrixLeftChildFixture.self,
@@ -6608,7 +6608,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSelfReferentialHierarchyManyToManyFiltersConcreteEndpoints() throws {
+    func testSelfReferentialHierarchyManyToManyFiltersConcreteEndpoints() async throws {
         let container = try ModelContainer(
             for: [SelfLinkChildFixture.self, SelfLinkGrandchildFixture.self],
             configurations: [.sqliteMemory("self-hierarchy-many-to-many")])
@@ -6641,7 +6641,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingInverseCollectionOwnerNullifiesInheritedToOne() throws {
+    func testDeletingInverseCollectionOwnerNullifiesInheritedToOne() async throws {
         let container = try ModelContainer(
             for: [
                 InheritedOneToManyChildFixture.self,
@@ -6672,7 +6672,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedToOneInverseDeleteRulesCascadeAndDeny() throws {
+    func testInheritedToOneInverseDeleteRulesCascadeAndDeny() async throws {
         let cascadeContainer = try ModelContainer(
             for: [InheritedCascadeChildFixture.self, InheritedCascadeTargetFixture.self],
             configurations: [.sqliteMemory("inherited-to-one-cascade")])
@@ -6723,7 +6723,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitInverseMayBeDeclaredOnDestinationSubtype() throws {
+    func testExplicitInverseMayBeDeclaredOnDestinationSubtype() async throws {
         let container = try ModelContainer(
             for: [HierarchyOwnerChildFixture.self, HierarchyTargetGrandchildFixture.self],
             configurations: [.sqliteMemory("inverse-on-destination-subtype")])
@@ -6749,7 +6749,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubtypeInverseDenyRuleDoesNotPreventConcreteTargetDeletion() throws {
+    func testSubtypeInverseDenyRuleDoesNotPreventConcreteTargetDeletion() async throws {
         let container = try ModelContainer(
             for: [
                 HierarchySubtypeOwnerChildFixture.self,
@@ -6782,7 +6782,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubtypeInverseCascadeDeletesOwnerWhenTargetIsDeleted() throws {
+    func testSubtypeInverseCascadeDeletesOwnerWhenTargetIsDeleted() async throws {
         let container = try ModelContainer(
             for: [CascadeHierarchyInverseOwnerChildFixture.self, CascadeHierarchyTargetChildFixture.self],
             configurations: [.sqliteMemory("subtype-inverse-cascade")])
@@ -6814,7 +6814,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testContainerAutomaticallyIncludesModelAncestors() throws {
+    func testContainerAutomaticallyIncludesModelAncestors() async throws {
         let implicit = try ModelContainer(
             for: [InheritanceRelationshipChildFixture.self, InheritanceRelationshipItemFixture.self], configurations: []
         )
@@ -6842,7 +6842,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSQLiteContainerAutomaticallyIncludesModelAncestors() throws {
+    func testSQLiteContainerAutomaticallyIncludesModelAncestors() async throws {
         let implicit = try ModelContainer(
             for: [InheritanceMacroChildFixture.self],
             configurations: [.sqliteMemory("inheritance-implicit-ancestor")])
@@ -6875,7 +6875,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testModelContainerInfersInheritanceMetadata() throws {
+    func testModelContainerInfersInheritanceMetadata() async throws {
         let container = try ModelContainer(
             for: [
                 InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
@@ -6892,7 +6892,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedSQLiteSchemaBootstrapsOneRootTableAndParentIDs() throws {
+    func testInheritedSQLiteSchemaBootstrapsOneRootTableAndParentIDs() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
             InheritanceMacroGrandchildFixture.self,
@@ -6915,7 +6915,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedChildInsertUsesRootTableAndConcreteDiscriminator() throws {
+    func testInheritedChildInsertUsesRootTableAndConcreteDiscriminator() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
             InheritanceMacroGrandchildFixture.self,
@@ -6931,7 +6931,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritanceFetchCountIdentifiersAndConcreteMaterialization() throws {
+    func testInheritanceFetchCountIdentifiersAndConcreteMaterialization() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self, InheritanceMacroChildFixture.self,
             InheritanceMacroGrandchildFixture.self,
@@ -7153,7 +7153,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyEnumerationResolvesConcreteSubtypesAcrossBatches() throws {
+    func testHierarchyEnumerationResolvesConcreteSubtypesAcrossBatches() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7181,7 +7181,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteIncludesSubclassesAndSavesMatches() throws {
+    func testPredicateDeleteIncludesSubclassesAndSavesMatches() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7200,7 +7200,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteWithoutPredicateDeletesAllRequestedModels() throws {
+    func testPredicateDeleteWithoutPredicateDeletesAllRequestedModels() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7219,7 +7219,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteWithoutPredicateCanExcludeSubclasses() throws {
+    func testPredicateDeleteWithoutPredicateCanExcludeSubclasses() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7240,7 +7240,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteInsideTransactionAppliesImmediately() throws {
+    func testPredicateDeleteInsideTransactionAppliesImmediately() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7264,7 +7264,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteIsNotRolledBackWithFailedOuterTransaction() throws {
+    func testPredicateDeleteIsNotRolledBackWithFailedOuterTransaction() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7291,7 +7291,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteCanExcludeSubclasses() throws {
+    func testPredicateDeleteCanExcludeSubclasses() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7316,7 +7316,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteCanTargetHierarchyMidpointOnly() throws {
+    func testPredicateDeleteCanTargetHierarchyMidpointOnly() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7341,7 +7341,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPredicateDeleteLeavesPendingInsertions() throws {
+    func testPredicateDeleteLeavesPendingInsertions() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7369,7 +7369,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() throws {
+    func testEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7408,7 +7408,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingHierarchyDeletionMatchesCommittedOnlyQueries() throws {
+    func testPendingHierarchyDeletionMatchesCommittedOnlyQueries() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7462,7 +7462,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testPendingHierarchyChangesAreMergedBeforePagination() throws {
+    func testPendingHierarchyChangesAreMergedBeforePagination() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7502,7 +7502,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSubtypeSortKeyOrdersHierarchyRowsAndPendingUpdates() throws {
+    func testSubtypeSortKeyOrdersHierarchyRowsAndPendingUpdates() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -7546,7 +7546,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() throws {
+    func testRelationshipPersistentIdentifierMatchesInheritedEndpoint() async throws {
         let container = try ModelContainer(
             for: InheritanceIdentifierOwnerFixture.self,
             InheritanceMacroBaseFixture.self,
@@ -7577,7 +7577,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingLeafSubclassToExistingSQLiteHierarchyPreservesEntityIDs() throws {
+    func testAddingLeafSubclassToExistingSQLiteHierarchyPreservesEntityIDs() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7631,7 +7631,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingLeafWithRequiredDefaultMaterializesTypedDefault() throws {
+    func testAddingLeafWithRequiredDefaultMaterializesTypedDefault() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7667,7 +7667,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingIndependentRootWithOptionalToOneRelationshipRoundTrips() throws {
+    func testAddingIndependentRootWithOptionalToOneRelationshipRoundTrips() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7730,7 +7730,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingIndependentRootWithToManyJoinTableRoundTrips() throws {
+    func testAddingIndependentRootWithToManyJoinTableRoundTrips() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7800,7 +7800,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingEntirelyNewRootAndLeafTreeRoundTrips() throws {
+    func testAddingEntirelyNewRootAndLeafTreeRoundTrips() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7865,7 +7865,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testNoInverseToManyBetweenHierarchiesIsIsolatedByDeclaringLeaf() throws {
+    func testNoInverseToManyBetweenHierarchiesIsIsolatedByDeclaringLeaf() async throws {
         let container = try ModelContainer(
             for: DualHierarchyOwnerBaseFixture.self,
             DualHierarchyOwnerLeafAFixture.self,
@@ -7933,13 +7933,13 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testInheritedDefaultedPropertyIsReadableBeforeContextInsertion() throws {
+    func testInheritedDefaultedPropertyIsReadableBeforeContextInsertion() async throws {
         let kitten = InheritanceMacroKittenFixture(name: "detached")
         XCTAssertEqual(kitten.rank, 7)
     }
 
     @MainActor
-    func testAddingLeafToOneRelationshipMigratesQualifiedRootColumn() throws {
+    func testAddingLeafToOneRelationshipMigratesQualifiedRootColumn() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -7987,7 +7987,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingLeafToManyRelationshipMigratesJoinTable() throws {
+    func testAddingLeafToManyRelationshipMigratesJoinTable() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -8039,7 +8039,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAddingLeafInverseRelationshipPreservesExistingToOneStorage() throws {
+    func testAddingLeafInverseRelationshipPreservesExistingToOneStorage() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -8091,7 +8091,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyLifecycleRollbackUndoAndIdentity() throws {
+    func testHierarchyLifecycleRollbackUndoAndIdentity() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -8142,7 +8142,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoDeletionRestoresHierarchySubtypeAndConcreteIdentity() throws {
+    func testUndoDeletionRestoresHierarchySubtypeAndConcreteIdentity() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -8193,7 +8193,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoPendingHierarchyDeleteBeforeSave() throws {
+    func testUndoPendingHierarchyDeleteBeforeSave() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -8218,7 +8218,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchySubtypeUndoRestoresMutationAndDelete() throws {
+    func testHierarchySubtypeUndoRestoresMutationAndDelete() async throws {
         let container = try ModelContainer(
             for: InheritanceMacroBaseFixture.self,
             InheritanceMacroChildFixture.self,
@@ -8251,7 +8251,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyIdentifierLookupReusesExistingMaterializedModel() throws {
+    func testHierarchyIdentifierLookupReusesExistingMaterializedModel() async throws {
         let container = try ModelContainer(
             for: InheritanceLookupBaseFixture.self, InheritanceLookupChildFixture.self,
             configurations: .sqliteMemory("inheritance-identifier-existing"))
@@ -8269,7 +8269,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyExternalRefreshKeepsRootIdentityMapEntry() throws {
+    func testHierarchyExternalRefreshKeepsRootIdentityMapEntry() async throws {
         let container = try ModelContainer(
             for: InheritanceLookupBaseFixture.self, InheritanceLookupChildFixture.self,
             configurations: .sqliteMemory("inheritance-external-refresh"))
@@ -8292,7 +8292,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testHierarchyPendingIdentifierFetchMatchesModelFetch() throws {
+    func testHierarchyPendingIdentifierFetchMatchesModelFetch() async throws {
         let container = try ModelContainer(
             for: InheritanceLookupBaseFixture.self, InheritanceLookupChildFixture.self,
             configurations: .sqliteMemory("inheritance-pending-identifiers"))
@@ -8367,7 +8367,7 @@ final class PersistentModelTests: XCTestCase {
     }
 
     @MainActor
-    func testGeneratedScalarSetterTracksManagedMutation() throws {
+    func testGeneratedScalarSetterTracksManagedMutation() async throws {
         let model = MacroBackedFixture(title: "before")
         let container = try ModelContainer(
             for: MacroBackedFixture.self, configurations: .sqliteMemory("scalar-setter"))

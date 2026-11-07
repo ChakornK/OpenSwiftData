@@ -624,7 +624,7 @@ private final class FailsOnceDataStore: DataStore, @unchecked Sendable {
 
 final class DataStoreTests: XCTestCase {
     @MainActor
-    func testConfiguredDataStoreSupportsSnapshotSaveFetchAndDelete() throws {
+    func testConfiguredDataStoreSupportsSnapshotSaveFetchAndDelete() async throws {
         let dataStore = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store", dataStoreConfiguration: ExistingDataStoreConfiguration(store: dataStore))
@@ -652,7 +652,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreHierarchyFetchIdentityAndPendingPagination() throws {
+    func testDataStoreHierarchyFetchIdentityAndPendingPagination() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-hierarchy", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -714,7 +714,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreHierarchyPartialFetchFaultsSubtypeProperties() throws {
+    func testDataStoreHierarchyPartialFetchFaultsSubtypeProperties() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-hierarchy-partial",
@@ -746,7 +746,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() throws {
+    func testDataStoreEnumerationHonorsCommittedOnlyDescriptorWithPendingDeletion() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-enumeration-delete",
@@ -785,7 +785,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFlatDataStoreRejectsHierarchySchemaWithoutCapability() throws {
+    func testFlatDataStoreRejectsHierarchySchemaWithoutCapability() async throws {
         let configuration = ModelConfiguration(
             "custom-flat-only",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: UnsupportedHierarchyDataStore()))
@@ -800,7 +800,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testContainerAdoptsRuntimeStoreReconciledSchema() throws {
+    func testContainerAdoptsRuntimeStoreReconciledSchema() async throws {
         let requestedSchema = Schema([
             Schema.Entity(name: "CustomHierarchyBase"),
             Schema.Entity(name: "CustomHierarchyChild", superentityName: "CustomHierarchyBase"),
@@ -824,7 +824,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testContainerKeepsRequestedSchemaForRuntimeStoresWithoutSchemaCapability() throws {
+    func testContainerKeepsRequestedSchemaForRuntimeStoresWithoutSchemaCapability() async throws {
         let requestedSchema = Schema([Schema.Entity(name: "CustomDataStoreFixture")])
         let configuration = ModelConfiguration(
             "runtime-schema-legacy-store", storeFactory: { _, _ in PlainRuntimeSchemaStore() })
@@ -835,7 +835,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testContainerRejectsIncompatibleRuntimeSchemaAndClosesStore() throws {
+    func testContainerRejectsIncompatibleRuntimeSchemaAndClosesStore() async throws {
         let requestedSchema = Schema([
             Schema.Entity(name: "CustomDataStoreFixture", attributes: [Schema.Attribute(name: "value", type: "Int")])
         ])
@@ -858,7 +858,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFlatDataStoreRemainsCompatibleWithoutInheritanceCapability() throws {
+    func testFlatDataStoreRemainsCompatibleWithoutInheritanceCapability() async throws {
         let configuration = ModelConfiguration(
             "custom-flat-compatible",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: UnsupportedHierarchyDataStore()))
@@ -867,7 +867,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsSnapshotWhoseIdentifierDisagreesWithConcreteEntity() throws {
+    func testDataStoreRejectsSnapshotWhoseIdentifierDisagreesWithConcreteEntity() async throws {
         let configuration = ModelConfiguration(
             "custom-hierarchy-mismatched",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: MismatchedHierarchySnapshotDataStore()))
@@ -883,7 +883,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsSnapshotOutsideRequestedHierarchySubtree() throws {
+    func testDataStoreRejectsSnapshotOutsideRequestedHierarchySubtree() async throws {
         let configuration = ModelConfiguration(
             "custom-hierarchy-outside",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: OutsideHierarchySnapshotDataStore()))
@@ -899,7 +899,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsDuplicateSnapshotIdentifiers() throws {
+    func testDataStoreRejectsDuplicateSnapshotIdentifiers() async throws {
         let configuration = ModelConfiguration(
             "custom-hierarchy-duplicate",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: DuplicateHierarchySnapshotDataStore()))
@@ -915,7 +915,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsRelationshipTargetOutsideDestinationSubtree() throws {
+    func testDataStoreRejectsRelationshipTargetOutsideDestinationSubtree() async throws {
         let configuration = ModelConfiguration(
             "custom-hierarchy-invalid-relationship",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: InvalidHierarchyRelationshipDataStore()))
@@ -935,7 +935,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreChildDestinationAcceptsGrandchildAndRejectsBaseTarget() throws {
+    func testDataStoreChildDestinationAcceptsGrandchildAndRejectsBaseTarget() async throws {
         let acceptedConfiguration = ModelConfiguration(
             "custom-hierarchy-child-destination-accepted",
             dataStoreConfiguration: ExistingDataStoreConfiguration(
@@ -966,7 +966,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreHierarchyRelationshipRoundTripsConcreteDestination() throws {
+    func testDataStoreHierarchyRelationshipRoundTripsConcreteDestination() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-hierarchy-relationship", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -992,7 +992,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreInheritedHierarchyRelationshipRoundTrips() throws {
+    func testDataStoreInheritedHierarchyRelationshipRoundTrips() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-inherited-hierarchy-relationship",
@@ -1055,7 +1055,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedDataStoreSaveRetainsPendingInsertion() throws {
+    func testFailedDataStoreSaveRetainsPendingInsertion() async throws {
         let store = FailingDictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-failure", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1069,7 +1069,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreUInt64OverflowDoesNotCommitAndCanRetry() throws {
+    func testDataStoreUInt64OverflowDoesNotCommitAndCanRetry() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-uint64-overflow", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1098,7 +1098,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStorePartialFetchFaultsUnrequestedProperties() throws {
+    func testDataStorePartialFetchFaultsUnrequestedProperties() async throws {
         let dataStore = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-partial", dataStoreConfiguration: ExistingDataStoreConfiguration(store: dataStore))
@@ -1130,7 +1130,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreSnapshotsRoundTripFlattenedComponentValues() throws {
+    func testDataStoreSnapshotsRoundTripFlattenedComponentValues() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-flattened", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1150,7 +1150,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreSnapshotsRoundTripRelationshipsByIdentifier() throws {
+    func testDataStoreSnapshotsRoundTripRelationshipsByIdentifier() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-relationships", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1190,7 +1190,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreRejectsMultipleTargetsForToOneRelationship() throws {
+    func testDataStoreRejectsMultipleTargetsForToOneRelationship() async throws {
         let configuration = ModelConfiguration(
             "custom-store-multiple-to-one-targets",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: MultipleTargetsForToOneDataStore()))
@@ -1205,7 +1205,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreAcceptsEmptyOptionalToOneRelationship() throws {
+    func testDataStoreAcceptsEmptyOptionalToOneRelationship() async throws {
         let configuration = ModelConfiguration(
             "custom-store-empty-to-one-target",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: EmptyToOneRelationshipDataStore()))
@@ -1216,7 +1216,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreAllowsMultipleTargetsForToManyRelationship() throws {
+    func testDataStoreAllowsMultipleTargetsForToManyRelationship() async throws {
         let configuration = ModelConfiguration(
             "custom-store-multiple-to-many-targets",
             dataStoreConfiguration: ExistingDataStoreConfiguration(store: MultipleTargetsForToManyDataStore()))
@@ -1240,7 +1240,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreSnapshotsRoundTripCyclicRelationshipGraph() throws {
+    func testDataStoreSnapshotsRoundTripCyclicRelationshipGraph() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-cycle", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1260,7 +1260,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedDataStoreBatchCanRetryWithReservedIdentifiers() throws {
+    func testFailedDataStoreBatchCanRetryWithReservedIdentifiers() async throws {
         let store = FailsOnceDataStore()
         let configuration = ModelConfiguration(
             "custom-store-retry", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1276,7 +1276,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreCancelAndReplacePendingSubtypeClearsRetryIdentity() throws {
+    func testDataStoreCancelAndReplacePendingSubtypeClearsRetryIdentity() async throws {
         let store = FailsOnceDataStore()
         let configuration = ModelConfiguration(
             "custom-store-cancel-replace", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1299,7 +1299,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDataStoreOriginalTemporaryIdentifierResolvesAfterHierarchySave() throws {
+    func testDataStoreOriginalTemporaryIdentifierResolvesAfterHierarchySave() async throws {
         let store = DictionaryDataStore()
         let configuration = ModelConfiguration(
             "custom-store-temp-lookup", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1316,7 +1316,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedHierarchyDataStoreRetryPreservesSameSaveRelationships() throws {
+    func testFailedHierarchyDataStoreRetryPreservesSameSaveRelationships() async throws {
         let store = FailsOnceDataStore()
         let configuration = ModelConfiguration(
             "custom-store-hierarchy-retry", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1345,7 +1345,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedHierarchyDataStoreRollbackClearsTemporaryIdentityState() throws {
+    func testFailedHierarchyDataStoreRollbackClearsTemporaryIdentityState() async throws {
         let store = FailsOnceDataStore()
         let configuration = ModelConfiguration(
             "custom-store-hierarchy-rollback", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1368,7 +1368,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedDataStoreUpdateRemapsNewHierarchyRelationshipTarget() throws {
+    func testFailedDataStoreUpdateRemapsNewHierarchyRelationshipTarget() async throws {
         let store = FailsOnceDataStore(failOnSaveNumber: 2)
         let configuration = ModelConfiguration(
             "custom-store-update-new-target", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
@@ -1396,7 +1396,7 @@ final class DataStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testInvalidDataStoreSaveResultDoesNotFinalizeContextModels() throws {
+    func testInvalidDataStoreSaveResultDoesNotFinalizeContextModels() async throws {
         let store = InvalidSaveResultDataStore()
         let configuration = ModelConfiguration(
             "custom-store-invalid-result", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))

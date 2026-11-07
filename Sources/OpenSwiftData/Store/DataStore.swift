@@ -66,6 +66,7 @@ public struct DataStoreSnapshot: Sendable, Equatable {
         self.values = values
         self.relationships = relationships
     }
+
 }
 
 /// A typed fetch request passed to a custom data store.
@@ -151,4 +152,214 @@ public struct ExistingDataStoreConfiguration: DataStoreConfiguration {
         _ = schema
         return store
     }
+}
+
+/// A custom store configuration aligned with Apple's associated-store configuration shape.
+///
+/// This prefixed API uses OpenSwiftData's current `Schema` type and remains separate from `DataStoreConfiguration`.
+public protocol AppleDataStoreConfiguration: Sendable {
+    /// The custom store type created from this configuration.
+    associatedtype Store: AppleDataStore
+    /// The configuration's stable name.
+    var name: String { get }
+    /// The schema assigned by the model container, when available.
+    var schema: Schema? { get set }
+    /// Creates the configured store with the resolved schema and migration plan.
+    func makeStore(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore
+    /// Validates configuration values before opening the store.
+    func validate() throws
+}
+
+public extension AppleDataStoreConfiguration {
+    func validate() throws {}
+}
+
+/// A snapshot exchanged between a model context and an Apple-shaped custom store.
+public protocol AppleDataStoreSnapshot: Codable, Sendable {
+    /// The snapshot's persistent identity.
+    var persistentIdentifier: PersistentIdentifier { get }
+    /// Creates a snapshot from model backing data and collects directly related backing data.
+    init(
+        from backingData: any BackingData,
+        relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
+    ) throws
+    /// Returns a snapshot with remapped identifiers.
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self
+}
+
+/// A value-oriented snapshot for stores that explicitly provide stored values and relationships.
+public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
+    public let persistentIdentifier: PersistentIdentifier
+    public let entityName: String
+    public let values: [String: StoredValue]
+    public let relationships: [String: [PersistentIdentifier]]
+
+    /// Creates an identity-only snapshot because the current backing interface does not expose model values.
+    public init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        values: [String: StoredValue] = [:],
+        relationships: [String: [PersistentIdentifier]] = [:]
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.values = values
+        self.relationships = relationships
+    }
+
+    public init(
+        from backingData: any BackingData,
+        relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
+    ) throws {
+        _ = (backingData, relatedBackingDatas)
+        let lifecycle = backingData.snapshot()
+        self.init(persistentIdentifier: lifecycle.identifier, entityName: lifecycle.identifier.entityName)
+    }
+
+    public func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]? = nil
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            values: values,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+
+}
+
+extension AppleDefaultSnapshot {
+    /// Converts this snapshot to the current OpenSwiftData context representation.
+    public func makeBackendSnapshot(in schema: Schema) throws -> DataStoreSnapshot {
+        guard schema.entity(forName: entityName) != nil else {
+            throw SwiftDataError.unsupportedStore("Snapshot entity '\(entityName)' is not in the schema.")
+        }
+        return DataStoreSnapshot(
+            persistentIdentifier: persistentIdentifier, entityName: entityName,
+            values: values, relationships: relationships)
+    }
+
+    /// Creates a snapshot from an OpenSwiftData context snapshot.
+    public static func makeAppleSnapshot(from snapshot: DataStoreSnapshot, in schema: Schema) throws -> Self {
+        guard schema.entity(forName: snapshot.entityName) != nil else {
+            throw SwiftDataError.unsupportedStore("Snapshot entity '\(snapshot.entityName)' is not in the schema.")
+        }
+        return Self(
+            persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
+            values: snapshot.values, relationships: snapshot.relationships)
+    }
+}
+
+/// A typed fetch request passed to an Apple-shaped custom store.
+public struct AppleDataStoreFetchRequest<Model: PersistentModel> {
+    /// The fetch descriptor supplied by the caller.
+    public let descriptor: FetchDescriptor<Model>
+
+    public init(descriptor: FetchDescriptor<Model>) {
+        self.descriptor = descriptor
+    }
+}
+
+
+/// The snapshots returned by an Apple-shaped custom store fetch.
+public struct AppleDataStoreFetchResult<Model: PersistentModel, Snapshot: AppleDataStoreSnapshot> {
+    /// The descriptor associated with the fetched snapshots.
+    public let descriptor: FetchDescriptor<Model>
+    /// The snapshots matching the descriptor.
+    public let fetchedSnapshots: [Snapshot]
+    /// Related snapshots keyed by persistent identifier.
+    public let relatedSnapshots: [PersistentIdentifier: Snapshot]
+
+    public init(
+        descriptor: FetchDescriptor<Model>,
+        fetchedSnapshots: [Snapshot],
+        relatedSnapshots: [PersistentIdentifier: Snapshot] = [:]
+    ) {
+        self.descriptor = descriptor
+        self.fetchedSnapshots = fetchedSnapshots
+        self.relatedSnapshots = relatedSnapshots
+    }
+}
+
+
+/// A batch of model changes passed to an Apple-shaped custom store.
+public struct AppleDataStoreSaveChangesRequest<Snapshot: AppleDataStoreSnapshot> {
+    public let inserted: [Snapshot]
+    public let updated: [Snapshot]
+    public let deleted: [Snapshot]
+
+    public init(inserted: [Snapshot], updated: [Snapshot], deleted: [Snapshot]) {
+        self.inserted = inserted
+        self.updated = updated
+        self.deleted = deleted
+    }
+}
+
+
+/// A batch of changes passed to an Apple-shaped custom store.
+public struct AppleDataStoreBatchRequest<Snapshot: AppleDataStoreSnapshot> {
+    public let saves: [AppleDataStoreSaveChangesRequest<Snapshot>]
+
+    public init(saves: [AppleDataStoreSaveChangesRequest<Snapshot>]) {
+        self.saves = saves
+    }
+}
+
+/// The result of committing changes to an Apple-shaped custom store.
+public struct AppleDataStoreSaveChangesResult: Sendable {
+    /// The identifier of the store that committed the changes.
+    public let storeIdentifier: String
+    /// Temporary-to-permanent identifier mappings for inserted snapshots.
+    public let remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]
+    /// Snapshots that the context should register after the save.
+    public let snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier]
+
+    public init(
+        for storeIdentifier: String,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:],
+        snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier] = [:]
+    ) {
+        self.storeIdentifier = storeIdentifier
+        self.remappedIdentifiers = remappedIdentifiers
+        self.snapshotsToReregister = snapshotsToReregister
+    }
+}
+
+/// A store that can provide its own adapter for the current OpenSwiftData context engine.
+public protocol AppleDataStoreBackendProviding: AppleDataStore {
+    func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore
+}
+
+/// A custom store using the Apple-shaped API under nonconflicting prefixed names.
+public protocol AppleDataStore: AnyObject, Sendable {
+    associatedtype Configuration: AppleDataStoreConfiguration where Configuration.Store == Self
+    associatedtype Snapshot: AppleDataStoreSnapshot
+
+    init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws
+    var configuration: Configuration { get }
+    var identifier: String { get }
+    var schema: Schema { get }
+    var supportsInheritance: Bool { get }
+
+    func fetch<Model: PersistentModel>(
+        _ request: AppleDataStoreFetchRequest<Model>
+    ) throws -> AppleDataStoreFetchResult<Model, Snapshot>
+    func save(_ request: AppleDataStoreSaveChangesRequest<Snapshot>) throws -> AppleDataStoreSaveChangesResult
+}
+
+public extension AppleDataStore {
+    var supportsInheritance: Bool { false }
+
+}
+
+/// An optional custom-store capability for batching model fetches and saves.
+public protocol AppleDataStoreBatching: AppleDataStore {
+    func fetch<Model: PersistentModel>(
+        _ requests: [AppleDataStoreFetchRequest<Model>]
+    ) throws -> [AppleDataStoreFetchResult<Model, Snapshot>]
+    func save(_ request: AppleDataStoreBatchRequest<Snapshot>) throws -> [AppleDataStoreSaveChangesResult]
 }

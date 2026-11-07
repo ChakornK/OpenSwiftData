@@ -75,6 +75,10 @@ var targets: [Target] = [
         path: "Tests/OpenSwiftDataTests"
     ),
     .testTarget(
+        name: "AppleDataStoreAPITests",
+        dependencies: ["OpenSwiftData"]
+    ),
+    .testTarget(
         name: "OSDQueryTests",
         dependencies: ["OSDQuery", "OpenSwiftData", "OpenSwiftDataSQLite"],
         path: "Tests/OSDQueryTests"

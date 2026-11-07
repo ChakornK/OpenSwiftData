@@ -103,6 +103,7 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
+    @available(*, deprecated, message: "Exercises the intentionally deprecated identity-only initializer.")
     func testDefaultSnapshotBackingInitializerCapturesIdentityOnly() throws {
         let backing = DetachedBackingData<AppleStoreFixture>(metadata: AppleStoreFixture.schemaMetadata())
         var related: [PersistentIdentifier: any BackingData] = [:]

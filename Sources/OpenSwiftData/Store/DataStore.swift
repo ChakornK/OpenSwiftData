@@ -190,7 +190,7 @@ public protocol AppleDataStoreSnapshot: Codable, Sendable {
     ) -> Self
 }
 
-    /// A value-oriented snapshot whose model values and relationships are supplied explicitly.
+/// A value-oriented snapshot whose model values and relationships are supplied explicitly.
 public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
     public let persistentIdentifier: PersistentIdentifier
     public let entityName: String
@@ -210,6 +210,8 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
         self.relationships = relationships
     }
 
+    /// Creates an identity-only snapshot because backing data does not expose model values.
+    @available(*, deprecated, message: "Captures identity only; provide values explicitly until Schema API parity is implemented.")
     public init(
         from backingData: any BackingData,
         relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
@@ -237,6 +239,7 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
 
 extension AppleDefaultSnapshot {
     /// Converts this snapshot to the current OpenSwiftData context representation.
+    /// Converts this snapshot to the context's stored representation after validating its entity.
     public func makeBackendSnapshot(in schema: Schema) throws -> DataStoreSnapshot {
         guard schema.entity(forName: entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(entityName)' is not in the schema.")
@@ -247,6 +250,7 @@ extension AppleDefaultSnapshot {
     }
 
     /// Creates a snapshot from an OpenSwiftData context snapshot.
+    /// Recreates a snapshot after validating its entity against the schema.
     public static func makeAppleSnapshot(from snapshot: DataStoreSnapshot, in schema: Schema) throws -> Self {
         guard schema.entity(forName: snapshot.entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(snapshot.entityName)' is not in the schema.")

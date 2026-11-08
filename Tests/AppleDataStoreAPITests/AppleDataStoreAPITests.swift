@@ -133,8 +133,8 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equata
     let value: Int64?
     let relationships: [String: [PersistentIdentifier]]
 
-    var persistedValues: [String: DataStoreSnapshotValue] {
-        var values: [String: DataStoreSnapshotValue] = [:]
+    var persistedValues: [String: DataStoreAttributeValue] {
+        var values: [String: DataStoreAttributeValue] = [:]
         if let title { values["title"] = .text(title) }
         if let value { values["value"] = .int(value) }
         return values
@@ -157,7 +157,7 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equata
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        persistedValues: [String: DataStoreSnapshotValue],
+        persistedValues: [String: DataStoreAttributeValue],
         relationships: [String: [PersistentIdentifier]]
     ) {
         self.init(
@@ -233,7 +233,7 @@ private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
         self.payload = payload
     }
 
-    var persistedValues: [String: DataStoreSnapshotValue] { ["title": .text("provider value")] }
+    var persistedValues: [String: DataStoreAttributeValue] { ["title": .text("provider value")] }
 
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
         _ = relatedBackingDatas
@@ -246,7 +246,7 @@ private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        persistedValues: [String: DataStoreSnapshotValue],
+        persistedValues: [String: DataStoreAttributeValue],
         relationships: [String: [PersistentIdentifier]]
     ) {
         self.persistentIdentifier = persistentIdentifier
@@ -706,6 +706,18 @@ private final class CanonicalDefaultStoreStates: @unchecked Sendable {
 
 @Suite
 struct AppleDataStoreAPITests {
+    @Test
+    func dataStoreSnapshotCodingKeysRoundTrip() throws {
+        let identifier = DataStoreSnapshotCodingKey(stringValue: "persistentIdentifier")
+        if case .persistentIdentifier = identifier {} else { Issue.record("Expected persistent identifier key") }
+        #expect(identifier?.stringValue == "persistentIdentifier")
+
+        let property = DataStoreSnapshotCodingKey(stringValue: "profile.displayName")
+        if case .modeledProperty("profile.displayName") = property {} else { Issue.record("Expected modeled property key") }
+        #expect(property?.stringValue == "profile.displayName")
+        #expect(DataStoreSnapshotCodingKey(intValue: 0) == nil)
+    }
+
     @Test
     func canonicalDataStoreContractCompiles() throws {
         let schema = Schema([AppleStoreFixture.self])

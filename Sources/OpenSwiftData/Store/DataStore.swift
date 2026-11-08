@@ -177,19 +177,47 @@ public protocol DataStoreSnapshot: Codable, Sendable {
     ) -> Self
 }
 
+/// A Codable and Sendable value that a data store snapshot can persist.
+public typealias DataStoreSnapshotValue = Codable & Sendable
+
+/// A coding key for the persistent identifier or a modeled property in a data store snapshot.
+public enum DataStoreSnapshotCodingKey: CodingKey, Sendable {
+    case persistentIdentifier
+    case modeledProperty(String)
+
+    public var stringValue: String {
+        switch self {
+        case .persistentIdentifier: "persistentIdentifier"
+        case let .modeledProperty(name): name
+        }
+    }
+
+    public init?(stringValue: String) {
+        if stringValue == "persistentIdentifier" {
+            self = .persistentIdentifier
+        } else {
+            self = .modeledProperty(stringValue)
+        }
+    }
+
+    public var intValue: Int? { nil }
+
+    public init?(intValue: Int) { return nil }
+}
+
 /// Exposes persisted property values without coupling a canonical snapshot to the legacy store snapshot type.
 public protocol DataStoreSnapshotValueProviding: DataStoreSnapshot {
-    var persistedValues: [String: DataStoreSnapshotValue] { get }
+    var persistedValues: [String: DataStoreAttributeValue] { get }
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        persistedValues: [String: DataStoreSnapshotValue],
+        persistedValues: [String: DataStoreAttributeValue],
         relationships: [String: [PersistentIdentifier]]
     )
 }
 
 /// A scalar value that a custom store can map to a model attribute.
-public enum DataStoreSnapshotValue: Sendable, Equatable, Codable {
+public enum DataStoreAttributeValue: Sendable, Equatable, Codable {
     case null
     case int(Int64)
     case double(Double)
@@ -349,7 +377,7 @@ private func makeSnapshotValue(
     type.init(
         persistentIdentifier: snapshot.persistentIdentifier,
         entityName: snapshot.entityName,
-        persistedValues: snapshot.values.mapValues(DataStoreSnapshotValue.init),
+        persistedValues: snapshot.values.mapValues(DataStoreAttributeValue.init),
         relationships: snapshot.relationships)
 }
 
@@ -703,12 +731,12 @@ public struct AppleDefaultSnapshot: DataStoreSnapshotValueProviding, Equatable {
         self.relationships = relationships
     }
 
-    public var persistedValues: [String: DataStoreSnapshotValue] { values.mapValues(DataStoreSnapshotValue.init) }
+    public var persistedValues: [String: DataStoreAttributeValue] { values.mapValues(DataStoreAttributeValue.init) }
 
     public init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        persistedValues: [String: DataStoreSnapshotValue],
+        persistedValues: [String: DataStoreAttributeValue],
         relationships: [String: [PersistentIdentifier]]
     ) {
         self.init(

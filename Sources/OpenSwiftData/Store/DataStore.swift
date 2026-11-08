@@ -180,7 +180,6 @@ public protocol DataStoreSnapshot: Codable, Sendable {
 public protocol DataStoreSnapshotBridge: DataStoreSnapshot {
     func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot
     init(openSwiftDataSnapshot snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws
-    static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations
 }
 
 public struct DataStoreSnapshotBridgeOperations {
@@ -252,10 +251,16 @@ public protocol DataStoreConfiguration: Sendable {
     var name: String { get }
     var schema: Schema? { get set }
     func validate() throws
+    func makeSnapshotBridge(for storeType: any DataStore.Type, schema: Schema) throws -> DataStoreSnapshotBridgeOperations
 }
 
 public extension DataStoreConfiguration {
     func validate() throws {}
+    func makeSnapshotBridge(for storeType: any DataStore.Type, schema: Schema) throws -> DataStoreSnapshotBridgeOperations {
+        _ = (storeType, schema)
+        throw SwiftDataError.unsupportedStore(
+            "The configuration does not provide a bridge for the built-in ModelContext engine.")
+    }
 }
 
 /// A custom model store using typed snapshots and atomic save changes.
@@ -285,20 +290,7 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
 ) throws -> any OpenSwiftDataDataStore {
     try configuration.validate()
     let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
-    let operations: DataStoreSnapshotBridgeOperations
-    if let bridge = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotBridge.Type {
-        operations = bridge.makeBridge(in: schema)
-    } else {
-        operations = DataStoreSnapshotBridgeOperations(
-            encode: { _ in
-                throw SwiftDataError.unsupportedStore(
-                    "This canonical snapshot type cannot be materialized by the built-in ModelContext engine.")
-            },
-            decode: { _ in
-                throw SwiftDataError.unsupportedStore(
-                    "This canonical snapshot type cannot be materialized by the built-in ModelContext engine.")
-            })
-    }
+    let operations = try configuration.makeSnapshotBridge(for: Configuration.StoreType.self, schema: schema)
     return CanonicalDataStoreAdapter(
         store: store,
         schema: schema.descriptor,
@@ -576,16 +568,6 @@ extension AppleDefaultSnapshot {
             in: schema.descriptor)
     }
 
-    public static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations {
-        DataStoreSnapshotBridgeOperations(
-            encode: { try Self.makeAppleSnapshot(from: $0, in: schema.descriptor) },
-            decode: { snapshot in
-                guard let snapshot = snapshot as? Self else {
-                    throw SwiftDataError.unsupportedStore("Canonical snapshot bridge received an incompatible type.")
-                }
-                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
-            })
-    }
 }
 
 /// A typed fetch request passed to an Apple-shaped custom store.

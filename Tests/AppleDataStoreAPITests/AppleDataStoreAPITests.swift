@@ -123,6 +123,20 @@ private struct CanonicalFixtureConfiguration: DataStoreConfiguration {
         self.name = name
         self.schema = schema
     }
+
+    func makeSnapshotBridge(for storeType: any DataStore.Type, schema: Schema) throws -> DataStoreSnapshotBridgeOperations {
+        _ = storeType
+        return DataStoreSnapshotBridgeOperations(
+            encode: { snapshot in
+                try CanonicalFixtureSnapshot(openSwiftDataSnapshot: snapshot, in: schema)
+            },
+            decode: { snapshot in
+                guard let snapshot = snapshot as? CanonicalFixtureSnapshot else {
+                    throw SwiftDataError.unsupportedStore("Canonical fixture snapshot type mismatch.")
+                }
+                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
+            })
+    }
 }
 
 private struct CanonicalFixtureSnapshot: DataStoreSnapshot, Equatable {
@@ -162,7 +176,7 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshot, Equatable {
 
 }
 
-extension CanonicalFixtureSnapshot: DataStoreSnapshotBridge {
+extension CanonicalFixtureSnapshot {
     func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot {
         OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: persistentIdentifier, entityName: entityName, values: values,
@@ -175,18 +189,6 @@ extension CanonicalFixtureSnapshot: DataStoreSnapshotBridge {
             values: snapshot.values, relationships: snapshot.relationships)
     }
 
-    static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations {
-        DataStoreSnapshotBridgeOperations(
-            encode: { snapshot in
-                try Self(openSwiftDataSnapshot: snapshot, in: schema)
-            },
-            decode: { snapshot in
-                guard let snapshot = snapshot as? Self else {
-                    throw SwiftDataError.unsupportedStore("Canonical fixture bridge received an incompatible snapshot.")
-                }
-                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
-            })
-    }
 }
 
 private struct CanonicalSourceShapeSnapshot: DataStoreSnapshot {
@@ -353,17 +355,13 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
-    func containerReportsMissingOptionalEngineBridgeAtUseTime() throws {
+    func containerReportsMissingOptionalEngineBridgeAtConfigurationTime() throws {
         let schema = Schema([AppleStoreFixture.self])
         let configuration = ModelConfiguration(
             canonicalStore: "unbridged", schema: schema,
             canonicalDataStoreConfiguration: UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema))
-        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
-        #expect(container.dataStore?.identifier == "unbridged.canonical")
-        let context = container.mainContext
-        context.insert(AppleStoreFixture(title: "requires bridge"))
         #expect(throws: SwiftDataError.unsupportedStore) {
-            try context.save()
+            try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
         }
     }
 

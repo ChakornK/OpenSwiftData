@@ -2,7 +2,7 @@ import Foundation
 import OSDCore
 
 /// Stores model snapshots without requiring a SQL backend.
-public protocol DataStore: Sendable {
+public protocol OpenSwiftDataDataStore: Sendable {
     /// A stable identifier for this store instance.
     var identifier: String { get }
     /// Whether fetch requests can return every requested hierarchy entity using its concrete entity name.
@@ -14,35 +14,56 @@ public protocol DataStore: Sendable {
     /// ModelContext requests all matching stored snapshots and applies pagination after merging pending models.
     /// Hierarchy-capable stores include every matching `includedEntityNames` entry and return each snapshot with its
     /// concrete entity name in both `entityName` and `persistentIdentifier.entityName`.
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult
     /// Reserves permanent identifiers for a batch before its atomic save. Reservations must be reusable if the
     /// subsequent `save` throws. Reserved identifiers are placed directly in inserted snapshots and may be used by
     /// relationship snapshots in the same request.
-    func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier]
+    func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier]
     /// Applies the request atomically. A thrown error must leave the store unchanged; a returned result must
     /// acknowledge every requested update and deletion. Inserted snapshots already carrying reserved identifiers
     /// need no result mapping; unreserved temporary identifiers must be mapped to permanent identifiers.
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult
     /// Returns one snapshot by its persistent identifier.
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot?
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot?
 }
 
-public extension DataStore {
+public extension OpenSwiftDataDataStore {
     var supportsInheritance: Bool { false }
 
-    func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
+    func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         [:]
     }
 }
 
+@available(*, deprecated, renamed: "OpenSwiftDataDataStore")
+public typealias LegacyDataStore = OpenSwiftDataDataStore
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreConfiguration")
+public typealias LegacyDataStoreConfiguration = OpenSwiftDataDataStoreConfiguration
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreSnapshot")
+public typealias LegacyDataStoreSnapshot = OpenSwiftDataDataStoreSnapshot
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreFetchRequest")
+public typealias LegacyDataStoreFetchRequest<Model: PersistentModel> = OpenSwiftDataDataStoreFetchRequest<Model>
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreFetchResult")
+public typealias LegacyDataStoreFetchResult = OpenSwiftDataDataStoreFetchResult
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreSaveRequest")
+public typealias LegacyDataStoreSaveRequest = OpenSwiftDataDataStoreSaveRequest
+
+@available(*, deprecated, renamed: "OpenSwiftDataDataStoreSaveResult")
+public typealias LegacyDataStoreSaveResult = OpenSwiftDataDataStoreSaveResult
+
 /// Creates a configured custom data store for a schema.
-public protocol DataStoreConfiguration: Sendable {
+public protocol OpenSwiftDataDataStoreConfiguration: Sendable {
     /// Creates the store that will back a model container.
-    func makeStore(schema: SchemaDescriptor) throws -> any DataStore
+    func makeStore(schema: SchemaDescriptor) throws -> any OpenSwiftDataDataStore
 }
 
 /// A value snapshot of one model row.
-public struct DataStoreSnapshot: Sendable, Equatable {
+public struct OpenSwiftDataDataStoreSnapshot: Sendable, Equatable {
     /// The model row identifier.
     public let persistentIdentifier: PersistentIdentifier
     /// The stable schema entity name.
@@ -70,7 +91,7 @@ public struct DataStoreSnapshot: Sendable, Equatable {
 }
 
 /// A typed fetch request passed to a custom data store.
-public struct DataStoreFetchRequest<Model: PersistentModel> {
+public struct OpenSwiftDataDataStoreFetchRequest<Model: PersistentModel> {
     /// The typed fetch descriptor, including predicate, ordering, and bounds.
     public let descriptor: FetchDescriptor<Model>
     /// The schema entity selected by the model container.
@@ -90,27 +111,27 @@ public struct DataStoreFetchRequest<Model: PersistentModel> {
 }
 
 /// The snapshots returned by a custom data store fetch.
-public struct DataStoreFetchResult: Sendable, Equatable {
+public struct OpenSwiftDataDataStoreFetchResult: Sendable, Equatable {
     /// The snapshots matching the request, in requested sort order.
-    public let snapshots: [DataStoreSnapshot]
+    public let snapshots: [OpenSwiftDataDataStoreSnapshot]
 
     /// Creates a fetch result from ordered snapshots.
-    public init(snapshots: [DataStoreSnapshot]) {
+    public init(snapshots: [OpenSwiftDataDataStoreSnapshot]) {
         self.snapshots = snapshots
     }
 }
 
 /// A batch of model snapshots to persist atomically.
-public struct DataStoreSaveRequest: Sendable, Equatable {
+public struct OpenSwiftDataDataStoreSaveRequest: Sendable, Equatable {
     /// Newly inserted model snapshots.
-    public let inserted: [DataStoreSnapshot]
+    public let inserted: [OpenSwiftDataDataStoreSnapshot]
     /// Existing model snapshots whose values changed.
-    public let updated: [DataStoreSnapshot]
+    public let updated: [OpenSwiftDataDataStoreSnapshot]
     /// Persistent identifiers to delete.
     public let deleted: [PersistentIdentifier]
 
     /// Creates a batch save request.
-    public init(inserted: [DataStoreSnapshot], updated: [DataStoreSnapshot], deleted: [PersistentIdentifier]) {
+    public init(inserted: [OpenSwiftDataDataStoreSnapshot], updated: [OpenSwiftDataDataStoreSnapshot], deleted: [PersistentIdentifier]) {
         self.inserted = inserted
         self.updated = updated
         self.deleted = deleted
@@ -118,7 +139,7 @@ public struct DataStoreSaveRequest: Sendable, Equatable {
 }
 
 /// The permanent identifiers assigned to newly inserted snapshots.
-public struct DataStoreSaveResult: Sendable, Equatable {
+public struct OpenSwiftDataDataStoreSaveResult: Sendable, Equatable {
     /// Maps only unreserved inserted temporary identifiers to their permanent store identifiers.
     public let identifierRemappings: [PersistentIdentifier: PersistentIdentifier]
     /// The existing identifiers whose updates were committed.
@@ -138,17 +159,165 @@ public struct DataStoreSaveResult: Sendable, Equatable {
     }
 }
 
+/// A snapshot exchanged with a custom data store.
+public protocol DataStoreSnapshot: Codable, Sendable {
+    var persistentIdentifier: PersistentIdentifier { get }
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData])
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self
+    func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot
+    static func makeDataStoreSnapshot(from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws -> Self
+}
+
+/// A typed fetch request for a custom store.
+public struct DataStoreFetchRequest<Model: PersistentModel> {
+    public let descriptor: FetchDescriptor<Model>
+    public init(_ descriptor: FetchDescriptor<Model>) { self.descriptor = descriptor }
+}
+
+/// A custom-store fetch result.
+public struct DataStoreFetchResult<Model: PersistentModel, Snapshot: DataStoreSnapshot> {
+    public let descriptor: FetchDescriptor<Model>
+    public let fetchedSnapshots: [Snapshot]
+    public let relatedSnapshots: [PersistentIdentifier: Snapshot]
+    public init(
+        descriptor: FetchDescriptor<Model>,
+        fetchedSnapshots: [Snapshot],
+        relatedSnapshots: [PersistentIdentifier: Snapshot] = [:]
+    ) {
+        self.descriptor = descriptor
+        self.fetchedSnapshots = fetchedSnapshots
+        self.relatedSnapshots = relatedSnapshots
+    }
+}
+
+/// A batch of snapshots to insert, update, or delete atomically.
+public struct DataStoreSaveChangesRequest<Snapshot: DataStoreSnapshot> {
+    public let inserted: [Snapshot]
+    public let updated: [Snapshot]
+    public let deleted: [PersistentIdentifier]
+    public init(inserted: [Snapshot], updated: [Snapshot], deleted: [PersistentIdentifier]) {
+        self.inserted = inserted
+        self.updated = updated
+        self.deleted = deleted
+    }
+}
+
+/// The permanent identifiers and snapshots produced by a custom-store save.
+public struct DataStoreSaveChangesResult: Sendable {
+    public let storeIdentifier: String
+    public let remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]
+    public let snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier]
+    public init(
+        for storeIdentifier: String,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:],
+        snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier] = [:]
+    ) {
+        self.storeIdentifier = storeIdentifier
+        self.remappedIdentifiers = remappedIdentifiers
+        self.snapshotsToReregister = snapshotsToReregister
+    }
+}
+
+/// Creates a custom store for a model container.
+public protocol DataStoreConfiguration: Sendable {
+    associatedtype StoreType: DataStore where StoreType.Configuration == Self
+    var name: String { get }
+    var schema: Schema? { get set }
+    func validate() throws
+}
+
+public extension DataStoreConfiguration {
+    func validate() throws {}
+}
+
+/// A custom model store using typed snapshots and atomic save changes.
+public protocol DataStore: AnyObject {
+    associatedtype Configuration: DataStoreConfiguration where Configuration.StoreType == Self
+    associatedtype Snapshot: DataStoreSnapshot
+    init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws
+    var configuration: Configuration { get }
+    var name: String { get }
+    var identifier: String { get }
+    var schema: Schema { get }
+    var supportsInheritance: Bool { get }
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot>
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot?
+}
+
+public extension DataStore {
+    var supportsInheritance: Bool { false }
+    var name: String { configuration.name }
+}
+
+package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
+    _ configuration: Configuration,
+    schema: Schema,
+    migrationPlan: (any SchemaMigrationPlan.Type)?
+) throws -> any OpenSwiftDataDataStore {
+    try configuration.validate()
+    let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
+    return CanonicalDataStoreAdapter(store: store, schema: schema.descriptor)
+}
+
+private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDataStore, @unchecked Sendable {
+    private let store: Store
+    private let descriptor: SchemaDescriptor
+    let identifier: String
+    let supportsInheritance: Bool
+
+    init(store: Store, schema: SchemaDescriptor) {
+        self.store = store
+        descriptor = schema
+        identifier = store.identifier
+        supportsInheritance = store.supportsInheritance
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: OpenSwiftDataDataStoreFetchRequest<Model>
+    ) throws -> OpenSwiftDataDataStoreFetchResult {
+        let result = try store.fetch(DataStoreFetchRequest(request.descriptor))
+        let snapshots = try result.fetchedSnapshots.map { try $0.makeOpenSwiftDataSnapshot(in: Schema(descriptor: descriptor)) }
+        return OpenSwiftDataDataStoreFetchResult(snapshots: snapshots)
+    }
+
+    func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
+        [:]
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        let publicSchema = Schema(descriptor: descriptor)
+        let inserts = try request.inserted.map { try Store.Snapshot.makeDataStoreSnapshot(from: $0, in: publicSchema) }
+        let updates = try request.updated.map { try Store.Snapshot.makeDataStoreSnapshot(from: $0, in: publicSchema) }
+        let deletions = request.deleted
+        let result = try store.save(
+            DataStoreSaveChangesRequest(inserted: inserts, updated: updates, deleted: deletions))
+        return OpenSwiftDataDataStoreSaveResult(
+            identifierRemappings: result.remappedIdentifiers,
+            updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
+            deletedIdentifiers: Set(request.deleted))
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
+        guard let snapshot = try store.snapshot(for: identifier) else { return nil }
+        return try snapshot.makeOpenSwiftDataSnapshot(in: Schema(descriptor: descriptor))
+    }
+}
+
 /// A type-erased configuration for an already-created custom store.
-public struct ExistingDataStoreConfiguration: DataStoreConfiguration {
-    private let store: any DataStore
+public struct ExistingDataStoreConfiguration: OpenSwiftDataDataStoreConfiguration {
+    private let store: any OpenSwiftDataDataStore
 
     /// Creates a configuration that returns an existing store instance.
-    public init(store: any DataStore) {
+    public init(store: any OpenSwiftDataDataStore) {
         self.store = store
     }
 
     /// Returns the configured store; the store is responsible for validating the supplied schema.
-    public func makeStore(schema: SchemaDescriptor) throws -> any DataStore {
+    public func makeStore(schema: SchemaDescriptor) throws -> any OpenSwiftDataDataStore {
         _ = schema
         return store
     }
@@ -156,7 +325,7 @@ public struct ExistingDataStoreConfiguration: DataStoreConfiguration {
 
 /// A custom store configuration aligned with Apple's associated-store configuration shape.
 ///
-/// This prefixed API uses OpenSwiftData's current `SchemaDescriptor` type and remains separate from `DataStoreConfiguration`.
+/// This prefixed API uses OpenSwiftData's current `SchemaDescriptor` type and remains separate from `OpenSwiftDataDataStoreConfiguration`.
 public protocol AppleDataStoreConfiguration: Sendable {
     /// The custom store type created from this configuration.
     associatedtype Store: AppleDataStore
@@ -191,7 +360,7 @@ public protocol AppleDataStoreSnapshot: Codable, Sendable {
 }
 
 /// A value-oriented snapshot whose model values and relationships are supplied explicitly.
-public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
+public struct AppleDefaultSnapshot: DataStoreSnapshot, Equatable {
     public let persistentIdentifier: PersistentIdentifier
     public let entityName: String
     public let values: [String: StoredValue]
@@ -283,24 +452,43 @@ public extension AppleDefaultSnapshot {
 extension AppleDefaultSnapshot {
     /// Converts this snapshot to the current OpenSwiftData context representation.
     /// Converts this snapshot to the context's stored representation after validating its entity.
-    public func makeBackendSnapshot(in schema: SchemaDescriptor) throws -> DataStoreSnapshot {
+    public func makeBackendSnapshot(in schema: SchemaDescriptor) throws -> OpenSwiftDataDataStoreSnapshot {
         guard schema.entity(forName: entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(entityName)' is not in the schema.")
         }
-        return DataStoreSnapshot(
+        return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: persistentIdentifier, entityName: entityName,
             values: values, relationships: relationships)
     }
 
     /// Creates a snapshot from an OpenSwiftData context snapshot.
     /// Recreates a snapshot after validating its entity against the schema.
-    public static func makeAppleSnapshot(from snapshot: DataStoreSnapshot, in schema: SchemaDescriptor) throws -> Self {
+    public static func makeAppleSnapshot(from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: SchemaDescriptor) throws -> Self {
         guard schema.entity(forName: snapshot.entityName) != nil else {
             throw SwiftDataError.unsupportedStore("Snapshot entity '\(snapshot.entityName)' is not in the schema.")
         }
         return Self(
             persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
             values: snapshot.values, relationships: snapshot.relationships)
+    }
+}
+
+extension AppleDefaultSnapshot {
+    public func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot {
+        let value = try makeBackendSnapshot(in: schema.descriptor)
+        return OpenSwiftDataDataStoreSnapshot(
+            persistentIdentifier: value.persistentIdentifier, entityName: value.entityName,
+            values: value.values, relationships: value.relationships)
+    }
+
+    public static func makeDataStoreSnapshot(
+        from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema
+    ) throws -> Self {
+        try makeAppleSnapshot(
+            from: OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
+                values: snapshot.values, relationships: snapshot.relationships),
+            in: schema.descriptor)
     }
 }
 
@@ -377,8 +565,8 @@ public struct AppleDataStoreSaveChangesResult: Sendable {
 }
 
 /// A store that can provide its own adapter for the current OpenSwiftData context engine.
-public protocol AppleDataStoreBackendProviding: AppleDataStore {
-    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore
+public protocol AppleDataStoreBackendProviding: AnyObject, Sendable {
+    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any OpenSwiftDataDataStore
 }
 
 /// A custom store using the Apple-shaped API under nonconflicting prefixed names.

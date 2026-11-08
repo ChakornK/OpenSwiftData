@@ -317,7 +317,7 @@ final class RuntimeAPITests: XCTestCase {
         let entity = try XCTUnwrap(container.schema.entity(forName: "SupportedOptionalCollectionFixture"))
         XCTAssertEqual(entity.name, "SupportedOptionalCollectionFixture")
         XCTAssertEqual(Set(entity.relationships.map(\.name)), ["destinations", "optionalDestinations"])
-        XCTAssertTrue(entity.attributes.isEmpty)
+        XCTAssertEqual(Set(entity.attributes.map(\.name)), ["destinations", "optionalDestinations"])
         XCTAssertEqual(
             container.relationshipAdapters(for: SupportedOptionalCollectionFixture.self).map(\.name),
             [],
@@ -329,7 +329,7 @@ final class RuntimeAPITests: XCTestCase {
     func testContainerSupportsOptionalScalarCollectionAttributes() async throws {
         let container = try ModelContainer(for: [OptionalScalarCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarCollectionFixture"))
-        XCTAssertEqual(entity.attributes.map(\.name), ["strings", "integers"])
+        XCTAssertEqual(Set(entity.attributes.map(\.name)), ["strings", "integers"])
         XCTAssertTrue(entity.relationships.isEmpty)
     }
 

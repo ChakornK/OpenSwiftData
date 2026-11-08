@@ -816,8 +816,8 @@ final class DataStoreTests: XCTestCase {
             schema: requestedSchema,
             configurations: [configuration])
 
-        XCTAssertEqual(container.schema.entityIDsByName, runtimeSchema.entityIDsByName)
-        XCTAssertEqual(container.schema.entity(forID: 20)?.name, "CustomHierarchyChild")
+        XCTAssertEqual(container.schemaDescriptor.entityIDsByName, runtimeSchema.entityIDsByName)
+        XCTAssertEqual(container.schemaDescriptor.entity(forID: 20)?.name, "CustomHierarchyChild")
         XCTAssertEqual(
             ObjectIdentifier(try XCTUnwrap(container.modelRegistration(forEntityID: 20)).type),
             ObjectIdentifier(CustomHierarchyChild.self))

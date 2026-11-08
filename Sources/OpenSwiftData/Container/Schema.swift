@@ -456,6 +456,7 @@ public final class Schema: @unchecked Sendable {
     package let modelTypes: [any PersistentModel.Type]
     package let inferenceError: (any Error)?
     private let sourceDescriptor: SchemaDescriptor?
+    private let preservesEntityIDs: Bool
 
     public var propertyMetadata: [PropertyMetadata] {
         models.flatMap { $0.schemaMetadata().map(PropertyMetadata.init) }
@@ -468,6 +469,7 @@ public final class Schema: @unchecked Sendable {
         modelTypes = []
         inferenceError = nil
         sourceDescriptor = nil
+        preservesEntityIDs = false
     }
 
     public convenience init(_ entities: Entity..., version: Version = Version(1, 0, 0)) {
@@ -513,6 +515,7 @@ public final class Schema: @unchecked Sendable {
         self.modelTypes = modelTypes
         self.inferenceError = inferenceError
         sourceDescriptor = nil
+        preservesEntityIDs = false
     }
 
     private init(descriptor: SchemaDescriptor, entities: Set<Entity>) {
@@ -521,7 +524,8 @@ public final class Schema: @unchecked Sendable {
         models = descriptor.modelTypes.types.compactMap { $0 as? any PersistentModel.Type }
         modelTypes = models
         inferenceError = descriptor.modelTypes.inferenceError
-        sourceDescriptor = nil
+        sourceDescriptor = descriptor
+        preservesEntityIDs = true
     }
 
     package var descriptor: SchemaDescriptor {
@@ -576,7 +580,10 @@ public final class Schema: @unchecked Sendable {
         descriptor.entity(forID: identifier).flatMap { entity(forName: $0.name) }
     }
 
-    var entityIDsByName: [String: Int] { descriptor.entityIDsByName }
+    var entityIDsByName: [String: Int] {
+        if preservesEntityIDs { return descriptor.entityIDsByName }
+        return Dictionary(uniqueKeysWithValues: entities.enumerated().map { ($0.element.name, $0.offset + 1) })
+    }
 
     public static func entityName<T: PersistentModel>(for type: T.Type) -> String {
         String(describing: type).split(separator: ".").last.map(String.init) ?? String(describing: type)

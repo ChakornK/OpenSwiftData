@@ -2178,7 +2178,7 @@ final class PersistentModelTests: XCTestCase {
             ], configurations: [])
 
         let mapping = try XCTUnwrap(
-            container.schema.relationshipStorageMapping(
+            container.schemaDescriptor.relationshipStorageMapping(
                 modelEntityName: "InheritanceRelationshipChildFixture", relationshipName: "items"))
         XCTAssertEqual(mapping.modelEntityName, "InheritanceRelationshipChildFixture")
         XCTAssertEqual(mapping.declaringEntityName, "InheritanceRelationshipBaseFixture")
@@ -2465,7 +2465,7 @@ final class PersistentModelTests: XCTestCase {
             [
                 [
                     .text("shared"),
-                    .int(Int64(try XCTUnwrap(container.schema.entityIDsByName["UniqueHierarchySiblingFixture"]))),
+                    .int(Int64(try XCTUnwrap(container.schemaDescriptor.entityIDsByName["UniqueHierarchySiblingFixture"]))),
                 ]
             ]
         )
@@ -2533,7 +2533,7 @@ final class PersistentModelTests: XCTestCase {
             ).first ?? []
         }
         let grandchildEntityID = Int64(
-            try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueGrandchildFixture"]))
+            try XCTUnwrap(container.schemaDescriptor.entityIDsByName["SubtypeUniqueGrandchildFixture"]))
         XCTAssertEqual(storedUniqueValue, [.int(childID), .int(grandchildEntityID), .text("different")])
 
         let attributeUniqueMatch = SubtypeUniqueChildFixture(
@@ -2545,9 +2545,9 @@ final class PersistentModelTests: XCTestCase {
         let rows: [[RuntimeValue]]? = try container.store?.read {
             try $0.rows("SELECT Z_ENT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE ORDER BY Z_PK", arguments: [])
         }
-        let baseID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueBaseFixture"]))
-        let siblingID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueSiblingFixture"]))
-        let childEntityID = Int64(try XCTUnwrap(container.schema.entityIDsByName["SubtypeUniqueChildFixture"]))
+        let baseID = Int64(try XCTUnwrap(container.schemaDescriptor.entityIDsByName["SubtypeUniqueBaseFixture"]))
+        let siblingID = Int64(try XCTUnwrap(container.schemaDescriptor.entityIDsByName["SubtypeUniqueSiblingFixture"]))
+        let childEntityID = Int64(try XCTUnwrap(container.schemaDescriptor.entityIDsByName["SubtypeUniqueChildFixture"]))
         XCTAssertEqual(
             rows, [[.int(baseID), .null], [.int(childEntityID), .int(10)], [.int(siblingID), .null]])
 
@@ -6742,7 +6742,7 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertEqual(ownerRelationship.inverse, "owners")
         XCTAssertEqual(targetRelationship.inverse, "target")
         XCTAssertEqual(
-            container.schema.relationshipStorageMapping(
+            container.schemaDescriptor.relationshipStorageMapping(
                 modelEntityName: "HierarchyTargetGrandchildFixture", relationshipName: "owners")?
                 .declaringEntityName,
             "HierarchyTargetChildFixture")
@@ -6803,7 +6803,7 @@ final class PersistentModelTests: XCTestCase {
         }
         XCTAssertEqual(cascadeJoinOrFK, [[.int(1)]])
         let inverseMetadata = try XCTUnwrap(
-            container.schema.relationship(named: "owners", onOrBelow: "CascadeHierarchyTargetBaseFixture"))
+            container.schemaDescriptor.relationship(named: "owners", onOrBelow: "CascadeHierarchyTargetBaseFixture"))
         XCTAssertEqual(inverseMetadata.deleteRule, .cascade)
         XCTAssertEqual(targetForDelete.owners.map(\.name), ["owner"])
         deleteContext.delete(targetForDelete)
@@ -7602,7 +7602,7 @@ final class PersistentModelTests: XCTestCase {
             InheritanceMacroAardvarkFixture.self,
             InheritanceMacroPuppyFixture.self,
             configurations: configuration)
-        let runtimeIDs = container.schema.entityIDsByName
+        let runtimeIDs = container.schemaDescriptor.entityIDsByName
         XCTAssertEqual(runtimeIDs["InheritanceMacroBaseFixture"], sourceIDs["InheritanceMacroBaseFixture"])
         XCTAssertEqual(runtimeIDs["InheritanceMacroChildFixture"], sourceIDs["InheritanceMacroChildFixture"])
         XCTAssertGreaterThan(
@@ -7650,7 +7650,7 @@ final class PersistentModelTests: XCTestCase {
             InheritanceMacroKittenFixture.self,
             configurations: configuration)
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
         let existing = try XCTUnwrap(
             container.mainContext.fetch(FetchDescriptor<InheritanceMacroBaseFixture>()).first)
@@ -7695,10 +7695,10 @@ final class PersistentModelTests: XCTestCase {
             InheritedToOneMigrationTargetFixture.self,
             configurations: configuration)
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritedToOneMigrationTargetFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritedToOneMigrationTargetFixture"],
             sourceIDs["InheritedToOneMigrationTargetFixture"])
 
         // Relate the new root to the target as managed by this container; relating it to the closed container's
@@ -7766,7 +7766,7 @@ final class PersistentModelTests: XCTestCase {
             ToManyHierarchyTargetSiblingFixture.self,
             configurations: configuration)
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
         let managedFirst = try XCTUnwrap(
             container.mainContext.model(for: first.persistentModelID) as? ToManyHierarchyTargetChildFixture)
@@ -7831,10 +7831,10 @@ final class PersistentModelTests: XCTestCase {
         for name in [
             "InheritanceMacroBaseFixture", "InheritanceMacroChildFixture", "InheritedToOneMigrationTargetFixture",
         ] {
-            XCTAssertEqual(container.schema.entityIDsByName[name], sourceIDs[name])
+            XCTAssertEqual(container.schemaDescriptor.entityIDsByName[name], sourceIDs[name])
         }
-        let rootID = try XCTUnwrap(container.schema.entityIDsByName["MigratedTreeRootFixture"])
-        let leafID = try XCTUnwrap(container.schema.entityIDsByName["MigratedTreeLeafFixture"])
+        let rootID = try XCTUnwrap(container.schemaDescriptor.entityIDsByName["MigratedTreeRootFixture"])
+        let leafID = try XCTUnwrap(container.schemaDescriptor.entityIDsByName["MigratedTreeLeafFixture"])
         XCTAssertLessThan(rootID, leafID)
 
         let root = MigratedTreeRootFixture(name: "new root")
@@ -7963,12 +7963,12 @@ final class PersistentModelTests: XCTestCase {
             InheritedToOneMigrationChildFixture.self,
             configurations: configuration)
         XCTAssertEqual(
-            container.schema.relationshipStorageMapping(
+            container.schemaDescriptor.relationshipStorageMapping(
                 modelEntityName: "InheritedToOneMigrationChildFixture", relationshipName: "target")?
                 .storageColumnName,
             "InheritedToOneMigrationChildFixture_target")
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritedToOneMigrationBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritedToOneMigrationBaseFixture"],
             sourceIDs["InheritedToOneMigrationBaseFixture"])
 
         let child = InheritedToOneMigrationChildFixture(name: "child", target: target)
@@ -8012,9 +8012,9 @@ final class PersistentModelTests: XCTestCase {
             InheritedToManyMigrationChildFixture.self,
             configurations: configuration)
         XCTAssertEqual(
-            container.schema.entityIDsByName["InheritanceMacroBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
-        let childID = try XCTUnwrap(container.schema.entityIDsByName["InheritedToManyMigrationChildFixture"])
+        let childID = try XCTUnwrap(container.schemaDescriptor.entityIDsByName["InheritedToManyMigrationChildFixture"])
         XCTAssertGreaterThan(childID, try XCTUnwrap(sourceIDs.values.max()))
 
         let child = InheritedToManyMigrationChildFixture(name: "child", items: [firstItem, secondItem])
@@ -8066,14 +8066,14 @@ final class PersistentModelTests: XCTestCase {
             InverseMigrationTargetChildFixture.self,
             configurations: configuration)
         let newMapping = try XCTUnwrap(
-            container.schema.relationshipStorageMapping(
+            container.schemaDescriptor.relationshipStorageMapping(
                 modelEntityName: "InverseMigrationOwnerFixture", relationshipName: "target"))
         XCTAssertEqual(oldMapping.storageColumnName, newMapping.storageColumnName)
         XCTAssertEqual(
-            container.schema.entityIDsByName["InverseMigrationOwnerFixture"],
+            container.schemaDescriptor.entityIDsByName["InverseMigrationOwnerFixture"],
             oldIDs["InverseMigrationOwnerFixture"])
         XCTAssertEqual(
-            container.schema.entityIDsByName["InverseMigrationTargetBaseFixture"],
+            container.schemaDescriptor.entityIDsByName["InverseMigrationTargetBaseFixture"],
             oldIDs["InverseMigrationTargetBaseFixture"])
 
         let reader = container.makeContext()

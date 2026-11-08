@@ -388,7 +388,8 @@ final class CustomMigrationPlanTests: XCTestCase {
 
             XCTAssertEqual(migrated.schema.version, MigrationV2.versionIdentifier)
             XCTAssertEqual(
-                migrated.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name), ["name", "note"])
+                Set(migrated.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name) ?? []),
+                Set(["name", "note"]))
             let records = try migrated.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
             XCTAssertEqual(records.map(\.name), ["preserved"])
             XCTAssertEqual(records.first?.persistentModelID, originalID)

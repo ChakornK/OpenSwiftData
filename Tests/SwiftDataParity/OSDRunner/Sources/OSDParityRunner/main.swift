@@ -10,7 +10,6 @@ struct OSDParityRunner {
         let results = try OSDScenarioAdapter.runAll()
         let output = RunnerOutput(
             manifest: RunnerManifest(
-                schemaVersion: 2,
                 implementation: "openswiftdata",
                 gitSHA: ProcessInfo.processInfo.environment["GITHUB_SHA"] ?? "local",
                 scenarios: results.map { $0.id }),

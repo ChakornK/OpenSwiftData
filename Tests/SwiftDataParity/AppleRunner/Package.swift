@@ -23,32 +23,16 @@ let package = Package(
             name: "ParityValidate",
             dependencies: [
                 .product(name: "ParityContracts", package: "contracts"),
-                "ParitySourceDiscovery",
-            ]),
-        .target(
-            name: "ParitySourceDiscovery",
-            dependencies: [
                 .product(name: "SwiftParser", package: "swift-syntax"),
-                .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
             ]),
         .executableTarget(
             name: "ParityCompare",
-            dependencies: [
-                .product(name: "ParityContracts", package: "contracts"),
-                "ParityCompareRuntime",
-            ],
+            dependencies: [.product(name: "ParityContracts", package: "contracts")],
             path: "Sources/ParityCompare"),
-        .target(
-            name: "ParityCompareRuntime",
-            dependencies: [.product(name: "ParityContracts", package: "contracts")]),
         .testTarget(
             name: "ParityToolTests",
-            dependencies: [
-                .product(name: "ParityContracts", package: "contracts"),
-                "ParityCompareRuntime",
-                "ParitySourceDiscovery",
-            ],
+            dependencies: [.product(name: "ParityContracts", package: "contracts")],
             path: "Tests/ParityToolTests"),
     ],
     swiftLanguageModes: [.v6])

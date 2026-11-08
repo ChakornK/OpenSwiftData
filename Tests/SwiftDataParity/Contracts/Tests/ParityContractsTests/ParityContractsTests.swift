@@ -43,76 +43,10 @@ import Testing
         let osd = makeOutput("openswiftdata", [result])
         let apple = makeOutput("apple-swiftdata", [result])
 
-        let comparison = try compare(osd: osd, apple: apple)
+        let comparison = try ParityComparator.compare(osd: osd, apple: apple)
 
         #expect(!comparison.hasUnexpectedDifferences)
         #expect(comparison.differences.isEmpty)
-    }
-
-    @Test func comparatorReportsExplicitNonComparableScenariosWithoutComparingThem() throws {
-        let id = ScenarioID(suite: "FixtureSuite", test: "unobservable selection")
-        let disposition = ScenarioDisposition.nonComparable(
-            reasonCategory: "shim-only-api", rationale: "The Apple wrapper exposes no public selection discriminator.")
-        let result = ScenarioResult(id: id, observations: [], disposition: disposition)
-        let comparison = try compare(
-            osd: makeOutput("openswiftdata", [result]), apple: makeOutput("apple-swiftdata", [result]),
-            expectedDispositions: [id: disposition])
-
-        #expect(comparison.nonComparableScenarios == [id])
-        #expect(comparison.differences.isEmpty)
-        #expect(!comparison.hasUnexpectedDifferences)
-    }
-
-    @Test func comparatorRejectsMismatchedNonComparableDisposition() throws {
-        let id = ScenarioID(suite: "FixtureSuite", test: "unobservable selection")
-        let osdResult = ScenarioResult(
-            id: id, observations: [],
-            disposition: .nonComparable(reasonCategory: "shim-only-api", rationale: "No public discriminator."))
-        let appleResult = ScenarioResult(id: id, observations: [])
-
-        #expect(throws: ComparisonError.dispositionMismatch(id)) {
-            try compare(
-                osd: makeOutput("openswiftdata", [osdResult]),
-                apple: makeOutput("apple-swiftdata", [appleResult]),
-                expectedDispositions: [id: osdResult.disposition])
-        }
-    }
-
-    @Test func comparatorRejectsNonComparableResultsWithObservationsOrNoRationale() throws {
-        let id = ScenarioID(suite: "FixtureSuite", test: "invalid non-comparable")
-        let osdResult = ScenarioResult(
-            id: id,
-            observations: [ParityObservation(step: 0, field: "value", value: .bool(true))],
-            disposition: .nonComparable(reasonCategory: "shim-only-api", rationale: "No public discriminator."))
-        let appleResult = ScenarioResult(id: id, observations: [], disposition: osdResult.disposition)
-        #expect(throws: ComparisonError.invalidNonComparableResult(id)) {
-            try compare(
-                osd: makeOutput("openswiftdata", [osdResult]),
-                apple: makeOutput("apple-swiftdata", [appleResult]),
-                expectedDispositions: [id: osdResult.disposition])
-        }
-
-        let emptyReason = ScenarioResult(
-            id: id, observations: [], disposition: .nonComparable(reasonCategory: "", rationale: " "))
-        #expect(throws: ComparisonError.invalidNonComparableResult(id)) {
-            try compare(
-                osd: makeOutput("openswiftdata", [emptyReason]),
-                apple: makeOutput("apple-swiftdata", [emptyReason]),
-                expectedDispositions: [id: emptyReason.disposition])
-        }
-    }
-
-    @Test func comparatorRejectsUnsupportedRunnerSchemaVersion() throws {
-        let results: [ScenarioResult] = []
-        let osd = RunnerOutput(
-            manifest: RunnerManifest(schemaVersion: 1, implementation: "openswiftdata", gitSHA: "fixture", scenarios: []),
-            results: results)
-        let apple = RunnerOutput(
-            manifest: RunnerManifest(schemaVersion: 1, implementation: "apple-swiftdata", gitSHA: "fixture", scenarios: []),
-            results: results)
-        #expect(throws: ComparisonError.unsupportedRunnerSchemaVersion(1)) {
-            try ParityComparator.compare(osd: osd, apple: apple, expectedDispositions: [:])
-        }
     }
 
     @Test func comparatorCanonicalizesSetsWithoutReorderingArrays() throws {
@@ -130,7 +64,7 @@ import Testing
             ])
         ])
 
-        let comparison = try compare(osd: osd, apple: apple)
+        let comparison = try ParityComparator.compare(osd: osd, apple: apple)
 
         #expect(comparison.differences.map(\.field) == ["array"])
         #expect(comparison.hasUnexpectedDifferences)
@@ -170,108 +104,6 @@ import Testing
         #expect(!ScenarioExpectationValidator.validate(result, against: specification))
     }
 
-    @Test func pendingFetchContractsRegisterFourScalarDeclarations() throws {
-        let specifications = PendingFetchScenarioCatalog.all
-        let contracts = PendingFetchScenarioCatalog.contractsByID
-        let expectedIDs = [
-            "PendingFetchParityTests/a zero fetch limit means no limit",
-            "PendingFetchParityTests/stored rows paginate before pending changes merge",
-            "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory",
-            "PendingFetchParityTests/excluding pending changes returns only stored rows",
-        ]
-
-        #expect(specifications.map(\.id.description) == expectedIDs)
-        #expect(Set(contracts.keys) == Set(expectedIDs))
-        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: contracts.keys))
-        #expect(ParityScenarioCatalog.allContractsByID.count
-            == ParityScenarioCatalog.contractsByID.count
-                + SchemaIntrospectionScenarioCatalog.contractsByID.count
-                + SchemaModelTypesScenarioCatalog.contractsByID.count
-                + StoreIdentifierScenarioCatalog.contractsByID.count
-                + ModelIdentityScenarioCatalog.contractsByID.count
-                + ModelConfigurationScenarioCatalog.contractsByID.count
-                + ModelConfigurationContainerScenarioCatalog.contractsByID.count
-                + PendingFetchScenarioCatalog.contractsByID.count)
-        #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
-        #expect(
-            PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
-                == PendingFetchSpecification.Sort.none)
-        #expect(
-            PendingFetchScenarioCatalog.zeroLimit.expectedObservations.first { $0.field == "identifierCount" }?.value
-                == .integer(4))
-        #expect(PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge.steps.prefix(3).compactMap(\.pendingChange)
-            == [.insert(.init(name: "p1", age: 20)), .updateAge(name: "s1", age: 60), .delete(name: "s2")])
-    }
-
-    @Test func pendingFetchExpectationValidatorRejectsMissingAndDuplicateObservations() throws {
-        let specification = PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge
-        let observations = specification.expectedObservations.map { observation in
-            ParityObservation(step: observation.step, field: observation.field, value: observation.value)
-        }
-        let matching = ScenarioResult(id: specification.id, observations: observations)
-        let missing = ScenarioResult(id: specification.id, observations: Array(observations.dropLast()))
-        let duplicate = ScenarioResult(id: specification.id, observations: observations + [observations[0]])
-        let wrongScenario = ScenarioResult(
-            id: ScenarioID(suite: "OtherSuite", test: "wrong scenario"), observations: observations)
-
-        #expect(PendingFetchExpectationValidator.validate(matching, against: specification))
-        #expect(!PendingFetchExpectationValidator.validate(missing, against: specification))
-        #expect(!PendingFetchExpectationValidator.validate(duplicate, against: specification))
-        #expect(!PendingFetchExpectationValidator.validate(wrongScenario, against: specification))
-    }
-
-    @Test func pendingFetchExpectationValidatorRejectsWrongOperationStepAndValue() throws {
-        let specification = PendingFetchScenarioCatalog.zeroLimit
-        let correct = specification.expectedObservations.map {
-            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
-        }
-        let wrongStep = ScenarioResult(id: specification.id, observations: [
-            ParityObservation(step: 99, field: correct[0].field, value: correct[0].value),
-        ] + Array(correct.dropFirst()))
-        let wrongValue = ScenarioResult(id: specification.id, observations: [
-            ParityObservation(step: correct[0].step, field: correct[0].field, value: .integer(999)),
-        ] + Array(correct.dropFirst()))
-
-        #expect(!PendingFetchExpectationValidator.validate(wrongStep, against: specification))
-        #expect(!PendingFetchExpectationValidator.validate(wrongValue, against: specification))
-    }
-
-    @Test func pendingFetchExpectationValidatorRejectsInvalidObservationSchedules() throws {
-        let specification = PendingFetchScenarioCatalog.zeroLimit
-        let invalid = PendingFetchSpecification(
-            id: specification.id,
-            seedRows: specification.seedRows,
-            steps: Array(specification.steps.dropLast()),
-            expectedObservations: specification.expectedObservations)
-        let result = ScenarioResult(id: invalid.id, observations: specification.expectedObservations.map {
-            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
-        })
-
-        #expect(!invalid.hasValidObservationSchedule)
-        #expect(!PendingFetchExpectationValidator.validate(result, against: invalid))
-    }
-
-    @Test func pendingFetchMatrixEntriesMatchSharedScenarioContracts() throws {
-        let expectedStatuses = Dictionary(uniqueKeysWithValues: PendingFetchScenarioCatalog.all.map {
-            ($0.id.description, "compared")
-        })
-        let entries = PendingFetchScenarioCatalog.all.map { specification in
-            CoverageMatrixEntry(
-                sourceCase: specification.id.description,
-                scenarioIDs: [specification.id.description],
-                outcomes: [specification.id.description: "compared"],
-                observations: [specification.id.description: specification.expectedObservations.map(\.field)])
-        }
-
-        #expect(CoverageMatrixValidator.validate(
-            discovered: Set(expectedStatuses.keys),
-            entries: entries,
-            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
-        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: entries) == Set(expectedStatuses.keys))
-        #expect(CoverageMatrixValidator.sourceCaseCounts(in: entries) == ["compared": 4])
-        #expect(CoverageMatrixValidator.outcomeCounts(in: entries) == ["compared": 4])
-    }
-
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
         let specification = SchemaIntrospectionScenarioCatalog.entitiesByModelType
         let result = ScenarioResult(
@@ -290,9 +122,7 @@ import Testing
                 .union(SchemaIntrospectionScenarioCatalog.contractsByID.keys)
                 .union(SchemaModelTypesScenarioCatalog.contractsByID.keys)
                 .union(StoreIdentifierScenarioCatalog.contractsByID.keys)
-                .union(ModelIdentityScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys))
+                .union(ModelIdentityScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {
@@ -418,199 +248,6 @@ import Testing
             discovered: Set(entries.map(\.sourceCase)),
             entries: entries,
             registry: ParityScenarioCatalog.allContractsByID).isEmpty)
-    }
-
-    @Test func modelConfigurationMatrixEntriesMatchCombinedScenarioRegistry() throws {
-        let regularEntries = ModelConfigurationScenarioCatalog.all.map { specification in
-            CoverageMatrixEntry(
-                sourceCase: specification.id.description,
-                scenarioIDs: [specification.id.description],
-                outcomes: [specification.id.description: "compared"],
-                observations: [specification.id.description: specification.expectedObservations.keys.sorted()])
-        }
-        let containerEntries = ModelConfigurationContainerScenarioCatalog.all.map { specification in
-            CoverageMatrixEntry(
-                sourceCase: specification.id.description,
-                scenarioIDs: [specification.id.description],
-                outcomes: [specification.id.description: "compared"],
-                observations: [specification.id.description: specification.expectedObservations.keys.sorted()])
-        }
-        let validationEntries = [
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/names up to 255 characters validate",
-                scenarioIDs: ["ModelConfigurationParityTests/names up to 255 characters validate"],
-                outcomes: ["ModelConfigurationParityTests/names up to 255 characters validate": "non-comparable"],
-                observations: [:],
-                reasonCategory: "shim-only-api",
-                rationale: "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/reserved characters fail validation",
-                scenarioIDs: ["/", ":", "\\", "*", "?", "<", ">", "|", "\""].map {
-                    "ModelConfigurationParityTests/reserved characters fail validation/\($0.debugDescription)"
-                },
-                outcomes: Dictionary(uniqueKeysWithValues: ["/", ":", "\\", "*", "?", "<", ">", "|", "\""].map {
-                    let id = "ModelConfigurationParityTests/reserved characters fail validation/\($0.debugDescription)"
-                    return (id, "non-comparable")
-                }),
-                observations: [:],
-                reasonCategory: "shim-only-api",
-                rationale: "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/other names validate",
-                scenarioIDs: ["a\0b", "a\nb", "a b", "a~b", "a.b", "a..b", ".", "..", ""].map {
-                    "ModelConfigurationParityTests/other names validate/\($0.debugDescription)"
-                },
-                outcomes: Dictionary(uniqueKeysWithValues: ["a\0b", "a\nb", "a b", "a~b", "a.b", "a..b", ".", "..", ""].map {
-                    let id = "ModelConfigurationParityTests/other names validate/\($0.debugDescription)"
-                    return (id, "non-comparable")
-                }),
-                observations: [:],
-                reasonCategory: "shim-only-api",
-                rationale: "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/explicit URL configurations still validate their names",
-                scenarioIDs: ["ModelConfigurationParityTests/explicit URL configurations still validate their names"],
-                outcomes: ["ModelConfigurationParityTests/explicit URL configurations still validate their names": "non-comparable"],
-                observations: [:],
-                reasonCategory: "shim-only-api",
-                rationale: "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."),
-        ]
-        let selectionSource = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description
-        let selectionIDs = ModelConfigurationScenarioCatalog.nonComparableSelectionIDStrings
-        let selectionEntry = CoverageMatrixEntry(
-            sourceCase: selectionSource,
-            scenarioIDs: [ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description] + selectionIDs,
-            outcomes: Dictionary(uniqueKeysWithValues: [(selectionSource, "compared")] + selectionIDs.map {
-                ($0, "non-comparable")
-            }),
-            observations: [
-                ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description:
-                    ModelConfigurationScenarioCatalog.cloudAndGroupSelections.expectedObservations.keys.sorted()
-            ],
-            reasonCategory: "shim-only-api",
-            rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
-        let entries = regularEntries.filter { $0.sourceCase != selectionSource }
-            + [selectionEntry] + containerEntries + validationEntries
-        let discoveredSourceCases = Set(
-            ModelConfigurationScenarioCatalog.all.map(\.id.description)
-                + [
-                    "ModelConfigurationParityTests/names up to 255 characters validate",
-                    "ModelConfigurationParityTests/reserved characters fail validation",
-                    "ModelConfigurationParityTests/other names validate",
-                    "ModelConfigurationParityTests/explicit URL configurations still validate their names",
-                ]
-                + ModelConfigurationContainerScenarioCatalog.all.map(\.id.description))
-
-        #expect(CoverageMatrixValidator.validate(
-            discovered: discoveredSourceCases,
-            entries: entries,
-            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
-    }
-
-    @Test func modelConfigurationSelectionCasesAreNotCountedAsComparisons() throws {
-        let ids = ModelConfigurationScenarioCatalog.nonComparableSelectionIDs
-        #expect(ids.count == 1)
-        #expect(ids == [ModelConfigurationScenarioCatalog.groupSelectionKind])
-        #expect(Set(ids).count == ids.count)
-        #expect(ids.allSatisfy { ParityScenarioCatalog.allContractsByID[$0.description] == nil })
-        let sourceCase = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description
-        let expectedScenarioIDs = [sourceCase] + ids.map(\.description)
-        let entry = CoverageMatrixEntry(
-            sourceCase: sourceCase,
-            scenarioIDs: expectedScenarioIDs,
-            outcomes: Dictionary(uniqueKeysWithValues: [(sourceCase, "compared")] + ids.map {
-                ($0.description, "non-comparable")
-            }),
-            observations: [sourceCase: ModelConfigurationScenarioCatalog.cloudAndGroupSelections.contract.expectedObservationFields.sorted()],
-            reasonCategory: "shim-only-api",
-            rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
-        #expect(CoverageMatrixValidator.validate(
-            discovered: [sourceCase], entries: [entry], registry: ParityScenarioCatalog.allContractsByID)
-            .isEmpty)
-        #expect(CoverageMatrixValidator.outcomeCounts(in: [entry]) == ["compared": 1, "non-comparable": 1])
-        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: [entry]) == Set(expectedScenarioIDs))
-        #expect(entry.rationale == ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
-    }
-
-    @Test func modelConfigurationSelectionMatrixMatchesRunnerDisposition() throws {
-        let matrixURL = try #require(locateParityMatrix())
-        let matrix = try JSONDecoder().decode(CoverageMatrixFixture.self, from: Data(contentsOf: matrixURL))
-        let sourceCase = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description
-        let entry = try #require(matrix.cases.first { $0.sourceCase == sourceCase })
-
-        #expect(entry.rationale == ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
-        #expect(entry.scenarioIDs == [sourceCase] + ModelConfigurationScenarioCatalog.nonComparableSelectionIDStrings)
-        #expect(entry.outcomes == [
-            sourceCase: "compared",
-            ModelConfigurationScenarioCatalog.groupSelectionKind.description: "non-comparable",
-        ])
-        #expect(entry.observations[sourceCase] == ["selected.cloudIdentifierMatches"])
-    }
-
-    private func locateParityMatrix() -> URL? {
-        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().standardizedFileURL
-        while directory.path != "/" {
-            let candidate = directory.appending(path: "parity-matrix.json")
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-            directory.deleteLastPathComponent()
-        }
-        return nil
-    }
-
-    @Test func modelConfigurationContainerMatrixEntriesMatchCombinedScenarioRegistry() throws {
-        let entries = ModelConfigurationContainerScenarioCatalog.all.map { specification in
-            CoverageMatrixEntry(
-                sourceCase: specification.id.description,
-                scenarioIDs: [specification.id.description],
-                outcomes: [specification.id.description: "compared"],
-                observations: [specification.id.description: specification.expectedObservations.keys.sorted()])
-        }
-
-        #expect(CoverageMatrixValidator.validate(
-            discovered: Set(entries.map(\.sourceCase)),
-            entries: entries,
-            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
-    }
-
-    @Test func modelConfigurationValidationCasesAreExplicitlyNonComparable() throws {
-        let rationale = "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
-        let cases = [
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/names up to 255 characters validate",
-                scenarioIDs: ["ModelConfigurationParityTests/names up to 255 characters validate"],
-                outcomes: ["ModelConfigurationParityTests/names up to 255 characters validate": "non-comparable"],
-                observations: [:], reasonCategory: "shim-only-api", rationale: rationale),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/reserved characters fail validation",
-                scenarioIDs: ["/", ":", "\\", "*", "?", "<", ">", "|", "\""].map {
-                    "ModelConfigurationParityTests/reserved characters fail validation/\($0.debugDescription)"
-                },
-                outcomes: Dictionary(uniqueKeysWithValues: ["/", ":", "\\", "*", "?", "<", ">", "|", "\""].map {
-                    let id = "ModelConfigurationParityTests/reserved characters fail validation/\($0.debugDescription)"
-                    return (id, "non-comparable")
-                }),
-                observations: [:], reasonCategory: "shim-only-api", rationale: rationale),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/other names validate",
-                scenarioIDs: ["a\0b", "a\nb", "a b", "a~b", "a.b", "a..b", ".", "..", ""].map {
-                    "ModelConfigurationParityTests/other names validate/\($0.debugDescription)"
-                },
-                outcomes: Dictionary(uniqueKeysWithValues: ["a\0b", "a\nb", "a b", "a~b", "a.b", "a..b", ".", "..", ""].map {
-                    let id = "ModelConfigurationParityTests/other names validate/\($0.debugDescription)"
-                    return (id, "non-comparable")
-                }),
-                observations: [:], reasonCategory: "shim-only-api", rationale: rationale),
-            CoverageMatrixEntry(
-                sourceCase: "ModelConfigurationParityTests/explicit URL configurations still validate their names",
-                scenarioIDs: ["ModelConfigurationParityTests/explicit URL configurations still validate their names"],
-                outcomes: ["ModelConfigurationParityTests/explicit URL configurations still validate their names": "non-comparable"],
-                observations: [:], reasonCategory: "shim-only-api", rationale: rationale),
-        ]
-
-        #expect(CoverageMatrixValidator.validate(
-            discovered: Set(cases.map(\.sourceCase)), entries: cases, registry: ParityScenarioCatalog.allContractsByID).isEmpty)
-        #expect(CoverageMatrixValidator.outcomeCounts(in: cases)["non-comparable"] == 20)
-        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: cases).isEmpty)
     }
 
     @Test func coverageMatrixValidatorAcceptsScenarioSpecificFieldsForParameterizedCases() throws {
@@ -786,35 +423,6 @@ import Testing
             == ["matrix sourceCase must not be empty"])
     }
 
-    @Test func coverageMatrixValidatorRejectsMalformedScenarioIDsAndAllowsNestedTestNames() throws {
-        let sourceCase = "FixtureSuite/nested case"
-        let malformedIDs = ["missing-separator", "/empty-suite", "FixtureSuite/"]
-        for malformedID in malformedIDs {
-            let entry = CoverageMatrixEntry(
-                sourceCase: sourceCase,
-                scenarioIDs: [malformedID],
-                outcomes: [malformedID: "non-comparable"],
-                observations: [:],
-                reasonCategory: "shim-only-api",
-                rationale: "The scenario cannot be compared.")
-            #expect(CoverageMatrixValidator.validate(
-                discovered: [sourceCase], entries: [entry], registry: [:])
-                == ["\(sourceCase): contains a malformed scenario ID"])
-        }
-
-        let nestedID = "FixtureSuite/nested/test case"
-        let entry = CoverageMatrixEntry(
-            sourceCase: sourceCase,
-            scenarioIDs: [nestedID],
-            outcomes: [nestedID: "non-comparable"],
-            observations: [:],
-            reasonCategory: "shim-only-api",
-            rationale: "The scenario cannot be compared.")
-        #expect(CoverageMatrixValidator.validate(
-            discovered: [sourceCase], entries: [entry], registry: [:]).isEmpty)
-        #expect(ScenarioID(description: nestedID) == ScenarioID(suite: "FixtureSuite", test: "nested/test case"))
-    }
-
     @Test func coverageMatrixValidatorRejectsUnsupportedSchemaVersion() throws {
         let sourceCase = "StringPredicateParityTests/string isEmpty"
 
@@ -844,90 +452,6 @@ import Testing
         #expect(entry.sourceStatus == "divergent")
     }
 
-    @Test func partialCoverageKeepsMappedOutcomesSeparateFromPendingSourceCases() throws {
-        let scenario = ParityScenarioCatalog.stringIsEmptyPending
-        let mappedSourceCase = "StringPredicateParityTests/string isEmpty"
-        let pendingSourceCase = "StringPredicateParityTests/unmapped declaration"
-        let entry = CoverageMatrixEntry(
-            sourceCase: mappedSourceCase,
-            scenarioIDs: [scenario.id.description],
-            outcomes: [scenario.id.description: "compared"],
-            observations: [scenario.id.description: Array(scenario.expectedObservations.keys)])
-        let discovered = Set([mappedSourceCase, pendingSourceCase])
-        let report = CoverageValidationReport(
-            discoveredCaseCount: discovered.count,
-            coverageValid: true,
-            mappedSourceCaseCount: 1,
-            declaredComparedSourceCaseCount: 1,
-            declaredDivergentSourceCaseCount: 0,
-            declaredNonComparableSourceCaseCount: 0,
-            declaredComparedScenarioCount: 1,
-            declaredDivergentScenarioCount: 0,
-            declaredNonComparableScenarioCount: 0,
-            discoveredCases: discovered.sorted(),
-            pendingCases: [pendingSourceCase],
-            validationIssues: [])
-
-        #expect(CoverageMatrixValidator.validate(
-            discovered: [mappedSourceCase], entries: [entry], registry: ParityScenarioCatalog.contractsByID).isEmpty)
-        #expect(CoverageMatrixValidator.sourceCaseCounts(in: [entry]) == ["compared": 1])
-        #expect(CoverageMatrixValidator.outcomeCounts(in: [entry]) == ["compared": 1])
-        #expect(discovered.subtracting([entry.sourceCase]).sorted() == [pendingSourceCase])
-        #expect(report.isConsistent(with: [entry]))
-        #expect(!report.hasCompleteCoverage)
-        #expect(report.hasValidMatrix(
-            entries: [entry], registry: ParityScenarioCatalog.allContractsByID))
-        let encodedReport = try CanonicalJSON.encode(report)
-        #expect(try JSONDecoder().decode(CoverageValidationReport.self, from: encodedReport) == report)
-        #expect(CoverageMatrixValidator.validate(
-            discovered: discovered, entries: [entry], registry: ParityScenarioCatalog.contractsByID)
-            == ["\(pendingSourceCase): expected exactly one matrix record"])
-
-        let inconsistentReport = CoverageValidationReport(
-            discoveredCaseCount: report.discoveredCaseCount,
-            coverageValid: report.coverageValid,
-            mappedSourceCaseCount: report.mappedSourceCaseCount,
-            declaredComparedSourceCaseCount: report.declaredComparedSourceCaseCount,
-            declaredDivergentSourceCaseCount: report.declaredDivergentSourceCaseCount,
-            declaredNonComparableSourceCaseCount: report.declaredNonComparableSourceCaseCount,
-            declaredComparedScenarioCount: 2,
-            declaredDivergentScenarioCount: 0,
-            declaredNonComparableScenarioCount: 0,
-            discoveredCases: report.discoveredCases,
-            pendingCases: report.pendingCases,
-            validationIssues: report.validationIssues)
-        #expect(!inconsistentReport.isConsistent(with: [entry]))
-
-        let invalidEntry = CoverageMatrixEntry(
-            sourceCase: mappedSourceCase,
-            scenarioIDs: [scenario.id.description],
-            outcomes: [scenario.id.description: "compared"],
-            observations: [scenario.id.description: ["unexpected.field"]])
-        let structuralIssues = CoverageMatrixValidator.validate(
-            discovered: [mappedSourceCase],
-            entries: [invalidEntry],
-            registry: ParityScenarioCatalog.allContractsByID)
-        let invalidReport = CoverageValidationReport(
-            discoveredCaseCount: 1,
-            coverageValid: false,
-            mappedSourceCaseCount: 1,
-            declaredComparedSourceCaseCount: 1,
-            declaredDivergentSourceCaseCount: 0,
-            declaredNonComparableSourceCaseCount: 0,
-            declaredComparedScenarioCount: 1,
-            declaredDivergentScenarioCount: 0,
-            declaredNonComparableScenarioCount: 0,
-            discoveredCases: [mappedSourceCase],
-            pendingCases: [],
-            validationIssues: structuralIssues)
-        #expect(invalidReport.isConsistent(with: [invalidEntry]))
-        #expect(!invalidReport.hasValidMatrix(
-            entries: [invalidEntry], registry: ParityScenarioCatalog.allContractsByID))
-        #expect(try JSONDecoder().decode(
-            CoverageValidationReport.self,
-            from: CanonicalJSON.encode(invalidReport)) == invalidReport)
-    }
-
     @Test func coverageSourceCountsDeduplicateAndOmitConflictingDuplicateRows() throws {
         let scenario = ParityScenarioCatalog.stringIsEmptyPending
         let sourceCase = "StringPredicateParityTests/string isEmpty"
@@ -951,7 +475,7 @@ import Testing
         let id = ScenarioID(suite: "FixtureSuite", test: "fixture")
         let output = makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])])
         #expect(throws: ComparisonError.unexpectedImplementation("apple", "openswiftdata")) {
-            try compare(osd: output, apple: output)
+            try ParityComparator.compare(osd: output, apple: output)
         }
     }
 
@@ -959,9 +483,9 @@ import Testing
         let id = ScenarioID(suite: "FixtureSuite", test: "fixture")
         let osd = makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])])
         let apple = makeOutput("apple-swiftdata", [])
-        #expect(throws: ComparisonError.dispositionScenarioMismatch("Apple")) {
-            try compare(osd: osd, apple: apple)
-        }
+        let comparison = try ParityComparator.compare(osd: osd, apple: apple)
+        #expect(comparison.missingAppleScenarios == [id])
+        #expect(comparison.hasUnexpectedDifferences)
 
         let unusedEntry = AllowedDifference(
             scenarioID: id,
@@ -971,29 +495,8 @@ import Testing
             reason: "stale fixture",
             issueURL: URL(string: "https://example.invalid/issues/1")!,
             expiration: "2099-01-01")
-        let completeApple = makeOutput("apple-swiftdata", [ScenarioResult(id: id, observations: [])])
         #expect(throws: ComparisonError.unreferencedAllowlist(["FixtureSuite/fixture#unused"])) {
-            try compare(osd: osd, apple: completeApple, allowedDifferences: [unusedEntry])
-        }
-    }
-
-    @Test func comparatorRejectsUnexpectedRunnerScenarios() throws {
-        let expectedID = ScenarioID(suite: "FixtureSuite", test: "expected")
-        let extraID = ScenarioID(suite: "FixtureSuite", test: "unexpected")
-        let osd = makeOutput("openswiftdata", [
-            ScenarioResult(id: expectedID, observations: []),
-            ScenarioResult(id: extraID, observations: []),
-        ])
-        let apple = makeOutput("apple-swiftdata", [
-            ScenarioResult(id: expectedID, observations: []),
-            ScenarioResult(id: extraID, observations: []),
-        ])
-
-        #expect(throws: ComparisonError.dispositionScenarioMismatch("OSD")) {
-            try ParityComparator.compare(
-                osd: osd,
-                apple: apple,
-                expectedDispositions: [expectedID: .observed])
+            try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: [unusedEntry])
         }
     }
 
@@ -1014,7 +517,7 @@ import Testing
             issueURL: URL(string: "https://example.invalid/issues/2")!,
             expiration: "2000-01-01")
         #expect(throws: ComparisonError.expiredAllowlist("FixtureSuite/fixture#value", "2000-01-01")) {
-            try compare(osd: osd, apple: apple, allowedDifferences: [expired])
+            try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: [expired])
         }
     }
 
@@ -1037,7 +540,7 @@ import Testing
             issueURL: URL(string: "https://example.invalid/issues/4")!,
             expiration: "2099-01-01")
 
-        let comparison = try compare(osd: osd, apple: apple, allowedDifferences: [allowance])
+        let comparison = try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: [allowance])
         #expect(!comparison.hasUnexpectedDifferences)
         #expect(comparison.differences.map(\.isAllowed) == [true])
 
@@ -1046,7 +549,7 @@ import Testing
                 id: id,
                 observations: [ParityObservation(step: 0, field: "saved.names", value: .array([.string("alpha")]))])
         ])
-        let changedOSDComparison = try compare(
+        let changedOSDComparison = try ParityComparator.compare(
             osd: changedOSD, apple: apple, allowedDifferences: [allowance])
         #expect(changedOSDComparison.hasUnexpectedDifferences)
         #expect(changedOSDComparison.differences.map(\.isAllowed) == [false])
@@ -1056,7 +559,7 @@ import Testing
                 id: id,
                 observations: [ParityObservation(step: 0, field: "saved.names", value: .array([.string("gamma")]))])
         ])
-        let changedAppleComparison = try compare(
+        let changedAppleComparison = try ParityComparator.compare(
             osd: osd, apple: changedApple, allowedDifferences: [allowance])
         #expect(changedAppleComparison.hasUnexpectedDifferences)
         #expect(changedAppleComparison.differences.map(\.isAllowed) == [false])
@@ -1065,7 +568,7 @@ import Testing
             ScenarioResult(id: id, observations: [ParityObservation(step: 0, field: "saved.names", value: appleValue)])
         ])
         #expect(throws: ComparisonError.unreferencedAllowlist(["FixtureSuite/expected divergence#saved.names"])) {
-            try compare(osd: equalValues, apple: apple, allowedDifferences: [allowance])
+            try ParityComparator.compare(osd: equalValues, apple: apple, allowedDifferences: [allowance])
         }
     }
 
@@ -1081,7 +584,7 @@ import Testing
             expiration: "2099-01-01")
 
         #expect(throws: ComparisonError.invalidAllowlist("\(id)#value")) {
-            try compare(
+            try ParityComparator.compare(
                 osd: makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])]),
                 apple: makeOutput("apple-swiftdata", [ScenarioResult(id: id, observations: [])]),
                 allowedDifferences: [allowance])
@@ -1093,22 +596,4 @@ import Testing
             manifest: RunnerManifest(implementation: implementation, gitSHA: "fixture", scenarios: results.map(\.id)),
             results: results)
     }
-
-    private func compare(
-        osd: RunnerOutput,
-        apple: RunnerOutput,
-        expectedDispositions explicit: [ScenarioID: ScenarioDisposition] = [:],
-        allowedDifferences: [AllowedDifference] = []
-    ) throws -> ParityComparison {
-        let ids = Set(osd.results.map(\.id)).union(apple.results.map(\.id))
-        let dispositions = Dictionary(uniqueKeysWithValues: ids.map { id in
-            (id, explicit[id] ?? .observed)
-        })
-        return try ParityComparator.compare(
-            osd: osd, apple: apple, expectedDispositions: dispositions, allowedDifferences: allowedDifferences)
-    }
-}
-
-private struct CoverageMatrixFixture: Decodable {
-    let cases: [CoverageMatrixEntry]
 }

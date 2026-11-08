@@ -1,4 +1,4 @@
-import OpenSwiftData
+@testable import OpenSwiftData
 import Testing
 
 @Model
@@ -204,6 +204,53 @@ private struct CanonicalSourceShapeSnapshot: DataStoreSnapshot {
     func copy(persistentIdentifier: PersistentIdentifier, remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?) -> Self {
         Self(
             persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+}
+
+private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let payload: String
+
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier
+        case entityName
+        case relationships
+        case payload
+    }
+
+    var persistedValues: [String: DataStoreSnapshotValue] { ["title": .text("provider value")] }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        payload = "codable value"
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        persistedValues: [String: DataStoreSnapshotValue],
+        relationships: [String: [PersistentIdentifier]]
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        payload = persistedValues["title"].flatMap { if case let .text(value) = $0 { value } else { nil } } ?? ""
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            persistedValues: persistedValues,
             relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
     }
 }
@@ -644,6 +691,46 @@ struct AppleDataStoreAPITests {
         let fetched = try #require(container.makeContext().fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
         #expect(fetched.title == "base protocol only")
         #expect(fetched.related?.value == 88)
+    }
+
+    @Test
+    func codableConventionRejectsRenamedKeysAndWrongTypes() throws {
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: ["persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture", "relationships": [:], "payload": "renamed"],
+                entity: entity)
+        }
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: ["persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture", "relationships": [:], "title": 42],
+                entity: entity)
+        }
+    }
+
+    @Test
+    func snapshotProviderTakesPrecedenceOverCodableLayout() throws {
+        let identifier = PersistentIdentifier(
+            storeIdentifier: "provider.precedence", entityName: "AppleStoreFixture", primaryKey: 1)
+        let snapshot = ProviderPrecedenceSnapshot(
+            persistentIdentifier: identifier,
+            entityName: "AppleStoreFixture",
+            persistedValues: ["title": .text("provider value")],
+            relationships: [:])
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture",
+                    "relationships": [:], "payload": "codable value",
+                ], entity: entity)
+        }
+        #expect(try materializeSnapshotValues(from: snapshot, entity: entity)["title"] == .text("provider value"))
     }
 
     @MainActor

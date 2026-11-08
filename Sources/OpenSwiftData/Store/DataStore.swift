@@ -217,6 +217,22 @@ public enum DataStoreSnapshotValue: Sendable, Equatable, Codable {
     }
 }
 
+package enum SnapshotMaterializationError: Error, Equatable, CustomStringConvertible {
+    case encodingFailed(String)
+    case unsupportedLayout(entity: String, missingKeys: [String], extraKeys: [String])
+    case typeMismatch(entity: String, key: String, expectedType: String)
+
+    package var description: String {
+        switch self {
+        case let .encodingFailed(message): "Snapshot encoding failed: \(message)"
+        case let .unsupportedLayout(entity, missing, extra):
+            "Snapshot layout for '\(entity)' is unsupported (missing keys: \(missing), extra keys: \(extra))."
+        case let .typeMismatch(entity, key, expectedType):
+            "Snapshot value '\(entity).\(key)' does not match declared type '\(expectedType)'."
+        }
+    }
+}
+
 /// A typed fetch request for a custom store.
 public struct DataStoreFetchRequest<Model: PersistentModel> {
     public let descriptor: FetchDescriptor<Model>
@@ -334,29 +350,29 @@ private func decodeSnapshot<Snapshot: DataStoreSnapshot>(_ type: Snapshot.Type, 
         return try JSONDecoder().decode(type, from: data)
     } catch {
         throw SwiftDataError.unsupportedStore(
-            "The custom snapshot Codable layout must use top-level persistentIdentifier, entityName, relationships, and model attribute keys: \(error)")
+            SnapshotMaterializationError.encodingFailed(String(describing: error)).description)
     }
 }
 
-private func storedValue(from json: Any, type: String) throws -> StoredValue {
+private func storedValue(from json: Any, entity: String, key: String, type: String) throws -> StoredValue {
     let typeName = type.split(separator: ".").last.map(String.init) ?? type
     let integerTypes: Set<String> = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64"]
     if json is NSNull { return .null }
     if let number = json as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
         guard typeName == "Bool" else {
-            throw SwiftDataError.unsupportedStore("Snapshot value does not match declared type '\(type)'.")
+            throw SnapshotMaterializationError.typeMismatch(entity: entity, key: key, expectedType: type)
         }
         return .int(number.boolValue ? 1 : 0)
     }
     if let string = json as? String {
         if typeName == "Data" {
             guard let bytes = Data(base64Encoded: string) else {
-                throw SwiftDataError.unsupportedStore("Snapshot Data value is not base64 encoded.")
+                throw SnapshotMaterializationError.typeMismatch(entity: entity, key: key, expectedType: type)
             }
             return .blob(Array(bytes))
         }
         guard ["String", "URL", "UUID", "Date", "Decimal"].contains(typeName) else {
-            throw SwiftDataError.unsupportedStore("Snapshot string does not match declared type '\(type)'.")
+            throw SnapshotMaterializationError.typeMismatch(entity: entity, key: key, expectedType: type)
         }
         if typeName == "UUID", let uuid = UUID(uuidString: string) {
             return .blob(withUnsafeBytes(of: uuid.uuid) { Array($0) })
@@ -368,15 +384,75 @@ private func storedValue(from json: Any, type: String) throws -> StoredValue {
             return .double(number.doubleValue)
         }
         guard integerTypes.contains(typeName), let integer = Int64(number.stringValue) else {
-            throw SwiftDataError.unsupportedStore("Snapshot number does not match declared type '\(type)'.")
+            throw SnapshotMaterializationError.typeMismatch(entity: entity, key: key, expectedType: type)
         }
         return .int(integer)
     }
     if !(json is [String: Any]) && !(json is [Any]) {
-        throw SwiftDataError.unsupportedStore("Unsupported JSON value for declared type '\(type)'.")
+        throw SnapshotMaterializationError.typeMismatch(entity: entity, key: key, expectedType: type)
     }
     let data = try JSONSerialization.data(withJSONObject: json, options: [.fragmentsAllowed, .sortedKeys])
     return .blob(Array(data))
+}
+
+package func projectSnapshotValues(
+    from object: [String: Any], entity: SchemaDescriptor.Entity
+) throws -> [String: StoredValue] {
+    let expectedKeys = Set(
+        ["persistentIdentifier", "entityName", "relationships"]
+            + entity.attributes.flatMap { attribute in
+                attribute.options.contains(.flattened)
+                    ? attribute.components.map(\.columnName)
+                    : [attribute.name]
+            })
+    guard Set(object.keys) == expectedKeys else {
+        throw SnapshotMaterializationError.unsupportedLayout(
+            entity: entity.name,
+            missingKeys: expectedKeys.subtracting(object.keys).sorted(),
+            extraKeys: Set(object.keys).subtracting(expectedKeys).sorted())
+    }
+    var values: [String: StoredValue] = [:]
+    for attribute in entity.attributes {
+        if attribute.options.contains(.flattened) {
+            for component in attribute.components {
+                guard let json = object[component.columnName] else {
+                    throw SnapshotMaterializationError.unsupportedLayout(
+                        entity: entity.name, missingKeys: [component.columnName], extraKeys: [])
+                }
+                values[component.columnName] = try storedValue(
+                    from: json, entity: entity.name, key: component.columnName, type: component.type)
+            }
+        } else {
+            guard let json = object[attribute.name] else {
+                throw SnapshotMaterializationError.unsupportedLayout(
+                    entity: entity.name, missingKeys: [attribute.name], extraKeys: [])
+            }
+            values[attribute.name] = try storedValue(
+                from: json, entity: entity.name, key: attribute.name, type: attribute.type)
+        }
+    }
+    return values
+}
+
+package func materializeSnapshotValues(
+    from snapshot: any DataStoreSnapshot,
+    entity: SchemaDescriptor.Entity
+) throws -> [String: StoredValue] {
+    if let valueSnapshot = snapshot as? any DataStoreSnapshotValueProviding {
+        return valueSnapshot.persistedValues.mapValues(\.storedValue)
+    }
+    do {
+        let data = try JSONEncoder().encode(snapshot)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SnapshotMaterializationError.unsupportedLayout(
+                entity: entity.name, missingKeys: [], extraKeys: [])
+        }
+        return try projectSnapshotValues(from: object, entity: entity)
+    } catch let error as SnapshotMaterializationError {
+        throw error
+    } catch {
+        throw SnapshotMaterializationError.encodingFailed(String(describing: error))
+    }
 }
 
 private func snapshotJSON(_ snapshot: OpenSwiftDataDataStoreSnapshot) throws -> Data {
@@ -503,55 +579,20 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         guard let identity = snapshot as? Store.Snapshot else {
             throw SwiftDataError.unsupportedStore("Canonical snapshot type mismatch.")
         }
-        if let valueSnapshot = identity as? any DataStoreSnapshotValueProviding {
-            return OpenSwiftDataDataStoreSnapshot(
-                persistentIdentifier: identity.persistentIdentifier,
-                entityName: identity.entityName,
-                values: valueSnapshot.persistedValues.mapValues(\.storedValue),
-                relationships: identity.relationships)
+        guard let entity = descriptor.entity(forName: identity.entityName) else {
+            throw SwiftDataError.unsupportedStore("Canonical snapshot refers to unknown entity '\(identity.entityName)'.")
         }
-        let data = try JSONEncoder().encode(identity)
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let entity = descriptor.entity(forName: identity.entityName)
-        else { throw unsupportedSnapshotLayout(entity: identity.entityName, property: nil) }
-        let expectedKeys = Set(
-            ["persistentIdentifier", "entityName", "relationships"]
-                + entity.attributes.flatMap { attribute in
-                    attribute.options.contains(.flattened)
-                        ? attribute.components.map(\.columnName)
-                        : [attribute.name]
-                })
-        guard Set(object.keys) == expectedKeys else {
-            throw SwiftDataError.unsupportedStore(
-                "The custom snapshot Codable layout for '\(entity.name)' must contain exactly the reserved keys and schema attribute keys.")
-        }
-        var values: [String: StoredValue] = [:]
-        for attribute in entity.attributes {
-            if attribute.options.contains(.flattened) {
-                for component in attribute.components {
-                    guard let json = object[component.columnName] else {
-                        throw unsupportedSnapshotLayout(entity: entity.name, property: component.columnName)
-                    }
-                    values[component.columnName] = try storedValue(from: json, type: component.type)
-                }
-            } else {
-                guard let json = object[attribute.name] else {
-                    throw unsupportedSnapshotLayout(entity: entity.name, property: attribute.name)
-                }
-                values[attribute.name] = try storedValue(from: json, type: attribute.type)
-            }
+        let values: [String: StoredValue]
+        do {
+            values = try materializeSnapshotValues(from: identity, entity: entity)
+        } catch let error as SnapshotMaterializationError {
+            throw SwiftDataError.unsupportedStore(error.description)
         }
         return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identity.persistentIdentifier,
             entityName: identity.entityName,
             values: values,
             relationships: identity.relationships)
-    }
-
-    private func unsupportedSnapshotLayout(entity: String, property: String?) -> SwiftDataError {
-        SwiftDataError.unsupportedStore(
-            "The custom snapshot Codable representation for '\(entity)' must use top-level model attribute keys"
-                + (property.map { "; missing '\($0)'" } ?? "."))
     }
 
 }

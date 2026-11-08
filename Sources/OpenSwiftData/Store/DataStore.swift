@@ -326,7 +326,15 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
         if let snapshotType = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotValueProviding.Type {
             return makeSnapshotValue(snapshot, as: snapshotType)
         }
-        let decoded = try decodeSnapshot(Configuration.StoreType.Snapshot.self, from: snapshotJSON(snapshot))
+        let encoded: Data
+        do {
+            encoded = try snapshotJSON(snapshot)
+        } catch {
+            throw SwiftDataError.unsupportedStore(
+                SnapshotMaterializationError.encodingFailed(String(describing: error)).description)
+        }
+        let decoded = try decodeSnapshot(
+            Configuration.StoreType.Snapshot.self, from: encoded, entity: snapshot.entityName)
         return decoded.copy(persistentIdentifier: snapshot.persistentIdentifier, remappedIdentifiers: nil)
     }
     return CanonicalDataStoreAdapter(
@@ -345,12 +353,29 @@ private func makeSnapshotValue(
         relationships: snapshot.relationships)
 }
 
-private func decodeSnapshot<Snapshot: DataStoreSnapshot>(_ type: Snapshot.Type, from data: Data) throws -> Snapshot {
+private func decodeSnapshot<Snapshot: DataStoreSnapshot>(
+    _ type: Snapshot.Type, from data: Data, entity: String
+) throws -> Snapshot {
     do {
         return try JSONDecoder().decode(type, from: data)
     } catch {
+        if var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let reservedKeys: Set<String> = ["persistentIdentifier", "entityName", "relationships", "values"]
+            let valueKeys = object.keys.filter { !reservedKeys.contains($0) }
+            if !object.keys.contains("values") {
+                var values: [String: Any] = [:]
+                for key in valueKeys { values[key] = object.removeValue(forKey: key) }
+                object["values"] = values
+                if let nestedData = try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]) {
+                    if let decoded = try? JSONDecoder().decode(type, from: nestedData) { return decoded }
+                }
+                throw SwiftDataError.unsupportedStore(
+                    SnapshotMaterializationError.unsupportedLayout(
+                        entity: entity, missingKeys: [], extraKeys: valueKeys.sorted()).description)
+            }
+        }
         throw SwiftDataError.unsupportedStore(
-            SnapshotMaterializationError.encodingFailed(String(describing: error)).description)
+            SnapshotMaterializationError.unsupportedLayout(entity: entity, missingKeys: [], extraKeys: []).description)
     }
 }
 
@@ -398,40 +423,49 @@ private func storedValue(from json: Any, entity: String, key: String, type: Stri
 package func projectSnapshotValues(
     from object: [String: Any], entity: SchemaDescriptor.Entity
 ) throws -> [String: StoredValue] {
-    let expectedKeys = Set(
-        ["persistentIdentifier", "entityName", "relationships"]
-            + entity.attributes.flatMap { attribute in
-                attribute.options.contains(.flattened)
-                    ? attribute.components.map(\.columnName)
-                    : [attribute.name]
-            })
-    guard Set(object.keys) == expectedKeys else {
+    let reservedKeys: Set<String> = ["persistentIdentifier", "entityName", "relationships"]
+    let attributeKeys = Set(
+        entity.attributes.flatMap { attribute in
+            attribute.options.contains(.flattened)
+                ? attribute.components.map(\.columnName)
+                : [attribute.name]
+        })
+    let topLevelKeys = reservedKeys.union(attributeKeys)
+    let valueContainerKeys = reservedKeys.union(["values"])
+    let values: [String: Any]
+    if Set(object.keys) == topLevelKeys {
+        values = object
+    } else if Set(object.keys) == valueContainerKeys, let nested = object["values"] as? [String: Any],
+        Set(nested.keys) == attributeKeys
+    {
+        values = nested
+    } else {
         throw SnapshotMaterializationError.unsupportedLayout(
             entity: entity.name,
-            missingKeys: expectedKeys.subtracting(object.keys).sorted(),
-            extraKeys: Set(object.keys).subtracting(expectedKeys).sorted())
+            missingKeys: topLevelKeys.subtracting(object.keys).sorted(),
+            extraKeys: Set(object.keys).subtracting(topLevelKeys).sorted())
     }
-    var values: [String: StoredValue] = [:]
+    var storedValues: [String: StoredValue] = [:]
     for attribute in entity.attributes {
         if attribute.options.contains(.flattened) {
             for component in attribute.components {
-                guard let json = object[component.columnName] else {
+                guard let json = values[component.columnName] else {
                     throw SnapshotMaterializationError.unsupportedLayout(
                         entity: entity.name, missingKeys: [component.columnName], extraKeys: [])
                 }
-                values[component.columnName] = try storedValue(
+                storedValues[component.columnName] = try storedValue(
                     from: json, entity: entity.name, key: component.columnName, type: component.type)
             }
         } else {
-            guard let json = object[attribute.name] else {
+            guard let json = values[attribute.name] else {
                 throw SnapshotMaterializationError.unsupportedLayout(
                     entity: entity.name, missingKeys: [attribute.name], extraKeys: [])
             }
-            values[attribute.name] = try storedValue(
+            storedValues[attribute.name] = try storedValue(
                 from: json, entity: entity.name, key: attribute.name, type: attribute.type)
         }
     }
-    return values
+    return storedValues
 }
 
 package func materializeSnapshotValues(

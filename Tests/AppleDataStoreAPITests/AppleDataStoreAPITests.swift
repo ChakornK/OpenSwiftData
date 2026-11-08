@@ -304,6 +304,14 @@ private struct CodableConventionSnapshot: DataStoreSnapshot {
     let title: String?
     let value: Int64?
 
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier, entityName, relationships, values
+    }
+
+    private enum ValueKeys: String, CodingKey {
+        case title, value
+    }
+
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
@@ -325,6 +333,26 @@ private struct CodableConventionSnapshot: DataStoreSnapshot {
         relationships = [:]
         title = nil
         value = nil
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        persistentIdentifier = try container.decode(PersistentIdentifier.self, forKey: .persistentIdentifier)
+        entityName = try container.decode(String.self, forKey: .entityName)
+        relationships = try container.decode([String: [PersistentIdentifier]].self, forKey: .relationships)
+        let values = try container.nestedContainer(keyedBy: ValueKeys.self, forKey: .values)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        value = try values.decodeIfPresent(Int64.self, forKey: .value)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(persistentIdentifier, forKey: .persistentIdentifier)
+        try container.encode(entityName, forKey: .entityName)
+        try container.encode(relationships, forKey: .relationships)
+        var values = container.nestedContainer(keyedBy: ValueKeys.self, forKey: .values)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encodeIfPresent(value, forKey: .value)
     }
 
     func copy(

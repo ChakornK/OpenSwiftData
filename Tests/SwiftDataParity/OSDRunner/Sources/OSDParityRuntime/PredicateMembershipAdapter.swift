@@ -142,8 +142,9 @@ public enum OSDScenarioAdapter {
         let configurationResults = OSDModelConfigurationAdapter.runAll()
         let configurationContainerResults = try OSDModelConfigurationContainerAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
+        let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults + pendingFetchResults)
+            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults)
             .sorted { $0.id.description < $1.id.description }
     }
 

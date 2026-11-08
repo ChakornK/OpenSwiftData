@@ -7,11 +7,13 @@ import Testing
     @Test func predicateMembershipMatchesSharedExpectations() throws {
         let results = try OSDScenarioAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
+        let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
             + ModelConfigurationContainerScenarioCatalog.all.map(\.id)
             + PendingFetchScenarioCatalog.all.map(\.id)
+            + BatchFetchScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -48,6 +50,13 @@ import Testing
             #expect(result.observations.map(\.field) == specification.expectedObservations.map(\.field))
             let directResult = try #require(pendingFetchResults.first { $0.id == specification.id })
             #expect(directResult == result)
+        }
+        #expect(batchFetchResults.map(\.id) == BatchFetchScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in BatchFetchScenarioCatalog.all {
+            let result = try #require(batchFetchResults.first { $0.id == specification.id })
+            #expect(BatchFetchExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

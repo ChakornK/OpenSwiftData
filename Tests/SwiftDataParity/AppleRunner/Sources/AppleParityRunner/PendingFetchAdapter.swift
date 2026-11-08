@@ -1,3 +1,4 @@
+import Foundation
 import ParityContracts
 import SwiftData
 
@@ -85,15 +86,16 @@ enum ApplePendingFetchAdapter {
         in context: ModelContext,
         step: Int
     ) throws -> ParityObservation {
-        let predicate: Predicate<ApplePendingFetchScenarioRow>? = switch query.predicate {
-        case .none:
-            nil
-        case let .lessThan(age):
-            let age = Int(age)
-            #Predicate { $0.age < age }
-        case let .greaterThan(age):
-            let age = Int(age)
-            #Predicate { $0.age > age }
+        let predicate: Predicate<ApplePendingFetchScenarioRow>?
+        switch query.predicate {
+        case nil:
+            predicate = nil
+        case let .some(.lessThan(value)):
+            let age = Int(value)
+            predicate = #Predicate { $0.age < age }
+        case let .some(.greaterThan(value)):
+            let age = Int(value)
+            predicate = #Predicate { $0.age > age }
         }
         let sort: [SortDescriptor<ApplePendingFetchScenarioRow>] = switch query.sort {
         case .none:

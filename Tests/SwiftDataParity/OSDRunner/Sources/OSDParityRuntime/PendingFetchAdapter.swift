@@ -83,15 +83,16 @@ public enum OSDPendingFetchAdapter {
         in context: ModelContext,
         step: Int
     ) throws -> ParityObservation {
-        let predicate: Predicate<PendingFetchScenarioRow>? = switch query.predicate {
-        case .none:
-            nil
-        case let .lessThan(age):
-            let age = Int(age)
-            #Predicate { $0.age < age }
-        case let .greaterThan(age):
-            let age = Int(age)
-            #Predicate { $0.age > age }
+        let predicate: Predicate<PendingFetchScenarioRow>?
+        switch query.predicate {
+        case nil:
+            predicate = nil
+        case let .some(.lessThan(value)):
+            let age = Int(value)
+            predicate = #Predicate { $0.age < age }
+        case let .some(.greaterThan(value)):
+            let age = Int(value)
+            predicate = #Predicate { $0.age > age }
         }
         let sort: [SortDescriptor<PendingFetchScenarioRow>] = switch query.sort {
         case .none:

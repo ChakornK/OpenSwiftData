@@ -191,7 +191,8 @@ import Testing
                 + ModelIdentityScenarioCatalog.contractsByID.count
                 + ModelConfigurationScenarioCatalog.contractsByID.count
                 + ModelConfigurationContainerScenarioCatalog.contractsByID.count
-                + PendingFetchScenarioCatalog.contractsByID.count)
+                + PendingFetchScenarioCatalog.contractsByID.count
+                + BatchFetchScenarioCatalog.contractsByID.count)
         #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
         #expect(
             PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
@@ -272,6 +273,54 @@ import Testing
         #expect(CoverageMatrixValidator.outcomeCounts(in: entries) == ["compared": 4])
     }
 
+    @Test func batchFetchContractsRegisterAllScenariosAndArguments() throws {
+        let specifications = BatchFetchScenarioCatalog.all
+        let ids = specifications.map(\.id.description)
+        #expect(ids.count == 10)
+        #expect(ids.filter { $0.contains("any batch size returns every result/") }.count == 4)
+        #expect(Set(ids).count == ids.count)
+        #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: ids))
+        #expect(BatchFetchScenarioCatalog.batchedResultsExcludePendingInsertionsAndKeepSnapshot.expectedObservations
+            .map(\.value) == [.integer(7), .integer(7), .integer(7)])
+    }
+
+    @Test func batchFetchExpectationValidatorRejectsMissingAndWrongObservations() throws {
+        let specification = BatchFetchScenarioCatalog.randomAccessFetchOrder
+        let matching = ScenarioResult(id: specification.id, observations: specification.expectedObservations.map {
+            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
+        })
+        let missing = ScenarioResult(id: specification.id, observations: [])
+        let wrong = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "collection.values", value: .array([.integer(0)])),
+        ])
+        #expect(BatchFetchExpectationValidator.validate(matching, against: specification))
+        #expect(!BatchFetchExpectationValidator.validate(missing, against: specification))
+        #expect(!BatchFetchExpectationValidator.validate(wrong, against: specification))
+    }
+
+    @Test func batchFetchMatrixEntriesMatchSharedScenarioContracts() throws {
+        let grouped = Dictionary(grouping: BatchFetchScenarioCatalog.all) { specification in
+            specification.id.test.hasPrefix("any batch size returns every result/")
+                ? "BatchFetchParityTests/any batch size returns every result"
+                : specification.id.description
+        }
+        let entries = grouped.map { sourceCase, specifications in
+            let scenarioIDs = specifications.map { $0.id.description }
+            return CoverageMatrixEntry(
+                sourceCase: sourceCase,
+                scenarioIDs: scenarioIDs,
+                outcomes: Dictionary(uniqueKeysWithValues: scenarioIDs.map { ($0, "compared") }),
+                observations: Dictionary(uniqueKeysWithValues: specifications.map {
+                    ($0.id.description, $0.expectedObservations.map(\.field))
+                }))
+        }
+        #expect(CoverageMatrixValidator.validate(
+            discovered: Set(entries.map(\.sourceCase)),
+            entries: entries,
+            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+    }
+
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
         let specification = SchemaIntrospectionScenarioCatalog.entitiesByModelType
         let result = ScenarioResult(
@@ -292,7 +341,9 @@ import Testing
                 .union(StoreIdentifierScenarioCatalog.contractsByID.keys)
                 .union(ModelIdentityScenarioCatalog.contractsByID.keys)
                 .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys))
+                .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
+                .union(PendingFetchScenarioCatalog.contractsByID.keys)
+                .union(BatchFetchScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

@@ -18,6 +18,14 @@ final class MembershipScenarioRow {
 struct AppleParityRunner {
     @MainActor
     static func run() throws {
+        if CommandLine.arguments.contains("--batch-fetch-probe") {
+            let observations = try AppleBatchFetchProbe.run()
+            let data = try CanonicalJSON.encode(observations)
+            try data.write(to: outputURL(from: CommandLine.arguments), options: .atomic)
+            print("Wrote Apple batch-fetch probe observations")
+            return
+        }
+
         let outputURL = outputURL(from: CommandLine.arguments)
         let predicateResults = try ParityScenarioCatalog.all.map(run)
         let schemaResults = try AppleSchemaIntrospectionAdapter.runAll()
@@ -33,8 +41,9 @@ struct AppleParityRunner {
         let configurationResults = AppleModelConfigurationAdapter.runAll()
         let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
         let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
+        let batchFetchResults = try AppleBatchFetchAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults + pendingFetchResults)
+            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

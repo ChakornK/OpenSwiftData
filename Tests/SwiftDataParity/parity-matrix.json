@@ -789,6 +789,117 @@
           "names.stored"
         ]
       }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/batched fetches require excluding pending changes",
+      "scenarioIDs": [
+        "BatchFetchParityTests/batched fetches require excluding pending changes"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/batched fetches require excluding pending changes": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/batched fetches require excluding pending changes": [
+          "modelBatch.throwsExpected",
+          "identifierBatch.throwsExpected"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/sorted identifier fetches require excluding pending changes",
+      "scenarioIDs": [
+        "BatchFetchParityTests/sorted identifier fetches require excluding pending changes"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/sorted identifier fetches require excluding pending changes": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/sorted identifier fetches require excluding pending changes": [
+          "pending.sortedIdentifier.throwsExpected",
+          "saved.identifierCount",
+          "saved.sortedIdentifierCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/batched results are a random access collection in fetch order",
+      "scenarioIDs": [
+        "BatchFetchParityTests/batched results are a random access collection in fetch order"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/batched results are a random access collection in fetch order": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/batched results are a random access collection in fetch order": [
+          "collection.values"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/batched fetches honor predicates, limits, and offsets",
+      "scenarioIDs": [
+        "BatchFetchParityTests/batched fetches honor predicates, limits, and offsets"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/batched fetches honor predicates, limits, and offsets": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/batched fetches honor predicates, limits, and offsets": [
+          "page.ranks",
+          "filtered.ranks"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/any batch size returns every result",
+      "scenarioIDs": [
+        "BatchFetchParityTests/any batch size returns every result/0",
+        "BatchFetchParityTests/any batch size returns every result/-1",
+        "BatchFetchParityTests/any batch size returns every result/1",
+        "BatchFetchParityTests/any batch size returns every result/100"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/any batch size returns every result/0": "compared",
+        "BatchFetchParityTests/any batch size returns every result/-1": "compared",
+        "BatchFetchParityTests/any batch size returns every result/1": "compared",
+        "BatchFetchParityTests/any batch size returns every result/100": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/any batch size returns every result/0": ["count"],
+        "BatchFetchParityTests/any batch size returns every result/-1": ["count"],
+        "BatchFetchParityTests/any batch size returns every result/1": ["count"],
+        "BatchFetchParityTests/any batch size returns every result/100": ["count"]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/batched identifiers match unbatched identifiers",
+      "scenarioIDs": [
+        "BatchFetchParityTests/batched identifiers match unbatched identifiers"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/batched identifiers match unbatched identifiers": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/batched identifiers match unbatched identifiers": [
+          "identifiers.count"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchFetchParityTests/batched results exclude pending insertions and keep their snapshot",
+      "scenarioIDs": [
+        "BatchFetchParityTests/batched results exclude pending insertions and keep their snapshot"
+      ],
+      "outcomes": {
+        "BatchFetchParityTests/batched results exclude pending insertions and keep their snapshot": "compared"
+      },
+      "observations": {
+        "BatchFetchParityTests/batched results exclude pending insertions and keep their snapshot": [
+          "snapshot.beforeSave.count",
+          "snapshot.pendingCount",
+          "snapshot.afterSave.count"
+        ]
+      }
     }
   ]
 }

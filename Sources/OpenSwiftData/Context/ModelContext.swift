@@ -943,7 +943,7 @@ public final class ModelContext {
 
     private func fetchFromDataStore<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>,
-        dataStore: any DataStore,
+        dataStore: any OpenSwiftDataDataStore,
         container: ModelContainer,
         entity: SchemaDescriptor.Entity,
         hasHierarchy: Bool
@@ -971,23 +971,23 @@ public final class ModelContext {
             propertiesToFetch: descriptor.propertiesToFetch,
             relationshipKeyPathsForPrefetching: descriptor.relationshipKeyPathsForPrefetching)
         let result = try dataStore.fetch(
-            DataStoreFetchRequest(
+            OpenSwiftDataDataStoreFetchRequest(
                 descriptor: requestDescriptor,
                 entity: entity,
                 includedEntityNames: hasHierarchy ? includedEntityNames : [entity.name]))
         var seenIdentifiers = Set<PersistentIdentifier>()
         var models: [Model] = []
         var materialized: [PersistentIdentifier: any PersistentModel] = [:]
-        let includedModels = try result.snapshots.map { snapshot -> (DataStoreSnapshot, SchemaDescriptor.Entity) in
+        let includedModels = try result.snapshots.map { snapshot -> (OpenSwiftDataDataStoreSnapshot, SchemaDescriptor.Entity) in
             guard seenIdentifiers.insert(snapshot.persistentIdentifier).inserted else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore returned duplicate snapshot identifier \(snapshot.persistentIdentifier).")
+                    "OpenSwiftDataDataStore returned duplicate snapshot identifier \(snapshot.persistentIdentifier).")
             }
             guard includedEntityNames.contains(snapshot.entityName),
                 let concreteEntity = container.schemaDescriptor.entity(forName: snapshot.entityName)
             else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore returned snapshot \(snapshot.entityName) outside the requested entity subtree.")
+                    "OpenSwiftDataDataStore returned snapshot \(snapshot.entityName) outside the requested entity subtree.")
             }
             return (snapshot, concreteEntity)
         }
@@ -996,7 +996,7 @@ public final class ModelContext {
                 snapshot, dataStore: dataStore, container: container, cache: &materialized,
                 requestedAttributeNames: requestedAttributeNames)
             guard isEntity(concreteEntity.name, descendantOf: entity.name), let model = resolved as? Model else {
-                throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with the wrong model type.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore returned a snapshot with the wrong model type.")
             }
             models.append(model)
         }
@@ -1004,8 +1004,8 @@ public final class ModelContext {
     }
 
     private func resolveDataStoreSnapshot(
-        _ snapshot: DataStoreSnapshot,
-        dataStore: any DataStore,
+        _ snapshot: OpenSwiftDataDataStoreSnapshot,
+        dataStore: any OpenSwiftDataDataStore,
         container: ModelContainer,
         cache: inout [PersistentIdentifier: any PersistentModel],
         requestedAttributeNames: Set<String>? = nil
@@ -1014,7 +1014,7 @@ public final class ModelContext {
         guard let entity = container.schemaDescriptor.entity(forName: snapshot.entityName),
             snapshot.persistentIdentifier.entityName == snapshot.entityName
         else {
-            throw SwiftDataError.unsupportedStore("DataStore snapshot refers to an unknown entity.")
+            throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore snapshot refers to an unknown entity.")
         }
         _ = try validateDataStoreSnapshot(snapshot, entity: entity, store: dataStore)
         let expectedAttributes = Set(
@@ -1025,7 +1025,7 @@ public final class ModelContext {
         guard suppliedAttributes.isSubset(of: expectedAttributes),
             Set(snapshot.relationships.keys) == Set(entity.relationships.map(\.name))
         else {
-            throw SwiftDataError.unsupportedStore("DataStore returned an incomplete model snapshot for \(entity.name).")
+            throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore returned an incomplete model snapshot for \(entity.name).")
         }
         if let requestedAttributeNames {
             let selectedAttributes = entity.attributes.filter { requestedAttributeNames.contains($0.name) }
@@ -1035,25 +1035,25 @@ public final class ModelContext {
                 })
             guard requiredKeys.isSubset(of: suppliedAttributes) else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore omitted a requested property from \(entity.name).")
+                    "OpenSwiftDataDataStore omitted a requested property from \(entity.name).")
             }
             for attribute in selectedAttributes where attribute.options.contains(.flattened) {
                 let suppliedCount = attribute.components.filter { suppliedAttributes.contains($0.columnName) }.count
                 guard suppliedCount == 0 || suppliedCount == attribute.components.count else {
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore returned a partial flattened property for \(entity.name).\(attribute.name).")
+                        "OpenSwiftDataDataStore returned a partial flattened property for \(entity.name).\(attribute.name).")
                 }
             }
         } else {
             guard suppliedAttributes == expectedAttributes else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore returned an incomplete model snapshot for \(entity.name).")
+                    "OpenSwiftDataDataStore returned an incomplete model snapshot for \(entity.name).")
             }
         }
         guard let registration = container.modelRegistration(forEntityName: entity.name),
             let primaryKey = snapshot.persistentIdentifier.primaryKey
         else {
-            throw SwiftDataError.unsupportedStore("No model type is registered for DataStore entity \(entity.name).")
+            throw SwiftDataError.unsupportedStore("No model type is registered for OpenSwiftDataDataStore entity \(entity.name).")
         }
         let key = identityKey(for: entity, primaryKey: primaryKey)
         let candidate = try registration.materializeDataStore(context: self, entity: entity, snapshot: snapshot)
@@ -1077,25 +1077,25 @@ public final class ModelContext {
             }
             guard relationship.isToMany || relatedIdentifiers.count <= 1 else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore returned multiple targets for to-one relationship '\(entity.name).\(relationship.name)'."
+                    "OpenSwiftDataDataStore returned multiple targets for to-one relationship '\(entity.name).\(relationship.name)'."
                 )
             }
             for relatedIdentifier in relatedIdentifiers {
                 guard let relatedSnapshot = try dataStore.snapshot(for: relatedIdentifier) else {
-                    throw SwiftDataError.unsupportedStore("DataStore relationship target snapshot is missing.")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore relationship target snapshot is missing.")
                 }
                 guard relatedSnapshot.persistentIdentifier == relatedIdentifier,
                     isEntity(relatedSnapshot.entityName, descendantOf: relationship.destination)
                 else {
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore relationship target does not match the declared destination subtree.")
+                        "OpenSwiftDataDataStore relationship target does not match the declared destination subtree.")
                 }
                 let endpoint = try resolveDataStoreSnapshot(
                     relatedSnapshot, dataStore: dataStore, container: container, cache: &cache)
                 guard let destinationType = container.modelType(forEntityName: relatedSnapshot.entityName),
                     ObjectIdentifier(type(of: endpoint)) == ObjectIdentifier(destinationType)
                 else {
-                    throw SwiftDataError.unsupportedStore("DataStore relationship target type is not registered.")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore relationship target type is not registered.")
                 }
                 endpoints.append(endpoint)
             }
@@ -1119,20 +1119,20 @@ public final class ModelContext {
     }
 
     private func validateDataStoreSnapshot(
-        _ snapshot: DataStoreSnapshot, entity: SchemaDescriptor.Entity, store: any DataStore
+        _ snapshot: OpenSwiftDataDataStoreSnapshot, entity: SchemaDescriptor.Entity, store: any OpenSwiftDataDataStore
     ) throws -> Int64 {
         guard snapshot.entityName == entity.name,
             snapshot.persistentIdentifier.entityName == entity.name,
             snapshot.persistentIdentifier.resolvedStoreIdentifier == store.identifier,
             let primaryKey = snapshot.persistentIdentifier.primaryKey
         else {
-            throw SwiftDataError.unsupportedStore("DataStore returned a snapshot with an incompatible identifier.")
+            throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore returned a snapshot with an incompatible identifier.")
         }
         return primaryKey
     }
 
     private func dataStoreRow(
-        _ snapshot: DataStoreSnapshot, attributes: [SchemaDescriptor.Attribute], type: any PersistentModel.Type,
+        _ snapshot: OpenSwiftDataDataStoreSnapshot, attributes: [SchemaDescriptor.Attribute], type: any PersistentModel.Type,
         primaryKey: Int64
     ) -> [RuntimeValue] {
         var values = [RuntimeValue.int(primaryKey), .int(0)]
@@ -1603,14 +1603,14 @@ public final class ModelContext {
             guard let snapshot = try dataStore.snapshot(for: identifier) else { return nil }
             guard try validateDataStoreSnapshot(snapshot, entity: entity, store: dataStore) == key else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore snapshot identifier does not match the requested model.")
+                    "OpenSwiftDataDataStore snapshot identifier does not match the requested model.")
             }
             var cache: [PersistentIdentifier: any PersistentModel] = [:]
             guard
                 let model = try resolveDataStoreSnapshot(
                     snapshot, dataStore: dataStore, container: container, cache: &cache) as? Model
             else {
-                throw SwiftDataError.unsupportedStore("DataStore snapshot is not compatible with the requested model.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore snapshot is not compatible with the requested model.")
             }
             return model
         }
@@ -4096,7 +4096,7 @@ public final class ModelContext {
         }
     }
 
-    private func persistPendingChanges(to dataStore: any DataStore) throws {
+    private func persistPendingChanges(to dataStore: any OpenSwiftDataDataStore) throws {
         let pending = state.pendingState()
         guard let container = containerStorage else { throw unsupportedStore("Saving") }
         for model in pending.inserted + pending.changed {
@@ -4130,7 +4130,7 @@ public final class ModelContext {
         }
         let inserted = zip(pending.inserted, insertedOriginal).map { model, snapshot in
             let identifier = normalizedByObject[ObjectIdentifier(model)] ?? snapshot.persistentIdentifier
-            return DataStoreSnapshot(
+            return OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: identifier,
                 entityName: snapshot.entityName,
                 values: snapshot.values,
@@ -4144,7 +4144,7 @@ public final class ModelContext {
                     && container.schemaDescriptor.entity(forName: $0.entityName) != nil
             }), deleted.allSatisfy({ $0.resolvedStoreIdentifier == dataStore.identifier })
         else {
-            throw SwiftDataError.unsupportedStore("DataStore save request contains identifiers from another store.")
+            throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore save request contains identifiers from another store.")
         }
         let reservations = try dataStore.reserveIdentifiers(for: inserted)
         let insertedIdentifiers = Set(inserted.map(\.persistentIdentifier))
@@ -4163,12 +4163,12 @@ public final class ModelContext {
         guard reservationKeysAreValid, reservationValuesAreUnique, reservationsAreValid
         else {
             throw SwiftDataError.unsupportedStore(
-                "DataStore returned invalid identifier reservations (keys: \(reservationKeysAreValid), "
+                "OpenSwiftDataDataStore returned invalid identifier reservations (keys: \(reservationKeysAreValid), "
                     + "unique: \(reservationValuesAreUnique), valid: \(reservationsAreValid), "
                     + "entries: \(reservationValidity)).")
         }
-        let remapRelationships: (DataStoreSnapshot) -> DataStoreSnapshot = { snapshot in
-            DataStoreSnapshot(
+        let remapRelationships: (OpenSwiftDataDataStoreSnapshot) -> OpenSwiftDataDataStoreSnapshot = { snapshot in
+            OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: snapshot.persistentIdentifier,
                 entityName: snapshot.entityName,
                 values: snapshot.values,
@@ -4179,11 +4179,11 @@ public final class ModelContext {
                     }
                 })
         }
-        let saveRequest = DataStoreSaveRequest(
+        let saveRequest = OpenSwiftDataDataStoreSaveRequest(
             inserted: inserted.map { snapshot in
                 let relationshipSnapshot = remapRelationships(snapshot)
                 let identifier = reservations[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
-                return DataStoreSnapshot(
+                return OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: identifier,
                     entityName: relationshipSnapshot.entityName,
                     values: relationshipSnapshot.values,
@@ -4212,7 +4212,7 @@ public final class ModelContext {
             mappingsAreValid
         else {
             throw SwiftDataError.unsupportedStore(
-                "DataStore returned an invalid save result (insert mappings: \(mappingsCoverInserts), "
+                "OpenSwiftDataDataStore returned an invalid save result (insert mappings: \(mappingsCoverInserts), "
                     + "updates: \(updatesAcknowledged), deletes: \(deletionsAcknowledged), "
                     + "unique IDs: \(mappingsAreUnique), valid mappings: \(mappingsAreValid), "
                     + "reserved IDs: \(reservations.count)); invalid results must not commit changes.")
@@ -4230,7 +4230,7 @@ public final class ModelContext {
                     ?? (isInserted ? nil : originalIdentifier),
                 let primaryKey = identifier.primaryKey
             else {
-                throw SwiftDataError.unsupportedStore("DataStore save did not return a permanent model identifier.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore save did not return a permanent model identifier.")
             }
             if isInserted || reservations[requestIdentifier] != nil
                 || result.identifierRemappings[requestIdentifier] != nil
@@ -4305,11 +4305,11 @@ public final class ModelContext {
 
     private func dataStoreSnapshot(
         for model: any PersistentModel, container: ModelContainer
-    ) throws -> DataStoreSnapshot {
-        func typed<Model: PersistentModel>(_ model: Model) throws -> DataStoreSnapshot {
+    ) throws -> OpenSwiftDataDataStoreSnapshot {
+        func typed<Model: PersistentModel>(_ model: Model) throws -> OpenSwiftDataDataStoreSnapshot {
             let entityName = String(describing: Model.self)
             guard let entity = container.schemaDescriptor.entity(forName: entityName) else {
-                throw SwiftDataError.unsupportedStore("DataStore model is not present in the container schema.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore model is not present in the container schema.")
             }
             var values: [String: StoredValue] = [:]
             let flattened = Model.flattenedPropertyAdapters()
@@ -4318,7 +4318,7 @@ public final class ModelContext {
                     let components = flattened.filter { $0.propertyName == attribute.name }
                     guard components.count == attribute.components.count else {
                         throw SwiftDataError.unsupportedStore(
-                            "DataStore flattened component adapters do not match \(entity.name).\(attribute.name).")
+                            "OpenSwiftDataDataStore flattened component adapters do not match \(entity.name).\(attribute.name).")
                     }
                     for component in components {
                         values[component.columnName] = try component.encoded(model)
@@ -4327,7 +4327,7 @@ public final class ModelContext {
                     guard let adapter = Model.erasedPersistenceAdapters().first(where: { $0.name == attribute.name })
                     else {
                         throw SwiftDataError.unsupportedStore(
-                            "DataStore has no encoder for \(entity.name).\(attribute.name).")
+                            "OpenSwiftDataDataStore has no encoder for \(entity.name).\(attribute.name).")
                     }
                     values[attribute.name] = try adapter.encoded(model)
                 }
@@ -4344,16 +4344,16 @@ public final class ModelContext {
             for relationship in entity.relationships {
                 guard let adapter = relationshipAdapters.first(where: { $0.name == relationship.name }) else {
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore has no relationship adapter for \(entity.name).\(relationship.name).")
+                        "OpenSwiftDataDataStore has no relationship adapter for \(entity.name).\(relationship.name).")
                 }
                 relationships[relationship.name] = adapter.read(model)?.map(\.persistentModelID) ?? []
             }
-            return DataStoreSnapshot(
+            return OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: model.persistentModelID,
                 entityName: entity.name,
                 values: values, relationships: relationships)
         }
-        func dispatch<Model: PersistentModel>(_ model: Model) throws -> DataStoreSnapshot { try typed(model) }
+        func dispatch<Model: PersistentModel>(_ model: Model) throws -> OpenSwiftDataDataStoreSnapshot { try typed(model) }
         return try dispatch(model)
     }
 

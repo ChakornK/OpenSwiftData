@@ -11,11 +11,11 @@ struct ModelTypeRegistration: @unchecked Sendable {
     private let relationshipFaultBody: (any PersistentModel, SchemaDescriptor.Entity, RelationshipFaultResolver) -> Void
     private let valueStateBody: (any PersistentModel, AnyKeyPath) -> ManagedValueState?
     private let setMaterializedValueBody: (any PersistentModel, AnyKeyPath, Any) -> Void
-    private let materializeDataStoreBody: (ModelContext, SchemaDescriptor.Entity, DataStoreSnapshot) throws -> any PersistentModel
+    private let materializeDataStoreBody: (ModelContext, SchemaDescriptor.Entity, OpenSwiftDataDataStoreSnapshot) throws -> any PersistentModel
     private let installDataStoreFaultsBody:
-        (any PersistentModel, SchemaDescriptor.Entity, any DataStore, Set<String>) throws -> Void
+        (any PersistentModel, SchemaDescriptor.Entity, any OpenSwiftDataDataStore, Set<String>) throws -> Void
     private let assignDataStoreRelationshipsBody: (any PersistentModel, [String: [any PersistentModel]]) throws -> Void
-    private let applyDataStoreValuesBody: (any PersistentModel, SchemaDescriptor.Entity, DataStoreSnapshot) throws -> Void
+    private let applyDataStoreValuesBody: (any PersistentModel, SchemaDescriptor.Entity, OpenSwiftDataDataStoreSnapshot) throws -> Void
 
     init<Model: PersistentModel>(type: Model.Type) {
         self.type = type
@@ -77,7 +77,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 else {
                     if snapshot.values[attribute.name] == nil { continue }
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore snapshot is missing value for \(entity.name).\(attribute.name).")
+                        "OpenSwiftDataDataStore snapshot is missing value for \(entity.name).\(attribute.name).")
                 }
                 values[keyPath] = try adapter.decoded(value)
             }
@@ -89,19 +89,19 @@ struct ModelTypeRegistration: @unchecked Sendable {
                     let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath
                 else {
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore has no flattened adapters for \(entity.name).\(attribute.name).")
+                        "OpenSwiftDataDataStore has no flattened adapters for \(entity.name).\(attribute.name).")
                 }
                 let suppliedComponents = components.compactMap { snapshot.values[$0.columnName] }
                 if suppliedComponents.isEmpty { continue }
                 guard suppliedComponents.count == components.count else {
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore returned a partial flattened property for \(entity.name).\(attribute.name).")
+                        "OpenSwiftDataDataStore returned a partial flattened property for \(entity.name).\(attribute.name).")
                 }
                 var composite = try first.makeEmptyComposite()
                 for component in components {
                     guard let value = snapshot.values[component.columnName] else {
                         throw SwiftDataError.unsupportedStore(
-                            "DataStore snapshot is missing flattened value \(entity.name).\(component.columnName).")
+                            "OpenSwiftDataDataStore snapshot is missing flattened value \(entity.name).\(component.columnName).")
                     }
                     composite = try component.decoded(value, into: composite)
                 }
@@ -110,7 +110,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
             let identifier = snapshot.persistentIdentifier
             guard let entityID = context.optionalContainer?.schemaDescriptor.entityIDsByName[entity.name] else {
                 throw SwiftDataError.unsupportedStore(
-                    "DataStore schema has no entity identifier for \(entity.name).")
+                    "OpenSwiftDataDataStore schema has no entity identifier for \(entity.name).")
             }
             let backing = ManagedBackingData<Model.Model>(
                 metadata: metadata, values: values, context: context,
@@ -127,7 +127,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 let backing = model.persistentBackingData as? ManagedBackingData<Model.Model>,
                 let primaryKey = model.persistentModelID.primaryKey
             else {
-                throw SwiftDataError.unsupportedStore("Cannot fault partial DataStore values for \(Model.self).")
+                throw SwiftDataError.unsupportedStore("Cannot fault partial OpenSwiftDataDataStore values for \(Model.self).")
             }
             let identifier = model.persistentModelID
             let entityName = entity.name
@@ -146,7 +146,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                     snapshot.persistentIdentifier == identifier,
                     snapshot.persistentIdentifier.primaryKey == primaryKey
                 else {
-                    throw SwiftDataError.unsupportedStore("DataStore could not fault the requested model snapshot.")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore could not fault the requested model snapshot.")
                 }
                 var values: [AnyKeyPath: Any] = [:]
                 for attribute in missingAttributes {
@@ -158,13 +158,13 @@ struct ModelTypeRegistration: @unchecked Sendable {
                             .sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) }
                         guard let first = components.first else {
                             throw SwiftDataError.unsupportedStore(
-                                "DataStore has no flattened adapters for \(entity.name).\(attribute.name).")
+                                "OpenSwiftDataDataStore has no flattened adapters for \(entity.name).\(attribute.name).")
                         }
                         var composite = try first.makeEmptyComposite()
                         for component in components {
                             guard let stored = snapshot.values[component.columnName] else {
                                 throw SwiftDataError.unsupportedStore(
-                                    "DataStore snapshot is missing flattened value \(entity.name).\(component.columnName)."
+                                    "OpenSwiftDataDataStore snapshot is missing flattened value \(entity.name).\(component.columnName)."
                                 )
                             }
                             composite = try component.decoded(stored, into: composite)
@@ -175,7 +175,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                             let adapter = propertyAdapters.first(where: { $0.name == attribute.name })
                         else {
                             throw SwiftDataError.unsupportedStore(
-                                "DataStore snapshot is missing value for \(entity.name).\(attribute.name).")
+                                "OpenSwiftDataDataStore snapshot is missing value for \(entity.name).\(attribute.name).")
                         }
                         values[keyPath] = try adapter.decoded(stored)
                     }
@@ -185,18 +185,18 @@ struct ModelTypeRegistration: @unchecked Sendable {
         }
         assignDataStoreRelationshipsBody = { model, relationships in
             guard let model = model as? Model else {
-                throw SwiftDataError.unsupportedStore("DataStore relationship owner type mismatch.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore relationship owner type mismatch.")
             }
             for adapter in relationshipAdapters(for: Model.self) {
                 guard let endpoints = relationships[adapter.name] else {
-                    throw SwiftDataError.unsupportedStore("DataStore snapshot is missing relationship \(adapter.name).")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore snapshot is missing relationship \(adapter.name).")
                 }
                 try adapter.assign(try adapter.makeValue(endpoints), to: model)
             }
         }
         applyDataStoreValuesBody = { model, entity, snapshot in
             guard let model = model as? Model else {
-                throw SwiftDataError.unsupportedStore("DataStore snapshot model type mismatch.")
+                throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore snapshot model type mismatch.")
             }
             let backing = model.anyBackingData
             let metadata = Model.schemaMetadata()
@@ -208,7 +208,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 else {
                     if snapshot.values[attribute.name] == nil { continue }
                     throw SwiftDataError.unsupportedStore(
-                        "DataStore snapshot is missing value for \(entity.name).\(attribute.name).")
+                        "OpenSwiftDataDataStore snapshot is missing value for \(entity.name).\(attribute.name).")
                 }
                 backing.setMaterializedValueIfNoOverlay(forKeyPath: keyPath, to: try adapter.decoded(value))
             }
@@ -219,18 +219,18 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 guard let first = components.first,
                     let keyPath = metadata.first(where: { $0.name == attribute.name })?.keypath
                 else {
-                    throw SwiftDataError.unsupportedStore("DataStore lacks flattened adapters for \(attribute.name).")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore lacks flattened adapters for \(attribute.name).")
                 }
                 var composite = try first.makeEmptyComposite()
                 let suppliedComponents = flattened.compactMap { snapshot.values[$0.columnName] }
                 if suppliedComponents.isEmpty { continue }
                 guard suppliedComponents.count == flattened.count else {
-                    throw SwiftDataError.unsupportedStore("DataStore returned a partial flattened property.")
+                    throw SwiftDataError.unsupportedStore("OpenSwiftDataDataStore returned a partial flattened property.")
                 }
                 for component in components {
                     guard let value = snapshot.values[component.columnName] else {
                         throw SwiftDataError.unsupportedStore(
-                            "DataStore snapshot lacks component \(component.columnName).")
+                            "OpenSwiftDataDataStore snapshot lacks component \(component.columnName).")
                     }
                     composite = try component.decoded(value, into: composite)
                 }
@@ -282,7 +282,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
     }
 
     func materializeDataStore(
-        context: ModelContext, entity: SchemaDescriptor.Entity, snapshot: DataStoreSnapshot
+        context: ModelContext, entity: SchemaDescriptor.Entity, snapshot: OpenSwiftDataDataStoreSnapshot
     ) throws -> any PersistentModel {
         try materializeDataStoreBody(context, entity, snapshot)
     }
@@ -290,7 +290,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
     func installDataStoreFaults(
         on model: any PersistentModel,
         entity: SchemaDescriptor.Entity,
-        dataStore: any DataStore,
+        dataStore: any OpenSwiftDataDataStore,
         suppliedAttributeNames: Set<String>
     ) throws {
         try installDataStoreFaultsBody(model, entity, dataStore, suppliedAttributeNames)
@@ -303,7 +303,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
     }
 
     func applyDataStoreValues(
-        on model: any PersistentModel, entity: SchemaDescriptor.Entity, snapshot: DataStoreSnapshot
+        on model: any PersistentModel, entity: SchemaDescriptor.Entity, snapshot: OpenSwiftDataDataStoreSnapshot
     ) throws {
         try applyDataStoreValuesBody(model, entity, snapshot)
     }

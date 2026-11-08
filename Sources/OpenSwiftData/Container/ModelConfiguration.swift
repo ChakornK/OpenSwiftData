@@ -26,7 +26,9 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     package let storeFactory: RuntimeStoreFactory?
     package let schemaVersionReader: RuntimeSchemaVersionReader?
     package let schemaCompatibilityReader: RuntimeSchemaCompatibilityReader?
-    package let dataStoreConfiguration: (any DataStoreConfiguration)?
+    package let dataStoreConfiguration: (any OpenSwiftDataDataStoreConfiguration)?
+    package let canonicalDataStoreConfiguration: (any DataStoreConfiguration)?
+    package let canonicalStoreFactory: (@Sendable (Schema, (any SchemaMigrationPlan.Type)?) throws -> any OpenSwiftDataDataStore)?
     package let appleDataStoreConfiguration: (any AppleDataStoreConfiguration)?
 
     /// The store URL, which identifies the configuration.
@@ -126,8 +128,9 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
-        dataStoreConfiguration: (any DataStoreConfiguration)? = nil,
-        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
+        dataStoreConfiguration: (any OpenSwiftDataDataStoreConfiguration)? = nil,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil,
+        canonicalDataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         let name = name ?? Self.defaultStoreName
         let url =
@@ -138,7 +141,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
             name: name, url: url, schema: schema, isStoredInMemoryOnly: isStoredInMemoryOnly, allowsSave: allowsSave,
             groupContainer: groupContainer, cloudKitDatabase: cloudKitDatabase, storeFactory: storeFactory,
             schemaVersionReader: schemaVersionReader, schemaCompatibilityReader: schemaCompatibilityReader,
-            dataStoreConfiguration: dataStoreConfiguration, appleDataStoreConfiguration: appleDataStoreConfiguration)
+            dataStoreConfiguration: dataStoreConfiguration, appleDataStoreConfiguration: appleDataStoreConfiguration,
+            canonicalDataStoreConfiguration: canonicalDataStoreConfiguration)
     }
 
     package init(
@@ -150,15 +154,17 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
-        dataStoreConfiguration: (any DataStoreConfiguration)? = nil,
-        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
+        dataStoreConfiguration: (any OpenSwiftDataDataStoreConfiguration)? = nil,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil,
+        canonicalDataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.init(
             name: name ?? Self.defaultStoreName, url: url, schema: schema, isStoredInMemoryOnly: false,
             allowsSave: allowsSave, groupContainer: .automatic, cloudKitDatabase: cloudKitDatabase,
             storeFactory: storeFactory, schemaVersionReader: schemaVersionReader,
             schemaCompatibilityReader: schemaCompatibilityReader, dataStoreConfiguration: dataStoreConfiguration,
-            appleDataStoreConfiguration: appleDataStoreConfiguration)
+            appleDataStoreConfiguration: appleDataStoreConfiguration,
+            canonicalDataStoreConfiguration: canonicalDataStoreConfiguration)
     }
 
     /// Creates a configuration backed by a custom value-oriented data store.
@@ -166,13 +172,27 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         _ name: String = "custom",
         schema: Schema? = nil,
         allowsSave: Bool = true,
-        dataStoreConfiguration: any DataStoreConfiguration
+        dataStoreConfiguration: any OpenSwiftDataDataStoreConfiguration
     ) {
         self.init(
             name: name, url: URL(fileURLWithPath: "/dev/null"), schema: schema, isStoredInMemoryOnly: false,
             allowsSave: allowsSave, groupContainer: .none, cloudKitDatabase: .none, storeFactory: nil,
             schemaVersionReader: nil, schemaCompatibilityReader: nil, dataStoreConfiguration: dataStoreConfiguration)
     }
+
+    public init(
+        canonicalStore name: String = "custom",
+        schema: Schema? = nil,
+        allowsSave: Bool = true,
+        canonicalDataStoreConfiguration: any DataStoreConfiguration
+    ) {
+        self.init(
+            name: name, url: URL(fileURLWithPath: "/dev/null"), schema: schema, isStoredInMemoryOnly: false,
+            allowsSave: allowsSave, groupContainer: .none, cloudKitDatabase: .none, storeFactory: nil,
+            schemaVersionReader: nil, schemaCompatibilityReader: nil, dataStoreConfiguration: nil,
+            appleDataStoreConfiguration: nil, canonicalDataStoreConfiguration: canonicalDataStoreConfiguration)
+    }
+
 
     /// Creates a configuration backed by an Apple-shaped custom data store.
     public init(
@@ -199,8 +219,9 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader?,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader?,
-        dataStoreConfiguration: (any DataStoreConfiguration)?,
-        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
+        dataStoreConfiguration: (any OpenSwiftDataDataStoreConfiguration)?,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil,
+        canonicalDataStoreConfiguration: (any DataStoreConfiguration)? = nil
     ) {
         self.name = name
         self.url = url
@@ -216,6 +237,14 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         self.schemaCompatibilityReader = schemaCompatibilityReader
         self.dataStoreConfiguration = dataStoreConfiguration
         self.appleDataStoreConfiguration = appleDataStoreConfiguration
+        self.canonicalDataStoreConfiguration = canonicalDataStoreConfiguration
+        if let canonicalDataStoreConfiguration {
+            canonicalStoreFactory = { schema, migrationPlan in
+                try makeCanonicalStore(canonicalDataStoreConfiguration, schema: schema, migrationPlan: migrationPlan)
+            }
+        } else {
+            canonicalStoreFactory = nil
+        }
     }
 
     package var schemaDescriptor: SchemaDescriptor? { schema?.descriptor }

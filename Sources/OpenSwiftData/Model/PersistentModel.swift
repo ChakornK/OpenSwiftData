@@ -6,6 +6,8 @@ public struct FlattenedComponent<Composite> {
     public let name: String
     /// The scalar type name used by the schema.
     public let columnType: String
+    /// The leaf's runtime Swift metatype.
+    public let valueType: Any.Type
     /// The key path to the scalar leaf within the composite.
     public let keyPath: AnyKeyPath
     private let encodeBody: (Composite) throws -> StoredValue
@@ -19,6 +21,7 @@ public struct FlattenedComponent<Composite> {
     ) {
         self.name = name
         columnType = String(reflecting: Value.self)
+        valueType = Value.self
         self.keyPath = keyPath
         encodeBody = { try PersistentValue.encode($0[keyPath: keyPath]) }
         decodeBody = { value, composite in
@@ -60,17 +63,29 @@ public protocol FlattenableComposite: Codable & Sendable, FlattenedCompositeMeta
     static var flattenedComponents: [FlattenedComponent<Self>] { get }
     /// Creates an initial value before applying stored components.
     static func emptyFlattenedValue() throws -> Self
+    /// Runtime component types in the same order as `flattenedComponents`.
+    static var flattenedComponentTypesForSchema: [(String, Any.Type)] { get }
 }
 
 /// Provides a type-erased component manifest for schema construction.
 public protocol FlattenedCompositeMetadataProviding {
     /// Component names and scalar types in schema order.
     static var flattenedComponentsForSchema: [(String, String)] { get }
+    /// Component names and runtime scalar types in schema order.
+    static var flattenedComponentTypesForSchema: [(String, Any.Type)] { get }
+}
+
+public extension FlattenedCompositeMetadataProviding {
+    static var flattenedComponentTypesForSchema: [(String, Any.Type)] { [] }
 }
 
 public extension FlattenableComposite {
     static var flattenedComponentsForSchema: [(String, String)] {
         flattenedComponents.map { ($0.name, $0.columnType) }
+    }
+
+    static var flattenedComponentTypesForSchema: [(String, Any.Type)] {
+        flattenedComponents.map { ($0.name, $0.valueType) }
     }
 }
 
@@ -98,6 +113,11 @@ public protocol AnyFlattenedPropertyAdapter {
     func decoded(_ value: StoredValue, into composite: Any) throws -> Any
     /// Assigns a completed composite to a model instance.
     func assign(_ composite: Any, to model: Any) throws
+}
+
+public extension AnyFlattenedPropertyAdapter {
+    /// Encodes this component from a persistent model.
+    func encoded(_ model: any PersistentModel) throws -> StoredValue { try encoded(model as Any) }
 }
 
 /// A typed adapter that persists one scalar component of a composite property.
@@ -198,12 +218,12 @@ public protocol PersistentModel: AnyObject, Observable, Hashable, Identifiable {
     var hasChanges: Bool { get }
     var persistentBackingData: any BackingData<Model> { get set }
     init(backingData: any BackingData<Model>)
-    static func schemaMetadata() -> [Schema.PropertyMetadata]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata]
     /// Returns the persisted property name associated with a model-rooted key path.
     static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String?
     /// Returns property descriptors keyed by paths rooted at this model's dynamic class.
     static func propertyDescriptorsByKeyPath() -> [AnyKeyPath: PropertyDescriptor]
-    static func schemaIndexes() -> [Schema.Index]
+    static func schemaIndexes() -> [SchemaDescriptor.Index]
     /// The generated, declaration-ordered property descriptor table.
     static var propertyDescriptors: [PropertyDescriptor] { get }
     /// Returns the slot associated with a property key path, if one exists.
@@ -249,7 +269,7 @@ public extension PersistentModel {
         if let backing = persistentBackingData as? any AnyBackingData { return backing }
         return persistentBackingData.erasedBackingData()
     }
-    static func schemaIndexes() -> [Schema.Index] { [] }
+    static func schemaIndexes() -> [SchemaDescriptor.Index] { [] }
     static func propertyName(forKeyPath keyPath: AnyKeyPath) -> String? {
         propertyDescriptorsByKeyPath()[keyPath]?.name
             ?? schemaMetadata().first(where: { $0.keypath == keyPath })?.name
@@ -458,7 +478,7 @@ private enum DetachedRelationshipGraph {
         let original = sourceHasValue ? unique(adapter.read(owner) ?? []) : []
         let declaredRelationship =
             ownerType.schemaMetadata()
-            .first(where: { $0.name == adapter.name })?.metadata?.base as? Schema.Relationship
+            .first(where: { $0.name == adapter.name })?.metadata?.base as? SchemaDescriptor.Relationship
         let explicitInverseName = adapter.explicitInverseKeyPath.flatMap { inverseKeyPath in
             (original + endpoints).compactMap { endpoint in
                 type(of: endpoint).schemaMetadata().first(where: { $0.keypath == inverseKeyPath })?.name
@@ -566,7 +586,7 @@ private enum DetachedRelationshipGraph {
         var inverseNames = Set<String>()
         for model in relatedModels {
             let matches = type(of: model).schemaMetadata().compactMap { metadata -> String? in
-                guard let relationship = metadata.metadata?.base as? Schema.Relationship,
+                guard let relationship = metadata.metadata?.base as? SchemaDescriptor.Relationship,
                     relationship.inverse == adapter.name
                 else { return nil }
                 return metadata.name

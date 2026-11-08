@@ -30,14 +30,14 @@ public macro Model(protocolConformancesOnly: Bool = false) =
 /// schema version hash when the property's stored representation changes without a visible declaration change.
 @attached(peer)
 public macro Attribute(
-    _ options: Schema.Attribute.Option..., originalName: String? = nil, hashModifier: String? = nil
+    _ options: SchemaDescriptor.Attribute.Option..., originalName: String? = nil, hashModifier: String? = nil
 ) = #externalMacro(module: "OpenSwiftDataMacros", type: "AttributeMacro")
 
 /// Customizes how a relationship is persisted.
 @attached(peer)
 public macro Relationship(
-    _ options: Schema.Relationship.Option...,
-    deleteRule: Schema.Relationship.DeleteRule = .nullify,
+    _ options: SchemaDescriptor.Relationship.Option...,
+    deleteRule: SchemaDescriptor.Relationship.DeleteRule = .nullify,
     minimumModelCount: Int? = 0,
     maximumModelCount: Int? = 0,
     originalName: String? = nil,

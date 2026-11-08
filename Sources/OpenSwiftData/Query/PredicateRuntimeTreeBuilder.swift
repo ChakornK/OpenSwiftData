@@ -37,8 +37,8 @@ package enum PredicateRuntimeTreeBuilder {
     package static func build<Model: PersistentModel>(
         _ value: Any,
         modelType: Model.Type,
-        entity: Schema.Entity,
-        schema: Schema? = nil,
+        entity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor? = nil,
         modelTypeForEntity: (String) -> (any PersistentModel.Type)? = { _ in nil }
     ) throws -> Result {
         var captures: [RuntimePredicatePath: StoredValue] = [:]
@@ -81,8 +81,8 @@ package enum PredicateRuntimeTreeBuilder {
         }
         func relationshipTraversal(
             _ node: RuntimePredicateNode,
-            from ownerEntity: Schema.Entity
-        ) throws -> (names: [String], entity: Schema.Entity, modelType: any PersistentModel.Type)? {
+            from ownerEntity: SchemaDescriptor.Entity
+        ) throws -> (names: [String], entity: SchemaDescriptor.Entity, modelType: any PersistentModel.Type)? {
             switch node {
             case let .property(reference):
                 var components = reference.name.split(separator: ".").map(String.init)
@@ -561,7 +561,7 @@ package enum PredicateRuntimeTreeBuilder {
                             "OSDScalarCollectionAll\(operationName.prefix(1).uppercased())\(operationName.dropFirst())",
                         children: [("sequence", sequenceNode), ("value", valueNode)])
                 }
-                let collectionOwner: (entity: Schema.Entity, modelType: any PersistentModel.Type)
+                let collectionOwner: (entity: SchemaDescriptor.Entity, modelType: any PersistentModel.Type)
                 if localOwnerParts.isEmpty {
                     collectionOwner = (activeEntity, activeModelType)
                 } else if let traversal = try relationshipTraversal(
@@ -1226,9 +1226,9 @@ package enum PredicateRuntimeTreeBuilder {
     }
 
     private static func supportsToOnePredicate(
-        _ relationship: Schema.Relationship,
-        ownerEntity: Schema.Entity,
-        schema: Schema
+        _ relationship: SchemaDescriptor.Relationship,
+        ownerEntity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor
     ) -> Bool {
         guard let inverseName = relationship.inverse else { return true }
         guard let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination),
@@ -1244,7 +1244,7 @@ package enum PredicateRuntimeTreeBuilder {
                 modelEntityName: inverse.entityName, relationshipName: inverse.relationship.name) != nil
     }
 
-    private static func supportsCollectionPredicate(_ relationship: Schema.Relationship, schema: Schema) -> Bool {
+    private static func supportsCollectionPredicate(_ relationship: SchemaDescriptor.Relationship, schema: SchemaDescriptor) -> Bool {
         guard let inverseName = relationship.inverse else { return true }
         guard let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: relationship.destination)
         else { return false }
@@ -1255,7 +1255,7 @@ package enum PredicateRuntimeTreeBuilder {
 
     private static func codableCollectionName(
         _ node: RuntimePredicateNode,
-        entity: Schema.Entity
+        entity: SchemaDescriptor.Entity
     ) -> String? {
         guard case let .property(reference) = node,
             let propertyName = reference.name.split(separator: ".").last.map(String.init),
@@ -1312,8 +1312,8 @@ package enum PredicateRuntimeTreeBuilder {
     private static func propertyReference(
         for keyPath: AnyKeyPath,
         modelType: any PersistentModel.Type,
-        entity: Schema.Entity,
-        schema: Schema?,
+        entity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor?,
         collectionName: String? = nil,
         relationshipName: String? = nil,
         expectedRootType: Any.Type

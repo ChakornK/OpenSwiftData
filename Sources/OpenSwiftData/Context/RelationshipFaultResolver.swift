@@ -22,7 +22,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     private let state: ContextState
     private let identityMap: IdentityMap
     private let store: any RuntimeStore
-    private let schema: Schema
+    private let schema: SchemaDescriptor
     private let storeIdentifier: String
 
     init(context: ModelContext, container: ModelContainer, state: ContextState, identityMap: IdentityMap) throws {
@@ -32,11 +32,11 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         self.state = state
         self.identityMap = identityMap
         self.store = store
-        schema = container.schema
+        schema = container.schemaDescriptor
         storeIdentifier = container.storeIdentifier
     }
 
-    func install<Model: PersistentModel>(on model: Model, entity: Schema.Entity) {
+    func install<Model: PersistentModel>(on model: Model, entity: SchemaDescriptor.Entity) {
         guard let backing = model.persistentBackingData as? ManagedBackingData<Model> else { return }
         let adapterNames = Set(container.relationshipAdapterTable[ObjectIdentifier(Model.self)]?.map(\.name) ?? [])
         let names = Set(entity.relationships.map(\.name)).intersection(adapterNames)
@@ -191,8 +191,8 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func persistedEndpointIDs(
-        ownerEntity: Schema.Entity,
-        relationship: Schema.Relationship,
+        ownerEntity: SchemaDescriptor.Entity,
+        relationship: SchemaDescriptor.Relationship,
         ownerPrimaryKey: Int64
     ) throws -> [Int64] {
         guard let destination = schema.entity(forName: relationship.destination) else {
@@ -353,7 +353,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             else { return nil }
             let candidate: any PersistentModel
             let concreteRegistration: ModelTypeRegistration
-            let concreteEntity: Schema.Entity
+            let concreteEntity: SchemaDescriptor.Entity
             let version = runtimeInt(row[1])
             if hasHierarchy {
                 guard row.count >= 3, case let .int(rawEntityID) = row[2],
@@ -384,7 +384,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         return try load(registration.type)
     }
 
-    private func rootEntity(for entity: Schema.Entity) -> Schema.Entity {
+    private func rootEntity(for entity: SchemaDescriptor.Entity) -> SchemaDescriptor.Entity {
         var current = entity
         var visited: Set<String> = []
         while let parentName = current.superentityName,
@@ -396,9 +396,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         return current
     }
 
-    private func hierarchyAttributes(for entity: Schema.Entity) -> [Schema.Attribute] {
+    private func hierarchyAttributes(for entity: SchemaDescriptor.Entity) -> [SchemaDescriptor.Attribute] {
         let identifiers = Set(descendantEntityIDs(for: entity))
-        var attributesByName: [String: Schema.Attribute] = [:]
+        var attributesByName: [String: SchemaDescriptor.Attribute] = [:]
         for candidate in schema.entities
         where schema.entityIDsByName[candidate.name].map(identifiers.contains) == true {
             for attribute in candidate.attributes { attributesByName[attribute.name.uppercased()] = attribute }
@@ -408,7 +408,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         }
     }
 
-    private func installFaultsOnRelatedModel(_ model: any PersistentModel, entity: Schema.Entity) {
+    private func installFaultsOnRelatedModel(_ model: any PersistentModel, entity: SchemaDescriptor.Entity) {
         guard let registration = container.modelRegistration(forEntityName: entity.name) else { return }
         registration.installRelationshipFaults(on: model, entity: entity, resolver: self)
     }
@@ -424,9 +424,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         return identifier
     }
 
-    private func descendantEntityIDs(for entity: Schema.Entity) -> [Int] {
+    private func descendantEntityIDs(for entity: SchemaDescriptor.Entity) -> [Int] {
         schema.entities.compactMap { candidate in
-            var current: Schema.Entity? = candidate
+            var current: SchemaDescriptor.Entity? = candidate
             var visited: Set<String> = []
             while let value = current, visited.insert(value.name).inserted {
                 if value.name == entity.name { return schema.entityIDsByName[candidate.name] }
@@ -442,9 +442,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func isToOneStorageOwner(
-        _ entity: Schema.Entity,
-        _ relationship: Schema.Relationship,
-        destination: Schema.Entity
+        _ entity: SchemaDescriptor.Entity,
+        _ relationship: SchemaDescriptor.Relationship,
+        destination: SchemaDescriptor.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = schema.relationshipDeclaration(
@@ -456,9 +456,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func isCanonicalSideA(
-        _ entity: Schema.Entity,
-        _ relationship: Schema.Relationship,
-        destination: Schema.Entity
+        _ entity: SchemaDescriptor.Entity,
+        _ relationship: SchemaDescriptor.Relationship,
+        destination: SchemaDescriptor.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = schema.relationshipDeclaration(
@@ -469,9 +469,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func joinSideAOwner(
-        _ entity: Schema.Entity,
-        _ relationship: Schema.Relationship,
-        destination: Schema.Entity
+        _ entity: SchemaDescriptor.Entity,
+        _ relationship: SchemaDescriptor.Relationship,
+        destination: SchemaDescriptor.Entity
     ) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverse = schema.relationshipDeclaration(
@@ -481,9 +481,9 @@ final class RelationshipFaultResolver: @unchecked Sendable {
     }
 
     private func joinTableName(
-        _ entity: Schema.Entity,
-        _ relationship: Schema.Relationship,
-        destination: Schema.Entity
+        _ entity: SchemaDescriptor.Entity,
+        _ relationship: SchemaDescriptor.Relationship,
+        destination: SchemaDescriptor.Entity
     ) -> String? {
         guard relationship.isToMany else { return nil }
         let ownerName = logicalOwnerName(entity, relationship)
@@ -509,13 +509,13 @@ final class RelationshipFaultResolver: @unchecked Sendable {
             "Z_\(ordered[0].0.uppercased())_\(ordered[0].1.uppercased())_\(ordered[1].0.uppercased())_\(ordered[1].1.uppercased())"
     }
 
-    private func logicalOwnerName(_ entity: Schema.Entity, _ relationship: Schema.Relationship) -> String {
+    private func logicalOwnerName(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> String {
         schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
     }
 
     private func relationshipStorageLocation(
-        _ entity: Schema.Entity, _ relationship: Schema.Relationship
+        _ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship
     ) -> (tableName: String, columnName: String) {
         let mapping = schema.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)

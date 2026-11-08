@@ -30,7 +30,7 @@ package enum LightweightMigration {
         return identifier
     }
 
-    package static func storedEntityIDs(schema: Schema, connection: SQLConnection) throws -> [String: Int]? {
+    package static func storedEntityIDs(schema: SchemaDescriptor, connection: SQLConnection) throws -> [String: Int]? {
         guard
             let row = try connection.rows(
                 "SELECT value FROM _osd_meta WHERE key = ?", [.text(entityIDsKey)]
@@ -43,7 +43,7 @@ package enum LightweightMigration {
     }
 
     package static func writeEntityIDs(
-        _ identifiers: [String: Int], schema: Schema, connection: SQLConnection
+        _ identifiers: [String: Int], schema: SchemaDescriptor, connection: SQLConnection
     ) throws {
         try connection.execute(
             "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -91,10 +91,10 @@ package enum LightweightMigration {
             case let .blob(bytes)? = row.first,
             let identifier = String(bytes: bytes, encoding: .utf8)
         else { return .unversioned }
-        return .version(try Schema.Version.decode(identifier))
+        return .version(try SchemaDescriptor.Version.decode(identifier))
     }
 
-    package static func storedSchemaMatches(_ expected: Schema, connection: SQLConnection) throws -> Bool {
+    package static func storedSchemaMatches(_ expected: SchemaDescriptor, connection: SQLConnection) throws -> Bool {
         guard let stored = try storedHash(connection),
             let storedSchema = try storedSchemaDescription(connection)
         else { return false }
@@ -115,8 +115,8 @@ package enum LightweightMigration {
     }
 
     private struct AttributeMapping {
-        let source: Schema.Attribute?
-        let destination: Schema.Attribute
+        let source: SchemaDescriptor.Attribute?
+        let destination: SchemaDescriptor.Attribute
     }
 
     private struct OwnerOnlyToManyRemovalPlan {
@@ -133,7 +133,7 @@ package enum LightweightMigration {
     private struct OwnerOnlyToManyRemovalBatchPlan {
         let removedRelationshipNamesByOwner: [String: Set<String>]
         let joinTables: [String]
-        let addedAttributesByOwner: [String: [Schema.Attribute]]
+        let addedAttributesByOwner: [String: [SchemaDescriptor.Attribute]]
     }
 
     private struct OwnerOnlyToManyAdditionBatchPlan {
@@ -166,7 +166,7 @@ package enum LightweightMigration {
     }
 
     package static func openOrMigrate(
-        to destination: Schema,
+        to destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         try ensureMetadataTable(connection)
@@ -251,7 +251,7 @@ package enum LightweightMigration {
 
     package static func openStore(
         location: StoreLocation,
-        schema: Schema,
+        schema: SchemaDescriptor,
         externalColumns: Set<String> = [],
         externalStorageOperations: ExternalStorageFileOperations = .live
     ) throws -> GRDBSQLiteDriver {
@@ -310,8 +310,8 @@ package enum LightweightMigration {
     }
 
     package static func migrate(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         try validateCardinality(source: source, destination: destination)
@@ -338,7 +338,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func validatePhysicalSchema(_ schema: Schema, connection: SQLConnection) throws {
+    private static func validatePhysicalSchema(_ schema: SchemaDescriptor, connection: SQLConnection) throws {
         let entityRows = try connection.rows("SELECT Z_ENT, Z_NAME, Z_SUPER FROM Z_PRIMARYKEY")
         guard entityRows.count == schema.entities.count else {
             throw SwiftDataError.migrationUnsupported("Physical entity metadata does not match the stored schema.")
@@ -363,7 +363,7 @@ package enum LightweightMigration {
             }
         }
         let entitiesByName = Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, $0) })
-        func rootName(for entity: Schema.Entity) throws -> String {
+        func rootName(for entity: SchemaDescriptor.Entity) throws -> String {
             var current = entity
             var visited = Set<String>()
             while let parentName = current.superentityName {
@@ -431,7 +431,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func expectedIndexNames(_ schema: Schema) throws -> Set<String> {
+    private static func expectedIndexNames(_ schema: SchemaDescriptor) throws -> Set<String> {
         let indexStatements = try SchemaBuilder.build(schema).statements.filter {
             $0.hasPrefix("CREATE INDEX") || $0.hasPrefix("CREATE UNIQUE INDEX")
         }
@@ -539,7 +539,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func initialize(_ schema: Schema, connection: SQLConnection) throws {
+    private static func initialize(_ schema: SchemaDescriptor, connection: SQLConnection) throws {
         let built = try SchemaBuilder.build(schema)
         try connection.execute("SAVEPOINT osd_schema_initialization")
         do {
@@ -578,7 +578,7 @@ package enum LightweightMigration {
             [.text(schemaHashKey), .blob(Array(value.utf8))])
     }
 
-    private static func storedSchemaDescription(_ connection: SQLConnection) throws -> Schema? {
+    private static func storedSchemaDescription(_ connection: SQLConnection) throws -> SchemaDescriptor? {
         guard
             let row = try connection.rows(
                 "SELECT value FROM _osd_meta WHERE key = ?", [.text(schemaDescriptionKey)]
@@ -590,7 +590,7 @@ package enum LightweightMigration {
     }
 
     private static func writeSchemaMetadata(
-        _ schema: Schema,
+        _ schema: SchemaDescriptor,
         minimumNextEntityID: Int? = nil,
         connection: SQLConnection
     ) throws {
@@ -624,7 +624,7 @@ package enum LightweightMigration {
         return nextIdentifier
     }
 
-    private static func writeSchemaVersion(_ version: Schema.Version?, connection: SQLConnection) throws {
+    private static func writeSchemaVersion(_ version: SchemaDescriptor.Version?, connection: SQLConnection) throws {
         if let version {
             try connection.execute(
                 "INSERT INTO _osd_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -634,7 +634,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func validateCardinality(source: Schema, destination: Schema) throws {
+    private static func validateCardinality(source: SchemaDescriptor, destination: SchemaDescriptor) throws {
         for sourceEntity in source.entities {
             guard let target = destination.entity(forName: sourceEntity.name) else { continue }
             for relationship in sourceEntity.relationships {
@@ -651,7 +651,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func apply(source: Schema, destination: Schema, connection: SQLConnection) throws {
+    private static func apply(source: SchemaDescriptor, destination: SchemaDescriptor, connection: SQLConnection) throws {
         let sourceHasInheritance = source.entities.contains { $0.superentityName != nil }
         let destinationHasInheritance = destination.entities.contains { $0.superentityName != nil }
         if sourceHasInheritance || destinationHasInheritance {
@@ -802,9 +802,9 @@ package enum LightweightMigration {
     }
 
     private static func addPlannedScalarColumns(
-        _ attributes: [Schema.Attribute],
-        source: Schema.Entity,
-        destination: Schema.Entity,
+        _ attributes: [SchemaDescriptor.Attribute],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
         connection: SQLConnection
     ) throws {
         let table = "Z\(source.name.uppercased())"
@@ -827,8 +827,8 @@ package enum LightweightMigration {
     }
 
     private static func planPairedInverseRelationshipRemovals(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> [PairedInverseRelationshipRemoval] {
         guard source.entities.count == destination.entities.count,
@@ -840,7 +840,7 @@ package enum LightweightMigration {
 
         let destinationEntities = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
         let removedRelationships = source.entities.flatMap { entity in
-            entity.relationships.compactMap { relationship -> (Schema.Entity, Schema.Relationship)? in
+            entity.relationships.compactMap { relationship -> (SchemaDescriptor.Entity, SchemaDescriptor.Relationship)? in
                 guard let destinationEntity = destinationEntities[entity.name],
                     relationship.inverse != nil
                         || source.entities.contains(where: { candidate in
@@ -989,8 +989,8 @@ package enum LightweightMigration {
     }
 
     private static func applyFlatIndependentRootAdditions(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         validatedSourceIndexSQL: [String: String],
         connection: SQLConnection
     ) throws {
@@ -1027,7 +1027,7 @@ package enum LightweightMigration {
         var plannedObjectNames = physicalNames
         var plans:
             [(
-                entity: Schema.Entity, identifier: Int64, tableName: String, statement: String,
+                entity: SchemaDescriptor.Entity, identifier: Int64, tableName: String, statement: String,
                 indexes: [IndexDefinition]
             )] = []
         for entity in added.sorted(by: { lhs, rhs in
@@ -1068,8 +1068,8 @@ package enum LightweightMigration {
     }
 
     private static func applyFlatIndependentRootRemovals(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         let removedNames = source.entities.filter { destination.entity(forName: $0.name) == nil }.map(\.name)
@@ -1129,8 +1129,8 @@ package enum LightweightMigration {
     }
 
     private static func applyFlatIndependentRootAdditionsAndRemovals(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         validatedSourceIndexSQL: [String: String],
         connection: SQLConnection
     ) throws {
@@ -1216,7 +1216,7 @@ package enum LightweightMigration {
         }
         let retainedEntities = source.entities.filter { retainedNames.contains($0.name) }
         let retainedIDs = source.entityIDsByName.filter { retainedNames.contains($0.key) }
-        let retainedSchema = try Schema(retainedEntities, version: source.declaredVersion, entityIDs: retainedIDs)
+        let retainedSchema = try SchemaDescriptor(retainedEntities, version: source.declaredVersion, entityIDs: retainedIDs)
         let retainedIndexNames = Set(
             retainedSchema.entities.flatMap { indexDefinitions(for: $0, schema: retainedSchema) }
                 .map { $0.name.uppercased() })
@@ -1234,7 +1234,7 @@ package enum LightweightMigration {
             connection: connection)
     }
 
-    private static func equivalentEntityMetadata(_ lhs: Schema.Entity, _ rhs: Schema.Entity) -> Bool {
+    private static func equivalentEntityMetadata(_ lhs: SchemaDescriptor.Entity, _ rhs: SchemaDescriptor.Entity) -> Bool {
         lhs.name == rhs.name
             && lhs.superentityName == rhs.superentityName
             && lhs.attributes.count == rhs.attributes.count
@@ -1246,9 +1246,9 @@ package enum LightweightMigration {
     }
 
     private static func isSafelyRemovableRootEntity(
-        _ entity: Schema.Entity,
-        source: Schema,
-        destination: Schema
+        _ entity: SchemaDescriptor.Entity,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor
     ) -> Bool {
         guard entity.superentityName == nil,
             !source.entities.contains(where: { $0.superentityName == entity.name }),
@@ -1285,8 +1285,8 @@ package enum LightweightMigration {
     }
 
     private static func validateEntityRemovalSideEffects(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         let removedEntities = source.entities.filter { destination.entity(forName: $0.name) == nil }
@@ -1376,8 +1376,8 @@ package enum LightweightMigration {
     }
 
     private static func applyHierarchyOptionalAttributeAdditions(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection,
         destinationHasInheritance: Bool
     ) throws {
@@ -1399,7 +1399,7 @@ package enum LightweightMigration {
         func less(_ lhs: String, _ rhs: String) -> Bool {
             lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
         }
-        func sameAttributeDefinition(_ lhs: Schema.Attribute, _ rhs: Schema.Attribute) -> Bool {
+        func sameAttributeDefinition(_ lhs: SchemaDescriptor.Attribute, _ rhs: SchemaDescriptor.Attribute) -> Bool {
             lhs.type == rhs.type
                 && lhs.isOptional == rhs.isOptional
                 && lhs.defaultValue == rhs.defaultValue
@@ -1442,7 +1442,7 @@ package enum LightweightMigration {
 
         let sourceByName = Dictionary(uniqueKeysWithValues: source.entities.map { ($0.name, $0) })
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        func rootName(for entityName: String, schema: Schema) throws -> String {
+        func rootName(for entityName: String, schema: SchemaDescriptor) throws -> String {
             var current = schema.entity(forName: entityName)
             var visited = Set<String>()
             while let entity = current, let parentName = entity.superentityName {
@@ -1468,7 +1468,7 @@ package enum LightweightMigration {
             }
             return false
         }
-        func sameRelationshipExceptInverse(_ lhs: Schema.Relationship, _ rhs: Schema.Relationship) -> Bool {
+        func sameRelationshipExceptInverse(_ lhs: SchemaDescriptor.Relationship, _ rhs: SchemaDescriptor.Relationship) -> Bool {
             lhs.name == rhs.name
                 && lhs.destination == rhs.destination
                 && lhs.isToMany == rhs.isToMany
@@ -1480,11 +1480,11 @@ package enum LightweightMigration {
                 && lhs.declaringEntityName == rhs.declaringEntityName
         }
         func permitsMetadataOnlyInverseAttachment(
-            newEntity: Schema.Entity,
-            inverseRelationship: Schema.Relationship,
-            ownerEntity: Schema.Entity,
-            sourceOwnerRelationship: Schema.Relationship,
-            destinationOwnerRelationship: Schema.Relationship
+            newEntity: SchemaDescriptor.Entity,
+            inverseRelationship: SchemaDescriptor.Relationship,
+            ownerEntity: SchemaDescriptor.Entity,
+            sourceOwnerRelationship: SchemaDescriptor.Relationship,
+            destinationOwnerRelationship: SchemaDescriptor.Relationship
         ) -> Bool {
             guard inverseRelationship.isToMany,
                 inverseRelationship.isOptional,
@@ -1631,7 +1631,7 @@ package enum LightweightMigration {
             }
         }
 
-        func isAncestor(_ ancestorName: String, of entityName: String, schema: Schema) -> Bool {
+        func isAncestor(_ ancestorName: String, of entityName: String, schema: SchemaDescriptor) -> Bool {
             var current = schema.entity(forName: entityName)
             var visited = Set<String>()
             while let entity = current, visited.insert(entity.name).inserted {
@@ -1660,7 +1660,7 @@ package enum LightweightMigration {
             sourceColumnsByRoot[root, default: []].formUnion(existingColumns)
         }
 
-        var additionsByRootAndColumn: [String: (root: String, column: String, attribute: Schema.Attribute)] = [:]
+        var additionsByRootAndColumn: [String: (root: String, column: String, attribute: SchemaDescriptor.Attribute)] = [:]
         var additionOwnersByRootAndColumn: [String: [String]] = [:]
         var relationshipAdditionsByRootAndColumn: [String: (root: String, column: String)] = [:]
         var joinTableAdditions: Set<String> = []
@@ -1893,12 +1893,12 @@ package enum LightweightMigration {
     }
 
     private static func attributeMappings(
-        source: Schema.Entity,
-        destination: Schema.Entity
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity
     ) throws -> [AttributeMapping] {
         func columnKey(_ property: String) -> String { "Z\(property.uppercased())" }
         let sourceByName = Dictionary(uniqueKeysWithValues: source.attributes.map { (columnKey($0.name), $0) })
-        var explicitClaims: [String: Schema.Attribute] = [:]
+        var explicitClaims: [String: SchemaDescriptor.Attribute] = [:]
         for target in destination.attributes {
             guard let originalName = target.originalName,
                 columnKey(originalName) != columnKey(target.name),
@@ -1927,8 +1927,8 @@ package enum LightweightMigration {
     }
 
     private static func applyHierarchyLeafOptionalAttributeRemovals(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> Bool {
         guard source.entities.count == destination.entities.count,
@@ -1936,7 +1936,7 @@ package enum LightweightMigration {
             Set(source.entities.map(\.name)) == Set(destination.entities.map(\.name))
         else { return false }
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        var removals: [(Schema.Entity, Schema.Attribute)] = []
+        var removals: [(SchemaDescriptor.Entity, SchemaDescriptor.Attribute)] = []
         var hasOtherChanges = false
         for sourceEntity in source.entities {
             guard let destinationEntity = destinationByName[sourceEntity.name],
@@ -1959,7 +1959,7 @@ package enum LightweightMigration {
                 "Hierarchy leaf attribute removal cannot be combined with other schema changes.")
         }
 
-        func hasDescendant(of entityName: String, in schema: Schema) -> Bool {
+        func hasDescendant(of entityName: String, in schema: SchemaDescriptor) -> Bool {
             schema.entities.contains { candidate in
                 var current = candidate.superentityName.flatMap(schema.entity(forName:))
                 var visited = Set<String>()
@@ -1970,7 +1970,7 @@ package enum LightweightMigration {
                 return false
             }
         }
-        func rootEntity(for entity: Schema.Entity) throws -> Schema.Entity {
+        func rootEntity(for entity: SchemaDescriptor.Entity) throws -> SchemaDescriptor.Entity {
             var current = entity
             var visited = Set<String>()
             while let parentName = current.superentityName {
@@ -2076,8 +2076,8 @@ package enum LightweightMigration {
 
     private static func preflightAndApplyHierarchyLeafAttributeRemovals(
         _ plans: [HierarchyLeafAttributeRemovalPlan],
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> Bool {
         func quotedIdentifier(_ identifier: String) -> String {
@@ -2215,12 +2215,12 @@ package enum LightweightMigration {
 
     private static func removeCombinedScalarAndRelationshipColumns(
         mappings: [AttributeMapping],
-        removedRelationships: [Schema.Relationship],
-        addedRelationships: [Schema.Relationship],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        removedRelationships: [SchemaDescriptor.Relationship],
+        addedRelationships: [SchemaDescriptor.Relationship],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
         existingColumns: Set<String>,
@@ -2235,8 +2235,8 @@ package enum LightweightMigration {
 
         let removedRelationshipNames = Set(removedRelationships.map(\.name))
         let retainedRelationships = source.relationships.filter { !removedRelationshipNames.contains($0.name) }
-        let sourceSchema = Schema(sourceEntities)
-        let destinationSchema = Schema(destinationEntities)
+        let sourceSchema = SchemaDescriptor(sourceEntities)
+        let destinationSchema = SchemaDescriptor(destinationEntities)
         guard addedRelationships.isEmpty,
             try mappings.allSatisfy({ mapping in
                 guard let old = mapping.source else {
@@ -2414,12 +2414,12 @@ package enum LightweightMigration {
 
     private static func addScalarsWithOwnerOnlyToManyRemoval(
         mappings: [AttributeMapping],
-        removedRelationships: [Schema.Relationship],
-        addedRelationships: [Schema.Relationship],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        removedRelationships: [SchemaDescriptor.Relationship],
+        addedRelationships: [SchemaDescriptor.Relationship],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
         connection: SQLConnection
@@ -2491,8 +2491,8 @@ package enum LightweightMigration {
                 attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
             _ = try migrationDefaultLiteral(for: attribute)
         }
-        let sourceSchema = Schema(sourceEntities)
-        let destinationSchema = Schema(destinationEntities)
+        let sourceSchema = SchemaDescriptor(sourceEntities)
+        let destinationSchema = SchemaDescriptor(destinationEntities)
         let table = "Z\(source.name.uppercased())"
         let existingColumns = try tableColumns(table, connection: connection)
         let addedColumnNames = Set(addedAttributes.map { "Z\($0.name.uppercased())" })
@@ -2503,8 +2503,8 @@ package enum LightweightMigration {
         }
         try validateSourceTableLayout(source, schema: sourceSchema, connection: connection)
         _ = try validateSourceIndexLayout(sourceSchema, connection: connection)
-        let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
-        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: Schema(destinationEntities))
+        let sourceIndexDefinitions = indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities))
+        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
         let destinationIndexNames = Set(destinationIndexDefinitions.map { $0.name.uppercased() })
         let sourceIndexNames = Set(sourceIndexDefinitions.map { $0.name.uppercased() })
         guard
@@ -2527,7 +2527,7 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("To-many relationship removal could not be planned.")
         }
 
-        try validateDestinationIndexNames(Schema(destinationEntities))
+        try validateDestinationIndexNames(SchemaDescriptor(destinationEntities))
 
         try applyOwnerOnlyToManyRemoval(plan, connection: connection)
         try addPlannedScalarColumns(addedAttributes, source: source, destination: destination, connection: connection)
@@ -2536,7 +2536,7 @@ package enum LightweightMigration {
 
     private static func validateAttributeColumns(
         _ mappings: [AttributeMapping],
-        destination: Schema.Entity,
+        destination: SchemaDescriptor.Entity,
         existing: Set<String>
     ) throws {
         let reserved = Set(["Z_PK", "Z_ENT", "Z_OPT"].map { $0.uppercased() })
@@ -2582,10 +2582,10 @@ package enum LightweightMigration {
     }
 
     private static func migrate(
-        entity source: Schema.Entity,
-        to destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        entity source: SchemaDescriptor.Entity,
+        to destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
@@ -2630,8 +2630,8 @@ package enum LightweightMigration {
                 try migrateRelationships(
                     source: source,
                     destination: destination,
-                    sourceSchema: Schema(sourceEntities),
-                    schema: Schema(destinationEntities),
+                    sourceSchema: SchemaDescriptor(sourceEntities),
+                    schema: SchemaDescriptor(destinationEntities),
                     pairedInverseRemovals: pairedInverseRemovals,
                     toManyRemovalPlan: toManyRemovalPlan,
                     toManyAdditionPlan: toManyAdditionPlan,
@@ -2646,8 +2646,8 @@ package enum LightweightMigration {
             }
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2685,8 +2685,8 @@ package enum LightweightMigration {
         {
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2705,8 +2705,8 @@ package enum LightweightMigration {
         {
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2723,8 +2723,8 @@ package enum LightweightMigration {
                 throw SwiftDataError.migrationUnsupported(
                     "A relationship rename cannot be combined with multiple relationship removals.")
             }
-            let sourceSchema = Schema(sourceEntities)
-            let destinationSchema = Schema(destinationEntities)
+            let sourceSchema = SchemaDescriptor(sourceEntities)
+            let destinationSchema = SchemaDescriptor(destinationEntities)
             let removals = try planOptionalToOneRelationshipRemovals(
                 removedRelationships,
                 addedRelationships: addedRelationships,
@@ -2818,8 +2818,8 @@ package enum LightweightMigration {
             }
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2844,11 +2844,11 @@ package enum LightweightMigration {
                     "Required-to-optional scalar storage affinity changed unexpectedly.")
             }
             try validateFlatOptionalityDDLCompatibility(
-                source: Schema(sourceEntities), destination: Schema(destinationEntities))
+                source: SchemaDescriptor(sourceEntities), destination: SchemaDescriptor(destinationEntities))
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2865,8 +2865,8 @@ package enum LightweightMigration {
         {
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2883,8 +2883,8 @@ package enum LightweightMigration {
         {
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -2902,8 +2902,8 @@ package enum LightweightMigration {
                 sourceEntityIDs: sourceEntityIDs,
                 destinationEntityIDs: destinationEntityIDs)
         {
-            let sourceSchema = Schema(sourceEntities)
-            let destinationSchema = Schema(destinationEntities)
+            let sourceSchema = SchemaDescriptor(sourceEntities)
+            let destinationSchema = SchemaDescriptor(destinationEntities)
             try validateRebuildIndexPlan(
                 table: table,
                 source: source,
@@ -2982,8 +2982,8 @@ package enum LightweightMigration {
             }
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -3000,8 +3000,8 @@ package enum LightweightMigration {
                 attribute: integerToFloating,
                 source: source,
                 destination: destination,
-                sourceSchema: Schema(sourceEntities),
-                destinationSchema: Schema(destinationEntities),
+                sourceSchema: SchemaDescriptor(sourceEntities),
+                destinationSchema: SchemaDescriptor(destinationEntities),
                 connection: connection)
             return
         }
@@ -3018,8 +3018,8 @@ package enum LightweightMigration {
                 attribute: floatingToInteger,
                 source: source,
                 destination: destination,
-                sourceSchema: Schema(sourceEntities),
-                destinationSchema: Schema(destinationEntities),
+                sourceSchema: SchemaDescriptor(sourceEntities),
+                destinationSchema: SchemaDescriptor(destinationEntities),
                 connection: connection)
             return
         }
@@ -3043,8 +3043,8 @@ package enum LightweightMigration {
             }
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -3071,7 +3071,7 @@ package enum LightweightMigration {
             try validateColumnRemovalSideEffects(
                 table: table,
                 entity: source,
-                schema: Schema(sourceEntities),
+                schema: SchemaDescriptor(sourceEntities),
                 removedColumns: removedPhysicalColumns,
                 connection: connection)
             let renamePlan = try orderedRenames(mappings)
@@ -3082,7 +3082,7 @@ package enum LightweightMigration {
                         "A scalar rename cannot target or free a column removed in the same migration.")
                 }
             }
-            let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
+            let sourceIndexDefinitions = indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities))
             let renameIndexNames = Set(
                 sourceIndexDefinitions.compactMap { definition -> String? in
                     renamePlan.contains(where: { sourceName, _ in
@@ -3111,7 +3111,7 @@ package enum LightweightMigration {
             }
             try validateGeneratedIndexesForAttributeRemoval(
                 table: table,
-                definitions: indexDefinitions(for: source, schema: Schema(sourceEntities)),
+                definitions: indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
                 connection: connection)
             for column in removedPhysicalColumns {
                 try validateIndexesForAttributeRemoval(
@@ -3119,13 +3119,13 @@ package enum LightweightMigration {
                     column: column,
                     removableIndexNames: removableIndexNames,
                     knownIndexNames: Set(
-                        indexDefinitions(for: source, schema: Schema(sourceEntities)).map {
+                        indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)).map {
                             $0.name.uppercased()
                         }),
                     connection: connection)
             }
             let knownIndexNames = Set(
-                indexDefinitions(for: source, schema: Schema(sourceEntities)).map { $0.name.uppercased() })
+                indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)).map { $0.name.uppercased() })
             for attribute in removedAttributes where !attribute.options.contains(.flattened) {
                 try validateIndexesForAttributeRemoval(
                     table: table,
@@ -3171,8 +3171,8 @@ package enum LightweightMigration {
             }
             indexTransitions.append(
                 (
-                    indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                    indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                    indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                    indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
                 ))
             return
         }
@@ -3214,8 +3214,8 @@ package enum LightweightMigration {
                 attribute.type, property: "\(destination.name).\(attribute.name)", options: attribute.options)
         }
         if !renamePlan.isEmpty {
-            try validateSourceTableLayout(source, schema: Schema(sourceEntities), connection: connection)
-            _ = try validateSourceIndexLayout(Schema(sourceEntities), connection: connection)
+            try validateSourceTableLayout(source, schema: SchemaDescriptor(sourceEntities), connection: connection)
+            _ = try validateSourceIndexLayout(SchemaDescriptor(sourceEntities), connection: connection)
         }
         for (sourceName, destinationName) in renamePlan {
             try connection.execute(
@@ -3250,7 +3250,7 @@ package enum LightweightMigration {
         }
         try migrateRelationships(
             source: source, destination: destination,
-            sourceSchema: Schema(sourceEntities), schema: Schema(destinationEntities),
+            sourceSchema: SchemaDescriptor(sourceEntities), schema: SchemaDescriptor(destinationEntities),
             pairedInverseRemovals: pairedInverseRemovals,
             toManyRemovalPlan: toManyRemovalPlan,
             toManyAdditionPlan: toManyAdditionPlan,
@@ -3258,17 +3258,17 @@ package enum LightweightMigration {
             connection: connection, existing: existing)
         indexTransitions.append(
             (
-                indexDefinitions(for: source, schema: Schema(sourceEntities)),
-                indexDefinitions(for: destination, schema: Schema(destinationEntities))
+                indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities)),
+                indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
             ))
     }
 
     private static func optionalToRequiredAttributeChanges(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> [AttributeMapping]? {
@@ -3347,10 +3347,10 @@ package enum LightweightMigration {
 
     private static func requiredToOptionalAttributeChange(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> AttributeMapping? {
@@ -3439,10 +3439,10 @@ package enum LightweightMigration {
 
     private static func compatibleIntegerWidening(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> Bool {
@@ -3525,9 +3525,9 @@ package enum LightweightMigration {
     }
 
     private static func validateIntegerWideningAdditions(
-        _ attributes: [Schema.Attribute],
-        source: Schema.Entity,
-        destination: Schema.Entity,
+        _ attributes: [SchemaDescriptor.Attribute],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
         existingColumns: Set<String>
     ) throws {
         let sourceNames = Set(source.attributes.map { $0.name.uppercased() })
@@ -3573,10 +3573,10 @@ package enum LightweightMigration {
 
     private static func compatibleIntegerWideningWithScalarAdditions(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int],
         existingColumns: Set<String>,
@@ -3586,7 +3586,7 @@ package enum LightweightMigration {
         guard !addedAttributes.isEmpty else { return false }
         let retainedMappings = mappings.filter { $0.source != nil }
         let retainedNames = Set(retainedMappings.map { $0.destination.name })
-        let retainedDestination = Schema.Entity(
+        let retainedDestination = SchemaDescriptor.Entity(
             name: destination.name,
             attributes: retainedMappings.map(\.destination),
             relationships: destination.relationships,
@@ -3616,10 +3616,10 @@ package enum LightweightMigration {
 
     private static func compatibleIntegerNarrowings(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> [AttributeMapping]? {
@@ -3740,10 +3740,10 @@ package enum LightweightMigration {
 
     private static func compatibleIntegerToFloating(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> AttributeMapping? {
@@ -3849,10 +3849,10 @@ package enum LightweightMigration {
 
     private static func compatibleExactNumericRebuilds(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> [(AttributeMapping, RebuildConversion)]? {
@@ -3982,10 +3982,10 @@ package enum LightweightMigration {
 
     private static func compatibleFloatingToInteger(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> AttributeMapping? {
@@ -4105,10 +4105,10 @@ package enum LightweightMigration {
 
     private static func rebuildFloatingColumnAsInteger(
         attribute mapping: AttributeMapping,
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         guard let sourceAttribute = mapping.source,
@@ -4236,10 +4236,10 @@ package enum LightweightMigration {
 
     private static func validateRebuildIndexPlan(
         table: String,
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         let sourceHasHierarchy = sourceSchema.entities.contains { entity in
@@ -4278,9 +4278,9 @@ package enum LightweightMigration {
     }
 
     private static func rebuildTable(
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        destinationSchema: Schema,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        destinationSchema: SchemaDescriptor,
         conversions: [RebuildColumnConversion],
         connection: SQLConnection
     ) throws {
@@ -4389,10 +4389,10 @@ package enum LightweightMigration {
 
     private static func rebuildIntegerColumnAsFloating(
         attribute mapping: AttributeMapping,
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         guard let sourceAttribute = mapping.source else {
@@ -4447,7 +4447,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func destinationTableColumnNames(_ entity: Schema.Entity) -> [String] {
+    private static func destinationTableColumnNames(_ entity: SchemaDescriptor.Entity) -> [String] {
         ["Z_PK", "Z_ENT", "Z_OPT"]
             + entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
             .map { "Z\($0.name.uppercased())" }
@@ -4455,7 +4455,7 @@ package enum LightweightMigration {
 
     private static func validateTableRebuildSideEffects(
         table: String,
-        schema: Schema,
+        schema: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         let sideObjects = try connection.rows(
@@ -4552,8 +4552,8 @@ package enum LightweightMigration {
     }
 
     private static func validateFlatOptionalityDDLCompatibility(
-        source: Schema,
-        destination: Schema
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor
     ) throws {
         let sourceBuilt = try SchemaBuilder.build(source)
         let destinationBuilt = try SchemaBuilder.build(destination)
@@ -4588,15 +4588,15 @@ package enum LightweightMigration {
         }
     }
 
-    private static func equivalentUniqueIndexes(_ lhs: [Schema.Index], _ rhs: [Schema.Index]) -> Bool {
+    private static func equivalentUniqueIndexes(_ lhs: [SchemaDescriptor.Index], _ rhs: [SchemaDescriptor.Index]) -> Bool {
         let left = lhs.filter(\.isUnique)
         let right = rhs.filter(\.isUnique)
         return left.count == right.count && left.allSatisfy { right.contains($0) }
     }
 
     private static func equivalentAttributeMetadataExceptTypeAndUnique(
-        _ lhs: Schema.Attribute,
-        _ rhs: Schema.Attribute
+        _ lhs: SchemaDescriptor.Attribute,
+        _ rhs: SchemaDescriptor.Attribute
     ) -> Bool {
         lhs.name == rhs.name
             && lhs.isOptional == rhs.isOptional
@@ -4608,10 +4608,10 @@ package enum LightweightMigration {
 
     private static func compatibleFloatTypeChanges(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
     ) throws -> [AttributeMapping]? {
@@ -4722,13 +4722,13 @@ package enum LightweightMigration {
 
     private static func removableScalarAttributes(
         _ mappings: [AttributeMapping],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceEntities: [Schema.Entity],
-        destinationEntities: [Schema.Entity],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceEntities: [SchemaDescriptor.Entity],
+        destinationEntities: [SchemaDescriptor.Entity],
         sourceEntityIDs: [String: Int],
         destinationEntityIDs: [String: Int]
-    ) throws -> [Schema.Attribute]? {
+    ) throws -> [SchemaDescriptor.Attribute]? {
         let removed = source.attributes.filter { sourceAttribute in
             !mappings.contains(where: { $0.source?.name == sourceAttribute.name })
         }
@@ -4795,7 +4795,7 @@ package enum LightweightMigration {
                     destinationEntity.attributes.filter { $0.options.contains(.unique) }.map(\.name))
                 guard sourceUnique == destinationUnique else { return false }
             }
-            func indexAllowsRenames(_ index: Schema.Index) -> Bool {
+            func indexAllowsRenames(_ index: SchemaDescriptor.Index) -> Bool {
                 !index.properties.contains { renameIndexPropertyNames.contains($0.uppercased()) }
                     || (!index.isUnique && index.properties.count == 1)
             }
@@ -4806,8 +4806,8 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported(
                 "Removal target entity metadata does not match the migration plan.")
         }
-        let sourceIndexDefinitions = indexDefinitions(for: source, schema: Schema(sourceEntities))
-        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: Schema(destinationEntities))
+        let sourceIndexDefinitions = indexDefinitions(for: source, schema: SchemaDescriptor(sourceEntities))
+        let destinationIndexDefinitions = indexDefinitions(for: destination, schema: SchemaDescriptor(destinationEntities))
         let renameIndexesAreOrdinary = renameMappings.allSatisfy({ mapping in
             guard let old = mapping.source else { return false }
             let sourceOnOld = sourceIndexDefinitions.filter { $0.columns == ["Z\(old.name.uppercased())"] }
@@ -4926,7 +4926,7 @@ package enum LightweightMigration {
         return removed
     }
 
-    private static func isRemovableAttributeStorage(_ attribute: Schema.Attribute, entity: Schema.Entity) throws -> Bool
+    private static func isRemovableAttributeStorage(_ attribute: SchemaDescriptor.Attribute, entity: SchemaDescriptor.Entity) throws -> Bool
     {
         if attribute.options.contains(.externalStorage) {
             return attribute.type == "Data"
@@ -4955,7 +4955,7 @@ package enum LightweightMigration {
         return true
     }
 
-    private static func externalColumns(in entities: [Schema.Entity]) -> Set<String> {
+    private static func externalColumns(in entities: [SchemaDescriptor.Entity]) -> Set<String> {
         Set(
             entities.flatMap { entity in
                 entity.attributes.compactMap { attribute in
@@ -4967,8 +4967,8 @@ package enum LightweightMigration {
 
     private static func validateColumnRemovalSideEffects(
         table: String,
-        entity: Schema.Entity,
-        schema: Schema,
+        entity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor,
         removedColumns: Set<String>,
         connection: SQLConnection
     ) throws {
@@ -5071,8 +5071,8 @@ package enum LightweightMigration {
     }
 
     private static func validateSourceTableLayout(
-        _ entity: Schema.Entity,
-        schema: Schema,
+        _ entity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor,
         connection: SQLConnection
     ) throws {
         let table = "Z\(entity.name.uppercased())"
@@ -5252,7 +5252,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func migrationDefaultLiteral(for attribute: Schema.Attribute) throws -> String? {
+    private static func migrationDefaultLiteral(for attribute: SchemaDescriptor.Attribute) throws -> String? {
         guard let source = attribute.defaultValue?.trimmingCharacters(in: .whitespacesAndNewlines) else {
             return nil
         }
@@ -5316,18 +5316,18 @@ package enum LightweightMigration {
     }
 
     private struct RelationshipColumnRemoval {
-        let relationship: Schema.Relationship
+        let relationship: SchemaDescriptor.Relationship
         let column: String
         let indexName: String
     }
 
     private static func planOptionalToOneRelationshipRemovals(
-        _ removedRelationships: [Schema.Relationship],
-        addedRelationships: [Schema.Relationship],
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema
+        _ removedRelationships: [SchemaDescriptor.Relationship],
+        addedRelationships: [SchemaDescriptor.Relationship],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor
     ) throws -> [RelationshipColumnRemoval] {
         let removedNames = Set(removedRelationships.map(\.name))
         let retainedRelationships = source.relationships.filter { !removedNames.contains($0.name) }
@@ -5396,10 +5396,10 @@ package enum LightweightMigration {
     }
 
     private static func migrateRelationships(
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        schema: Schema,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        schema: SchemaDescriptor,
         pairedInverseRemovals: [PairedInverseRelationshipRemoval],
         toManyRemovalPlan: OwnerOnlyToManyRemovalBatchPlan?,
         toManyAdditionPlan: OwnerOnlyToManyAdditionBatchPlan?,
@@ -5691,12 +5691,12 @@ package enum LightweightMigration {
     }
 
     private static func migrateFlatOwnerOnlyToMany(
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema,
-        removed: Schema.Relationship?,
-        added: Schema.Relationship?,
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor,
+        removed: SchemaDescriptor.Relationship?,
+        added: SchemaDescriptor.Relationship?,
         connection: SQLConnection
     ) throws {
         if let removed, added == nil {
@@ -5823,12 +5823,12 @@ package enum LightweightMigration {
     }
 
     private static func planOwnerOnlyToManyRemoval(
-        source: Schema.Entity,
-        destination: Schema.Entity,
-        sourceSchema: Schema,
-        destinationSchema: Schema,
-        relationship: Schema.Relationship,
-        addedAttributes: [Schema.Attribute],
+        source: SchemaDescriptor.Entity,
+        destination: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor,
+        destinationSchema: SchemaDescriptor,
+        relationship: SchemaDescriptor.Relationship,
+        addedAttributes: [SchemaDescriptor.Attribute],
         connection: SQLConnection
     ) throws -> OwnerOnlyToManyRemovalPlan? {
         guard relationship.isToMany,
@@ -5873,9 +5873,9 @@ package enum LightweightMigration {
     }
 
     private static func planOwnerOnlyToManyJoinTableRemoval(
-        _ relationship: Schema.Relationship,
-        owner: Schema.Entity,
-        schema: Schema,
+        _ relationship: SchemaDescriptor.Relationship,
+        owner: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> OwnerOnlyToManyRemovalPlan? {
         guard relationship.isToMany,
@@ -5920,8 +5920,8 @@ package enum LightweightMigration {
     }
 
     private static func planMultipleFlatOwnerOnlyToManyRemovals(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         sourceIndexSQL: [String: String],
         excludedEndpoints: Set<String>,
         connection: SQLConnection
@@ -5939,7 +5939,7 @@ package enum LightweightMigration {
             throw SwiftDataError.migrationUnsupported("Entity names cannot change case during relationship removal.")
         }
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        let removedByOwnerEntries = source.entities.compactMap { sourceEntity -> (String, [Schema.Relationship])? in
+        let removedByOwnerEntries = source.entities.compactMap { sourceEntity -> (String, [SchemaDescriptor.Relationship])? in
             guard let destinationEntity = destinationByName[sourceEntity.name] else { return nil }
             let removed = sourceEntity.relationships.filter { relationship in
                 guard !excludedEndpoints.contains("\(sourceEntity.name).\(relationship.name)") else { return false }
@@ -5991,7 +5991,7 @@ package enum LightweightMigration {
                 "Paired inverse removals cannot be combined with owner-only join removals.")
         }
         let changedOwnerNames = Set(removedByOwner.filter { !$0.value.isEmpty }.map(\.key))
-        let addedAttributeEntries: [(String, [Schema.Attribute])] = try source.entities.compactMap { entity in
+        let addedAttributeEntries: [(String, [SchemaDescriptor.Attribute])] = try source.entities.compactMap { entity in
             guard let next = destinationByName[entity.name] else { return nil }
             let mappings = try attributeMappings(source: entity, destination: next)
             let added = mappings.filter { $0.source == nil }.map(\.destination)
@@ -6233,8 +6233,8 @@ package enum LightweightMigration {
     }
 
     private static func planOwnerOnlyToManyReplacement(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> OwnerOnlyToManyReplacementPlan? {
         guard source.entities.count == destination.entities.count,
@@ -6245,8 +6245,8 @@ package enum LightweightMigration {
         else { return nil }
 
         let destinationEntities = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
-        var removedRelationships: [(Schema.Entity, Schema.Relationship)] = []
-        var addedRelationships: [(Schema.Entity, Schema.Relationship)] = []
+        var removedRelationships: [(SchemaDescriptor.Entity, SchemaDescriptor.Relationship)] = []
+        var addedRelationships: [(SchemaDescriptor.Entity, SchemaDescriptor.Relationship)] = []
         for sourceEntity in source.entities {
             guard let destinationEntity = destinationEntities[sourceEntity.name] else { return nil }
             let retained = sourceEntity.relationships.filter { relationship in
@@ -6408,8 +6408,8 @@ package enum LightweightMigration {
     }
 
     private static func planMultipleFlatOwnerOnlyToManyAdditions(
-        source: Schema,
-        destination: Schema,
+        source: SchemaDescriptor,
+        destination: SchemaDescriptor,
         validatedSourceIndexSQL: [String: String],
         excludedEndpoints: Set<String>,
         connection: SQLConnection
@@ -6419,7 +6419,7 @@ package enum LightweightMigration {
         }
         let destinationByName = Dictionary(uniqueKeysWithValues: destination.entities.map { ($0.name, $0) })
         let additionsByOwnerEntries = source.entities.compactMap {
-            sourceEntity -> (String, [Schema.Relationship])? in
+            sourceEntity -> (String, [SchemaDescriptor.Relationship])? in
             guard let destinationEntity = destinationByName[sourceEntity.name] else { return nil }
             let sourceNames = Set(sourceEntity.relationships.map(\.name))
             let additions = destinationEntity.relationships.filter { relationship in
@@ -6624,7 +6624,7 @@ package enum LightweightMigration {
         named relationshipName: String,
         from ownerName: String,
         to destinationName: String,
-        schema: Schema
+        schema: SchemaDescriptor
     ) -> Bool {
         schema.entity(forName: destinationName)?.relationships.contains(where: { candidate in
             guard candidate.destination == ownerName else { return false }
@@ -6769,10 +6769,10 @@ package enum LightweightMigration {
     }
 
     private static func validatedRemovedRelationshipMapping(
-        _ relationship: Schema.Relationship,
-        owner: Schema.Entity,
-        sourceSchema: Schema
-    ) throws -> Schema.RelationshipStorageMapping {
+        _ relationship: SchemaDescriptor.Relationship,
+        owner: SchemaDescriptor.Entity,
+        sourceSchema: SchemaDescriptor
+    ) throws -> SchemaDescriptor.RelationshipStorageMapping {
         guard
             let mapping = sourceSchema.relationshipStorageMapping(
                 modelEntityName: owner.name, relationshipName: relationship.name),
@@ -6789,9 +6789,9 @@ package enum LightweightMigration {
     private static func validateOptionalRelationshipColumnRemoval(
         table: String,
         column: String,
-        relationship: Schema.Relationship,
-        owner: Schema.Entity,
-        schema: Schema,
+        relationship: SchemaDescriptor.Relationship,
+        owner: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor,
         connection: SQLConnection,
         validatePhysicalLayout: Bool = true
     ) throws {
@@ -6903,7 +6903,7 @@ package enum LightweightMigration {
     }
 
     private static func validateSourceIndexLayout(
-        _ schema: Schema,
+        _ schema: SchemaDescriptor,
         connection: SQLConnection
     ) throws -> [String: String] {
         let definitions = schema.entities.flatMap { indexDefinitions(for: $0, schema: schema) }
@@ -7188,7 +7188,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func validateDestinationIndexNames(_ schema: Schema) throws {
+    private static func validateDestinationIndexNames(_ schema: SchemaDescriptor) throws {
         var seen: Set<String> = []
         for entity in schema.entities {
             for index in indexDefinitions(for: entity, schema: schema) {
@@ -7200,7 +7200,7 @@ package enum LightweightMigration {
         }
     }
 
-    private static func indexDefinitions(for entity: Schema.Entity, schema: Schema) -> [IndexDefinition] {
+    private static func indexDefinitions(for entity: SchemaDescriptor.Entity, schema: SchemaDescriptor) -> [IndexDefinition] {
         var definitions: [IndexDefinition] = []
         for relationship in entity.relationships where !relationship.isToMany {
             guard !SchemaBuilder.isNonOwner(entity, relationship, schema: schema) else { continue }

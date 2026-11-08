@@ -3,7 +3,7 @@ import XCTest
 
 final class SchemaTests: XCTestCase {
     func testConstructionPreservesNamesAndMetadata() {
-        let attribute = Schema.Attribute(
+        let attribute = SchemaDescriptor.Attribute(
             name: "title",
             type: "String",
             isOptional: true,
@@ -11,7 +11,7 @@ final class SchemaTests: XCTestCase {
             options: [.unique],
             originalName: "name"
         )
-        let relationship = Schema.Relationship(
+        let relationship = SchemaDescriptor.Relationship(
             name: "stops",
             destination: "Stop",
             isToMany: true,
@@ -20,9 +20,9 @@ final class SchemaTests: XCTestCase {
             minimumModelCount: 1,
             maximumModelCount: 8
         )
-        let entity = Schema.Entity(name: "Trip", attributes: [attribute], relationships: [relationship])
-        let version = Schema.Version(1, 2, 0)
-        let schema = Schema([entity], version: version)
+        let entity = SchemaDescriptor.Entity(name: "Trip", attributes: [attribute], relationships: [relationship])
+        let version = SchemaDescriptor.Version(1, 2, 0)
+        let schema = SchemaDescriptor([entity], version: version)
 
         XCTAssertEqual(schema.entities, [entity])
         XCTAssertEqual(schema.version, version)
@@ -45,7 +45,7 @@ final class SchemaTests: XCTestCase {
             let inverse: String?
         }
 
-        let relationship = Schema.Relationship(inverse: \Model.inverse)
+        let relationship = SchemaDescriptor.Relationship(inverse: \Model.inverse)
 
         XCTAssertEqual(relationship.inverse, "inverse")
     }
@@ -54,18 +54,18 @@ final class SchemaTests: XCTestCase {
         struct Model {
             let title: String
         }
-        let generated = Schema.PropertyMetadata(
+        let generated = SchemaDescriptor.PropertyMetadata(
             name: "title",
             keypath: \Model.title,
             defaultValue: nil,
             metadata: nil
         )
-        let relationship = Schema.PropertyMetadata(
+        let relationship = SchemaDescriptor.PropertyMetadata(
             name: "relationship",
             keypath: \Model.title,
-            metadata: AnyHashable(Schema.Relationship(name: "relationship", destination: "Destination"))
+            metadata: AnyHashable(SchemaDescriptor.Relationship(name: "relationship", destination: "Destination"))
         )
-        let legacy = Schema.PropertyMetadata(
+        let legacy = SchemaDescriptor.PropertyMetadata(
             name: "legacy",
             isRelationship: true,
             defaultValue: "1",
@@ -88,13 +88,13 @@ final class SchemaTests: XCTestCase {
         struct Model {
             let count: Int
         }
-        let generated = Schema.PropertyMetadata(
+        let generated = SchemaDescriptor.PropertyMetadata(
             name: "count",
             keypath: \Model.count,
             defaultValue: 1,
             metadata: nil
         )
-        let equivalent = Schema.PropertyMetadata(
+        let equivalent = SchemaDescriptor.PropertyMetadata(
             name: "count",
             keypath: \Model.count,
             defaultValue: 2,
@@ -112,19 +112,19 @@ final class SchemaTests: XCTestCase {
         struct Model {
             let value: Int
         }
-        let first = Schema.PropertyMetadata(
+        let first = SchemaDescriptor.PropertyMetadata(
             name: "value",
             keypath: \Model.value,
             defaultValue: nil,
             metadata: AnyHashable(42)
         )
-        let equal = Schema.PropertyMetadata(
+        let equal = SchemaDescriptor.PropertyMetadata(
             name: "value",
             keypath: \Model.value,
             defaultValue: nil,
             metadata: AnyHashable(42)
         )
-        let different = Schema.PropertyMetadata(
+        let different = SchemaDescriptor.PropertyMetadata(
             name: "value",
             keypath: \Model.value,
             defaultValue: nil,
@@ -141,7 +141,7 @@ final class SchemaTests: XCTestCase {
         struct Model {
             let title: String
         }
-        let metadata = Schema.PropertyMetadata(
+        let metadata = SchemaDescriptor.PropertyMetadata(
             name: "title",
             keypath: \Model.title,
             defaultValue: "untitled",
@@ -154,23 +154,23 @@ final class SchemaTests: XCTestCase {
 
     func testSchemaRemainsSendableWithoutPropertyMetadataStorage() {
         func requireSendable<T: Sendable>(_ value: T) {}
-        requireSendable(Schema([]))
+        requireSendable(SchemaDescriptor([]))
     }
 
     func testTransformableOptionStoresTransformerTypeIdentifier() {
         let transformerTypeIdentifier = "Example.ArchiveTransformer"
-        let option = Schema.Attribute.Option.transformable(by: transformerTypeIdentifier)
-        let attribute = Schema.Attribute(name: "payload", type: "Payload", options: [option])
+        let option = SchemaDescriptor.Attribute.Option.transformable(by: transformerTypeIdentifier)
+        let attribute = SchemaDescriptor.Attribute(name: "payload", type: "Payload", options: [option])
 
         XCTAssertEqual(attribute.options, [.transformable(by: transformerTypeIdentifier)])
         XCTAssertEqual(Set([option, .transformable(by: transformerTypeIdentifier)]).count, 1)
     }
 
     func testEntityOrderingAndLookupAreDeterministic() {
-        let schema = Schema([
-            Schema.Entity(name: "Trip"),
-            Schema.Entity(name: "Person"),
-            Schema.Entity(name: "Stop"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Trip"),
+            SchemaDescriptor.Entity(name: "Person"),
+            SchemaDescriptor.Entity(name: "Stop"),
         ])
 
         XCTAssertEqual(schema.entities.map(\.name), ["Person", "Stop", "Trip"])
@@ -179,12 +179,12 @@ final class SchemaTests: XCTestCase {
     }
 
     func testReconciledEntityIDsPreserveStoredIDsAndAppendNewHierarchyEntities() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Animal"),
-            Schema.Entity(name: "Dog", superentityName: "Animal"),
-            Schema.Entity(name: "Zebra", superentityName: "Animal"),
-            Schema.Entity(name: "Cat", superentityName: "Animal"),
-            Schema.Entity(name: "Kitten", superentityName: "Cat"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Animal"),
+            SchemaDescriptor.Entity(name: "Dog", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Zebra", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Cat", superentityName: "Animal"),
+            SchemaDescriptor.Entity(name: "Kitten", superentityName: "Cat"),
         ])
 
         let reconciled = try schema.reconciled(with: ["Animal": 1, "Dog": 2, "Zebra": 3])
@@ -194,43 +194,43 @@ final class SchemaTests: XCTestCase {
             ["Animal": 1, "Dog": 2, "Zebra": 3, "Cat": 4, "Kitten": 5])
         XCTAssertEqual(reconciled.entity(forID: 2)?.name, "Dog")
         XCTAssertEqual(reconciled.entity(forID: 20), nil)
-        XCTAssertEqual(Schema(schema.entities).entityIDsByName["Cat"], 2)
+        XCTAssertEqual(SchemaDescriptor(schema.entities).entityIDsByName["Cat"], 2)
         XCTAssertEqual(try schema.reconciled(with: [:]).entityIDsByName, schema.entityIDsByName)
     }
 
     func testReconciledEntityIDsRejectInvalidStoredMaps() {
-        let schema = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Child", superentityName: "Base"),
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Child", superentityName: "Base"),
         ])
 
         XCTAssertThrowsError(try schema.reconciled(with: ["Base": 1, "Unknown": 2]))
         XCTAssertThrowsError(try schema.reconciled(with: ["Base": 1, "Child": 1]))
         XCTAssertThrowsError(try schema.reconciled(with: ["Base": 0, "Child": 2]))
 
-        let orphanSchema = Schema([Schema.Entity(name: "Orphan", superentityName: "MissingParent")])
+        let orphanSchema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Orphan", superentityName: "MissingParent")])
         XCTAssertThrowsError(try orphanSchema.reconciled(with: ["Base": 1]))
 
-        let cyclicSchema = Schema([
-            Schema.Entity(name: "First", superentityName: "Second"),
-            Schema.Entity(name: "Second", superentityName: "First"),
+        let cyclicSchema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "First", superentityName: "Second"),
+            SchemaDescriptor.Entity(name: "Second", superentityName: "First"),
         ])
         XCTAssertThrowsError(try cyclicSchema.reconciled(with: ["First": 1, "Second": 2]))
 
-        let duplicateSchema = Schema([Schema.Entity(name: "Base"), Schema.Entity(name: "Base")])
+        let duplicateSchema = SchemaDescriptor([SchemaDescriptor.Entity(name: "Base"), SchemaDescriptor.Entity(name: "Base")])
         XCTAssertThrowsError(try duplicateSchema.reconciled(with: ["Base": 1]))
     }
 
     func testEntityPreservesAttributeAndRelationshipDeclarationOrder() {
-        let entity = Schema.Entity(
+        let entity = SchemaDescriptor.Entity(
             name: "Trip",
             attributes: [
-                Schema.Attribute(name: "zeta", type: "String"),
-                Schema.Attribute(name: "alpha", type: "Int"),
+                SchemaDescriptor.Attribute(name: "zeta", type: "String"),
+                SchemaDescriptor.Attribute(name: "alpha", type: "Int"),
             ],
             relationships: [
-                Schema.Relationship(name: "zStops", destination: "Stop"),
-                Schema.Relationship(name: "aOwner", destination: "Person"),
+                SchemaDescriptor.Relationship(name: "zStops", destination: "Stop"),
+                SchemaDescriptor.Relationship(name: "aOwner", destination: "Person"),
             ]
         )
 
@@ -239,9 +239,9 @@ final class SchemaTests: XCTestCase {
     }
 
     func testDuplicateEntityNamesArePreservedByNonthrowingInitializer() {
-        let first = Schema.Entity(name: "Trip")
-        let second = Schema.Entity(name: "Trip")
-        let schema = Schema([first, second])
+        let first = SchemaDescriptor.Entity(name: "Trip")
+        let second = SchemaDescriptor.Entity(name: "Trip")
+        let schema = SchemaDescriptor([first, second])
 
         XCTAssertEqual(schema.entities, [first, second])
         XCTAssertEqual(schema.entity(forName: "Trip"), first)

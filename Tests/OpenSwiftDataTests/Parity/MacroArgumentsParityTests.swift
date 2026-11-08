@@ -57,9 +57,9 @@ enum RenameSchemaV2 {
     }
 
     @Test func `delete rules use SwiftData's raw values`() {
-        let rules: [Schema.Relationship.DeleteRule] = [.noAction, .nullify, .cascade, .deny]
+        let rules: [SchemaDescriptor.Relationship.DeleteRule] = [.noAction, .nullify, .cascade, .deny]
         #expect(rules.map(\.rawValue) == ["noAction", "nullify", "cascade", "deny"])
-        #expect(Schema.Relationship.DeleteRule(rawValue: "cascade") == .cascade)
+        #expect(SchemaDescriptor.Relationship.DeleteRule(rawValue: "cascade") == .cascade)
     }
 
     @Test func `an original name migrates a renamed attribute`() throws {

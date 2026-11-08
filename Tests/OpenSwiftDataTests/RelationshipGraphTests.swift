@@ -404,13 +404,13 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testManualSchemaBindsExplicitRelationshipCandidate() async throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "GraphPerson",
                 relationships: [
-                    Schema.Relationship(name: "pets", destination: "GraphPet", isToMany: true, inverse: "owner")
+                    SchemaDescriptor.Relationship(name: "pets", destination: "GraphPet", isToMany: true, inverse: "owner")
                 ]),
-            Schema.Entity(name: "GraphPet"),
+            SchemaDescriptor.Entity(name: "GraphPet"),
         ])
 
         let container = try ModelContainer(for: [GraphPerson.self, GraphPet.self], schema: schema, configurations: [])
@@ -423,13 +423,13 @@ final class RelationshipGraphTests: XCTestCase {
 
     @MainActor
     func testManualSchemaRejectsRelationshipWithoutCompatibleCandidate() async {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "GraphPerson",
                 relationships: [
-                    Schema.Relationship(name: "pet", destination: "GraphPet", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "pet", destination: "GraphPet", isToMany: true)
                 ]),
-            Schema.Entity(name: "GraphPet"),
+            SchemaDescriptor.Entity(name: "GraphPet"),
         ])
 
         XCTAssertThrowsError(
@@ -868,12 +868,12 @@ private final class ManualInverseSource: RelationshipModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "destination",
                 keypath: \ManualInverseSource.destination,
-                metadata: Schema.Relationship(inverseName: "source")
+                metadata: SchemaDescriptor.Relationship(inverseName: "source")
             )
         ]
     }
@@ -890,7 +890,7 @@ private final class ManualInverseSource: RelationshipModel {
                 >(
                     "destination",
                     keyPath: \.destination,
-                    metadata: Schema.Relationship(inverseName: "source"),
+                    metadata: SchemaDescriptor.Relationship(inverseName: "source"),
                     read: { $0.destination },
                     endpoints: { $0.map { [$0] } ?? [] },
                     build: { $0.first },
@@ -909,12 +909,12 @@ private final class ManualInverseDestination: RelationshipModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "source",
                 keypath: \ManualInverseDestination.source,
-                metadata: Schema.Relationship(inverseName: "destination")
+                metadata: SchemaDescriptor.Relationship(inverseName: "destination")
             )
         ]
     }
@@ -929,7 +929,7 @@ private final class ManualInverseDestination: RelationshipModel {
                 TypedRelationshipPropertyAdapter<ManualInverseDestination, ManualInverseSource?, ManualInverseSource>(
                     "source",
                     keyPath: \.source,
-                    metadata: Schema.Relationship(inverseName: "destination"),
+                    metadata: SchemaDescriptor.Relationship(inverseName: "destination"),
                     read: { $0.source },
                     endpoints: { $0.map { [$0] } ?? [] },
                     build: { $0.first },
@@ -948,8 +948,8 @@ private final class MissingCandidateOwner: RelationshipModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
-        [Schema.PropertyMetadata(name: "targets", keypath: \MissingCandidateOwner.targets)]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
+        [SchemaDescriptor.PropertyMetadata(name: "targets", keypath: \MissingCandidateOwner.targets)]
     }
 
     static func createBackingData() -> DetachedBackingData<MissingCandidateOwner> {
@@ -974,8 +974,8 @@ private final class LegacyPersistentOwner: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
-        [Schema.PropertyMetadata(name: "targets", keypath: \LegacyPersistentOwner.targets)]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
+        [SchemaDescriptor.PropertyMetadata(name: "targets", keypath: \LegacyPersistentOwner.targets)]
     }
 
     static func createBackingData() -> DetachedBackingData<LegacyPersistentOwner> {
@@ -991,8 +991,8 @@ private final class DuplicateCandidateOwner: RelationshipModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
-        [Schema.PropertyMetadata(name: "targets", keypath: \DuplicateCandidateOwner.targets)]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
+        [SchemaDescriptor.PropertyMetadata(name: "targets", keypath: \DuplicateCandidateOwner.targets)]
     }
 
     static func createBackingData() -> DetachedBackingData<DuplicateCandidateOwner> {

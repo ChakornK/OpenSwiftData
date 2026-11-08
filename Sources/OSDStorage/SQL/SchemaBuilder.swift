@@ -40,9 +40,9 @@ package enum SchemaBuilder {
     }
 
     private static func validateRelationships(
-        _ relationships: [Schema.Relationship],
-        in entity: Schema.Entity,
-        schema: Schema
+        _ relationships: [SchemaDescriptor.Relationship],
+        in entity: SchemaDescriptor.Entity,
+        schema: SchemaDescriptor
     ) throws {
         let entities = schema.entities
         for relationship in relationships {
@@ -77,8 +77,8 @@ package enum SchemaBuilder {
                     "Relationship '\(property)' cannot be its own inverse."
                 )
             }
-            let inverseCandidates = entities.flatMap { candidateEntity -> [(String, Schema.Relationship)] in
-                var current: Schema.Entity? = candidateEntity
+            let inverseCandidates = entities.flatMap { candidateEntity -> [(String, SchemaDescriptor.Relationship)] in
+                var current: SchemaDescriptor.Entity? = candidateEntity
                 var visited: Set<String> = []
                 var isDestinationDescendant = false
                 while let value = current, visited.insert(value.name).inserted {
@@ -140,7 +140,7 @@ package enum SchemaBuilder {
         }
     }
 
-    package static func build(_ schema: Schema) throws -> BuiltSchema {
+    package static func build(_ schema: SchemaDescriptor) throws -> BuiltSchema {
         try schema.validateRelationshipStorageMappings()
         let entities = schema.entities.sorted { bytewiseLess($0.name, $1.name) }
         try validateUniqueNames(entities.map(\.name), scope: "entity")
@@ -397,9 +397,9 @@ package enum SchemaBuilder {
     }
 
     private static func buildInheritedSchema(
-        _ schema: Schema,
-        _ entities: [Schema.Entity],
-        entitiesByName: [String: Schema.Entity],
+        _ schema: SchemaDescriptor,
+        _ entities: [SchemaDescriptor.Entity],
+        entitiesByName: [String: SchemaDescriptor.Entity],
         entityIDs: [String: Int]
     ) throws -> BuiltSchema {
         let roots = entities.filter { $0.superentityName == nil }.sorted { bytewiseLess($0.name, $1.name) }
@@ -436,7 +436,7 @@ package enum SchemaBuilder {
 
         for root in roots {
             let members = ordered.filter { rootsByEntity[$0.name] == root.name }
-            var declaredIndexesByEntity: [String: [Schema.Index]] = [:]
+            var declaredIndexesByEntity: [String: [SchemaDescriptor.Index]] = [:]
             for member in members {
                 let ancestors = ancestorEntities(of: member, entitiesByName: entitiesByName)
                 let inheritedIndexes = Set(ancestors.flatMap(\.indexes))
@@ -462,7 +462,7 @@ package enum SchemaBuilder {
                     }
                 }
             }
-            var relationshipsByColumn: [String: Schema.RelationshipStorageMapping] = [:]
+            var relationshipsByColumn: [String: SchemaDescriptor.RelationshipStorageMapping] = [:]
             for member in members {
                 for relationship in member.relationships {
                     guard
@@ -494,9 +494,9 @@ package enum SchemaBuilder {
                     }
                     let hasSupportedInverse: Bool
                     if let inverseName = relationship.inverse {
-                        let inverseCandidates = schema.entities.flatMap { entity -> [(String, Schema.Relationship)] in
+                        let inverseCandidates = schema.entities.flatMap { entity -> [(String, SchemaDescriptor.Relationship)] in
                             let isDestinationDescendant = {
-                                var current: Schema.Entity? = entity
+                                var current: SchemaDescriptor.Entity? = entity
                                 var visited: Set<String> = []
                                 while let value = current, visited.insert(value.name).inserted {
                                     if value.name == relationship.destination { return true }
@@ -541,8 +541,8 @@ package enum SchemaBuilder {
                     relationshipsByColumn[columnKey] = mapping
                 }
             }
-            var attributesByName: [String: (Schema.Attribute, String)] = [:]
-            var uniqueAttributesByOwner: [(Schema.Attribute, String)] = []
+            var attributesByName: [String: (SchemaDescriptor.Attribute, String)] = [:]
+            var uniqueAttributesByOwner: [(SchemaDescriptor.Attribute, String)] = []
             for entity in members {
                 let ancestors = ancestorEntities(of: entity, entitiesByName: entitiesByName)
                 let inheritedAttributesByName = Dictionary(
@@ -718,7 +718,7 @@ package enum SchemaBuilder {
     }
 
     private static func hierarchyIndexName(
-        root: Schema.Entity, ownerEntityName: String, properties: [String], unique: Bool
+        root: SchemaDescriptor.Entity, ownerEntityName: String, properties: [String], unique: Bool
     ) -> String {
         let columns = properties.map { "Z\($0.uppercased())" }.joined(separator: "_")
         let owner = ownerEntityName == root.name ? "" : "_\(ownerEntityName.uppercased())"
@@ -726,9 +726,9 @@ package enum SchemaBuilder {
     }
 
     private static func ancestorEntities(
-        of entity: Schema.Entity, entitiesByName: [String: Schema.Entity]
-    ) -> [Schema.Entity] {
-        var ancestors: [Schema.Entity] = []
+        of entity: SchemaDescriptor.Entity, entitiesByName: [String: SchemaDescriptor.Entity]
+    ) -> [SchemaDescriptor.Entity] {
+        var ancestors: [SchemaDescriptor.Entity] = []
         var parentName = entity.superentityName
         var visited = Set<String>()
         while let name = parentName, visited.insert(name).inserted, let parent = entitiesByName[name] {
@@ -741,12 +741,12 @@ package enum SchemaBuilder {
     private static func hierarchyIndexPredicate(
         ownerEntityName: String,
         rootEntityName: String,
-        entities: [Schema.Entity],
+        entities: [SchemaDescriptor.Entity],
         entityIDs: [String: Int]
     ) -> String {
         guard ownerEntityName != rootEntityName else { return "" }
         let includedIDs = entities.compactMap { candidate -> Int? in
-            var current: Schema.Entity? = candidate
+            var current: SchemaDescriptor.Entity? = candidate
             var visited = Set<String>()
             while let entity = current, visited.insert(entity.name).inserted {
                 if entity.name == ownerEntityName { return entityIDs[candidate.name] }
@@ -759,24 +759,24 @@ package enum SchemaBuilder {
         return " WHERE Z_ENT IN (\(includedIDs.map(String.init).joined(separator: ", ")))"
     }
 
-    private static func indexStatement(entity: Schema.Entity, properties: [String], unique: Bool) -> String {
+    private static func indexStatement(entity: SchemaDescriptor.Entity, properties: [String], unique: Bool) -> String {
         let columns = properties.map { "Z\($0.uppercased())" }
         let indexName = indexName(entity: entity, properties: properties, unique: unique)
         return
             "CREATE \(unique ? "UNIQUE " : "")INDEX \(indexName) ON Z\(entity.name.uppercased()) (\(columns.joined(separator: ", ")));"
     }
 
-    private static func indexName(entity: Schema.Entity, index: Schema.Index) -> String {
+    private static func indexName(entity: SchemaDescriptor.Entity, index: SchemaDescriptor.Index) -> String {
         indexName(entity: entity, properties: index.properties, unique: index.isUnique)
     }
 
-    private static func indexName(entity: Schema.Entity, properties: [String], unique: Bool) -> String {
+    private static func indexName(entity: SchemaDescriptor.Entity, properties: [String], unique: Bool) -> String {
         let columns = properties.map { "Z\($0.uppercased())" }
         return "Z\(entity.name.uppercased())_\(columns.joined(separator: "_"))\(unique ? "_UNIQUE" : "")_INDEX"
     }
 
     package static func isNonOwner(
-        _ entity: Schema.Entity, _ relationship: Schema.Relationship, schema: Schema
+        _ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship, schema: SchemaDescriptor
     ) -> Bool {
         guard let inverseName = relationship.inverse,
             let inverseDeclaration = schema.relationshipDeclaration(
@@ -808,7 +808,7 @@ package enum SchemaBuilder {
     }
 
     package static func joinTableName(
-        for entity: Schema.Entity, relationship: Schema.Relationship, schema: Schema
+        for entity: SchemaDescriptor.Entity, relationship: SchemaDescriptor.Relationship, schema: SchemaDescriptor
     ) -> String? {
         guard relationship.isToMany else { return nil }
         let mapping = schema.relationshipStorageMapping(

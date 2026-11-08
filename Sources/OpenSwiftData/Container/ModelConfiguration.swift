@@ -78,7 +78,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a default-named configuration that stores the given model types.
     public init(for forTypes: any PersistentModel.Type..., isStoredInMemoryOnly: Bool = false) {
         self.init(
-            nil, schema: Schema(forTypes as [any PersistentModel.Type], version: nil),
+            nil, schema: Schema(forTypes as [any PersistentModel.Type]),
             isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
@@ -218,6 +218,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         self.appleDataStoreConfiguration = appleDataStoreConfiguration
     }
 
+    package var schemaDescriptor: SchemaDescriptor? { schema?.descriptor }
+
     /// Throws when the name cannot form a store file name.
     ///
     /// Names longer than 255 characters throw `configurationFileNameTooLong`; names containing
@@ -233,7 +235,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     /// Returns whether both configurations have the same name, URL, schema, save permission, and in-memory flag.
     public static func == (lhs: ModelConfiguration, rhs: ModelConfiguration) -> Bool {
-        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema == rhs.schema && lhs.allowsSave == rhs.allowsSave
+        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema?.descriptor == rhs.schema?.descriptor
+            && lhs.allowsSave == rhs.allowsSave
             && lhs.isStoredInMemoryOnly == rhs.isStoredInMemoryOnly
     }
 

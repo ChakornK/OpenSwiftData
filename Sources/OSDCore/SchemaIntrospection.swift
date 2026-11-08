@@ -23,7 +23,7 @@ extension SchemaProperty {
     public var isTransient: Bool { false }
 }
 
-extension Schema.Attribute: SchemaProperty {
+extension SchemaDescriptor.Attribute: SchemaProperty {
     /// Always `true`.
     public var isAttribute: Bool { true }
     /// Always `false`.
@@ -36,7 +36,7 @@ extension Schema.Attribute: SchemaProperty {
     }
 }
 
-extension Schema.Relationship: SchemaProperty {
+extension SchemaDescriptor.Relationship: SchemaProperty {
     /// Always `false`.
     public var isAttribute: Bool { false }
     /// Always `true`.
@@ -49,15 +49,15 @@ extension Schema.Relationship: SchemaProperty {
     public var inverseName: String? { inverse }
 }
 
-extension Schema.Entity {
+extension SchemaDescriptor.Entity {
     /// The entity's attributes and relationships, including inherited ones, in declaration order.
     public var properties: [any SchemaProperty] { attributes + relationships }
     /// The entity's attributes keyed by name.
-    public var attributesByName: [String: Schema.Attribute] {
+    public var attributesByName: [String: SchemaDescriptor.Attribute] {
         Dictionary(attributes.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
     }
     /// The entity's relationships keyed by name.
-    public var relationshipsByName: [String: Schema.Relationship] {
+    public var relationshipsByName: [String: SchemaDescriptor.Relationship] {
         Dictionary(relationships.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
     }
     /// The property names of each uniqueness constraint, including single `.unique` attributes.

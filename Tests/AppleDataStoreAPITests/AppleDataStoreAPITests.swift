@@ -7,6 +7,38 @@ final class AppleStoreFixture {
     init(title: String) { self.title = title }
 }
 
+@Model
+private final class AppleSnapshotRelatedFixture {
+    var value: Int
+    var owners: [AppleSnapshotOwnerFixture] = []
+    init(value: Int) { self.value = value }
+}
+
+@Model
+private final class AppleSnapshotOwnerFixture {
+    var title: String
+    var related: AppleSnapshotRelatedFixture?
+    init(title: String, related: AppleSnapshotRelatedFixture? = nil) {
+        self.title = title
+        self.related = related
+        related?.owners.append(self)
+    }
+}
+
+private struct AppleSnapshotComposite: Codable, Sendable, FlattenableComposite {
+    let count: Int
+    static var flattenedComponents: [FlattenedComponent<Self>] {
+        [FlattenedComponent("count", keyPath: \.count, set: { count, _ in Self(count: count) })]
+    }
+    static func emptyFlattenedValue() throws -> Self { Self(count: 0) }
+}
+
+@Model
+private final class AppleSnapshotCompositeFixture {
+    @Attribute(.flattened) var composite: AppleSnapshotComposite
+    init(composite: AppleSnapshotComposite) { self.composite = composite }
+}
+
 private struct FixtureSnapshot: AppleDataStoreSnapshot {
     let persistentIdentifier: PersistentIdentifier
     let title: String
@@ -16,12 +48,9 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
         self.title = title
     }
 
-    init(
-        from backingData: any BackingData,
-        relatedBackingDatas: inout [PersistentIdentifier: any BackingData]
-    ) throws {
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
         _ = (backingData, relatedBackingDatas)
-        throw SwiftDataError.unsupportedStore("fixture requires explicit snapshot values")
+        self.init(persistentIdentifier: backingData.persistentModelID, title: "")
     }
 
     func copy(
@@ -30,15 +59,14 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
     ) -> Self {
         Self(persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier, title: title)
     }
-
 }
 
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
     typealias Store = FixtureAppleStore
     let name: String
-    var schema: Schema?
+    var schema: SchemaDescriptor?
 
-    func makeStore(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
+    func makeStore(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
         FixtureAppleStore(self, schema: schema)
     }
 }
@@ -46,7 +74,7 @@ private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
 private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecked Sendable {
     let configuration: FixtureAppleConfiguration
     let identifier = "apple.fixture"
-    let schema: Schema
+    let schema: SchemaDescriptor
 
     required init(_ configuration: FixtureAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
         guard let schema = configuration.schema else { throw SwiftDataError.unsupportedStore("Missing schema") }
@@ -54,7 +82,7 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
         self.schema = schema
     }
 
-    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: Schema) {
+    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: SchemaDescriptor) {
         self.configuration = configuration
         self.schema = schema
     }
@@ -69,11 +97,10 @@ private final class FixtureAppleStore: AppleDataStoreBackendProviding, @unchecke
         AppleDataStoreSaveChangesResult(for: identifier)
     }
 
-    func makeBackend(schema: Schema, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
+    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any DataStore {
         _ = (schema, migrationPlan)
         return FixtureLegacyBackend()
     }
-
 }
 
 private struct FixtureLegacyBackend: DataStore {
@@ -85,67 +112,43 @@ private struct FixtureLegacyBackend: DataStore {
     func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
 }
 
-private final class FixtureTransactionState: @unchecked Sendable {
-    private let lock = NSRecursiveLock()
-    private var snapshots: [PersistentIdentifier: DataStoreSnapshot] = [:]
-    private var failAfterFirstInsert = false
-    private var inserts = 0
-
-    func enableFailure() { lock.lock(); failAfterFirstInsert = true; lock.unlock() }
-    func resetFailure() { lock.lock(); failAfterFirstInsert = false; inserts = 0; lock.unlock() }
-
-    func apply(_ request: DataStoreSaveRequest) throws {
-        lock.lock(); defer { lock.unlock() }
-        for snapshot in request.inserted {
-            snapshots[snapshot.persistentIdentifier] = snapshot
-            inserts += 1
-            if failAfterFirstInsert, inserts == 1 {
-                throw SwiftDataError.unsupportedStore("injected atomic write failure")
-            }
-        }
-        for snapshot in request.updated { snapshots[snapshot.persistentIdentifier] = snapshot }
-        for identifier in request.deleted { snapshots.removeValue(forKey: identifier) }
-    }
-
-    func all() -> [DataStoreSnapshot] { lock.lock(); defer { lock.unlock() }; return Array(snapshots.values) }
-    func restore(_ values: [DataStoreSnapshot]) {
-        lock.lock(); defer { lock.unlock() }
-        snapshots = Dictionary(uniqueKeysWithValues: values.map { ($0.persistentIdentifier, $0) })
-    }
-}
-
-private struct AtomicFixtureBackend: DataStore {
-    let identifier = "apple.fixture"
-    let state: FixtureTransactionState
-
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        DataStoreFetchResult(snapshots: state.all())
-    }
-
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
-        let before = state.all()
-        do {
-            try state.apply(request)
-            return DataStoreSaveResult(
-                updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
-                deletedIdentifiers: Set(request.deleted))
-        } catch {
-            state.restore(before)
-            state.resetFailure()
-            throw error
-        }
-    }
-
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
-        state.all().first { $0.persistentIdentifier == identifier }
-    }
-}
-
 @Suite
 struct AppleDataStoreAPITests {
+    @MainActor
+    @Test
+    func testDefaultSnapshotCaptureIncludesScalarAndRelatedValues() throws {
+        let related = AppleSnapshotRelatedFixture(value: 7)
+        let owner = AppleSnapshotOwnerFixture(title: "snapshot", related: related)
+        let schema = try ModelContainer.inferredSchema(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let snapshots = try AppleDefaultSnapshot.capture(from: owner, in: schema)
+        let ownerSnapshot = try #require(snapshots.first { $0.entityName == "AppleSnapshotOwnerFixture" })
+        let relatedSnapshot = try #require(snapshots.first { $0.entityName == "AppleSnapshotRelatedFixture" })
+
+        #expect(ownerSnapshot.values["title"] == .text("snapshot"))
+        #expect(ownerSnapshot.relationships["related"] == [related.persistentModelID])
+        #expect(relatedSnapshot.values["value"] == .int(7))
+        #expect(relatedSnapshot.relationships["owners"] == [owner.persistentModelID])
+        #expect(snapshots.count == 2)
+
+        let remappedOwner = PersistentIdentifier(
+            storeIdentifier: "snapshot.store", entityName: owner.persistentModelID.entityName, primaryKey: 30)
+        let remappedRelated = PersistentIdentifier(
+            storeIdentifier: "snapshot.store", entityName: related.persistentModelID.entityName, primaryKey: 31)
+        let remappings = [owner.persistentModelID: remappedOwner, related.persistentModelID: remappedRelated]
+        let copied = ownerSnapshot.copy(persistentIdentifier: remappedOwner, remappedIdentifiers: remappings)
+        #expect(copied.relationships["related"] == [remappedRelated])
+
+        let compositeModel = AppleSnapshotCompositeFixture(composite: AppleSnapshotComposite(count: 42))
+        let compositeSchema = try ModelContainer.inferredSchema(for: [AppleSnapshotCompositeFixture.self])
+        let compositeSnapshots = try AppleDefaultSnapshot.capture(from: compositeModel, in: compositeSchema)
+        let compositeSnapshot = try #require(compositeSnapshots.first)
+        #expect(compositeSnapshot.values["composite_count"] == .int(42))
+    }
+
     @Test
     func testAppleStoreConformanceCompiles() throws {
-        let schema = Schema([AppleStoreFixture.self])
+        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
         let config = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let store = try FixtureAppleStore(config, migrationPlan: nil)
         #expect(store.schema == schema)
@@ -164,10 +167,11 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
+    @available(*, deprecated, message: "Exercises the intentionally deprecated identity-only initializer.")
     func testDefaultSnapshotBackingInitializerCapturesIdentityOnly() throws {
         let backing = DetachedBackingData<AppleStoreFixture>(metadata: AppleStoreFixture.schemaMetadata())
         var related: [PersistentIdentifier: any BackingData] = [:]
-        let snapshot = try AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
+        let snapshot = AppleDefaultSnapshot(from: backing, relatedBackingDatas: &related)
         #expect(snapshot.persistentIdentifier == backing.persistentModelID)
         #expect(snapshot.entityName == backing.persistentModelID.entityName)
         #expect(snapshot.values.isEmpty)
@@ -175,14 +179,13 @@ struct AppleDataStoreAPITests {
 
     @Test @MainActor
     func testContainerRoutesAppleStoreConfigurationToBackend() throws {
-        let schema = Schema([AppleStoreFixture.self])
+        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
         let configuration = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let container = try ModelContainer(
             for: [AppleStoreFixture.self],
             configurations: [ModelConfiguration(
-                appleStore: "apple-fixture", schema: schema,
+                appleStore: "apple-fixture", schema: Schema(descriptor: schema),
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
     }
-
 }

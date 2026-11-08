@@ -361,8 +361,10 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
             throw SwiftDataError.unsupportedStore(
                 SnapshotMaterializationError.encodingFailed(String(describing: error)).description)
         }
-        let decoded = try decodeSnapshot(
-            Configuration.StoreType.Snapshot.self, from: encoded, entity: snapshot.entityName)
+        guard let entity = schema.descriptor.entity(forName: snapshot.entityName) else {
+            throw SwiftDataError.unsupportedStore("Snapshot refers to unknown entity '\(snapshot.entityName)'.")
+        }
+        let decoded = try decodeSnapshot(Configuration.StoreType.Snapshot.self, from: encoded, entity: entity)
         return decoded.copy(persistentIdentifier: snapshot.persistentIdentifier, remappedIdentifiers: nil)
     }
     return CanonicalDataStoreAdapter(
@@ -382,28 +384,60 @@ private func makeSnapshotValue(
 }
 
 private func decodeSnapshot<Snapshot: DataStoreSnapshot>(
-    _ type: Snapshot.Type, from data: Data, entity: String
+    _ type: Snapshot.Type, from data: Data, entity: SchemaDescriptor.Entity
 ) throws -> Snapshot {
+    let candidates: [Data]
     do {
-        return try JSONDecoder().decode(type, from: data)
+        candidates = try SnapshotCodableLayout.acceptedEncodings(data, entity: entity)
+    } catch let error as SnapshotMaterializationError {
+        throw SwiftDataError.unsupportedStore(error.description)
     } catch {
-        if var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let reservedKeys: Set<String> = ["persistentIdentifier", "entityName", "relationships", "values"]
-            let valueKeys = object.keys.filter { !reservedKeys.contains($0) }
-            if !object.keys.contains("values") {
-                var values: [String: Any] = [:]
-                for key in valueKeys { values[key] = object.removeValue(forKey: key) }
-                object["values"] = values
-                if let nestedData = try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]) {
-                    if let decoded = try? JSONDecoder().decode(type, from: nestedData) { return decoded }
-                }
-                throw SwiftDataError.unsupportedStore(
-                    SnapshotMaterializationError.unsupportedLayout(
-                        entity: entity, missingKeys: [], extraKeys: valueKeys.sorted()).description)
-            }
-        }
         throw SwiftDataError.unsupportedStore(
-            SnapshotMaterializationError.unsupportedLayout(entity: entity, missingKeys: [], extraKeys: []).description)
+            SnapshotMaterializationError.encodingFailed(String(describing: error)).description)
+    }
+    var decodeErrors: [String] = []
+    for candidate in candidates {
+        do {
+            return try JSONDecoder().decode(type, from: candidate)
+        } catch {
+            decodeErrors.append(String(describing: error))
+        }
+    }
+    throw SwiftDataError.unsupportedStore(
+        SnapshotMaterializationError.encodingFailed(decodeErrors.joined(separator: " | ")).description)
+}
+
+private enum SnapshotCodableLayout {
+    static func acceptedEncodings(_ data: Data, entity: SchemaDescriptor.Entity) throws -> [Data] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SnapshotMaterializationError.unsupportedLayout(entity: entity.name, missingKeys: [], extraKeys: [])
+        }
+        let reserved: Set<String> = ["persistentIdentifier", "entityName", "relationships"]
+        let attributeKeys = Set(entity.attributes.flatMap { attribute in
+            attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
+        })
+        let topLevelKeys = reserved.union(attributeKeys)
+        let nestedKeys = reserved.union(["values"])
+        let keys = Set(object.keys)
+        if keys == topLevelKeys {
+            var nested = object
+            var values: [String: Any] = [:]
+            for key in attributeKeys {
+                if let value = nested.removeValue(forKey: key) { values[key] = value }
+            }
+            nested["values"] = values
+            return [data, try JSONSerialization.data(withJSONObject: nested, options: [.fragmentsAllowed, .sortedKeys])]
+        }
+        if keys == nestedKeys, let values = object["values"] as? [String: Any], Set(values.keys) == attributeKeys {
+            var flattened = object
+            flattened.removeValue(forKey: "values")
+            for (key, value) in values { flattened[key] = value }
+            return [data, try JSONSerialization.data(withJSONObject: flattened, options: [.fragmentsAllowed, .sortedKeys])]
+        }
+        throw SnapshotMaterializationError.unsupportedLayout(
+            entity: entity.name,
+            missingKeys: topLevelKeys.subtracting(keys).sorted(),
+            extraKeys: keys.subtracting(topLevelKeys).sorted())
     }
 }
 

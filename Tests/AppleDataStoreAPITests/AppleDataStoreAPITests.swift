@@ -864,6 +864,21 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
+    func nestedSnapshotValuesRequireExactSchemaKeys() throws {
+        let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(),
+                    "entityName": entity.name,
+                    "relationships": [:],
+                    "values": ["title": "valid", "metadata": "extra"],
+                ],
+                entity: entity)
+        }
+    }
+
+    @Test
     func snapshotCodingKeyMaterializesModeledProperty() throws {
         let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
         let values = try projectSnapshotValues(

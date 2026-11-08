@@ -6,21 +6,39 @@ import SwiftData
 final class MembershipScenarioRow {
     var name: String
     var age: Int
+    var nick: String?
 
-    init(name: String, age: Int) {
+    init(name: String, age: Int, nick: String? = nil) {
         self.name = name
         self.age = age
+        self.nick = nick
     }
 }
 
-@main
 struct AppleParityRunner {
     @MainActor
-    static func main() throws {
+    static func run() throws {
         let outputURL = outputURL(from: CommandLine.arguments)
-        let results = try ParityScenarioCatalog.all.map(run)
+        let predicateResults = try ParityScenarioCatalog.all.map(run)
+        let schemaResults = try AppleSchemaIntrospectionAdapter.runAll()
+        guard #available(macOS 26, *) else {
+            throw NSError(
+                domain: "AppleParityRunner",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Schema model-type parity requires macOS 26 or newer."])
+        }
+        let modelTypeResults = try AppleSchemaModelTypesAdapter.runAll()
+        let storeIdentifierResults = try AppleStoreIdentifierAdapter.runAll()
+        let identityResults = try AppleModelIdentityAdapter.runAll()
+        let configurationResults = AppleModelConfigurationAdapter.runAll()
+        let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
+        let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
+        let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
+            + configurationResults + configurationContainerResults + pendingFetchResults)
+            .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(
+                schemaVersion: 2,
                 implementation: "apple-swiftdata",
                 gitSHA: ProcessInfo.processInfo.environment["GITHUB_SHA"] ?? "local",
                 scenarios: results.map(\.id)),
@@ -40,45 +58,40 @@ struct AppleParityRunner {
             switch operation {
             case .insertRows:
                 for row in specification.rows {
-                    context.insert(MembershipScenarioRow(name: row.name, age: Int(row.age)))
+                    context.insert(MembershipScenarioRow(name: row.name, age: Int(row.age), nick: row.nick))
                 }
             case let .fetchNamesMatchingCapturedNames(field, includesPending):
-                guard specification.sortField == .age else { throw ScenarioAdapterError.unsupportedSortField }
                 let capturedNames = specification.capturedNames
-                var descriptor = FetchDescriptor<MembershipScenarioRow>(
-                    predicate: #Predicate { capturedNames.contains($0.name) },
-                    sortBy: [SortDescriptor(\.age)])
+                var descriptor = makeDescriptor(
+                    #Predicate { capturedNames.contains($0.name) }, sortField: specification.sortField)
                 descriptor.includePendingChanges = includesPending
                 let names = try context.fetch(descriptor).map(\.name)
                 observations.append(
                     ParityObservation(step: step, field: field, value: .array(names.map(ObservedValue.string))))
             case let .fetchNamesMatchingArrayLiteralBD(field, includesPending):
-                guard specification.sortField == .age else { throw ScenarioAdapterError.unsupportedSortField }
-                var descriptor = FetchDescriptor<MembershipScenarioRow>(
-                    predicate: #Predicate { ["b", "d"].contains($0.name) },
-                    sortBy: [SortDescriptor(\.age)])
+                var descriptor = makeDescriptor(
+                    #Predicate { ["b", "d"].contains($0.name) }, sortField: specification.sortField)
                 descriptor.includePendingChanges = includesPending
                 let names = try context.fetch(descriptor).map(\.name)
                 observations.append(
                     ParityObservation(step: step, field: field, value: .array(names.map(ObservedValue.string))))
             case let .fetchNamesNotMatchingCapturedNames(field, names, includesPending):
-                var descriptor = FetchDescriptor<MembershipScenarioRow>(
-                    predicate: #Predicate { !names.contains($0.name) }, sortBy: [SortDescriptor(\.age)])
+                var descriptor = makeDescriptor(
+                    #Predicate { !names.contains($0.name) }, sortField: specification.sortField)
                 descriptor.includePendingChanges = includesPending
                 let values = try context.fetch(descriptor).map(\.name)
                 observations.append(
                     ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
             case let .fetchNamesMatchingAges(field, ages, includesPending):
-                var descriptor = FetchDescriptor<MembershipScenarioRow>(
-                    predicate: #Predicate { ages.contains($0.age) }, sortBy: [SortDescriptor(\.age)])
+                var descriptor = makeDescriptor(
+                    #Predicate { ages.contains($0.age) }, sortField: specification.sortField)
                 descriptor.includePendingChanges = includesPending
                 let values = try context.fetch(descriptor).map(\.name)
                 observations.append(
                     ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
             case let .fetchNamesMatchingNamesOrAge(field, names, minimumAge, includesPending):
-                var descriptor = FetchDescriptor<MembershipScenarioRow>(
-                    predicate: #Predicate { names.contains($0.name) || $0.age > minimumAge },
-                    sortBy: [SortDescriptor(\.age)])
+                var descriptor = makeDescriptor(
+                    #Predicate { names.contains($0.name) || $0.age > minimumAge }, sortField: specification.sortField)
                 descriptor.includePendingChanges = includesPending
                 let values = try context.fetch(descriptor).map(\.name)
                 observations.append(
@@ -88,6 +101,68 @@ struct AppleParityRunner {
                 let count = try context.fetchCount(
                     FetchDescriptor<MembershipScenarioRow>(predicate: #Predicate { names.contains($0.name) }))
                 observations.append(ParityObservation(step: step, field: field, value: .integer(Int64(count))))
+            case let .countNamesMatchingNonEmptyNames(field):
+                let count = try context.fetchCount(
+                    FetchDescriptor<MembershipScenarioRow>(predicate: #Predicate { !$0.name.isEmpty }))
+                observations.append(ParityObservation(step: step, field: field, value: .integer(Int64(count))))
+            case let .fetchNameSetMatchingNameCharacterCount(field, count):
+                let descriptor = FetchDescriptor<MembershipScenarioRow>(
+                    predicate: #Predicate { $0.name.count == count }, sortBy: sorting(for: specification.sortField))
+                let names = try context.fetch(descriptor).map(\.name)
+                observations.append(ParityObservation(step: step, field: field, value: .stringSet(names)))
+            case let .fetchNameSetMatchingOptionalNickCount(field, minimumCount, defaultValue):
+                let predicate = #Predicate<MembershipScenarioRow> { $0.nick.flatMap { $0.count > minimumCount } ?? defaultValue }
+                let descriptor = FetchDescriptor(predicate: predicate, sortBy: sorting(for: specification.sortField))
+                let names = try context.fetch(descriptor).map(\.name)
+                observations.append(ParityObservation(step: step, field: field, value: .stringSet(names)))
+            case let .fetchNamesMatchingNameIsEmpty(field, negated, includesPending):
+                if negated {
+                    var descriptor = FetchDescriptor<MembershipScenarioRow>(
+                        predicate: #Predicate { !$0.name.isEmpty }, sortBy: sorting(for: specification.sortField))
+                    descriptor.includePendingChanges = includesPending
+                    let values = try context.fetch(descriptor).map(\.name)
+                    observations.append(
+                        ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+                } else {
+                    var descriptor = FetchDescriptor<MembershipScenarioRow>(
+                        predicate: #Predicate { $0.name.isEmpty }, sortBy: sorting(for: specification.sortField))
+                    descriptor.includePendingChanges = includesPending
+                    let values = try context.fetch(descriptor).map(\.name)
+                    observations.append(
+                        ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+                }
+            case let .fetchNamesMatchingNameCharacterCount(field, count, usesGreaterThan):
+                if usesGreaterThan {
+                    let descriptor = FetchDescriptor<MembershipScenarioRow>(
+                        predicate: #Predicate { $0.name.count > count }, sortBy: sorting(for: specification.sortField))
+                    let values = try context.fetch(descriptor).map(\.name)
+                    observations.append(
+                        ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+                } else {
+                    let descriptor = FetchDescriptor<MembershipScenarioRow>(
+                        predicate: #Predicate { $0.name.count == count }, sortBy: sorting(for: specification.sortField))
+                    let values = try context.fetch(descriptor).map(\.name)
+                    observations.append(
+                        ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+                }
+            case let .fetchNamesMatchingOptionalNickIsEmpty(field, defaultValue):
+                let predicate = #Predicate<MembershipScenarioRow> { $0.nick.flatMap { $0.isEmpty } ?? defaultValue }
+                let descriptor = FetchDescriptor(predicate: predicate, sortBy: sorting(for: specification.sortField))
+                let values = try context.fetch(descriptor).map(\.name)
+                observations.append(
+                    ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+            case let .fetchNamesMatchingOptionalNickCount(field, minimumCount, defaultValue):
+                let predicate = #Predicate<MembershipScenarioRow> { $0.nick.flatMap { $0.count > minimumCount } ?? defaultValue }
+                let descriptor = FetchDescriptor(predicate: predicate, sortBy: sorting(for: specification.sortField))
+                let values = try context.fetch(descriptor).map(\.name)
+                observations.append(
+                    ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
+            case let .fetchNamesMatchingOptionalNickIsEmptyDirectly(field):
+                let descriptor = FetchDescriptor<MembershipScenarioRow>(
+                    predicate: #Predicate { $0.nick?.isEmpty == true }, sortBy: sorting(for: specification.sortField))
+                let values = try context.fetch(descriptor).map(\.name)
+                observations.append(
+                    ParityObservation(step: step, field: field, value: .array(values.map(ObservedValue.string))))
             case .save:
                 try context.save()
             }
@@ -101,8 +176,20 @@ struct AppleParityRunner {
         }
         return URL(fileURLWithPath: arguments[index + 1])
     }
+    private static func makeDescriptor(
+        _ predicate: Predicate<MembershipScenarioRow>, sortField: PredicateMembershipSpecification.SortField
+    ) -> FetchDescriptor<MembershipScenarioRow> {
+        FetchDescriptor(predicate: predicate, sortBy: sorting(for: sortField))
+    }
+
+    private static func sorting(
+        for sortField: PredicateMembershipSpecification.SortField
+    ) -> [SortDescriptor<MembershipScenarioRow>] {
+        switch sortField {
+        case .age: [SortDescriptor(\.age)]
+        case .name: [SortDescriptor(\.name)]
+        }
+    }
 }
 
-private enum ScenarioAdapterError: Error {
-    case unsupportedSortField
-}
+try AppleParityRunner.run()

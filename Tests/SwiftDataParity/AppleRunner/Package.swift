@@ -4,7 +4,7 @@ import PackageDescription
 #if os(macOS)
 let package = Package(
     name: "AppleSwiftDataParityRunner",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "apple-parity-runner", targets: ["AppleParityRunner"]),
         .executable(name: "parity-validate", targets: ["ParityValidate"]),
@@ -23,16 +23,32 @@ let package = Package(
             name: "ParityValidate",
             dependencies: [
                 .product(name: "ParityContracts", package: "contracts"),
+                "ParitySourceDiscovery",
+            ]),
+        .target(
+            name: "ParitySourceDiscovery",
+            dependencies: [
                 .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
             ]),
         .executableTarget(
             name: "ParityCompare",
-            dependencies: [.product(name: "ParityContracts", package: "contracts")],
+            dependencies: [
+                .product(name: "ParityContracts", package: "contracts"),
+                "ParityCompareRuntime",
+            ],
             path: "Sources/ParityCompare"),
+        .target(
+            name: "ParityCompareRuntime",
+            dependencies: [.product(name: "ParityContracts", package: "contracts")]),
         .testTarget(
             name: "ParityToolTests",
-            dependencies: [.product(name: "ParityContracts", package: "contracts")],
+            dependencies: [
+                .product(name: "ParityContracts", package: "contracts"),
+                "ParityCompareRuntime",
+                "ParitySourceDiscovery",
+            ],
             path: "Tests/ParityToolTests"),
     ],
     swiftLanguageModes: [.v6])

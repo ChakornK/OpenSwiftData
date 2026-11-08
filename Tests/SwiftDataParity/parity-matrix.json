@@ -3,35 +3,792 @@
   "cases": [
     {
       "sourceCase": "PredicateParityTests/membership in a captured array",
-      "scenarioIDs": ["PredicateParityTests/membership in a captured array"],
-      "status": "compared",
-      "argumentSets": ["default"],
-      "observations": ["pending.names", "saved.names"]
+      "scenarioIDs": [
+        "PredicateParityTests/membership in a captured array"
+      ],
+      "observations": {
+        "PredicateParityTests/membership in a captured array": [
+          "pending.names",
+          "saved.names"
+        ]
+      },
+      "outcomes": {
+        "PredicateParityTests/membership in a captured array": "compared"
+      }
     },
     {
       "sourceCase": "PredicateParityTests/membership in an array literal",
-      "scenarioIDs": ["PredicateParityTests/membership in an array literal"],
-      "status": "compared",
-      "argumentSets": ["default"],
-      "observations": ["pending.names", "saved.names"]
+      "scenarioIDs": [
+        "PredicateParityTests/membership in an array literal"
+      ],
+      "observations": {
+        "PredicateParityTests/membership in an array literal": [
+          "pending.names",
+          "saved.names"
+        ]
+      },
+      "outcomes": {
+        "PredicateParityTests/membership in an array literal": "compared"
+      }
     },
     {
       "sourceCase": "PredicateParityTests/membership in an empty array matches nothing",
-      "scenarioIDs": ["PredicateParityTests/membership in an empty array matches nothing"],
-      "status": "compared",
-      "argumentSets": ["default"],
-      "observations": ["pending.names", "saved.names", "saved.count"]
+      "scenarioIDs": [
+        "PredicateParityTests/membership in an empty array matches nothing"
+      ],
+      "observations": {
+        "PredicateParityTests/membership in an empty array matches nothing": [
+          "pending.names",
+          "saved.names",
+          "saved.count"
+        ]
+      },
+      "outcomes": {
+        "PredicateParityTests/membership in an empty array matches nothing": "compared"
+      }
     },
     {
       "sourceCase": "PredicateParityTests/negated, integer, and combined membership",
-      "scenarioIDs": ["PredicateParityTests/negated, integer, and combined membership"],
-      "status": "compared",
-      "argumentSets": ["default"],
-      "observations": [
-        "negated.pending", "negated.saved",
-        "integer.pending", "integer.saved",
-        "combined.pending", "combined.saved"
-      ]
+      "scenarioIDs": [
+        "PredicateParityTests/negated, integer, and combined membership"
+      ],
+      "observations": {
+        "PredicateParityTests/negated, integer, and combined membership": [
+          "negated.pending",
+          "negated.saved",
+          "integer.pending",
+          "integer.saved",
+          "combined.pending",
+          "combined.saved"
+        ]
+      },
+      "outcomes": {
+        "PredicateParityTests/negated, integer, and combined membership": "compared"
+      }
+    },
+    {
+      "sourceCase": "StringPredicateParityTests/string isEmpty",
+      "scenarioIDs": [
+        "StringPredicateParityTests/string isEmpty/pending",
+        "StringPredicateParityTests/string isEmpty/saved"
+      ],
+      "observations": {
+        "StringPredicateParityTests/string isEmpty/pending": [
+          "empty.names",
+          "nonempty.count"
+        ],
+        "StringPredicateParityTests/string isEmpty/saved": [
+          "empty.names",
+          "nonempty.count"
+        ]
+      },
+      "outcomes": {
+        "StringPredicateParityTests/string isEmpty/pending": "compared",
+        "StringPredicateParityTests/string isEmpty/saved": "compared"
+      }
+    },
+    {
+      "sourceCase": "StringPredicateParityTests/string count counts characters",
+      "scenarioIDs": [
+        "StringPredicateParityTests/string count counts characters/pending",
+        "StringPredicateParityTests/string count counts characters/saved"
+      ],
+      "observations": {
+        "StringPredicateParityTests/string count counts characters/pending": [
+          "length.4",
+          "length.5",
+          "length.gt5"
+        ],
+        "StringPredicateParityTests/string count counts characters/saved": [
+          "length.4",
+          "length.5",
+          "length.gt5"
+        ]
+      },
+      "outcomes": {
+        "StringPredicateParityTests/string count counts characters/pending": "compared",
+        "StringPredicateParityTests/string count counts characters/saved": "divergent"
+      }
+    },
+    {
+      "sourceCase": "StringPredicateParityTests/optional flatMap over a string",
+      "scenarioIDs": [
+        "StringPredicateParityTests/optional flatMap over a string/pending",
+        "StringPredicateParityTests/optional flatMap over a string/saved"
+      ],
+      "observations": {
+        "StringPredicateParityTests/optional flatMap over a string/pending": [
+          "nick.empty.false",
+          "nick.count.gt1.false",
+          "nick.count.gt1.true",
+          "nick.isEmpty.direct"
+        ],
+        "StringPredicateParityTests/optional flatMap over a string/saved": [
+          "nick.empty.false",
+          "nick.count.gt1.false",
+          "nick.count.gt1.true",
+          "nick.isEmpty.direct"
+        ]
+      },
+      "outcomes": {
+        "StringPredicateParityTests/optional flatMap over a string/pending": "compared",
+        "StringPredicateParityTests/optional flatMap over a string/saved": "divergent"
+      }
+    },
+    {
+      "sourceCase": "SchemaIntrospectionParityTests/entities are found by model type",
+      "scenarioIDs": [
+        "SchemaIntrospectionParityTests/entities are found by model type"
+      ],
+      "outcomes": {
+        "SchemaIntrospectionParityTests/entities are found by model type": "compared"
+      },
+      "observations": {
+        "SchemaIntrospectionParityTests/entities are found by model type": [
+          "author.entityName",
+          "author.entitiesLookup",
+          "author.attributes",
+          "author.relationships",
+          "author.properties",
+          "book.entityName",
+          "book.entitiesLookup",
+          "entities.names"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaIntrospectionParityTests/property flags describe attributes and relationships",
+      "scenarioIDs": [
+        "SchemaIntrospectionParityTests/property flags describe attributes and relationships"
+      ],
+      "outcomes": {
+        "SchemaIntrospectionParityTests/property flags describe attributes and relationships": "divergent"
+      },
+      "observations": {
+        "SchemaIntrospectionParityTests/property flags describe attributes and relationships": [
+          "author.handle.flags",
+          "author.bio.optional",
+          "author.books.flags",
+          "book.author.toOne"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaIntrospectionParityTests/constraints and indices are listed by property name",
+      "scenarioIDs": [
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name"
+      ],
+      "outcomes": {
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": "divergent"
+      },
+      "observations": {
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": [
+          "author.uniquenessConstraints",
+          "book.indices",
+          "entities.names"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaIntrospectionParityTests/schemas round-trip through Codable and files",
+      "scenarioIDs": [
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files"
+      ],
+      "outcomes": {
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": "divergent"
+      },
+      "observations": {
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": [
+          "roundTrip.version",
+          "roundTrip.entities",
+          "roundTrip.author.properties",
+          "roundTrip.author.uniquenessConstraints",
+          "roundTrip.book.indices",
+          "roundTrip.entities.names"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaModelTypesParityTests/a schema built from types lists entities in name order",
+      "scenarioIDs": [
+        "SchemaModelTypesParityTests/a schema built from types lists entities in name order"
+      ],
+      "outcomes": {
+        "SchemaModelTypesParityTests/a schema built from types lists entities in name order": "compared"
+      },
+      "observations": {
+        "SchemaModelTypesParityTests/a schema built from types lists entities in name order": [
+          "entities.names",
+          "schema.version",
+          "schema.variadicEntityCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaModelTypesParityTests/a schema includes models reachable only as relationship destinations",
+      "scenarioIDs": [
+        "SchemaModelTypesParityTests/a schema includes models reachable only as relationship destinations"
+      ],
+      "outcomes": {
+        "SchemaModelTypesParityTests/a schema includes models reachable only as relationship destinations": "compared"
+      },
+      "observations": {
+        "SchemaModelTypesParityTests/a schema includes models reachable only as relationship destinations": [
+          "stop.lookup",
+          "trip.entityName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaModelTypesParityTests/an empty schema has no entities and version 1.0.0",
+      "scenarioIDs": [
+        "SchemaModelTypesParityTests/an empty schema has no entities and version 1.0.0"
+      ],
+      "outcomes": {
+        "SchemaModelTypesParityTests/an empty schema has no entities and version 1.0.0": "compared"
+      },
+      "observations": {
+        "SchemaModelTypesParityTests/an empty schema has no entities and version 1.0.0": [
+          "entities.names",
+          "schema.version"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaModelTypesParityTests/a versioned schema carries its version",
+      "scenarioIDs": [
+        "SchemaModelTypesParityTests/a versioned schema carries its version"
+      ],
+      "outcomes": {
+        "SchemaModelTypesParityTests/a versioned schema carries its version": "compared"
+      },
+      "observations": {
+        "SchemaModelTypesParityTests/a versioned schema carries its version": [
+          "schema.version",
+          "entities.count"
+        ]
+      }
+    },
+    {
+      "sourceCase": "SchemaModelTypesParityTests/a container opened from a type-built schema saves and fetches models",
+      "scenarioIDs": [
+        "SchemaModelTypesParityTests/a container opened from a type-built schema saves and fetches models"
+      ],
+      "outcomes": {
+        "SchemaModelTypesParityTests/a container opened from a type-built schema saves and fetches models": "compared"
+      },
+      "observations": {
+        "SchemaModelTypesParityTests/a container opened from a type-built schema saves and fetches models": [
+          "fetched.tripNames",
+          "fetched.stopLabels"
+        ]
+      }
+    },
+    {
+      "sourceCase": "StoreIdentifierParityTests/saved identifiers use a UUID store identifier",
+      "scenarioIDs": [
+        "StoreIdentifierParityTests/saved identifiers use a UUID store identifier"
+      ],
+      "outcomes": {
+        "StoreIdentifierParityTests/saved identifiers use a UUID store identifier": "compared"
+      },
+      "observations": {
+        "StoreIdentifierParityTests/saved identifiers use a UUID store identifier": [
+          "temporary.storeIdentifierAbsent",
+          "saved.storeIdentifierPresent",
+          "saved.storeIdentifierIsUUID"
+        ]
+      }
+    },
+    {
+      "sourceCase": "StoreIdentifierParityTests/the store identifier survives reopening the store",
+      "scenarioIDs": [
+        "StoreIdentifierParityTests/the store identifier survives reopening the store"
+      ],
+      "outcomes": {
+        "StoreIdentifierParityTests/the store identifier survives reopening the store": "divergent"
+      },
+      "observations": {
+        "StoreIdentifierParityTests/the store identifier survives reopening the store": [
+          "reopened.identifierEqual",
+          "reopened.storeIdentifierEqual",
+          "reopened.fetchName",
+          "reopened.registeredName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "StoreIdentifierParityTests/separate stores have different identifiers",
+      "scenarioIDs": [
+        "StoreIdentifierParityTests/separate stores have different identifiers"
+      ],
+      "outcomes": {
+        "StoreIdentifierParityTests/separate stores have different identifiers": "compared"
+      },
+      "observations": {
+        "StoreIdentifierParityTests/separate stores have different identifiers": [
+          "stores.identifiersDiffer"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/models compare by instance identity",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/models compare by instance identity"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/models compare by instance identity": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/models compare by instance identity": [
+          "instances.sameReferenceEqual",
+          "instances.distinctEqual",
+          "instances.distinctHashesDiffer",
+          "instances.remainUnequalAfterSave"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/the id is the persistent identifier",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/the id is the persistent identifier"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/the id is the persistent identifier": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/the id is the persistent identifier": [
+          "id.matchesPersistentIDBeforeSave",
+          "id.matchesPersistentIDAfterSave"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/saving replaces the temporary identifier",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/saving replaces the temporary identifier"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/saving replaces the temporary identifier": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/saving replaces the temporary identifier": [
+          "id.changedAfterSave",
+          "id.temporaryStoreAbsent",
+          "id.savedStorePresent"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/instances of one row in two contexts hash equally but compare unequal",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/instances of one row in two contexts hash equally but compare unequal"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/instances of one row in two contexts hash equally but compare unequal": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/instances of one row in two contexts hash equally but compare unequal": [
+          "contexts.distinctReferences",
+          "contexts.modelsUnequal",
+          "contexts.hashesEqual",
+          "contexts.setCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/a declared id property replaces the identifier id",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/a declared id property replaces the identifier id"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/a declared id property replaces the identifier id": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/a declared id property replaces the identifier id": [
+          "customID.matchesDeclaredUUID"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelIdentityParityTests/models are Identifiable and Observable",
+      "scenarioIDs": [
+        "ModelIdentityParityTests/models are Identifiable and Observable"
+      ],
+      "outcomes": {
+        "ModelIdentityParityTests/models are Identifiable and Observable": "compared"
+      },
+      "observations": {
+        "ModelIdentityParityTests/models are Identifiable and Observable": [
+          "conformance.identifiable",
+          "conformance.observable"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/the default configuration stores default.store in Application Support",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support": [
+          "name",
+          "url.fileName",
+          "url.parent",
+          "idMatchesURL",
+          "inMemory",
+          "allowsSave",
+          "hasSchema",
+          "hasGroupIdentifier",
+          "hasCloudIdentifier"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/in-memory configurations use dev null",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/in-memory configurations use dev null"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/in-memory configurations use dev null": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/in-memory configurations use dev null": [
+          "default.inMemory",
+          "default.url",
+          "named.inMemory",
+          "named.url",
+          "named.name"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/named configurations use the name as the file stem",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/named configurations use the name as the file stem"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/named configurations use the name as the file stem": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/named configurations use the name as the file stem": [
+          "named.url.fileName",
+          "named.url.parent",
+          "nilName.defaults",
+          "slashName.fileName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/explicit URLs are kept and the name defaults",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults": [
+          "url.kept",
+          "defaultName",
+          "explicitName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/type-scoped configurations carry a schema",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema": [
+          "typed.entities",
+          "typed.name",
+          "typed.inMemory",
+          "mutable.schemaEntityCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/cloud and group selections are reported",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/cloud and group selections are reported",
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/cloud and group selections are reported": "compared",
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind": "non-comparable"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/cloud and group selections are reported": [
+          "selected.cloudIdentifierMatches"
+        ]
+      },
+      "reasonCategory": "shim-only-api",
+      "rationale": "Apple's SwiftData selection wrappers expose no public selection discriminator."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage": [
+          "equality.defaults",
+          "equality.memoryDefaults",
+          "equality.nameDifference",
+          "equality.saveDifference",
+          "equality.memoryNameDifference",
+          "equality.sameURLDifferentName",
+          "equality.differentSchemas",
+          "equality.schemaPresence"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/cloud and group selections do not affect equality",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality": [
+          "equality.cloudSelection",
+          "equality.groupSelection"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/hashing ignores the schema",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/hashing ignores the schema"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/hashing ignores the schema": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/hashing ignores the schema": [
+          "hash.sameConfiguration",
+          "hash.differentSchema"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/debug description lists every setting",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/debug description lists every setting"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/debug description lists every setting": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/debug description lists every setting": [
+          "debug.defaultFieldsPresent",
+          "debug.customFieldsPresent"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/containers reject configurations with invalid names",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names": [
+          "invalidName.containerRejected"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent": [
+          "secondStore.fetchCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/file stores create missing parent directories",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories": [
+          "saved.fileExists",
+          "saved.fetchNames"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/names up to 255 characters validate",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/names up to 255 characters validate"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/names up to 255 characters validate": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/reserved characters fail validation",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/reserved characters fail validation/'/'",
+        "ModelConfigurationParityTests/reserved characters fail validation/':'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\\\\'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'*'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'?'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'<'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'>'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'|'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\"'"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/reserved characters fail validation/'/'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/':'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\\\\'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'*'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'?'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'<'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'>'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'|'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\"'": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/other names validate",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/other names validate/'a\\x00b'",
+        "ModelConfigurationParityTests/other names validate/'a\\nb'",
+        "ModelConfigurationParityTests/other names validate/'a b'",
+        "ModelConfigurationParityTests/other names validate/'a~b'",
+        "ModelConfigurationParityTests/other names validate/'a.b'",
+        "ModelConfigurationParityTests/other names validate/'a..b'",
+        "ModelConfigurationParityTests/other names validate/'.'",
+        "ModelConfigurationParityTests/other names validate/'..'",
+        "ModelConfigurationParityTests/other names validate/''"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/other names validate/'a\\x00b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a\\nb'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a~b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a.b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a..b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'.'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'..'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/''": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/explicit URL configurations still validate their names",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/explicit URL configurations still validate their names"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/explicit URL configurations still validate their names": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/a zero fetch limit means no limit",
+      "scenarioIDs": [
+        "PendingFetchParityTests/a zero fetch limit means no limit"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/a zero fetch limit means no limit": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/a zero fetch limit means no limit": [
+          "names.all",
+          "names.offset",
+          "count",
+          "identifierCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/stored rows paginate before pending changes merge",
+      "scenarioIDs": [
+        "PendingFetchParityTests/stored rows paginate before pending changes merge"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/stored rows paginate before pending changes merge": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/stored rows paginate before pending changes merge": [
+          "names.all",
+          "names.limit",
+          "names.offset",
+          "names.limitOffset",
+          "names.zeroLimitOffset",
+          "count.all",
+          "count.limit",
+          "count.limitOffset"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory",
+      "scenarioIDs": [
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory": [
+          "names.lessThanForty",
+          "names.lessThanForty.limit",
+          "names.greaterThanFifty.offset"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/excluding pending changes returns only stored rows",
+      "scenarioIDs": [
+        "PendingFetchParityTests/excluding pending changes returns only stored rows"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/excluding pending changes returns only stored rows": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/excluding pending changes returns only stored rows": [
+          "names.stored"
+        ]
+      }
     }
   ]
 }

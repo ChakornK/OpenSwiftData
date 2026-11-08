@@ -290,7 +290,19 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
 ) throws -> any OpenSwiftDataDataStore {
     try configuration.validate()
     let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
-    let operations = try configuration.makeSnapshotBridge(for: Configuration.StoreType.self, schema: schema)
+    let operations: DataStoreSnapshotBridgeOperations
+    if Configuration.StoreType.Snapshot.self == AppleDefaultSnapshot.self {
+        operations = DataStoreSnapshotBridgeOperations(
+            encode: { try AppleDefaultSnapshot.makeAppleSnapshot(from: $0, in: schema.descriptor) },
+            decode: { snapshot in
+                guard let snapshot = snapshot as? AppleDefaultSnapshot else {
+                    throw SwiftDataError.unsupportedStore("Canonical default snapshot type mismatch.")
+                }
+                return try snapshot.makeBackendSnapshot(in: schema.descriptor)
+            })
+    } else {
+        operations = try configuration.makeSnapshotBridge(for: Configuration.StoreType.self, schema: schema)
+    }
     return CanonicalDataStoreAdapter(
         store: store,
         schema: schema.descriptor,

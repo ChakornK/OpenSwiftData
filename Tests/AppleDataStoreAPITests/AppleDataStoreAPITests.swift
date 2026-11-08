@@ -221,6 +221,18 @@ private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
         case payload
     }
 
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        payload: String
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.payload = payload
+    }
+
     var persistedValues: [String: DataStoreSnapshotValue] { ["title": .text("provider value")] }
 
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
@@ -325,6 +337,51 @@ private struct CodableConventionSnapshot: DataStoreSnapshot {
             relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } },
             title: title,
             value: value)
+    }
+}
+
+private struct RenamedCodableSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let payload: String
+
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier
+        case entityName
+        case relationships
+        case payload
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        payload: String
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.payload = payload
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        payload = ""
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } },
+            payload: payload)
     }
 }
 
@@ -708,6 +765,22 @@ struct AppleDataStoreAPITests {
             try projectSnapshotValues(
                 from: ["persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture", "relationships": [:], "title": 42],
                 entity: entity)
+        }
+    }
+
+    @Test
+    func opaqueSnapshotLayoutFailsBeforeModelMaterialization() throws {
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+        let snapshot = RenamedCodableSnapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "opaque", entityName: entity.name, primaryKey: 1),
+            entityName: entity.name,
+            relationships: [:],
+            payload: "not a schema field")
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try materializeSnapshotValues(from: snapshot, entity: entity)
         }
     }
 

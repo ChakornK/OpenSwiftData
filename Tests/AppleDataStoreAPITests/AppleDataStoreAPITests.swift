@@ -809,6 +809,23 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
+    func codableConventionRejectsReservedModeledPropertyNames() throws {
+        let entity = SchemaDescriptor.Entity(
+            name: "ReservedNameFixture",
+            attributes: [SchemaDescriptor.Attribute(name: "persistentIdentifier", type: "String")],
+            relationships: [])
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(),
+                    "entityName": "ReservedNameFixture",
+                    "relationships": [:],
+                ],
+                entity: entity)
+        }
+    }
+
+    @Test
     func snapshotCodingKeyMaterializesModeledProperty() throws {
         let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
         let values = try projectSnapshotValues(

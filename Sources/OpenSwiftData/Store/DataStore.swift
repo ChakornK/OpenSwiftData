@@ -458,6 +458,11 @@ package func projectSnapshotValues(
                 ? attribute.components.map(\.columnName)
                 : [attribute.name]
         })
+    let reservedKeyCollisions = attributeKeys.intersection(reservedKeys)
+    guard reservedKeyCollisions.isEmpty else {
+        throw SnapshotMaterializationError.unsupportedLayout(
+            entity: entity.name, missingKeys: [], extraKeys: reservedKeyCollisions.sorted())
+    }
     let topLevelKeys = reservedKeys.union(attributeKeys)
     let valueContainerKeys = reservedKeys.union(["values"])
     let values: [String: Any]

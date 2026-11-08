@@ -3,26 +3,26 @@ import SwiftData
 import Testing
 
 @Model
-final class ProbeRecord {
+final class ValidationRecord {
     var title: String
-    var related: ProbeRelated?
+    var related: ValidationRelated?
 
-    init(title: String, related: ProbeRelated? = nil) {
+    init(title: String, related: ValidationRelated? = nil) {
         self.title = title
         self.related = related
     }
 }
 
 @Model
-final class ProbeRelated {
+final class ValidationRelated {
     var count: Int
-    var records: [ProbeRecord] = []
+    var records: [ValidationRecord] = []
 
     init(count: Int) { self.count = count }
 }
 
-private struct ProbeConfiguration: DataStoreConfiguration, Hashable {
-    typealias Store = ProbeStore
+private struct ValidationConfiguration: DataStoreConfiguration, Hashable {
+    typealias Store = ValidationStore
     var name: String
     var schema: Schema?
 
@@ -30,7 +30,7 @@ private struct ProbeConfiguration: DataStoreConfiguration, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(name) }
 }
 
-private struct ProbeSnapshot: DataStoreSnapshot {
+private struct ValidationSnapshot: DataStoreSnapshot {
     let persistentIdentifier: PersistentIdentifier
     let title: String?
     let count: Int?
@@ -42,22 +42,22 @@ private struct ProbeSnapshot: DataStoreSnapshot {
             preconditionFailure("BackingData has no persistent identifier")
         }
         persistentIdentifier = identifier
-        if identifier.entityName == "ProbeRecord",
-            let recordBacking = backingData as? any BackingData<ProbeRecord>
+        if identifier.entityName == "ValidationRecord",
+            let recordBacking = backingData as? any BackingData<ValidationRecord>
         {
-            title = recordBacking.getValue(forKey: \ProbeRecord.title)
+            title = recordBacking.getValue(forKey: \ValidationRecord.title)
             count = nil
-            let relatedModel = recordBacking.getValue(forKey: \ProbeRecord.related)
+            let relatedModel = recordBacking.getValue(forKey: \ValidationRecord.related)
             related = relatedModel?.persistentModelID
             records = []
             if let relatedModel { relatedBackingDatas[relatedModel.persistentModelID] = relatedModel.persistentBackingData }
-        } else if identifier.entityName == "ProbeRelated",
-            let relatedBacking = backingData as? any BackingData<ProbeRelated>
+        } else if identifier.entityName == "ValidationRelated",
+            let relatedBacking = backingData as? any BackingData<ValidationRelated>
         {
             title = nil
-            count = relatedBacking.getValue(forKey: \ProbeRelated.count)
+            count = relatedBacking.getValue(forKey: \ValidationRelated.count)
             related = nil
-            let recordModels = relatedBacking.getValue(forKey: \ProbeRelated.records)
+            let recordModels = relatedBacking.getValue(forKey: \ValidationRelated.records)
             records = recordModels.map(\.persistentModelID)
             for record in recordModels {
                 relatedBackingDatas[record.persistentModelID] = record.persistentBackingData
@@ -119,9 +119,9 @@ private struct ProbeSnapshot: DataStoreSnapshot {
     }
 }
 
-private final class ProbeStore: DataStore {
-    typealias Configuration = ProbeConfiguration
-    typealias Snapshot = ProbeSnapshot
+private final class ValidationStore: DataStore {
+    typealias Configuration = ValidationConfiguration
+    typealias Snapshot = ValidationSnapshot
     let configuration: Configuration
     let identifier: String
     var schema: Schema { configuration.schema ?? Schema() }
@@ -171,8 +171,8 @@ private final class ProbeStore: DataStore {
     }
 }
 
-@Suite("Apple SwiftData snapshot probe")
-struct AppleSnapshotTests {
+@Suite("Apple SwiftData snapshot behavior")
+struct AppleSnapshotBehaviorTests {
     @Test func modeledPropertyKeyRepresentation() {
         #expect(DataStoreSnapshotCodingKey.modeledProperty("title").stringValue == "title")
         #expect(DataStoreSnapshotCodingKey(stringValue: "title").map {
@@ -182,17 +182,17 @@ struct AppleSnapshotTests {
 
     @MainActor
     @Test func customSnapshotMaterializesRelationships() throws {
-        let schema = Schema([ProbeRecord.self, ProbeRelated.self])
-        let configuration = ProbeConfiguration(name: "apple-snapshot-probe", schema: schema)
+        let schema = Schema([ValidationRecord.self, ValidationRelated.self])
+        let configuration = ValidationConfiguration(name: "apple-snapshot-validation", schema: schema)
         let container = try ModelContainer(
             for: schema, configurations: [configuration])
-        let related = ProbeRelated(count: 7)
-        let record = ProbeRecord(title: "apple-runtime", related: related)
+        let related = ValidationRelated(count: 7)
+        let record = ValidationRecord(title: "apple-runtime", related: related)
         let context = ModelContext(container)
         context.insert(record)
         try context.save()
 
-        let fetched = try #require(ModelContext(container).fetch(FetchDescriptor<ProbeRecord>()).first)
+        let fetched = try #require(ModelContext(container).fetch(FetchDescriptor<ValidationRecord>()).first)
         #expect(fetched.title == "apple-runtime")
         #expect(fetched.related?.count == 7)
         #expect(fetched.related?.records.map(\.title) == ["apple-runtime"])

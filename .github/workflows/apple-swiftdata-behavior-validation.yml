@@ -1,4 +1,4 @@
-name: Apple SwiftData snapshot probe
+name: Apple SwiftData behavior validation
 
 on:
   pull_request:
@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  swiftdata-snapshot-probe:
+  swiftdata-behavior-validation:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show selected Apple toolchain
         run: swift --version
-      - name: Run Apple SwiftData snapshot probe
+      - name: Validate Apple SwiftData snapshot behavior
         run: swift test
-        working-directory: AppleSDKProbe
+        working-directory: AppleSwiftDataBehaviorValidation

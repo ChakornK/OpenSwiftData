@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "AppleSDKProbe",
+    name: "AppleSwiftDataBehaviorValidation",
     platforms: [.macOS(.v15)],
     targets: [
-        .testTarget(name: "AppleSDKProbeTests")
+        .testTarget(name: "AppleSwiftDataBehaviorValidationTests")
     ],
     swiftLanguageModes: [.v6]
 )

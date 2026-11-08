@@ -1,4 +1,4 @@
-import OpenSwiftData
+@testable import OpenSwiftData
 import Testing
 
 @Model
@@ -133,8 +133,8 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equata
     let value: Int64?
     let relationships: [String: [PersistentIdentifier]]
 
-    var persistedValues: [String: DataStoreSnapshotValue] {
-        var values: [String: DataStoreSnapshotValue] = [:]
+    var persistedValues: [String: DataStoreAttributeValue] {
+        var values: [String: DataStoreAttributeValue] = [:]
         if let title { values["title"] = .text(title) }
         if let value { values["value"] = .int(value) }
         return values
@@ -157,7 +157,7 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equata
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        persistedValues: [String: DataStoreSnapshotValue],
+        persistedValues: [String: DataStoreAttributeValue],
         relationships: [String: [PersistentIdentifier]]
     ) {
         self.init(
@@ -208,6 +208,65 @@ private struct CanonicalSourceShapeSnapshot: DataStoreSnapshot {
     }
 }
 
+private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let payload: String
+
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier
+        case entityName
+        case relationships
+        case payload
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        payload: String
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.payload = payload
+    }
+
+    var persistedValues: [String: DataStoreAttributeValue] { ["title": .text("provider value")] }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        payload = "codable value"
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        persistedValues: [String: DataStoreAttributeValue],
+        relationships: [String: [PersistentIdentifier]]
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        payload = persistedValues["title"].flatMap { if case let .text(value) = $0 { value } else { nil } } ?? ""
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            persistedValues: persistedValues,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+}
+
 private struct UnbridgedCanonicalConfiguration: DataStoreConfiguration {
     typealias StoreType = UnbridgedCanonicalStore
     let name: String
@@ -230,6 +289,442 @@ private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
         DataStoreSaveChangesResult(for: identifier)
     }
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
+}
+
+private struct CodableConventionConfiguration: DataStoreConfiguration {
+    typealias StoreType = CodableConventionStore
+    let name: String
+    var schema: Schema?
+}
+
+private struct CodableConventionSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let title: String?
+    let value: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier, entityName, relationships, values
+    }
+
+    private enum ValueKeys: String, CodingKey {
+        case title, value
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        title: String?,
+        value: Int64?
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.title = title
+        self.value = value
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        title = nil
+        value = nil
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        persistentIdentifier = try container.decode(PersistentIdentifier.self, forKey: .persistentIdentifier)
+        entityName = try container.decode(String.self, forKey: .entityName)
+        relationships = try container.decode([String: [PersistentIdentifier]].self, forKey: .relationships)
+        let values = try container.nestedContainer(keyedBy: ValueKeys.self, forKey: .values)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        value = try values.decodeIfPresent(Int64.self, forKey: .value)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(persistentIdentifier, forKey: .persistentIdentifier)
+        try container.encode(entityName, forKey: .entityName)
+        try container.encode(relationships, forKey: .relationships)
+        var values = container.nestedContainer(keyedBy: ValueKeys.self, forKey: .values)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encodeIfPresent(value, forKey: .value)
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } },
+            title: title,
+            value: value)
+    }
+}
+
+private struct RenamedCodableSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let payload: String
+
+    private enum CodingKeys: String, CodingKey {
+        case persistentIdentifier
+        case entityName
+        case relationships
+        case payload
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        payload: String
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.payload = payload
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        payload = ""
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } },
+            payload: payload)
+    }
+}
+
+private struct AppleKeyLayoutSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let title: String?
+    let value: Int64?
+    let related: PersistentIdentifier?
+    let owners: [PersistentIdentifier]
+
+    var relationships: [String: [PersistentIdentifier]] {
+        if entityName == "AppleSnapshotOwnerFixture" { ["related": related.map { [$0] } ?? []] }
+        else { ["owners": owners] }
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        title: String?,
+        value: Int64?,
+        related: PersistentIdentifier?,
+        owners: [PersistentIdentifier] = []
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.title = title
+        self.value = value
+        self.related = related
+        self.owners = owners
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        title = nil
+        value = nil
+        related = nil
+        owners = []
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: DataStoreSnapshotCodingKey.self)
+        persistentIdentifier = try container.decode(PersistentIdentifier.self, forKey: .persistentIdentifier)
+        entityName = persistentIdentifier.entityName
+        if entityName == "AppleSnapshotOwnerFixture" {
+            title = try container.decodeIfPresent(String.self, forKey: .modeledProperty("title"))
+            value = nil
+            related = try container.decodeIfPresent(PersistentIdentifier.self, forKey: .modeledProperty("related"))
+            owners = []
+        } else {
+            title = nil
+            value = try container.decodeIfPresent(Int64.self, forKey: .modeledProperty("value"))
+            related = nil
+            owners = try container.decodeIfPresent([PersistentIdentifier].self, forKey: .modeledProperty("owners")) ?? []
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: DataStoreSnapshotCodingKey.self)
+        try container.encode(persistentIdentifier, forKey: .persistentIdentifier)
+        if entityName == "AppleSnapshotOwnerFixture" {
+            try container.encodeIfPresent(title, forKey: .modeledProperty("title"))
+            try container.encodeIfPresent(related, forKey: .modeledProperty("related"))
+        } else {
+            try container.encodeIfPresent(value, forKey: .modeledProperty("value"))
+            try container.encode(owners, forKey: .modeledProperty("owners"))
+        }
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            title: title,
+            value: value,
+            related: related.flatMap { remappedIdentifiers?[$0] ?? $0 },
+            owners: owners.map { remappedIdentifiers?[$0] ?? $0 })
+    }
+}
+
+private struct AppleKeyLayoutConfiguration: DataStoreConfiguration {
+    typealias StoreType = AppleKeyLayoutStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class AppleKeyLayoutStore: DataStore, @unchecked Sendable {
+    typealias Configuration = AppleKeyLayoutConfiguration
+    typealias Snapshot = AppleKeyLayoutSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let state: AppleKeyLayoutStoreState
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        state = AppleKeyLayoutStoreRegistry.shared.state(for: configuration.name)
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        try state.save(request, storeIdentifier: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { state.snapshot(for: identifier) }
+    static func failNextSave(for name: String) { AppleKeyLayoutStoreRegistry.shared.state(for: name).failNextSave() }
+}
+
+private final class AppleKeyLayoutStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [PersistentIdentifier: AppleKeyLayoutSnapshot] = [:]
+    private var failsNextSave = false
+
+    func failNextSave() {
+        lock.lock(); defer { lock.unlock() }
+        failsNextSave = true
+    }
+
+    func fetch<Model: PersistentModel>(
+        entityName: String, descriptor: FetchDescriptor<Model>
+    ) -> DataStoreFetchResult<Model, AppleKeyLayoutSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        return DataStoreFetchResult(
+            descriptor: descriptor,
+            fetchedSnapshots: snapshots.values.filter { $0.entityName == entityName },
+            relatedSnapshots: snapshots)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) -> AppleKeyLayoutSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return snapshots[identifier]
+    }
+
+    func save(
+        _ request: DataStoreSaveChangesRequest<AppleKeyLayoutSnapshot>, storeIdentifier: String
+    ) throws -> DataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        if failsNextSave {
+            failsNextSave = false
+            throw SwiftDataError.unsupportedStore("injected Apple coding-key snapshot save failure")
+        }
+        var candidate = snapshots
+        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            remappings[snapshot.persistentIdentifier] = PersistentIdentifier(
+                storeIdentifier: storeIdentifier, entityName: snapshot.entityName, primaryKey: nextPrimaryKey)
+            nextPrimaryKey += 1
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            let copied = snapshot.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
+            candidate[copied.persistentIdentifier] = copied
+        }
+        snapshots = candidate
+        return DataStoreSaveChangesResult(for: storeIdentifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class AppleKeyLayoutStoreRegistry: @unchecked Sendable {
+    static let shared = AppleKeyLayoutStoreRegistry()
+    private let lock = NSLock()
+    private var storage: [String: AppleKeyLayoutStoreState] = [:]
+
+    func state(for name: String) -> AppleKeyLayoutStoreState {
+        lock.lock(); defer { lock.unlock() }
+        if let state = storage[name] { return state }
+        let state = AppleKeyLayoutStoreState()
+        storage[name] = state
+        return state
+    }
+}
+
+private struct RenamedSnapshotConfiguration: DataStoreConfiguration {
+    typealias StoreType = RenamedSnapshotStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class RenamedSnapshotStore: DataStore, @unchecked Sendable {
+    typealias Configuration = RenamedSnapshotConfiguration
+    typealias Snapshot = RenamedCodableSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let row: Snapshot
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        row = Snapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: configuration.name, entityName: "AppleStoreFixture", primaryKey: 1),
+            entityName: "AppleStoreFixture",
+            relationships: [:],
+            payload: "opaque value")
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [row])
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        DataStoreSaveChangesResult(for: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { identifier == row.persistentIdentifier ? row : nil }
+}
+
+private final class CodableConventionStore: DataStore, @unchecked Sendable {
+    typealias Configuration = CodableConventionConfiguration
+    typealias Snapshot = CodableConventionSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let state: CodableConventionStoreState
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        state = CodableConventionRegistry.shared.state(for: configuration.name)
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        state.fetch(descriptor: request.descriptor, entityName: Schema.entityName(for: Model.self))
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        try state.save(request, storeIdentifier: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { state.snapshot(for: identifier) }
+    static func failNextSave(for name: String) { CodableConventionRegistry.shared.state(for: name).failNextSave() }
+}
+
+private final class CodableConventionStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: CodableConventionSnapshot] = [:]
+    private var failsNextSave = false
+
+    func failNextSave() {
+        lock.lock(); defer { lock.unlock() }
+        failsNextSave = true
+    }
+
+    func fetch<Model: PersistentModel>(
+        descriptor: FetchDescriptor<Model>, entityName: String
+    ) -> DataStoreFetchResult<Model, CodableConventionSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        return DataStoreFetchResult(
+            descriptor: descriptor,
+            fetchedSnapshots: rows.values.filter { $0.entityName == entityName },
+            relatedSnapshots: rows)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) -> CodableConventionSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return rows[identifier]
+    }
+
+    func save(
+        _ request: DataStoreSaveChangesRequest<CodableConventionSnapshot>, storeIdentifier: String
+    ) throws -> DataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        if failsNextSave {
+            failsNextSave = false
+            throw SwiftDataError.unsupportedStore("injected Codable convention save failure")
+        }
+        var candidate = rows
+        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            remappings[snapshot.persistentIdentifier] = PersistentIdentifier(
+                storeIdentifier: storeIdentifier, entityName: snapshot.entityName, primaryKey: nextPrimaryKey)
+            nextPrimaryKey += 1
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanentID = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            let remapped = snapshot.copy(persistentIdentifier: permanentID, remappedIdentifiers: remappings)
+            candidate[remapped.persistentIdentifier] = remapped
+        }
+        rows = candidate
+        return DataStoreSaveChangesResult(for: storeIdentifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class CodableConventionRegistry: @unchecked Sendable {
+    static let shared = CodableConventionRegistry()
+    private let lock = NSLock()
+    private var storage: [String: CodableConventionStoreState] = [:]
+
+    func state(for name: String) -> CodableConventionStoreState {
+        lock.lock(); defer { lock.unlock() }
+        if let state = storage[name] { return state }
+        let state = CodableConventionStoreState()
+        storage[name] = state
+        return state
+    }
 }
 
 private final class CanonicalStoreState: @unchecked Sendable {
@@ -432,6 +927,18 @@ private final class CanonicalDefaultStoreStates: @unchecked Sendable {
 @Suite
 struct AppleDataStoreAPITests {
     @Test
+    func dataStoreSnapshotCodingKeysRoundTrip() throws {
+        let identifier = DataStoreSnapshotCodingKey(stringValue: "persistentIdentifier")
+        if case .persistentIdentifier = identifier {} else { Issue.record("Expected persistent identifier key") }
+        #expect(identifier?.stringValue == "persistentIdentifier")
+
+        let property = DataStoreSnapshotCodingKey(stringValue: "profile.displayName")
+        if case .modeledProperty("profile.displayName") = property {} else { Issue.record("Expected modeled property key") }
+        #expect(property?.stringValue == "profile.displayName")
+        #expect(DataStoreSnapshotCodingKey(intValue: 0) == nil)
+    }
+
+    @Test
     func canonicalDataStoreContractCompiles() throws {
         let schema = Schema([AppleStoreFixture.self])
         let configuration = CanonicalFixtureConfiguration(schema: schema)
@@ -454,14 +961,13 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
-    func containerReportsMissingOptionalEngineBridgeAtConfigurationTime() throws {
+    func baseOnlySnapshotStoreCanOpenEmptyContainer() throws {
         let schema = Schema([AppleStoreFixture.self])
         let configuration = ModelConfiguration(
             canonicalStore: "unbridged", schema: schema,
             canonicalDataStoreConfiguration: UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema))
-        #expect(throws: SwiftDataError.unsupportedStore) {
-            try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
-        }
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+        #expect(container.dataStore?.identifier == "unbridged.canonical")
     }
 
     @MainActor
@@ -478,6 +984,172 @@ struct AppleDataStoreAPITests {
         #expect(container.dataStore?.identifier == "canonical.fixture")
         let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         #expect(fetched.map(\.title) == ["canonical"])
+    }
+
+    @MainActor
+    @Test
+    func baseDataStoreSnapshotCodableConventionRoundTripsRelationshipsAndRollback() throws {
+        let schema = Schema([AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let name = "codable-convention-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: CodableConventionConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self], configurations: [configuration])
+        let related = AppleSnapshotRelatedFixture(value: 88)
+        let owner = AppleSnapshotOwnerFixture(title: "base protocol only", related: related)
+        container.mainContext.insert(owner)
+        CodableConventionStore.failNextSave(for: name)
+
+        #expect(throws: (any Error).self) { try container.mainContext.save() }
+        #expect(owner.modelContext === container.mainContext)
+        try container.mainContext.save()
+
+        let fetched = try #require(container.makeContext().fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
+        #expect(fetched.title == "base protocol only")
+        #expect(fetched.related?.value == 88)
+    }
+
+    @MainActor
+    @Test
+    func appleCodingKeySnapshotRoundTripsRelationshipAndRollback() throws {
+        let schema = Schema([AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let name = "apple-coding-key-snapshot-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: AppleKeyLayoutConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self], configurations: [configuration])
+        let related = AppleSnapshotRelatedFixture(value: 93)
+        let owner = AppleSnapshotOwnerFixture(title: "coded key snapshot", related: related)
+        container.mainContext.insert(owner)
+        AppleKeyLayoutStore.failNextSave(for: name)
+
+        #expect(throws: (any Error).self) { try container.mainContext.save() }
+        #expect(owner.modelContext === container.mainContext)
+        try container.mainContext.save()
+
+        let fetched = try #require(
+            container.makeContext().fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
+        #expect(fetched.title == "coded key snapshot")
+        #expect(fetched.related?.value == 93)
+    }
+
+    @Test
+    func codableConventionRejectsRenamedKeysAndWrongTypes() throws {
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: ["persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture", "relationships": [:], "payload": "renamed"],
+                entity: entity)
+        }
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: ["persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture", "relationships": [:], "title": 42],
+                entity: entity)
+        }
+    }
+
+    @Test
+    func codableConventionRejectsReservedModeledPropertyNames() throws {
+        let entity = SchemaDescriptor.Entity(
+            name: "ReservedNameFixture",
+            attributes: [SchemaDescriptor.Attribute(name: "persistentIdentifier", type: "String")],
+            relationships: [])
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(),
+                    "entityName": "ReservedNameFixture",
+                    "relationships": [:],
+                ],
+                entity: entity)
+        }
+    }
+
+    @Test
+    func nestedSnapshotValuesRequireExactSchemaKeys() throws {
+        let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(),
+                    "entityName": entity.name,
+                    "relationships": [:],
+                    "values": ["title": "valid", "metadata": "extra"],
+                ],
+                entity: entity)
+        }
+    }
+
+    @Test
+    func snapshotCodingKeyMaterializesModeledProperty() throws {
+        let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
+        let values = try projectSnapshotValues(
+            from: [
+                "persistentIdentifier": NSNull(),
+                "entityName": entity.name,
+                "relationships": [:],
+                DataStoreSnapshotCodingKey.modeledProperty("title").stringValue: "coded through Apple key",
+            ],
+            entity: entity)
+        #expect(values["title"] == .text("coded through Apple key"))
+    }
+
+    @Test
+    func opaqueSnapshotLayoutFailsBeforeModelMaterialization() throws {
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+        let snapshot = RenamedCodableSnapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "opaque", entityName: entity.name, primaryKey: 1),
+            entityName: entity.name,
+            relationships: [:],
+            payload: "not a schema field")
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try materializeSnapshotValues(from: snapshot, entity: entity)
+        }
+    }
+
+    @MainActor
+    @Test
+    func renamedBaseOnlySnapshotFailsDeterministicallyDuringContainerFetch() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "renamed-snapshot-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: RenamedSnapshotConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+
+        #expect(throws: SwiftDataError.unsupportedStore) {
+            try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
+        }
+    }
+
+    @Test
+    func snapshotProviderTakesPrecedenceOverCodableLayout() throws {
+        let identifier = PersistentIdentifier(
+            storeIdentifier: "provider.precedence", entityName: "AppleStoreFixture", primaryKey: 1)
+        let snapshot = ProviderPrecedenceSnapshot(
+            persistentIdentifier: identifier,
+            entityName: "AppleStoreFixture",
+            persistedValues: ["title": .text("provider value")],
+            relationships: [:])
+        let schema = Schema([AppleStoreFixture.self]).descriptor
+        let entity = try #require(schema.entity(forName: "AppleStoreFixture"))
+
+        #expect(throws: SnapshotMaterializationError.self) {
+            try projectSnapshotValues(
+                from: [
+                    "persistentIdentifier": NSNull(), "entityName": "AppleStoreFixture",
+                    "relationships": [:], "payload": "codable value",
+                ], entity: entity)
+        }
+        #expect(try materializeSnapshotValues(from: snapshot, entity: entity)["title"] == .text("provider value"))
     }
 
     @MainActor

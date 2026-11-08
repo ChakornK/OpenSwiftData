@@ -413,6 +413,44 @@ private struct RenamedCodableSnapshot: DataStoreSnapshot {
     }
 }
 
+private struct RenamedSnapshotConfiguration: DataStoreConfiguration {
+    typealias StoreType = RenamedSnapshotStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class RenamedSnapshotStore: DataStore, @unchecked Sendable {
+    typealias Configuration = RenamedSnapshotConfiguration
+    typealias Snapshot = RenamedCodableSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let row: Snapshot
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        row = Snapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: configuration.name, entityName: "AppleStoreFixture", primaryKey: 1),
+            entityName: "AppleStoreFixture",
+            relationships: [:],
+            payload: "opaque value")
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [row])
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        DataStoreSaveChangesResult(for: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { identifier == row.persistentIdentifier ? row : nil }
+}
+
 private final class CodableConventionStore: DataStore, @unchecked Sendable {
     typealias Configuration = CodableConventionConfiguration
     typealias Snapshot = CodableConventionSnapshot
@@ -852,6 +890,21 @@ struct AppleDataStoreAPITests {
 
         #expect(throws: SnapshotMaterializationError.self) {
             try materializeSnapshotValues(from: snapshot, entity: entity)
+        }
+    }
+
+    @MainActor
+    @Test
+    func renamedBaseOnlySnapshotFailsDeterministicallyDuringContainerFetch() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "renamed-snapshot-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: RenamedSnapshotConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+
+        #expect(throws: SwiftDataError.unsupportedStore) {
+            try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         }
     }
 

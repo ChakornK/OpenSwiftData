@@ -1,0 +1,55 @@
+name: SwiftData behavior parity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Tests/OpenSwiftDataTests/Parity/**"
+      - "Tests/SwiftDataParity/**"
+      - "Sources/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - ".github/workflows/swiftdata-parity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Tests/OpenSwiftDataTests/Parity/**"
+      - "Tests/SwiftDataParity/**"
+      - "Sources/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - ".github/workflows/swiftdata-parity.yml"
+  workflow_dispatch:
+
+jobs:
+  compare-swiftdata-behavior:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Record Apple toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+      - name: Run OpenSwiftData parity scenarios
+        run: swift run --package-path Tests/SwiftDataParity/OSDRunner osd-parity-runner --output /tmp/osd-observations.json
+      - name: Run Apple SwiftData parity scenarios
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --output /tmp/apple-observations.json
+      - name: Compare scenario observations
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-compare --osd /tmp/osd-observations.json --apple /tmp/apple-observations.json --allowlist Tests/SwiftDataParity/parity-allowlist.json --report /tmp/parity-diff.json
+      - name: Validate source coverage
+        if: always()
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-validate
+      - name: Upload parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftdata-parity-${{ github.sha }}
+          path: |
+            /tmp/osd-observations.json
+            /tmp/apple-observations.json
+            /tmp/parity-diff.json
+            parity-coverage-report.json
+          if-no-files-found: warn

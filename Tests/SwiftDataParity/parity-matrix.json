@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "sourceCase": "PredicateParityTests/membership in a captured array",
+      "scenarioIDs": ["PredicateParityTests/membership in a captured array"],
+      "status": "compared",
+      "argumentSets": ["default"],
+      "observations": ["pending.names", "saved.names"]
+    },
+    {
+      "sourceCase": "PredicateParityTests/membership in an array literal",
+      "scenarioIDs": ["PredicateParityTests/membership in an array literal"],
+      "status": "compared",
+      "argumentSets": ["default"],
+      "observations": ["pending.names", "saved.names"]
+    },
+    {
+      "sourceCase": "PredicateParityTests/membership in an empty array matches nothing",
+      "scenarioIDs": ["PredicateParityTests/membership in an empty array matches nothing"],
+      "status": "compared",
+      "argumentSets": ["default"],
+      "observations": ["pending.names", "saved.names", "saved.count"]
+    },
+    {
+      "sourceCase": "PredicateParityTests/negated, integer, and combined membership",
+      "scenarioIDs": ["PredicateParityTests/negated, integer, and combined membership"],
+      "status": "compared",
+      "argumentSets": ["default"],
+      "observations": [
+        "negated.pending", "negated.saved",
+        "integer.pending", "integer.saved",
+        "combined.pending", "combined.saved"
+      ]
+    }
+  ]
+}

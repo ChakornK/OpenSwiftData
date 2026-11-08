@@ -170,6 +170,108 @@ import Testing
         #expect(!ScenarioExpectationValidator.validate(result, against: specification))
     }
 
+    @Test func pendingFetchContractsRegisterFourScalarDeclarations() throws {
+        let specifications = PendingFetchScenarioCatalog.all
+        let contracts = PendingFetchScenarioCatalog.contractsByID
+        let expectedIDs = [
+            "PendingFetchParityTests/a zero fetch limit means no limit",
+            "PendingFetchParityTests/stored rows paginate before pending changes merge",
+            "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory",
+            "PendingFetchParityTests/excluding pending changes returns only stored rows",
+        ]
+
+        #expect(specifications.map(\.id.description) == expectedIDs)
+        #expect(Set(contracts.keys) == Set(expectedIDs))
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: contracts.keys))
+        #expect(ParityScenarioCatalog.allContractsByID.count
+            == ParityScenarioCatalog.contractsByID.count
+                + SchemaIntrospectionScenarioCatalog.contractsByID.count
+                + SchemaModelTypesScenarioCatalog.contractsByID.count
+                + StoreIdentifierScenarioCatalog.contractsByID.count
+                + ModelIdentityScenarioCatalog.contractsByID.count
+                + ModelConfigurationScenarioCatalog.contractsByID.count
+                + ModelConfigurationContainerScenarioCatalog.contractsByID.count
+                + PendingFetchScenarioCatalog.contractsByID.count)
+        #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
+        #expect(
+            PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
+                == PendingFetchSpecification.Sort.none)
+        #expect(
+            PendingFetchScenarioCatalog.zeroLimit.expectedObservations.first { $0.field == "identifierCount" }?.value
+                == .integer(4))
+        #expect(PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge.steps.prefix(3).compactMap(\.pendingChange)
+            == [.insert(.init(name: "p1", age: 20)), .updateAge(name: "s1", age: 60), .delete(name: "s2")])
+    }
+
+    @Test func pendingFetchExpectationValidatorRejectsMissingAndDuplicateObservations() throws {
+        let specification = PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge
+        let observations = specification.expectedObservations.map { observation in
+            ParityObservation(step: observation.step, field: observation.field, value: observation.value)
+        }
+        let matching = ScenarioResult(id: specification.id, observations: observations)
+        let missing = ScenarioResult(id: specification.id, observations: Array(observations.dropLast()))
+        let duplicate = ScenarioResult(id: specification.id, observations: observations + [observations[0]])
+        let wrongScenario = ScenarioResult(
+            id: ScenarioID(suite: "OtherSuite", test: "wrong scenario"), observations: observations)
+
+        #expect(PendingFetchExpectationValidator.validate(matching, against: specification))
+        #expect(!PendingFetchExpectationValidator.validate(missing, against: specification))
+        #expect(!PendingFetchExpectationValidator.validate(duplicate, against: specification))
+        #expect(!PendingFetchExpectationValidator.validate(wrongScenario, against: specification))
+    }
+
+    @Test func pendingFetchExpectationValidatorRejectsWrongOperationStepAndValue() throws {
+        let specification = PendingFetchScenarioCatalog.zeroLimit
+        let correct = specification.expectedObservations.map {
+            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
+        }
+        let wrongStep = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 99, field: correct[0].field, value: correct[0].value),
+        ] + Array(correct.dropFirst()))
+        let wrongValue = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: correct[0].step, field: correct[0].field, value: .integer(999)),
+        ] + Array(correct.dropFirst()))
+
+        #expect(!PendingFetchExpectationValidator.validate(wrongStep, against: specification))
+        #expect(!PendingFetchExpectationValidator.validate(wrongValue, against: specification))
+    }
+
+    @Test func pendingFetchExpectationValidatorRejectsInvalidObservationSchedules() throws {
+        let specification = PendingFetchScenarioCatalog.zeroLimit
+        let invalid = PendingFetchSpecification(
+            id: specification.id,
+            seedRows: specification.seedRows,
+            steps: Array(specification.steps.dropLast()),
+            expectedObservations: specification.expectedObservations)
+        let result = ScenarioResult(id: invalid.id, observations: specification.expectedObservations.map {
+            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
+        })
+
+        #expect(!invalid.hasValidObservationSchedule)
+        #expect(!PendingFetchExpectationValidator.validate(result, against: invalid))
+    }
+
+    @Test func pendingFetchMatrixEntriesMatchSharedScenarioContracts() throws {
+        let expectedStatuses = Dictionary(uniqueKeysWithValues: PendingFetchScenarioCatalog.all.map {
+            ($0.id.description, "compared")
+        })
+        let entries = PendingFetchScenarioCatalog.all.map { specification in
+            CoverageMatrixEntry(
+                sourceCase: specification.id.description,
+                scenarioIDs: [specification.id.description],
+                outcomes: [specification.id.description: "compared"],
+                observations: [specification.id.description: specification.expectedObservations.map(\.field)])
+        }
+
+        #expect(CoverageMatrixValidator.validate(
+            discovered: Set(expectedStatuses.keys),
+            entries: entries,
+            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: entries) == Set(expectedStatuses.keys))
+        #expect(CoverageMatrixValidator.sourceCaseCounts(in: entries) == ["compared": 4])
+        #expect(CoverageMatrixValidator.outcomeCounts(in: entries) == ["compared": 4])
+    }
+
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
         let specification = SchemaIntrospectionScenarioCatalog.entitiesByModelType
         let result = ScenarioResult(
@@ -378,15 +480,15 @@ import Testing
         let selectionEntry = CoverageMatrixEntry(
             sourceCase: selectionSource,
             scenarioIDs: [ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description] + selectionIDs,
-            outcomes: Dictionary(uniqueKeysWithValues: [
-                (ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description, "compared")
-            ] + selectionIDs.map { ($0, "non-comparable") }),
+            outcomes: Dictionary(uniqueKeysWithValues: [(selectionSource, "compared")] + selectionIDs.map {
+                ($0, "non-comparable")
+            }),
             observations: [
                 ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description:
                     ModelConfigurationScenarioCatalog.cloudAndGroupSelections.expectedObservations.keys.sorted()
             ],
             reasonCategory: "shim-only-api",
-            rationale: "Apple's SwiftData CloudKitDatabase and GroupContainer selection wrappers do not expose Equatable or public selection discriminators.")
+            rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
         let entries = regularEntries.filter { $0.sourceCase != selectionSource }
             + [selectionEntry] + containerEntries + validationEntries
         let discoveredSourceCases = Set(
@@ -407,7 +509,8 @@ import Testing
 
     @Test func modelConfigurationSelectionCasesAreNotCountedAsComparisons() throws {
         let ids = ModelConfigurationScenarioCatalog.nonComparableSelectionIDs
-        #expect(ids.count == 4)
+        #expect(ids.count == 1)
+        #expect(ids == [ModelConfigurationScenarioCatalog.groupSelectionKind])
         #expect(Set(ids).count == ids.count)
         #expect(ids.allSatisfy { ParityScenarioCatalog.allContractsByID[$0.description] == nil })
         let sourceCase = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description
@@ -415,14 +518,43 @@ import Testing
         let entry = CoverageMatrixEntry(
             sourceCase: sourceCase,
             scenarioIDs: expectedScenarioIDs,
-            outcomes: Dictionary(uniqueKeysWithValues: [(sourceCase, "compared")] + ids.map { ($0.description, "non-comparable") }),
+            outcomes: Dictionary(uniqueKeysWithValues: [(sourceCase, "compared")] + ids.map {
+                ($0.description, "non-comparable")
+            }),
             observations: [sourceCase: ModelConfigurationScenarioCatalog.cloudAndGroupSelections.contract.expectedObservationFields.sorted()],
             reasonCategory: "shim-only-api",
-            rationale: "Apple's SwiftData CloudKitDatabase and GroupContainer selection wrappers do not expose Equatable or public selection discriminators.")
+            rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
         #expect(CoverageMatrixValidator.validate(
             discovered: [sourceCase], entries: [entry], registry: ParityScenarioCatalog.allContractsByID)
             .isEmpty)
-        #expect(CoverageMatrixValidator.outcomeCounts(in: [entry]) == ["compared": 1, "non-comparable": 4])
+        #expect(CoverageMatrixValidator.outcomeCounts(in: [entry]) == ["compared": 1, "non-comparable": 1])
+        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: [entry]) == Set(expectedScenarioIDs))
+        #expect(entry.rationale == ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
+    }
+
+    @Test func modelConfigurationSelectionMatrixMatchesRunnerDisposition() throws {
+        let matrixURL = try #require(locateParityMatrix())
+        let matrix = try JSONDecoder().decode(CoverageMatrixFixture.self, from: Data(contentsOf: matrixURL))
+        let sourceCase = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id.description
+        let entry = try #require(matrix.cases.first { $0.sourceCase == sourceCase })
+
+        #expect(entry.rationale == ModelConfigurationScenarioCatalog.nonComparableSelectionReason)
+        #expect(entry.scenarioIDs == [sourceCase] + ModelConfigurationScenarioCatalog.nonComparableSelectionIDStrings)
+        #expect(entry.outcomes == [
+            sourceCase: "compared",
+            ModelConfigurationScenarioCatalog.groupSelectionKind.description: "non-comparable",
+        ])
+        #expect(entry.observations[sourceCase] == ["selected.cloudIdentifierMatches"])
+    }
+
+    private func locateParityMatrix() -> URL? {
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().standardizedFileURL
+        while directory.path != "/" {
+            let candidate = directory.appending(path: "parity-matrix.json")
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            directory.deleteLastPathComponent()
+        }
+        return nil
     }
 
     @Test func modelConfigurationContainerMatrixEntriesMatchCombinedScenarioRegistry() throws {
@@ -478,6 +610,7 @@ import Testing
         #expect(CoverageMatrixValidator.validate(
             discovered: Set(cases.map(\.sourceCase)), entries: cases, registry: ParityScenarioCatalog.allContractsByID).isEmpty)
         #expect(CoverageMatrixValidator.outcomeCounts(in: cases)["non-comparable"] == 20)
+        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: cases).isEmpty)
     }
 
     @Test func coverageMatrixValidatorAcceptsScenarioSpecificFieldsForParameterizedCases() throws {
@@ -974,4 +1107,8 @@ import Testing
         return try ParityComparator.compare(
             osd: osd, apple: apple, expectedDispositions: dispositions, allowedDifferences: allowedDifferences)
     }
+}
+
+private struct CoverageMatrixFixture: Decodable {
+    let cases: [CoverageMatrixEntry]
 }

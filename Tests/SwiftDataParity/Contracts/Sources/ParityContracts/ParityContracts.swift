@@ -457,6 +457,233 @@ public struct PredicateMembershipSpecification: Codable, Equatable, Sendable {
     }
 }
 
+public struct PendingFetchSpecification: Codable, Equatable, Sendable {
+    public struct Row: Codable, Equatable, Sendable {
+        public let name: String
+        public let age: Int64
+
+        public init(name: String, age: Int64) {
+            self.name = name
+            self.age = age
+        }
+    }
+
+    public enum PendingChange: Codable, Equatable, Sendable {
+        case insert(Row)
+        case updateAge(name: String, age: Int64)
+        case delete(name: String)
+    }
+
+    public enum AgePredicate: Codable, Equatable, Sendable {
+        case lessThan(Int64)
+        case greaterThan(Int64)
+    }
+
+    public enum QueryResult: Codable, Equatable, Sendable {
+        case names
+        case count
+        case identifierCount
+    }
+
+    public enum Sort: Codable, Equatable, Sendable {
+        case none
+        case ageAscending
+    }
+
+    public struct Query: Codable, Equatable, Sendable {
+        public let observationField: String
+        public let predicate: AgePredicate?
+        public let sort: Sort
+        public let limit: Int?
+        public let offset: Int?
+        public let includesPendingChanges: Bool
+        public let result: QueryResult
+
+        public init(
+            observationField: String,
+            predicate: AgePredicate? = nil,
+            sort: Sort = .ageAscending,
+            limit: Int? = nil,
+            offset: Int? = nil,
+            includesPendingChanges: Bool = true,
+            result: QueryResult = .names
+        ) {
+            self.observationField = observationField
+            self.predicate = predicate
+            self.sort = sort
+            self.limit = limit
+            self.offset = offset
+            self.includesPendingChanges = includesPendingChanges
+            self.result = result
+        }
+    }
+
+    public struct ExpectedObservation: Codable, Equatable, Sendable {
+        public let step: Int
+        public let field: String
+        public let value: ObservedValue
+
+        public init(step: Int, field: String, value: ObservedValue) {
+            self.step = step
+            self.field = field
+            self.value = value
+        }
+    }
+
+    public struct Step: Codable, Equatable, Sendable {
+        public let pendingChange: PendingChange?
+        public let query: Query?
+
+        public init(pendingChange: PendingChange? = nil, query: Query? = nil) {
+            self.pendingChange = pendingChange
+            self.query = query
+        }
+    }
+
+    public let id: ScenarioID
+    public let seedRows: [Row]
+    public let steps: [Step]
+    public let expectedObservations: [ExpectedObservation]
+
+    public init(
+        id: ScenarioID,
+        seedRows: [Row],
+        steps: [Step],
+        expectedObservations: [ExpectedObservation]
+    ) {
+        self.id = id
+        self.seedRows = seedRows
+        self.steps = steps
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.map(\.field)))
+    }
+
+    public var hasValidObservationSchedule: Bool {
+        let scheduledQueries = Dictionary(uniqueKeysWithValues: steps.enumerated().compactMap { index, step in
+            step.query.map { ($0.observationField, index) }
+        })
+        let expectedFields = expectedObservations.map(\.field)
+        guard expectedFields.count == Set(expectedFields).count,
+              scheduledQueries.count == steps.compactMap(\.query).count,
+              Set(scheduledQueries.keys) == Set(expectedFields)
+        else {
+            return false
+        }
+        return expectedObservations.allSatisfy { scheduledQueries[$0.field] == $0.step }
+    }
+}
+
+public enum PendingFetchScenarioCatalog {
+    private static let seedRows: [PendingFetchSpecification.Row] = [
+        .init(name: "s1", age: 10), .init(name: "s2", age: 30),
+        .init(name: "s3", age: 50), .init(name: "s4", age: 70),
+    ]
+
+    private static let makePendingChanges = PendingFetchSpecification.Step(pendingChange: .insert(.init(name: "p1", age: 20)))
+    private static let updateFirstRow = PendingFetchSpecification.Step(
+        pendingChange: .updateAge(name: "s1", age: 60))
+    private static let deleteSecondRow = PendingFetchSpecification.Step(pendingChange: .delete(name: "s2"))
+
+    public static let zeroLimit = PendingFetchSpecification(
+        id: ScenarioID(suite: "PendingFetchParityTests", test: "a zero fetch limit means no limit"),
+        seedRows: seedRows,
+        steps: [
+            .init(query: .init(observationField: "names.all", limit: 0, includesPendingChanges: false)),
+            .init(query: .init(observationField: "names.offset", limit: 0, offset: 1, includesPendingChanges: false)),
+            .init(query: .init(observationField: "count", limit: 0, result: .count)),
+            .init(query: .init(
+                observationField: "identifierCount", sort: .none, limit: 0,
+                includesPendingChanges: false, result: .identifierCount)),
+        ],
+        expectedObservations: [
+            .init(step: 0, field: "names.all", value: .array([.string("s1"), .string("s2"), .string("s3"), .string("s4")])),
+            .init(step: 1, field: "names.offset", value: .array([.string("s2"), .string("s3"), .string("s4")])),
+            .init(step: 2, field: "count", value: .integer(4)),
+            .init(step: 3, field: "identifierCount", value: .integer(4)),
+        ])
+
+    public static let storedPaginationBeforePendingMerge = PendingFetchSpecification(
+        id: ScenarioID(suite: "PendingFetchParityTests", test: "stored rows paginate before pending changes merge"),
+        seedRows: seedRows,
+        steps: [makePendingChanges, updateFirstRow, deleteSecondRow] + [
+            .init(query: .init(observationField: "names.all")),
+            .init(query: .init(observationField: "names.limit", limit: 2)),
+            .init(query: .init(observationField: "names.offset", offset: 1)),
+            .init(query: .init(observationField: "names.limitOffset", limit: 2, offset: 1)),
+            .init(query: .init(observationField: "names.zeroLimitOffset", limit: 0, offset: 2)),
+            .init(query: .init(observationField: "count.all", result: .count)),
+            .init(query: .init(observationField: "count.limit", limit: 2, result: .count)),
+            .init(query: .init(observationField: "count.limitOffset", limit: 2, offset: 1, result: .count)),
+        ],
+        expectedObservations: [
+            .init(step: 3, field: "names.all", value: .array([.string("p1"), .string("s3"), .string("s1"), .string("s4")])),
+            .init(step: 4, field: "names.limit", value: .array([.string("p1"), .string("s1")])),
+            .init(step: 5, field: "names.offset", value: .array([.string("p1"), .string("s3"), .string("s1"), .string("s4")])),
+            .init(step: 6, field: "names.limitOffset", value: .array([.string("p1"), .string("s3")])),
+            .init(step: 7, field: "names.zeroLimitOffset", value: .array([.string("p1"), .string("s3"), .string("s1"), .string("s4")])),
+            .init(step: 8, field: "count.all", value: .integer(4)),
+            .init(step: 9, field: "count.limit", value: .integer(2)),
+            .init(step: 10, field: "count.limitOffset", value: .integer(2)),
+        ])
+
+    public static let changedRowsReevaluatePredicate = PendingFetchSpecification(
+        id: ScenarioID(
+            suite: "PendingFetchParityTests", test: "changed models are re-evaluated against the predicate in memory"),
+        seedRows: seedRows,
+        steps: [makePendingChanges, updateFirstRow, deleteSecondRow] + [
+            .init(query: .init(observationField: "names.lessThanForty", predicate: .lessThan(40))),
+            .init(query: .init(observationField: "names.lessThanForty.limit", predicate: .lessThan(40), limit: 1)),
+            .init(query: .init(observationField: "names.greaterThanFifty.offset", predicate: .greaterThan(55), offset: 1)),
+        ],
+        expectedObservations: [
+            .init(step: 3, field: "names.lessThanForty", value: .array([.string("p1")])),
+            .init(step: 4, field: "names.lessThanForty.limit", value: .array([.string("p1")])),
+            .init(step: 5, field: "names.greaterThanFifty.offset", value: .array([.string("s1")])),
+        ])
+
+    public static let excludesPendingChanges = PendingFetchSpecification(
+        id: ScenarioID(suite: "PendingFetchParityTests", test: "excluding pending changes returns only stored rows"),
+        seedRows: seedRows,
+        steps: [makePendingChanges, updateFirstRow, deleteSecondRow,
+            .init(query: .init(observationField: "names.stored", includesPendingChanges: false))],
+        expectedObservations: [
+            .init(step: 3, field: "names.stored", value: .array([.string("s1"), .string("s2"), .string("s3"), .string("s4")])),
+        ])
+
+    public static let all = [zeroLimit, storedPaginationBeforePendingMerge, changedRowsReevaluatePredicate, excludesPendingChanges]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+
+    public static var expectedObservationFields: Set<String> {
+        Set(all.flatMap { $0.expectedObservations.map(\.field) })
+    }
+}
+
+public enum PendingFetchExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: PendingFetchSpecification) -> Bool {
+        guard result.id == specification.id, specification.hasValidObservationSchedule else { return false }
+        var observations: [String: (Int, ObservedValue)] = [:]
+        for observation in result.observations {
+            guard observations.updateValue((observation.step, observation.value.canonicalized), forKey: observation.field) == nil else {
+                return false
+            }
+        }
+        let expected = Dictionary(uniqueKeysWithValues: specification.expectedObservations.map {
+            ($0.field, ($0.step, $0.value.canonicalized))
+        })
+        return observations.count == specification.expectedObservations.count
+            && observations.allSatisfy { field, actual in
+                guard let expected = expected[field] else { return false }
+                return actual.0 == expected.0 && actual.1 == expected.1
+            }
+    }
+}
+
 public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
@@ -727,6 +954,9 @@ public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
 }
 
 public enum ModelConfigurationScenarioCatalog {
+    public static let nonComparableSelectionReason =
+        "Apple's SwiftData selection wrappers expose no public selection discriminator."
+
     public static let defaultConfiguration = ModelConfigurationSpecification(
         id: ScenarioID(
             suite: "ModelConfigurationParityTests",
@@ -768,18 +998,10 @@ public enum ModelConfigurationScenarioCatalog {
 
     public static let cloudAndGroupSelections = ModelConfigurationSpecification(
         id: ScenarioID(suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported"),
-        expectedObservations: [
-            "selected.cloudIdentifierMatches": .bool(true), "selected.groupIdentifierMatches": .bool(true),
-        ])
+        expectedObservations: ["selected.cloudIdentifierMatches": .bool(true)])
 
-    public static let cloudSelectionKind = ScenarioID(
-        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/cloud selection kind")
     public static let groupSelectionKind = ScenarioID(
         suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/group selection kind")
-    public static let defaultCloudSelectionKind = ScenarioID(
-        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/default cloud selection kind")
-    public static let defaultGroupSelectionKind = ScenarioID(
-        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/default group selection kind")
 
     public static let equalityIncludesCoreFields = ModelConfigurationSpecification(
         id: ScenarioID(suite: "ModelConfigurationParityTests", test: "equality compares name, url, schema, save permission, and storage"),
@@ -815,7 +1037,7 @@ public enum ModelConfigurationScenarioCatalog {
     }
 
     public static var nonComparableSelectionIDs: [ScenarioID] {
-        [cloudSelectionKind, groupSelectionKind, defaultCloudSelectionKind, defaultGroupSelectionKind]
+        [groupSelectionKind]
     }
 
     public static var nonComparableSelectionIDStrings: [String] {
@@ -1062,6 +1284,12 @@ public enum CoverageMatrixValidator {
         }
     }
 
+    public static func runnerScenarioIDs(in entries: [CoverageMatrixEntry]) -> Set<String> {
+        Set(entries.lazy
+            .filter { $0.outcomes.values.contains { $0 != "non-comparable" } }
+            .flatMap(\.scenarioIDs))
+    }
+
     public static func sourceCaseCounts(in entries: [CoverageMatrixEntry]) -> [String: Int] {
         let groupedEntries = Dictionary(grouping: entries, by: \.sourceCase)
         return groupedEntries.reduce(into: [String: Int]()) { counts, group in
@@ -1088,7 +1316,8 @@ public extension ParityScenarioCatalog {
             + Array(StoreIdentifierScenarioCatalog.contractsByID.values)
             + Array(ModelIdentityScenarioCatalog.contractsByID.values)
             + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
-            + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values))
+            + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
+            + Array(PendingFetchScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

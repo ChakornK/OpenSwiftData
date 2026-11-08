@@ -32,8 +32,9 @@ struct AppleParityRunner {
         let identityResults = try AppleModelIdentityAdapter.runAll()
         let configurationResults = AppleModelConfigurationAdapter.runAll()
         let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
+        let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults)
+            + configurationResults + configurationContainerResults + pendingFetchResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

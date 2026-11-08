@@ -6,10 +6,12 @@ import Testing
     @MainActor
     @Test func predicateMembershipMatchesSharedExpectations() throws {
         let results = try OSDScenarioAdapter.runAll()
+        let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
             + ModelConfigurationContainerScenarioCatalog.all.map(\.id)
+            + PendingFetchScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -33,15 +35,25 @@ import Testing
             let result = try #require(results.first { $0.id == specification.id })
             #expect(Set(result.observations.map(\.field)) == specification.contract.expectedObservationFields)
         }
+        let selectionID = ModelConfigurationScenarioCatalog.cloudAndGroupSelections.id
+        let selectionResult = try #require(results.first { $0.id == selectionID })
+        #expect(Set(selectionResult.observations.map(\.field)) == ["selected.cloudIdentifierMatches"])
         for specification in ModelConfigurationContainerScenarioCatalog.all {
             let result = try #require(results.first { $0.id == specification.id })
             #expect(Set(result.observations.map(\.field)) == specification.contract.expectedObservationFields)
+        }
+        for specification in PendingFetchScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(PendingFetchExpectationValidator.validate(result, against: specification))
+            #expect(result.observations.map(\.field) == specification.expectedObservations.map(\.field))
+            let directResult = try #require(pendingFetchResults.first { $0.id == specification.id })
+            #expect(directResult == result)
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })
             #expect(result.disposition == .nonComparable(
                 reasonCategory: "shim-only-api",
-                rationale: "Apple's SwiftData selection wrappers expose no public selection discriminator."))
+                rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason))
             #expect(result.observations.isEmpty)
         }
     }

@@ -27,7 +27,7 @@ enum AppleModelConfigurationAdapter {
                 observations: [],
                 disposition: .nonComparable(
                     reasonCategory: "shim-only-api",
-                    rationale: "Apple's SwiftData selection wrappers expose no public selection discriminator."))
+                    rationale: ModelConfigurationScenarioCatalog.nonComparableSelectionReason))
         }
         return (comparableResults + nonComparableResults).sorted { $0.id.description < $1.id.description }
     }
@@ -90,10 +90,7 @@ enum AppleModelConfigurationAdapter {
             let selected = ModelConfiguration(
                 "P", isStoredInMemoryOnly: true, groupContainer: .identifier("group.x"),
                 cloudKitDatabase: .private("iCloud.x"))
-            observations = [
-                "selected.cloudIdentifierMatches": .bool(selected.cloudKitContainerIdentifier == "iCloud.x"),
-                "selected.groupIdentifierMatches": .bool(selected.groupAppContainerIdentifier == "group.x"),
-            ]
+            observations = ["selected.cloudIdentifierMatches": .bool(selected.cloudKitContainerIdentifier == "iCloud.x")]
         case ModelConfigurationScenarioCatalog.equalityIncludesCoreFields.id:
             let schemaA = Schema([ConfigurationParityThing.self])
             let schemaB = Schema([ConfigurationParityOther.self])

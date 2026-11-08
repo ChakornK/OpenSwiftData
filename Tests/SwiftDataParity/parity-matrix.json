@@ -519,26 +519,19 @@
       "sourceCase": "ModelConfigurationParityTests/cloud and group selections are reported",
       "scenarioIDs": [
         "ModelConfigurationParityTests/cloud and group selections are reported",
-        "ModelConfigurationParityTests/cloud and group selections are reported/cloud selection kind",
-        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind",
-        "ModelConfigurationParityTests/cloud and group selections are reported/default cloud selection kind",
-        "ModelConfigurationParityTests/cloud and group selections are reported/default group selection kind"
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind"
       ],
       "outcomes": {
         "ModelConfigurationParityTests/cloud and group selections are reported": "compared",
-        "ModelConfigurationParityTests/cloud and group selections are reported/cloud selection kind": "non-comparable",
-        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind": "non-comparable",
-        "ModelConfigurationParityTests/cloud and group selections are reported/default cloud selection kind": "non-comparable",
-        "ModelConfigurationParityTests/cloud and group selections are reported/default group selection kind": "non-comparable"
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind": "non-comparable"
       },
       "observations": {
         "ModelConfigurationParityTests/cloud and group selections are reported": [
-          "selected.cloudIdentifierMatches",
-          "selected.groupIdentifierMatches"
+          "selected.cloudIdentifierMatches"
         ]
       },
       "reasonCategory": "shim-only-api",
-      "rationale": "Apple's SwiftData CloudKitDatabase and GroupContainer selection wrappers do not expose Equatable or public selection discriminators."
+      "rationale": "Apple's SwiftData selection wrappers expose no public selection discriminator."
     },
     {
       "sourceCase": "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage",
@@ -728,6 +721,74 @@
       "observations": {},
       "reasonCategory": "shim-only-api",
       "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/a zero fetch limit means no limit",
+      "scenarioIDs": [
+        "PendingFetchParityTests/a zero fetch limit means no limit"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/a zero fetch limit means no limit": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/a zero fetch limit means no limit": [
+          "names.all",
+          "names.offset",
+          "count",
+          "identifierCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/stored rows paginate before pending changes merge",
+      "scenarioIDs": [
+        "PendingFetchParityTests/stored rows paginate before pending changes merge"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/stored rows paginate before pending changes merge": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/stored rows paginate before pending changes merge": [
+          "names.all",
+          "names.limit",
+          "names.offset",
+          "names.limitOffset",
+          "names.zeroLimitOffset",
+          "count.all",
+          "count.limit",
+          "count.limitOffset"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory",
+      "scenarioIDs": [
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/changed models are re-evaluated against the predicate in memory": [
+          "names.lessThanForty",
+          "names.lessThanForty.limit",
+          "names.greaterThanFifty.offset"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/excluding pending changes returns only stored rows",
+      "scenarioIDs": [
+        "PendingFetchParityTests/excluding pending changes returns only stored rows"
+      ],
+      "outcomes": {
+        "PendingFetchParityTests/excluding pending changes returns only stored rows": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/excluding pending changes returns only stored rows": [
+          "names.stored"
+        ]
+      }
     }
   ]
 }

@@ -232,6 +232,149 @@ private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
 }
 
+private struct CodableConventionConfiguration: DataStoreConfiguration {
+    typealias StoreType = CodableConventionStore
+    let name: String
+    var schema: Schema?
+}
+
+private struct CodableConventionSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    let title: String?
+    let value: Int64?
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        relationships: [String: [PersistentIdentifier]],
+        title: String?,
+        value: Int64?
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.relationships = relationships
+        self.title = title
+        self.value = value
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        persistentIdentifier = backingData.persistentModelID
+        entityName = backingData.persistentModelID.entityName
+        relationships = [:]
+        title = nil
+        value = nil
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } },
+            title: title,
+            value: value)
+    }
+}
+
+private final class CodableConventionStore: DataStore, @unchecked Sendable {
+    typealias Configuration = CodableConventionConfiguration
+    typealias Snapshot = CodableConventionSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let state: CodableConventionStoreState
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        state = CodableConventionRegistry.shared.state(for: configuration.name)
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        state.fetch(descriptor: request.descriptor, entityName: Schema.entityName(for: Model.self))
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        try state.save(request, storeIdentifier: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { state.snapshot(for: identifier) }
+    static func failNextSave(for name: String) { CodableConventionRegistry.shared.state(for: name).failNextSave() }
+}
+
+private final class CodableConventionStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: CodableConventionSnapshot] = [:]
+    private var failsNextSave = false
+
+    func failNextSave() {
+        lock.lock(); defer { lock.unlock() }
+        failsNextSave = true
+    }
+
+    func fetch<Model: PersistentModel>(
+        descriptor: FetchDescriptor<Model>, entityName: String
+    ) -> DataStoreFetchResult<Model, CodableConventionSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        return DataStoreFetchResult(
+            descriptor: descriptor,
+            fetchedSnapshots: rows.values.filter { $0.entityName == entityName },
+            relatedSnapshots: rows)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) -> CodableConventionSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return rows[identifier]
+    }
+
+    func save(
+        _ request: DataStoreSaveChangesRequest<CodableConventionSnapshot>, storeIdentifier: String
+    ) throws -> DataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        if failsNextSave {
+            failsNextSave = false
+            throw SwiftDataError.unsupportedStore("injected Codable convention save failure")
+        }
+        var candidate = rows
+        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            remappings[snapshot.persistentIdentifier] = PersistentIdentifier(
+                storeIdentifier: storeIdentifier, entityName: snapshot.entityName, primaryKey: nextPrimaryKey)
+            nextPrimaryKey += 1
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanentID = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            let remapped = snapshot.copy(persistentIdentifier: permanentID, remappedIdentifiers: remappings)
+            candidate[remapped.persistentIdentifier] = remapped
+        }
+        rows = candidate
+        return DataStoreSaveChangesResult(for: storeIdentifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class CodableConventionRegistry: @unchecked Sendable {
+    static let shared = CodableConventionRegistry()
+    private let lock = NSLock()
+    private var storage: [String: CodableConventionStoreState] = [:]
+
+    func state(for name: String) -> CodableConventionStoreState {
+        lock.lock(); defer { lock.unlock() }
+        if let state = storage[name] { return state }
+        let state = CodableConventionStoreState()
+        storage[name] = state
+        return state
+    }
+}
+
 private final class CanonicalStoreState: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [PersistentIdentifier: CanonicalFixtureSnapshot] = [:]
@@ -454,14 +597,13 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
-    func containerReportsMissingOptionalEngineBridgeAtConfigurationTime() throws {
+    func baseOnlySnapshotStoreCanOpenEmptyContainer() throws {
         let schema = Schema([AppleStoreFixture.self])
         let configuration = ModelConfiguration(
             canonicalStore: "unbridged", schema: schema,
             canonicalDataStoreConfiguration: UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema))
-        #expect(throws: SwiftDataError.unsupportedStore) {
-            try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
-        }
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+        #expect(container.dataStore?.identifier == "unbridged.canonical")
     }
 
     @MainActor
@@ -478,6 +620,30 @@ struct AppleDataStoreAPITests {
         #expect(container.dataStore?.identifier == "canonical.fixture")
         let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         #expect(fetched.map(\.title) == ["canonical"])
+    }
+
+    @MainActor
+    @Test
+    func baseDataStoreSnapshotCodableConventionRoundTripsRelationshipsAndRollback() throws {
+        let schema = Schema([AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let name = "codable-convention-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: CodableConventionConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self], configurations: [configuration])
+        let related = AppleSnapshotRelatedFixture(value: 88)
+        let owner = AppleSnapshotOwnerFixture(title: "base protocol only", related: related)
+        container.mainContext.insert(owner)
+        CodableConventionStore.failNextSave(for: name)
+
+        #expect(throws: (any Error).self) { try container.mainContext.save() }
+        #expect(owner.modelContext === container.mainContext)
+        try container.mainContext.save()
+
+        let fetched = try #require(container.makeContext().fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
+        #expect(fetched.title == "base protocol only")
+        #expect(fetched.related?.value == 88)
     }
 
     @MainActor

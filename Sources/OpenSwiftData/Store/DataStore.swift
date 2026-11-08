@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import OSDCore
 
 /// Stores model snapshots without requiring a SQL backend.
@@ -305,15 +306,12 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
 ) throws -> any OpenSwiftDataDataStore {
     try configuration.validate()
     let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
-    guard Configuration.StoreType.Snapshot.self is any DataStoreSnapshotValueProviding.Type else {
-        throw SwiftDataError.unsupportedStore(
-            "The built-in ModelContext engine requires DataStoreSnapshotValueProviding for custom snapshot layouts.")
-    }
     let makeSnapshot: (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot = { snapshot in
-        guard let snapshotType = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotValueProviding.Type else {
-            throw SwiftDataError.unsupportedStore("Canonical snapshot does not provide persistedValues.")
+        if let snapshotType = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotValueProviding.Type {
+            return makeSnapshotValue(snapshot, as: snapshotType)
         }
-        return makeSnapshotValue(snapshot, as: snapshotType)
+        let decoded = try decodeSnapshot(Configuration.StoreType.Snapshot.self, from: snapshotJSON(snapshot))
+        return decoded.copy(persistentIdentifier: snapshot.persistentIdentifier, remappedIdentifiers: nil)
     }
     return CanonicalDataStoreAdapter(
         store: store,
@@ -329,6 +327,89 @@ private func makeSnapshotValue(
         entityName: snapshot.entityName,
         persistedValues: snapshot.values.mapValues(DataStoreSnapshotValue.init),
         relationships: snapshot.relationships)
+}
+
+private func decodeSnapshot<Snapshot: DataStoreSnapshot>(_ type: Snapshot.Type, from data: Data) throws -> Snapshot {
+    do {
+        return try JSONDecoder().decode(type, from: data)
+    } catch {
+        throw SwiftDataError.unsupportedStore(
+            "The custom snapshot Codable layout must use top-level persistentIdentifier, entityName, relationships, and model attribute keys: \(error)")
+    }
+}
+
+private func storedValue(from json: Any, type: String) throws -> StoredValue {
+    let typeName = type.split(separator: ".").last.map(String.init) ?? type
+    let integerTypes: Set<String> = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64"]
+    if json is NSNull { return .null }
+    if let number = json as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+        guard typeName == "Bool" else {
+            throw SwiftDataError.unsupportedStore("Snapshot value does not match declared type '\(type)'.")
+        }
+        return .int(number.boolValue ? 1 : 0)
+    }
+    if let string = json as? String {
+        if typeName == "Data" {
+            guard let bytes = Data(base64Encoded: string) else {
+                throw SwiftDataError.unsupportedStore("Snapshot Data value is not base64 encoded.")
+            }
+            return .blob(Array(bytes))
+        }
+        guard ["String", "URL", "UUID", "Date", "Decimal"].contains(typeName) else {
+            throw SwiftDataError.unsupportedStore("Snapshot string does not match declared type '\(type)'.")
+        }
+        if typeName == "UUID", let uuid = UUID(uuidString: string) {
+            return .blob(withUnsafeBytes(of: uuid.uuid) { Array($0) })
+        }
+        return .text(string)
+    }
+    if let number = json as? NSNumber {
+        if typeName == "Double" || typeName == "Float" || typeName == "Date" {
+            return .double(number.doubleValue)
+        }
+        guard integerTypes.contains(typeName), let integer = Int64(number.stringValue) else {
+            throw SwiftDataError.unsupportedStore("Snapshot number does not match declared type '\(type)'.")
+        }
+        return .int(integer)
+    }
+    if !(json is [String: Any]) && !(json is [Any]) {
+        throw SwiftDataError.unsupportedStore("Unsupported JSON value for declared type '\(type)'.")
+    }
+    let data = try JSONSerialization.data(withJSONObject: json, options: [.fragmentsAllowed, .sortedKeys])
+    return .blob(Array(data))
+}
+
+private func snapshotJSON(_ snapshot: OpenSwiftDataDataStoreSnapshot) throws -> Data {
+    var object: [String: Any] = [
+        "persistentIdentifier": try jsonObject(snapshot.persistentIdentifier),
+        "entityName": snapshot.entityName,
+        "relationships": try jsonObject(snapshot.relationships),
+    ]
+    for (key, value) in snapshot.values {
+        switch value {
+        case .null:
+            object[key] = NSNull()
+        case let .int(integer):
+            object[key] = NSNumber(value: integer)
+        case let .double(number):
+            object[key] = NSNumber(value: number)
+        case let .text(text):
+            object[key] = text
+        case let .blob(bytes):
+            let data = Data(bytes)
+            if let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+                object[key] = json
+            } else {
+                object[key] = data.base64EncodedString()
+            }
+        }
+    }
+    return try JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed, .sortedKeys])
+}
+
+private func jsonObject<T: Encodable>(_ value: T) throws -> Any {
+    let data = try JSONEncoder().encode(value)
+    return try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
 }
 
 private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDataStore, @unchecked Sendable {
@@ -362,7 +443,7 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         var visited: Set<PersistentIdentifier> = []
         while let snapshot = pending.popLast() {
             guard visited.insert(snapshot.persistentIdentifier).inserted else { continue }
-            let converted = try Self.backendSnapshot(snapshot)
+            let converted = try backendSnapshot(snapshot)
             if rootIdentifiers.contains(snapshot.persistentIdentifier) {
                 roots.append(converted)
             } else {
@@ -411,25 +492,66 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
 
     func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard let snapshot = try store.snapshot(for: identifier) else { return nil }
-        return try Self.backendSnapshot(snapshot)
+        return try backendSnapshot(snapshot)
     }
 
     private func makeCanonicalSnapshot(_ snapshot: OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot {
         try makeSnapshot(snapshot)
     }
 
-    private static func backendSnapshot(_ snapshot: any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot {
+    private func backendSnapshot(_ snapshot: any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot {
         guard let identity = snapshot as? Store.Snapshot else {
             throw SwiftDataError.unsupportedStore("Canonical snapshot type mismatch.")
         }
-        guard let valueSnapshot = identity as? any DataStoreSnapshotValueProviding else {
-            throw SwiftDataError.unsupportedStore("Canonical snapshot does not expose persisted values.")
+        if let valueSnapshot = identity as? any DataStoreSnapshotValueProviding {
+            return OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: identity.persistentIdentifier,
+                entityName: identity.entityName,
+                values: valueSnapshot.persistedValues.mapValues(\.storedValue),
+                relationships: identity.relationships)
+        }
+        let data = try JSONEncoder().encode(identity)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let entity = descriptor.entity(forName: identity.entityName)
+        else { throw unsupportedSnapshotLayout(entity: identity.entityName, property: nil) }
+        let expectedKeys = Set(
+            ["persistentIdentifier", "entityName", "relationships"]
+                + entity.attributes.flatMap { attribute in
+                    attribute.options.contains(.flattened)
+                        ? attribute.components.map(\.columnName)
+                        : [attribute.name]
+                })
+        guard Set(object.keys) == expectedKeys else {
+            throw SwiftDataError.unsupportedStore(
+                "The custom snapshot Codable layout for '\(entity.name)' must contain exactly the reserved keys and schema attribute keys.")
+        }
+        var values: [String: StoredValue] = [:]
+        for attribute in entity.attributes {
+            if attribute.options.contains(.flattened) {
+                for component in attribute.components {
+                    guard let json = object[component.columnName] else {
+                        throw unsupportedSnapshotLayout(entity: entity.name, property: component.columnName)
+                    }
+                    values[component.columnName] = try storedValue(from: json, type: component.type)
+                }
+            } else {
+                guard let json = object[attribute.name] else {
+                    throw unsupportedSnapshotLayout(entity: entity.name, property: attribute.name)
+                }
+                values[attribute.name] = try storedValue(from: json, type: attribute.type)
+            }
         }
         return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identity.persistentIdentifier,
             entityName: identity.entityName,
-            values: valueSnapshot.persistedValues.mapValues(\.storedValue),
+            values: values,
             relationships: identity.relationships)
+    }
+
+    private func unsupportedSnapshotLayout(entity: String, property: String?) -> SwiftDataError {
+        SwiftDataError.unsupportedStore(
+            "The custom snapshot Codable representation for '\(entity)' must use top-level model attribute keys"
+                + (property.map { "; missing '\($0)'" } ?? "."))
     }
 
 }

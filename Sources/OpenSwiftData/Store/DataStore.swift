@@ -174,8 +174,26 @@ public protocol DataStoreSnapshot: Codable, Sendable {
         persistentIdentifier: PersistentIdentifier,
         remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
     ) -> Self
+}
+
+/// Converts a canonical snapshot to the internal context representation when using the built-in container engine.
+public protocol DataStoreSnapshotBridge: DataStoreSnapshot {
     func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot
-    static func makeDataStoreSnapshot(from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws -> Self
+    init(openSwiftDataSnapshot snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws
+    static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations
+}
+
+public struct DataStoreSnapshotBridgeOperations {
+    let encode: (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot
+    let decode: (any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot
+
+    public init(
+        encode: @escaping (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot,
+        decode: @escaping (any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot
+    ) {
+        self.encode = encode
+        self.decode = decode
+    }
 }
 
 /// A typed fetch request for a custom store.
@@ -267,18 +285,45 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
 ) throws -> any OpenSwiftDataDataStore {
     try configuration.validate()
     let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
-    return CanonicalDataStoreAdapter(store: store, schema: schema.descriptor)
+    let operations: DataStoreSnapshotBridgeOperations
+    if let bridge = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotBridge.Type {
+        operations = bridge.makeBridge(in: schema)
+    } else {
+        operations = DataStoreSnapshotBridgeOperations(
+            encode: { _ in
+                throw SwiftDataError.unsupportedStore(
+                    "This canonical snapshot type cannot be materialized by the built-in ModelContext engine.")
+            },
+            decode: { _ in
+                throw SwiftDataError.unsupportedStore(
+                    "This canonical snapshot type cannot be materialized by the built-in ModelContext engine.")
+            })
+    }
+    return CanonicalDataStoreAdapter(
+        store: store,
+        schema: schema.descriptor,
+        encode: operations.encode,
+        decode: operations.decode)
 }
 
 private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDataStore, @unchecked Sendable {
     private let store: Store
     private let descriptor: SchemaDescriptor
+    private let encode: (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot
+    private let decode: (any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot
     let identifier: String
     let supportsInheritance: Bool
 
-    init(store: Store, schema: SchemaDescriptor) {
+    init(
+        store: Store,
+        schema: SchemaDescriptor,
+        encode: @escaping (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot,
+        decode: @escaping (any DataStoreSnapshot) throws -> OpenSwiftDataDataStoreSnapshot
+    ) {
         self.store = store
         descriptor = schema
+        self.encode = encode
+        self.decode = decode
         identifier = store.identifier
         supportsInheritance = store.supportsInheritance
     }
@@ -287,23 +332,22 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         _ request: OpenSwiftDataDataStoreFetchRequest<Model>
     ) throws -> OpenSwiftDataDataStoreFetchResult {
         let result = try store.fetch(DataStoreFetchRequest(request.descriptor))
-        let publicSchema = Schema(descriptor: descriptor)
         var roots: [OpenSwiftDataDataStoreSnapshot] = []
         var related: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
-        var pending = result.fetchedSnapshots
-        pending.append(contentsOf: result.relatedSnapshots.values)
+        var pending: [any DataStoreSnapshot] = result.fetchedSnapshots
+        for snapshot in result.relatedSnapshots.values { pending.append(snapshot) }
         let rootIdentifiers = Set(result.fetchedSnapshots.map(\.persistentIdentifier))
         var visited: Set<PersistentIdentifier> = []
         while let snapshot = pending.popLast() {
             guard visited.insert(snapshot.persistentIdentifier).inserted else { continue }
-            let converted = try snapshot.makeOpenSwiftDataSnapshot(in: publicSchema)
+            let converted = try decode(snapshot)
             if rootIdentifiers.contains(snapshot.persistentIdentifier) {
                 roots.append(converted)
             } else {
                 related[converted.persistentIdentifier] = converted
             }
             for identifier in snapshot.relationships.values.flatMap({ $0 }) {
-                let relatedSnapshot: Store.Snapshot?
+                let relatedSnapshot: (any DataStoreSnapshot)?
                 if let explicitSnapshot = result.relatedSnapshots[identifier] {
                     relatedSnapshot = explicitSnapshot
                 } else {
@@ -322,9 +366,18 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
     }
 
     func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
-        let publicSchema = Schema(descriptor: descriptor)
-        let inserts = try request.inserted.map { try Store.Snapshot.makeDataStoreSnapshot(from: $0, in: publicSchema) }
-        let updates = try request.updated.map { try Store.Snapshot.makeDataStoreSnapshot(from: $0, in: publicSchema) }
+        let inserts = try request.inserted.map { snapshot in
+            guard let typed = try encode(snapshot) as? Store.Snapshot else {
+                throw SwiftDataError.unsupportedStore("Canonical snapshot bridge returned an incompatible snapshot type.")
+            }
+            return typed
+        }
+        let updates = try request.updated.map { snapshot in
+            guard let typed = try encode(snapshot) as? Store.Snapshot else {
+                throw SwiftDataError.unsupportedStore("Canonical snapshot bridge returned an incompatible snapshot type.")
+            }
+            return typed
+        }
         let deletions = request.deleted
         let result = try store.save(
             DataStoreSaveChangesRequest(inserted: inserts, updated: updates, deleted: deletions))
@@ -336,8 +389,9 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
 
     func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard let snapshot = try store.snapshot(for: identifier) else { return nil }
-        return try snapshot.makeOpenSwiftDataSnapshot(in: Schema(descriptor: descriptor))
+        return try decode(snapshot)
     }
+
 }
 
 /// A type-erased configuration for an already-created custom store.
@@ -393,7 +447,7 @@ public protocol AppleDataStoreSnapshot: Codable, Sendable {
 }
 
 /// A value-oriented snapshot whose model values and relationships are supplied explicitly.
-public struct AppleDefaultSnapshot: DataStoreSnapshot, Equatable {
+public struct AppleDefaultSnapshot: DataStoreSnapshotBridge, Equatable {
     public let persistentIdentifier: PersistentIdentifier
     public let entityName: String
     public let values: [String: StoredValue]
@@ -514,14 +568,23 @@ extension AppleDefaultSnapshot {
             values: value.values, relationships: value.relationships)
     }
 
-    public static func makeDataStoreSnapshot(
-        from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema
-    ) throws -> Self {
-        try makeAppleSnapshot(
+    public init(openSwiftDataSnapshot snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws {
+        self = try Self.makeAppleSnapshot(
             from: OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
                 values: snapshot.values, relationships: snapshot.relationships),
             in: schema.descriptor)
+    }
+
+    public static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations {
+        DataStoreSnapshotBridgeOperations(
+            encode: { try Self.makeAppleSnapshot(from: $0, in: schema.descriptor) },
+            decode: { snapshot in
+                guard let snapshot = snapshot as? Self else {
+                    throw SwiftDataError.unsupportedStore("Canonical snapshot bridge received an incompatible type.")
+                }
+                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
+            })
     }
 }
 

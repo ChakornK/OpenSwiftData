@@ -160,17 +160,77 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshot, Equatable {
             relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
     }
 
+}
+
+extension CanonicalFixtureSnapshot: DataStoreSnapshotBridge {
     func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot {
         OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: persistentIdentifier, entityName: entityName, values: values,
             relationships: relationships)
     }
 
-    static func makeDataStoreSnapshot(from snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws -> Self {
-        Self(
+    init(openSwiftDataSnapshot snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws {
+        self.init(
             persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
             values: snapshot.values, relationships: snapshot.relationships)
     }
+
+    static func makeBridge(in schema: Schema) -> DataStoreSnapshotBridgeOperations {
+        DataStoreSnapshotBridgeOperations(
+            encode: { snapshot in
+                try Self(openSwiftDataSnapshot: snapshot, in: schema)
+            },
+            decode: { snapshot in
+                guard let snapshot = snapshot as? Self else {
+                    throw SwiftDataError.unsupportedStore("Canonical fixture bridge received an incompatible snapshot.")
+                }
+                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
+            })
+    }
+}
+
+private struct CanonicalSourceShapeSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    init(persistentIdentifier: PersistentIdentifier, relationships: [String: [PersistentIdentifier]] = [:]) {
+        self.persistentIdentifier = persistentIdentifier
+        entityName = persistentIdentifier.entityName
+        self.relationships = relationships
+    }
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        self.init(persistentIdentifier: backingData.persistentModelID)
+    }
+    func copy(persistentIdentifier: PersistentIdentifier, remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+}
+
+private struct UnbridgedCanonicalConfiguration: DataStoreConfiguration {
+    typealias StoreType = UnbridgedCanonicalStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
+    typealias Configuration = UnbridgedCanonicalConfiguration
+    typealias Snapshot = CanonicalSourceShapeSnapshot
+    let configuration: UnbridgedCanonicalConfiguration
+    let identifier = "unbridged.canonical"
+    var schema: Schema { configuration.schema ?? Schema() }
+    required init(_ configuration: UnbridgedCanonicalConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+    }
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot> {
+        DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [])
+    }
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        DataStoreSaveChangesResult(for: identifier)
+    }
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
 }
 
 private final class CanonicalStoreState: @unchecked Sendable {
@@ -277,6 +337,34 @@ struct AppleDataStoreAPITests {
         let store = try CanonicalFixtureStore(configuration, migrationPlan: nil)
         #expect(store.schema.entities.count == 1)
         #expect(store.name == "canonical.fixture")
+        let identifier = PersistentIdentifier(storeIdentifier: "canonical.fixture", entityName: "AppleStoreFixture", primaryKey: 1)
+        let sourceShapeSnapshot = CanonicalSourceShapeSnapshot(persistentIdentifier: identifier)
+        #expect(sourceShapeSnapshot.entityName == "AppleStoreFixture")
+    }
+
+    @Test
+    func canonicalSnapshotConformanceDoesNotRequireEngineConversions() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema)
+        let store = try UnbridgedCanonicalStore(configuration, migrationPlan: nil)
+        let result = try store.fetch(DataStoreFetchRequest(FetchDescriptor<AppleStoreFixture>()))
+        #expect(result.fetchedSnapshots.isEmpty)
+    }
+
+    @MainActor
+    @Test
+    func containerReportsMissingOptionalEngineBridgeAtUseTime() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = ModelConfiguration(
+            canonicalStore: "unbridged", schema: schema,
+            canonicalDataStoreConfiguration: UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema))
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+        #expect(container.dataStore?.identifier == "unbridged.canonical")
+        let context = container.mainContext
+        context.insert(AppleStoreFixture(title: "requires bridge"))
+        #expect(throws: SwiftDataError.unsupportedStore) {
+            try context.save()
+        }
     }
 
     @MainActor

@@ -112,6 +112,20 @@ public final class ModelContainer: Sendable {
             }
         }
         let effectivePropertiesByEntity = propertiesByEntity.mapValues(Self.effectiveProperties)
+        var runtimePropertyTypes: [String: [String: Any.Type]] = [:]
+        var runtimeCompositeTypes: [String: [String: [String: Any.Type]]] = [:]
+        for (entityName, properties) in propertiesByEntity {
+            runtimePropertyTypes[entityName] = Dictionary(uniqueKeysWithValues: properties.map { metadata, keyPath in
+                (metadata.name, type(of: keyPath).valueType)
+            })
+            for (metadata, keyPath) in properties where metadata.options.contains("flattened") {
+                let propertyType = type(of: keyPath).valueType
+                guard let compositeType = propertyType as? any FlattenedCompositeMetadataProviding.Type else { continue }
+                if runtimeCompositeTypes[entityName] == nil { runtimeCompositeTypes[entityName] = [:] }
+                runtimeCompositeTypes[entityName]?[metadata.name] =
+                    Dictionary(uniqueKeysWithValues: compositeType.flattenedComponentTypesForSchema)
+            }
+        }
         let entities = try types.map { modelType in
             let properties = propertiesByEntity[Self.unqualifiedTypeName(String(describing: modelType))] ?? []
             let schemaProperties = try properties.map {
@@ -411,6 +425,8 @@ public final class ModelContainer: Sendable {
         var schema = SchemaDescriptor(inferredEntities, version: version)
         try schema.validateRelationshipStorageMappings()
         schema.modelTypes = SchemaDescriptor.ModelTypes(types: types)
+        schema.runtimePropertyTypes = SchemaDescriptor.RuntimePropertyTypes(values: runtimePropertyTypes)
+        schema.runtimePropertyTypes.compositeValues = runtimeCompositeTypes
         return schema
     }
 

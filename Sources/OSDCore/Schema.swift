@@ -454,8 +454,30 @@ public struct SchemaDescriptor: Sendable {
         }
     }
 
+    package struct RuntimePropertyTypes: @unchecked Sendable {
+        package var values: [String: [String: Any.Type]] = [:]
+        package var compositeValues: [String: [String: [String: Any.Type]]] = [:]
+
+        package init(
+            values: [String: [String: Any.Type]] = [:],
+            compositeValues: [String: [String: [String: Any.Type]]] = [:]
+        ) {
+            self.values = values
+            self.compositeValues = compositeValues
+        }
+
+        package func type(for entity: String, property: String) -> Any.Type? {
+            values[entity]?[property]
+        }
+
+        package func compositeType(for entity: String, property: String, component: String) -> Any.Type? {
+            compositeValues[entity]?[property]?[component]
+        }
+    }
+
     /// The model types the schema was created from, in declaration order; empty for hand-built schemas.
     package var modelTypes = ModelTypes()
+    package var runtimePropertyTypes = RuntimePropertyTypes()
 
     /// Creates a schema with entities sorted by name.
     public init(_ entities: [Entity], version: Version? = nil) {
@@ -508,6 +530,7 @@ public struct SchemaDescriptor: Sendable {
         }
         var reconciled = try SchemaDescriptor(entities, version: declaredVersion, entityIDs: resolved)
         reconciled.modelTypes = modelTypes
+        reconciled.runtimePropertyTypes = runtimePropertyTypes
         return reconciled
     }
 

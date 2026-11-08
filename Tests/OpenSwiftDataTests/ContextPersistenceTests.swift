@@ -244,6 +244,21 @@ struct FlattenedDimensions: Codable, Sendable, FlattenableComposite, Equatable {
     }
 }
 
+struct FlattenedNestedDimensions: Codable, Sendable, FlattenableComposite {
+    let dimensions: FlattenedDimensions
+
+    static var flattenedComponents: [FlattenedComponent<Self>] {
+        [FlattenedComponent("dimensions", keyPath: \.dimensions, set: { value, _ in Self(dimensions: value) })]
+    }
+
+    static func emptyFlattenedValue() throws -> Self { Self(dimensions: try .emptyFlattenedValue()) }
+}
+
+@Model final class FlattenedNestedDimensionsFixture {
+    @Attribute(.flattened) var value: FlattenedNestedDimensions
+    init(value: FlattenedNestedDimensions) { self.value = value }
+}
+
 struct FlattenedPayload: Codable, Sendable, FlattenableComposite, Equatable {
     let bytes: Data
 
@@ -352,6 +367,22 @@ final class LazyCascadeChildFixture {
 }
 
 final class ContextPersistenceTests: XCTestCase {
+    func testSchemaCompositeAttributeProjectsRuntimeTypes() throws {
+        let descriptor = try ModelContainer.inferredSchema(for: [FlattenedCompositeFixture.self])
+        let schema = Schema(descriptor: descriptor)
+        let entity = try XCTUnwrap(schema.entity(for: FlattenedCompositeFixture.self))
+        let composite = try XCTUnwrap(entity.attributes.first { $0.name == "dimensions" }?.composite)
+
+        XCTAssertTrue(entity.properties.contains { $0.name == composite.name })
+        XCTAssertTrue(ObjectIdentifier(composite.valueType) == ObjectIdentifier(FlattenedDimensions.self))
+        XCTAssertEqual(Set(composite.attributes.map(\.name)), ["width", "label"])
+        XCTAssertTrue(ObjectIdentifier(try XCTUnwrap(composite.attributes.first { $0.name == "width" }).valueType) == ObjectIdentifier(Int.self))
+        XCTAssertTrue(ObjectIdentifier(try XCTUnwrap(composite.attributes.first { $0.name == "label" }).valueType) == ObjectIdentifier(String.self))
+        let converted = try XCTUnwrap(schema.descriptor.entity(forName: "FlattenedCompositeFixture")?.attributes.first)
+        let original = try XCTUnwrap(descriptor.entity(forName: "FlattenedCompositeFixture")?.attributes.first)
+        XCTAssertEqual(converted, original)
+    }
+
     @MainActor
     func testFlattenedCodableCompositePersistsAndSupportsLeafPredicate() async throws {
         let container = try ModelContainer(

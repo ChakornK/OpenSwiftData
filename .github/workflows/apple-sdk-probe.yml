@@ -1,0 +1,18 @@
+name: Apple SwiftData snapshot probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  swiftdata-snapshot-probe:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show selected Apple toolchain
+        run: swift --version
+      - name: Run Apple SwiftData snapshot probe
+        run: swift test
+        working-directory: AppleSDKProbe

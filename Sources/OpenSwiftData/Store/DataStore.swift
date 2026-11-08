@@ -114,10 +114,15 @@ public struct OpenSwiftDataDataStoreFetchRequest<Model: PersistentModel> {
 public struct OpenSwiftDataDataStoreFetchResult: Sendable, Equatable {
     /// The snapshots matching the request, in requested sort order.
     public let snapshots: [OpenSwiftDataDataStoreSnapshot]
+    public let relatedSnapshots: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot]
 
     /// Creates a fetch result from ordered snapshots.
-    public init(snapshots: [OpenSwiftDataDataStoreSnapshot]) {
+    public init(
+        snapshots: [OpenSwiftDataDataStoreSnapshot],
+        relatedSnapshots: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+    ) {
         self.snapshots = snapshots
+        self.relatedSnapshots = relatedSnapshots
     }
 }
 
@@ -162,6 +167,8 @@ public struct OpenSwiftDataDataStoreSaveResult: Sendable, Equatable {
 /// A snapshot exchanged with a custom data store.
 public protocol DataStoreSnapshot: Codable, Sendable {
     var persistentIdentifier: PersistentIdentifier { get }
+    var entityName: String { get }
+    var relationships: [String: [PersistentIdentifier]] { get }
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData])
     func copy(
         persistentIdentifier: PersistentIdentifier,
@@ -280,8 +287,34 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         _ request: OpenSwiftDataDataStoreFetchRequest<Model>
     ) throws -> OpenSwiftDataDataStoreFetchResult {
         let result = try store.fetch(DataStoreFetchRequest(request.descriptor))
-        let snapshots = try result.fetchedSnapshots.map { try $0.makeOpenSwiftDataSnapshot(in: Schema(descriptor: descriptor)) }
-        return OpenSwiftDataDataStoreFetchResult(snapshots: snapshots)
+        let publicSchema = Schema(descriptor: descriptor)
+        var roots: [OpenSwiftDataDataStoreSnapshot] = []
+        var related: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+        var pending = result.fetchedSnapshots
+        pending.append(contentsOf: result.relatedSnapshots.values)
+        let rootIdentifiers = Set(result.fetchedSnapshots.map(\.persistentIdentifier))
+        var visited: Set<PersistentIdentifier> = []
+        while let snapshot = pending.popLast() {
+            guard visited.insert(snapshot.persistentIdentifier).inserted else { continue }
+            let converted = try snapshot.makeOpenSwiftDataSnapshot(in: publicSchema)
+            if rootIdentifiers.contains(snapshot.persistentIdentifier) {
+                roots.append(converted)
+            } else {
+                related[converted.persistentIdentifier] = converted
+            }
+            for identifier in snapshot.relationships.values.flatMap({ $0 }) {
+                let relatedSnapshot: Store.Snapshot?
+                if let explicitSnapshot = result.relatedSnapshots[identifier] {
+                    relatedSnapshot = explicitSnapshot
+                } else {
+                    relatedSnapshot = try store.snapshot(for: identifier)
+                }
+                if let relatedSnapshot {
+                    pending.append(relatedSnapshot)
+                }
+            }
+        }
+        return OpenSwiftDataDataStoreFetchResult(snapshots: roots, relatedSnapshots: related)
     }
 
     func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {

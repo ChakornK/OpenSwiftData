@@ -195,5 +195,6 @@ struct AppleSnapshotTests {
         let fetched = try #require(ModelContext(container).fetch(FetchDescriptor<ProbeRecord>()).first)
         #expect(fetched.title == "apple-runtime")
         #expect(fetched.related?.count == 7)
+        #expect(fetched.related?.records.map(\.title) == ["apple-runtime"])
     }
 }

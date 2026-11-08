@@ -2,7 +2,7 @@ import Foundation
 import OSDCore
 
 package enum SchemaHash {
-    package static func digest(_ schema: Schema) -> [UInt8] {
+    package static func digest(_ schema: SchemaDescriptor) -> [UInt8] {
         SHA256.hash(canonicalEncoding(of: schema))
     }
 
@@ -10,11 +10,11 @@ package enum SchemaHash {
         SHA256.hash(bytes)
     }
 
-    package static func hexDigest(_ schema: Schema) -> String {
+    package static func hexDigest(_ schema: SchemaDescriptor) -> String {
         digest(schema).map { String(format: "%02x", $0) }.joined()
     }
 
-    package static func canonicalEncoding(of schema: Schema) -> [UInt8] {
+    package static func canonicalEncoding(of schema: SchemaDescriptor) -> [UInt8] {
         var encoder = CanonicalEncoder()
         encoder.append("OpenSwiftData.LayoutA.Schema.v1")
         encoder.append(
@@ -78,7 +78,7 @@ package enum SchemaHash {
         return encoder.bytes
     }
 
-    private static func indexLess(_ lhs: Schema.Index, _ rhs: Schema.Index) -> Bool {
+    private static func indexLess(_ lhs: SchemaDescriptor.Index, _ rhs: SchemaDescriptor.Index) -> Bool {
         if lhs.isUnique != rhs.isUnique { return lhs.isUnique && !rhs.isUnique }
         return lhs.properties.lexicographicallyPrecedes(rhs.properties) {
             $0.utf8.lexicographicallyPrecedes($1.utf8)
@@ -141,7 +141,7 @@ package enum SchemaHash {
     ///
     /// Entities, attributes, relationships, indexes, and options use the same ordering as `canonicalEncoding(of:)`.
     /// Optional fields are omitted when nil, so nil and empty strings remain distinct after decoding.
-    package static func canonicalDescription(of schema: Schema) -> String {
+    package static func canonicalDescription(of schema: SchemaDescriptor) -> String {
         let document = DescriptionDocument(
             format: descriptionFormat,
             entities: schema.entities.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
@@ -159,7 +159,7 @@ package enum SchemaHash {
     ///
     /// Throws `SwiftDataError.migrationUnsupported` for malformed JSON, unknown formats, unknown options or delete
     /// rules, and duplicate entity names.
-    package static func decodeCanonicalDescription(_ description: String) throws -> Schema {
+    package static func decodeCanonicalDescription(_ description: String) throws -> SchemaDescriptor {
         let document: DescriptionDocument
         do {
             document = try JSONDecoder().decode(DescriptionDocument.self, from: Data(description.utf8))
@@ -176,7 +176,7 @@ package enum SchemaHash {
             }
             return try entity.schemaEntity()
         }
-        return Schema(entities)
+        return SchemaDescriptor(entities)
     }
 
     private struct DescriptionDocument: Codable {
@@ -204,7 +204,7 @@ package enum SchemaHash {
             indexes = try container.decode([DescriptionIndex].self, forKey: .indexes)
         }
 
-        init(_ entity: Schema.Entity) {
+        init(_ entity: SchemaDescriptor.Entity) {
             name = entity.name
             superentityName = entity.superentityName
             attributes = entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
@@ -214,11 +214,11 @@ package enum SchemaHash {
             indexes = entity.indexes.sorted(by: SchemaHash.indexLess).map(DescriptionIndex.init)
         }
 
-        func schemaEntity() throws -> Schema.Entity {
-            Schema.Entity(
+        func schemaEntity() throws -> SchemaDescriptor.Entity {
+            SchemaDescriptor.Entity(
                 name: name, attributes: try attributes.map { try $0.schemaAttribute() },
                 relationships: try relationships.map { try $0.schemaRelationship() },
-                indexes: indexes.map { Schema.Index(properties: $0.properties, isUnique: $0.isUnique) },
+                indexes: indexes.map { SchemaDescriptor.Index(properties: $0.properties, isUnique: $0.isUnique) },
                 superentityName: superentityName)
         }
     }
@@ -230,7 +230,7 @@ package enum SchemaHash {
         var defaultValue: String?
         var originalName: String?
         var options: [DescriptionOption]
-        var components: [Schema.Attribute.Component]
+        var components: [SchemaDescriptor.Attribute.Component]
 
         private enum CodingKeys: String, CodingKey {
             case name, type, isOptional, defaultValue, originalName, options, components
@@ -244,10 +244,10 @@ package enum SchemaHash {
             defaultValue = try container.decodeIfPresent(String.self, forKey: .defaultValue)
             originalName = try container.decodeIfPresent(String.self, forKey: .originalName)
             options = try container.decode([DescriptionOption].self, forKey: .options)
-            components = try container.decodeIfPresent([Schema.Attribute.Component].self, forKey: .components) ?? []
+            components = try container.decodeIfPresent([SchemaDescriptor.Attribute.Component].self, forKey: .components) ?? []
         }
 
-        init(_ attribute: Schema.Attribute) {
+        init(_ attribute: SchemaDescriptor.Attribute) {
             name = attribute.name
             type = attribute.type
             isOptional = attribute.isOptional
@@ -258,8 +258,8 @@ package enum SchemaHash {
                 .sorted { ($0.kind, $0.transformer ?? "") < ($1.kind, $1.transformer ?? "") }
         }
 
-        func schemaAttribute() throws -> Schema.Attribute {
-            Schema.Attribute(
+        func schemaAttribute() throws -> SchemaDescriptor.Attribute {
+            SchemaDescriptor.Attribute(
                 name: name, type: type, isOptional: isOptional, defaultValue: defaultValue,
                 options: Set(try options.map { try $0.schemaOption() }), originalName: originalName,
                 components: components)
@@ -271,7 +271,7 @@ package enum SchemaHash {
         var kind: String
         var transformer: String?
 
-        init(_ option: Schema.Attribute.Option) {
+        init(_ option: SchemaDescriptor.Attribute.Option) {
             switch option {
             case .unique: kind = "unique"
             case .externalStorage: kind = "externalStorage"
@@ -288,7 +288,7 @@ package enum SchemaHash {
             }
         }
 
-        func schemaOption() throws -> Schema.Attribute.Option {
+        func schemaOption() throws -> SchemaDescriptor.Attribute.Option {
             if kind == "transformable" {
                 guard let transformer else {
                     throw SwiftDataError.migrationUnsupported("Stored transformable option lacks a transformer.")
@@ -325,7 +325,7 @@ package enum SchemaHash {
         var originalName: String?
         var declaringEntityName: String?
 
-        init(_ relationship: Schema.Relationship) {
+        init(_ relationship: SchemaDescriptor.Relationship) {
             name = relationship.name
             destination = relationship.destination
             isToMany = relationship.isToMany
@@ -338,11 +338,11 @@ package enum SchemaHash {
             declaringEntityName = relationship.declaringEntityName
         }
 
-        func schemaRelationship() throws -> Schema.Relationship {
-            guard let rule = Schema.Relationship.DeleteRule(canonicalName: deleteRule) else {
+        func schemaRelationship() throws -> SchemaDescriptor.Relationship {
+            guard let rule = SchemaDescriptor.Relationship.DeleteRule(canonicalName: deleteRule) else {
                 throw SwiftDataError.migrationUnsupported("Invalid stored relationship delete rule.")
             }
-            return Schema.Relationship(
+            return SchemaDescriptor.Relationship(
                 name: name, destination: destination, isToMany: isToMany, isOptional: isOptional ?? true,
                 inverse: inverse, deleteRule: rule,
                 minimumModelCount: minimumModelCount, maximumModelCount: maximumModelCount,
@@ -354,7 +354,7 @@ package enum SchemaHash {
         var isUnique: Bool
         var properties: [String]
 
-        init(_ index: Schema.Index) {
+        init(_ index: SchemaDescriptor.Index) {
             isUnique = index.isUnique
             properties = index.properties
         }
@@ -364,8 +364,8 @@ package enum SchemaHash {
 package enum EntityIDMapCodec {
     private static let format = "entity-id-map.v1"
 
-    package static func encode(_ identifiers: [String: Int], for schema: Schema) throws -> [UInt8] {
-        _ = try Schema(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
+    package static func encode(_ identifiers: [String: Int], for schema: SchemaDescriptor) throws -> [UInt8] {
+        _ = try SchemaDescriptor(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
         let entries = identifiers.map { Entry(name: $0.key, identifier: $0.value) }
             .sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         let encoder = JSONEncoder()
@@ -373,7 +373,7 @@ package enum EntityIDMapCodec {
         return Array(try encoder.encode(Document(format: format, entries: entries)))
     }
 
-    package static func decode(_ bytes: [UInt8], for schema: Schema) throws -> [String: Int] {
+    package static func decode(_ bytes: [UInt8], for schema: SchemaDescriptor) throws -> [String: Int] {
         let document: Document
         do {
             document = try JSONDecoder().decode(Document.self, from: Data(bytes))
@@ -390,7 +390,7 @@ package enum EntityIDMapCodec {
             }
         }
         do {
-            _ = try Schema(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
+            _ = try SchemaDescriptor(schema.entities, version: schema.declaredVersion, entityIDs: identifiers)
         } catch {
             throw SwiftDataError.migrationUnsupported("Stored entity identifier map does not match the schema.")
         }
@@ -408,7 +408,7 @@ package enum EntityIDMapCodec {
     }
 }
 
-private extension Schema.Attribute.Option {
+private extension SchemaDescriptor.Attribute.Option {
     var canonicalName: String {
         switch self {
         case .unique: "unique"
@@ -425,7 +425,7 @@ private extension Schema.Attribute.Option {
     }
 }
 
-private extension Schema.Relationship.DeleteRule {
+private extension SchemaDescriptor.Relationship.DeleteRule {
     var rawValue: String {
         switch self {
         case .nullify: "nullify"
@@ -436,7 +436,7 @@ private extension Schema.Relationship.DeleteRule {
     }
 }
 
-private extension Schema.Relationship.DeleteRule {
+private extension SchemaDescriptor.Relationship.DeleteRule {
     init?(canonicalName: String) {
         switch canonicalName {
         case "nullify": self = .nullify

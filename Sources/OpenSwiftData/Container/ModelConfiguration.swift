@@ -27,6 +27,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     package let schemaVersionReader: RuntimeSchemaVersionReader?
     package let schemaCompatibilityReader: RuntimeSchemaCompatibilityReader?
     package let dataStoreConfiguration: (any DataStoreConfiguration)?
+    package let appleDataStoreConfiguration: (any AppleDataStoreConfiguration)?
 
     /// The store URL, which identifies the configuration.
     public var id: URL { url }
@@ -77,7 +78,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a default-named configuration that stores the given model types.
     public init(for forTypes: any PersistentModel.Type..., isStoredInMemoryOnly: Bool = false) {
         self.init(
-            nil, schema: Schema(forTypes as [any PersistentModel.Type], version: nil),
+            nil, schema: Schema(forTypes as [any PersistentModel.Type]),
             isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
@@ -125,7 +126,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
-        dataStoreConfiguration: (any DataStoreConfiguration)? = nil
+        dataStoreConfiguration: (any DataStoreConfiguration)? = nil,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
     ) {
         let name = name ?? Self.defaultStoreName
         let url =
@@ -136,7 +138,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
             name: name, url: url, schema: schema, isStoredInMemoryOnly: isStoredInMemoryOnly, allowsSave: allowsSave,
             groupContainer: groupContainer, cloudKitDatabase: cloudKitDatabase, storeFactory: storeFactory,
             schemaVersionReader: schemaVersionReader, schemaCompatibilityReader: schemaCompatibilityReader,
-            dataStoreConfiguration: dataStoreConfiguration)
+            dataStoreConfiguration: dataStoreConfiguration, appleDataStoreConfiguration: appleDataStoreConfiguration)
     }
 
     package init(
@@ -148,13 +150,15 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader? = nil,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader? = nil,
-        dataStoreConfiguration: (any DataStoreConfiguration)? = nil
+        dataStoreConfiguration: (any DataStoreConfiguration)? = nil,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
     ) {
         self.init(
             name: name ?? Self.defaultStoreName, url: url, schema: schema, isStoredInMemoryOnly: false,
             allowsSave: allowsSave, groupContainer: .automatic, cloudKitDatabase: cloudKitDatabase,
             storeFactory: storeFactory, schemaVersionReader: schemaVersionReader,
-            schemaCompatibilityReader: schemaCompatibilityReader, dataStoreConfiguration: dataStoreConfiguration)
+            schemaCompatibilityReader: schemaCompatibilityReader, dataStoreConfiguration: dataStoreConfiguration,
+            appleDataStoreConfiguration: appleDataStoreConfiguration)
     }
 
     /// Creates a configuration backed by a custom value-oriented data store.
@@ -170,6 +174,20 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
             schemaVersionReader: nil, schemaCompatibilityReader: nil, dataStoreConfiguration: dataStoreConfiguration)
     }
 
+    /// Creates a configuration backed by an Apple-shaped custom data store.
+    public init(
+        appleStore name: String,
+        schema: Schema? = nil,
+        allowsSave: Bool = true,
+        appleDataStoreConfiguration: any AppleDataStoreConfiguration
+    ) {
+        self.init(
+            name: name, url: URL(fileURLWithPath: "/dev/null"), schema: schema, isStoredInMemoryOnly: false,
+            allowsSave: allowsSave, groupContainer: .none, cloudKitDatabase: .none, storeFactory: nil,
+            schemaVersionReader: nil, schemaCompatibilityReader: nil, dataStoreConfiguration: nil,
+            appleDataStoreConfiguration: appleDataStoreConfiguration)
+    }
+
     private init(
         name: String,
         url: URL,
@@ -181,7 +199,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         storeFactory: RuntimeStoreFactory?,
         schemaVersionReader: RuntimeSchemaVersionReader?,
         schemaCompatibilityReader: RuntimeSchemaCompatibilityReader?,
-        dataStoreConfiguration: (any DataStoreConfiguration)?
+        dataStoreConfiguration: (any DataStoreConfiguration)?,
+        appleDataStoreConfiguration: (any AppleDataStoreConfiguration)? = nil
     ) {
         self.name = name
         self.url = url
@@ -196,7 +215,10 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         self.schemaVersionReader = schemaVersionReader
         self.schemaCompatibilityReader = schemaCompatibilityReader
         self.dataStoreConfiguration = dataStoreConfiguration
+        self.appleDataStoreConfiguration = appleDataStoreConfiguration
     }
+
+    package var schemaDescriptor: SchemaDescriptor? { schema?.descriptor }
 
     /// Throws when the name cannot form a store file name.
     ///
@@ -213,7 +235,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     /// Returns whether both configurations have the same name, URL, schema, save permission, and in-memory flag.
     public static func == (lhs: ModelConfiguration, rhs: ModelConfiguration) -> Bool {
-        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema == rhs.schema && lhs.allowsSave == rhs.allowsSave
+        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema?.descriptor == rhs.schema?.descriptor
+            && lhs.allowsSave == rhs.allowsSave
             && lhs.isStoredInMemoryOnly == rhs.isStoredInMemoryOnly
     }
 

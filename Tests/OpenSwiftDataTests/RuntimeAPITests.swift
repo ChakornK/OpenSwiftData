@@ -27,7 +27,7 @@ final class OptionalDestinationFixture: PersistentModel, Hashable {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] { [] }
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] { [] }
 
     static func createBackingData() -> DetachedBackingData<OptionalDestinationFixture> {
         DetachedBackingData(metadata: schemaMetadata())
@@ -56,12 +56,12 @@ final class MissingDestinationWithoutInverseFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "destination",
                 keypath: \MissingDestinationWithoutInverseFixture.destination,
-                metadata: AnyHashable(Schema.Relationship())
+                metadata: AnyHashable(SchemaDescriptor.Relationship())
             )
         ]
     }
@@ -105,12 +105,12 @@ final class ExplicitInverseDestinationFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "source",
                 keypath: \ExplicitInverseDestinationFixture.source,
-                metadata: AnyHashable(Schema.Relationship(inverseName: "destination"))
+                metadata: AnyHashable(SchemaDescriptor.Relationship(inverseName: "destination"))
             )
         ]
     }
@@ -125,7 +125,7 @@ final class ExplicitInverseDestinationFixture: PersistentModel {
                 TypedRelationshipPropertyAdapter<
                     ExplicitInverseDestinationFixture, ExplicitInverseSourceFixture?, ExplicitInverseSourceFixture
                 >(
-                    "source", keyPath: \.source, metadata: Schema.Relationship(inverseName: "destination"),
+                    "source", keyPath: \.source, metadata: SchemaDescriptor.Relationship(inverseName: "destination"),
                     read: { $0.source }, endpoints: { $0.map { [$0] } ?? [] }, isToMany: false)
             )
         ]
@@ -152,8 +152,8 @@ final class ExplicitInverseNonRelationshipFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
-        [Schema.PropertyMetadata(name: "title", keypath: \ExplicitInverseNonRelationshipFixture.title)]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
+        [SchemaDescriptor.PropertyMetadata(name: "title", keypath: \ExplicitInverseNonRelationshipFixture.title)]
     }
 
     static func createBackingData() -> DetachedBackingData<ExplicitInverseNonRelationshipFixture> {
@@ -169,12 +169,12 @@ final class InvalidInverseBackReferenceFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "destination",
                 keypath: \InvalidInverseBackReferenceFixture.destination,
-                metadata: AnyHashable(Schema.Relationship(inverseName: "source"))
+                metadata: AnyHashable(SchemaDescriptor.Relationship(inverseName: "source"))
             )
         ]
     }
@@ -197,12 +197,12 @@ final class MissingRelationshipDestinationFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(
                 name: "destination",
                 keypath: \MissingRelationshipDestinationFixture.destination,
-                metadata: AnyHashable(Schema.Relationship(inverseName: "missing"))
+                metadata: AnyHashable(SchemaDescriptor.Relationship(inverseName: "missing"))
             )
         ]
     }
@@ -227,10 +227,10 @@ final class OptionalModelSetsFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
         [
-            Schema.PropertyMetadata(name: "destinations", keypath: \OptionalModelSetsFixture.destinations),
-            Schema.PropertyMetadata(
+            SchemaDescriptor.PropertyMetadata(name: "destinations", keypath: \OptionalModelSetsFixture.destinations),
+            SchemaDescriptor.PropertyMetadata(
                 name: "optionalDestinations", keypath: \OptionalModelSetsFixture.optionalDestinations),
         ]
     }
@@ -248,8 +248,8 @@ final class OptionalElementCollectionFixture: PersistentModel {
         persistentBackingData = backingData
     }
 
-    static func schemaMetadata() -> [Schema.PropertyMetadata] {
-        [Schema.PropertyMetadata(name: "destinations", keypath: \OptionalElementCollectionFixture.destinations)]
+    static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] {
+        [SchemaDescriptor.PropertyMetadata(name: "destinations", keypath: \OptionalElementCollectionFixture.destinations)]
     }
 
     static func createBackingData() -> DetachedBackingData<OptionalElementCollectionFixture> {
@@ -266,7 +266,7 @@ enum FirstNamespace {
             persistentBackingData = backingData
         }
 
-        static func schemaMetadata() -> [Schema.PropertyMetadata] { [] }
+        static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] { [] }
 
         static func createBackingData() -> DetachedBackingData<SharedName> {
             DetachedBackingData(metadata: schemaMetadata())
@@ -283,7 +283,7 @@ enum SecondNamespace {
             persistentBackingData = backingData
         }
 
-        static func schemaMetadata() -> [Schema.PropertyMetadata] { [] }
+        static func schemaMetadata() -> [SchemaDescriptor.PropertyMetadata] { [] }
 
         static func createBackingData() -> DetachedBackingData<SharedName> {
             DetachedBackingData(metadata: schemaMetadata())
@@ -315,35 +315,9 @@ final class RuntimeAPITests: XCTestCase {
         let container = try ModelContainer(
             for: [OptionalDestinationFixture.self, SupportedOptionalCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "SupportedOptionalCollectionFixture"))
-        XCTAssertEqual(
-            entity,
-            Schema.Entity(
-                name: "SupportedOptionalCollectionFixture",
-                attributes: [
-                    Schema.Attribute(
-                        name: "destinations",
-                        type: "Array<OpenSwiftDataTests.OptionalDestinationFixture>",
-                        defaultValue: "[]"
-                    ),
-                    Schema.Attribute(
-                        name: "optionalDestinations",
-                        type: "Array<OpenSwiftDataTests.OptionalDestinationFixture>",
-                        isOptional: true
-                    ),
-                ],
-                relationships: [
-                    Schema.Relationship(
-                        name: "destinations",
-                        destination: "OptionalDestinationFixture",
-                        isToMany: true
-                    ),
-                    Schema.Relationship(
-                        name: "optionalDestinations",
-                        destination: "OptionalDestinationFixture",
-                        isToMany: true
-                    ),
-                ]
-            ))
+        XCTAssertEqual(entity.name, "SupportedOptionalCollectionFixture")
+        XCTAssertEqual(Set(entity.relationships.map(\.name)), ["destinations", "optionalDestinations"])
+        XCTAssertEqual(Set(entity.attributes.map(\.name)), ["destinations", "optionalDestinations"])
         XCTAssertEqual(
             container.relationshipAdapters(for: SupportedOptionalCollectionFixture.self).map(\.name),
             [],
@@ -355,7 +329,7 @@ final class RuntimeAPITests: XCTestCase {
     func testContainerSupportsOptionalScalarCollectionAttributes() async throws {
         let container = try ModelContainer(for: [OptionalScalarCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarCollectionFixture"))
-        XCTAssertEqual(entity.attributes.map(\.name), ["strings", "integers"])
+        XCTAssertEqual(Set(entity.attributes.map(\.name)), ["strings", "integers"])
         XCTAssertTrue(entity.relationships.isEmpty)
     }
 

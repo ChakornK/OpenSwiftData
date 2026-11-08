@@ -5,7 +5,7 @@ public enum RuntimeSchemaVersionState: Sendable {
     /// The store does not yet contain a schema.
     case empty
     /// The store contains a recognized version.
-    case version(Schema.Version)
+    case version(SchemaDescriptor.Version)
     /// The store has schema data but no recognized version identifier.
     case unversioned
     /// A custom stage changed the schema but has not completed its destination callback.
@@ -13,7 +13,7 @@ public enum RuntimeSchemaVersionState: Sendable {
 }
 
 /// Describes the entities and version metadata in a persistent store.
-public struct Schema: Sendable {
+public struct SchemaDescriptor: Sendable {
     /// Describes the logical declaration and physical root storage for one relationship.
     package struct RelationshipStorageMapping: Sendable, Hashable {
         package let modelEntityName: String
@@ -156,7 +156,8 @@ public struct Schema: Sendable {
             defaultValue: String? = nil,
             options: Set<Option> = [],
             originalName: String? = nil,
-            components: [Component] = []
+            components: [Component] = [],
+            hashModifier: String? = nil
         ) {
             self.name = name
             self.type = type
@@ -164,7 +165,7 @@ public struct Schema: Sendable {
             self.defaultValue = defaultValue
             self.options = options
             self.originalName = originalName
-            self.hashModifier = nil
+            self.hashModifier = hashModifier
             self.components = components.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         }
     }
@@ -342,7 +343,7 @@ public struct Schema: Sendable {
         public let name: String
         /// The typed key path to the property, when available.
         public let keypath: AnyKeyPath?
-        /// Schema-level attribute or relationship metadata.
+        /// Descriptor-level attribute or relationship metadata.
         public let metadata: AnyHashable?
         /// Whether the property is a relationship.
         public let isRelationship: Bool
@@ -357,7 +358,7 @@ public struct Schema: Sendable {
         /// Property-specific options.
         public let options: [String]
         /// Flattened components declared by the property value type.
-        public let flattenedComponents: [Schema.Attribute.Component]
+        public let flattenedComponents: [SchemaDescriptor.Attribute.Component]
         package let runtimeDefaultValue: Any?
 
         /// Compares schema-facing metadata, excluding the runtime default value.
@@ -396,13 +397,13 @@ public struct Schema: Sendable {
             isInferredRelationship: Bool = false,
             isExplicitAttribute: Bool = false,
             options: [String] = [],
-            flattenedComponents: [Schema.Attribute.Component] = []
+            flattenedComponents: [SchemaDescriptor.Attribute.Component] = []
         ) {
             self.name = name
             self.keypath = keypath
             self.metadata = metadata
             self.isRelationship =
-                metadata?.base is Schema.Relationship || isExplicitRelationship
+                metadata?.base is SchemaDescriptor.Relationship || isExplicitRelationship
                 || isInferredRelationship
             self.isExplicitRelationship = isExplicitRelationship
             self.isInferredRelationship = isInferredRelationship
@@ -473,7 +474,7 @@ public struct Schema: Sendable {
     package func reconciled(
         with storedEntityIDs: [String: Int],
         minimumNextIdentifier: Int? = nil
-    ) throws -> Schema {
+    ) throws -> SchemaDescriptor {
         guard minimumNextIdentifier.map({ $0 > 0 }) ?? true else {
             throw SwiftDataError.migrationUnsupported("Next entity identifier must be positive.")
         }
@@ -505,7 +506,7 @@ public struct Schema: Sendable {
             }
             nextIdentifier = overflow ? nil : followingIdentifier
         }
-        var reconciled = try Schema(entities, version: declaredVersion, entityIDs: resolved)
+        var reconciled = try SchemaDescriptor(entities, version: declaredVersion, entityIDs: resolved)
         reconciled.modelTypes = modelTypes
         return reconciled
     }
@@ -660,13 +661,13 @@ public struct Schema: Sendable {
     }
 }
 
-extension Schema.Index: Codable {}
-extension Schema.Attribute.Option: Codable {}
-extension Schema.Attribute: Codable {}
-extension Schema.Relationship: Codable {}
-extension Schema.Entity: Codable {}
+extension SchemaDescriptor.Index: Codable {}
+extension SchemaDescriptor.Attribute.Option: Codable {}
+extension SchemaDescriptor.Attribute: Codable {}
+extension SchemaDescriptor.Relationship: Codable {}
+extension SchemaDescriptor.Entity: Codable {}
 
-extension Schema: Codable {
+extension SchemaDescriptor: Codable {
     private enum CodingKeys: String, CodingKey {
         case entities
         case version
@@ -688,9 +689,9 @@ extension Schema: Codable {
     }
 }
 
-extension Schema: Hashable {
+extension SchemaDescriptor: Hashable {
     /// Returns whether both schemas have equal entities and versions.
-    public static func == (lhs: Schema, rhs: Schema) -> Bool {
+    public static func == (lhs: SchemaDescriptor, rhs: SchemaDescriptor) -> Bool {
         lhs.entities == rhs.entities && lhs.version == rhs.version
     }
 
@@ -702,7 +703,7 @@ extension Schema: Hashable {
 }
 
 #if canImport(ObjectiveC)
-    extension Schema.Attribute.Option {
+    extension SchemaDescriptor.Attribute.Option {
         /// Stores values using the given value transformer class, identified by its registered class name.
         public static func transformable(by transformerType: ValueTransformer.Type) -> Self {
             .transformable(by: NSStringFromClass(transformerType))

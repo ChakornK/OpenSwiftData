@@ -280,7 +280,7 @@ final class CodeGenTests: XCTestCase {
             }
             """)
         let attributeSources = CodeGen.memberSources(qualifiedAttribute).joined(separator: "\n")
-        XCTAssertTrue(attributeSources.contains("metadata: Schema.Attribute(.unique)"), attributeSources)
+        XCTAssertTrue(attributeSources.contains("metadata: OSDCore.SchemaDescriptor.Attribute(.unique)"), attributeSources)
 
         let qualifiedTransient = try parseClass(
             """
@@ -388,12 +388,12 @@ final class CodeGenTests: XCTestCase {
         .joined(separator: "\n")
         XCTAssertTrue(
             generated.contains(
-                "public static func schemaIndexes() -> [Schema.Index] { [Schema.Index(properties: [\"first\"], isUnique: true), Schema.Index(properties: [\"second\", \"first\"], isUnique: false)] }"
+                "public static func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { [OSDCore.SchemaDescriptor.Index(properties: [\"first\"], isUnique: true), OSDCore.SchemaDescriptor.Index(properties: [\"second\", \"first\"], isUnique: false)] }"
             ),
             generated)
         XCTAssertEqual(
             try CodeGen.schemaIndexSourcesValidating(in: declaration),
-            "public static func schemaIndexes() -> [Schema.Index] { [Schema.Index(properties: [\"first\"], isUnique: true), Schema.Index(properties: [\"second\", \"first\"], isUnique: false)] }"
+            "public static func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { [OSDCore.SchemaDescriptor.Index(properties: [\"first\"], isUnique: true), OSDCore.SchemaDescriptor.Index(properties: [\"second\", \"first\"], isUnique: false)] }"
         )
     }
 
@@ -441,12 +441,12 @@ final class CodeGenTests: XCTestCase {
             [
                 "@Transient\nprivate var _$backingData: any BackingData<Trip> = Trip.createBackingData()",
                 "public var persistentBackingData: any BackingData<Trip> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
-                "public static func schemaMetadata() -> [Schema.PropertyMetadata] {\n    return [\n        Schema.PropertyMetadata(name: \"name\", keypath: \\Trip.name, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"days\", keypath: \\Trip.days, defaultValue: 1, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"notes\", keypath: \\Trip.notes, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        Schema.PropertyMetadata(name: \"stops\", keypath: \\Trip.stops, defaultValue: [], metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), isExplicitRelationship: true)\n    ]\n}",
+                "public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {\n    return [\n        OSDCore.SchemaDescriptor.PropertyMetadata(name: \"name\", keypath: \\Trip.name, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        OSDCore.SchemaDescriptor.PropertyMetadata(name: \"days\", keypath: \\Trip.days, defaultValue: 1, metadata: nil, isExplicitRelationship: false),\n        OSDCore.SchemaDescriptor.PropertyMetadata(name: \"notes\", keypath: \\Trip.notes, defaultValue: nil, metadata: nil, isExplicitRelationship: false),\n        OSDCore.SchemaDescriptor.PropertyMetadata(name: \"stops\", keypath: \\Trip.stops, defaultValue: [], metadata: OSDCore.SchemaDescriptor.Relationship(deleteRule: .cascade, inverseName: \"trip\"), isExplicitRelationship: true)\n    ]\n}",
                 "public static let propertyDescriptors: [PropertyDescriptor] = [PropertyDescriptor(slot: 0, name: \"name\", keyPath: \\Trip.name, kind: .attribute, codec: String.self, options: []), PropertyDescriptor(slot: 1, name: \"days\", keyPath: \\Trip.days, kind: .attribute, codec: Int.self, options: []), PropertyDescriptor(slot: 2, name: \"notes\", keyPath: \\Trip.notes, kind: .attribute, codec: String?.self, options: []), PropertyDescriptor(slot: 3, name: \"stops\", keyPath: \\Trip.stops, kind: .relationship, codec: [Stop].self, options: [])]",
                 "public static func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }",
                 "public static func persistenceAdapters() -> [any PersistencePropertyAdapter<Trip>] {\n    [\n        TypedPropertyAdapter<Trip, String>(\"name\", keyPath: \\Trip.name, encode: { model in try PersistentValue.encode(model.name) }, decode: { value, model in model.name = try PersistentValue.decode(String.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, Int>(\"days\", keyPath: \\Trip.days, encode: { model in try PersistentValue.encode(model.days) }, decode: { value, model in model.days = try PersistentValue.decode(Int.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(Int.self, from: value)) as Any }),\n        TypedPropertyAdapter<Trip, String?>(\"notes\", keyPath: \\Trip.notes, encode: { model in try PersistentValue.encode(model.notes) }, decode: { value, model in model.notes = try PersistentValue.decode(String?.self, from: value) }, decodeValue: { value in (try PersistentValue.decode(String?.self, from: value)) as Any })\n    ]\n}",
                 "public static func erasedPersistenceAdapters() -> [any AnyPersistencePropertyAdapter] { persistenceAdapters().map(ErasedPersistencePropertyAdapter.init) }",
-                "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
+                "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: OSDCore.SchemaDescriptor.Relationship(deleteRule: .cascade, inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}",
                 "public init(backingData: any BackingData<Trip>) {\n    _$backingData = backingData\n}",
                 "@Transient\nprivate let _$observationRegistrar = Observation.ObservationRegistrar()",
                 "internal nonisolated func access<_OSDRoot: Trip, _M>(keyPath: KeyPath<_OSDRoot, _M>) where _OSDRoot: Observable {\n    guard let subject = self as? _OSDRoot else { return }\n    _$observationRegistrar.access(subject, keyPath: keyPath)\n}",
@@ -480,9 +480,9 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             metadata,
             [
-                "Schema.Attribute(.unique)",
-                "Schema.Attribute(.transformable(by: \"Codec\"))",
-                "Schema.Relationship(deleteRule: .deny, minimumModelCount: 1, inverseName: \"people\")",
+                "OSDCore.SchemaDescriptor.Attribute(.unique)",
+                "OSDCore.SchemaDescriptor.Attribute(.transformable(by: \"Codec\"))",
+                "OSDCore.SchemaDescriptor.Relationship(deleteRule: .deny, minimumModelCount: 1, inverseName: \"people\")",
             ])
     }
 
@@ -498,8 +498,8 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.persistedProperties(in: declaration).map(\.metadata),
             [
-                "Schema.Relationship(inverseName: \"someProperty\")",
-                "Schema.Relationship(inverseName: \"`class`\")",
+                "OSDCore.SchemaDescriptor.Relationship(inverseName: \"someProperty\")",
+                "OSDCore.SchemaDescriptor.Relationship(inverseName: \"`class`\")",
             ])
     }
 
@@ -512,7 +512,7 @@ final class CodeGenTests: XCTestCase {
             """)
         XCTAssertEqual(
             CodeGen.memberSources(declaration).first { $0.contains("relationshipAdapterCandidates()") },
-            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: Schema.Relationship(originalName: \"a,b\", inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}"
+            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Trip>(TypedRelationshipPropertyAdapter<Trip, [Stop], Stop>(\"stops\", keyPath: \\Trip.stops, metadata: OSDCore.SchemaDescriptor.Relationship(originalName: \"a,b\", inverseName: \"trip\"), read: { model in model.stops }, endpoints: { value in value }, build: { endpoints in [Stop](endpoints) }, inverseBuild: { endpoints in endpoints }, isToMany: true, explicitInverseKeyPath: \\Stop.trip))\n    ]\n}"
         )
     }
 
@@ -526,7 +526,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(CodeGen.persistedProperties(in: declaration).map(\.inverseKeyPath), ["\\Dest.`class`"])
         XCTAssertEqual(
             CodeGen.memberSources(declaration).first { $0.contains("relationshipAdapterCandidates()") },
-            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Model>(TypedRelationshipPropertyAdapter<Model, Dest?, Dest>(\"dest\", keyPath: \\Model.dest, metadata: Schema.Relationship(inverseName: \"`class`\"), read: { model in model.dest }, endpoints: { value in value.map { [$0] } ?? [] }, build: { endpoints in endpoints.first }, inverseBuild: { endpoints in endpoints.first }, isToMany: false, explicitInverseKeyPath: \\Dest.`class`))\n    ]\n}"
+            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Model>(TypedRelationshipPropertyAdapter<Model, Dest?, Dest>(\"dest\", keyPath: \\Model.dest, metadata: OSDCore.SchemaDescriptor.Relationship(inverseName: \"`class`\"), read: { model in model.dest }, endpoints: { value in value.map { [$0] } ?? [] }, build: { endpoints in endpoints.first }, inverseBuild: { endpoints in endpoints.first }, isToMany: false, explicitInverseKeyPath: \\Dest.`class`))\n    ]\n}"
         )
     }
 
@@ -556,7 +556,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(CodeGen.persistedProperties(in: declaration).map(\.inverseKeyPath), [nil])
         XCTAssertEqual(
             CodeGen.memberSources(declaration).first { $0.contains("relationshipAdapterCandidates()") },
-            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Model>(TypedRelationshipPropertyAdapter<Model, Dest?, Dest>(\"dest\", keyPath: \\Model.dest, metadata: Schema.Relationship(inverse: nil), read: { model in model.dest }, endpoints: { value in value.map { [$0] } ?? [] }, build: { endpoints in endpoints.first }, inverseBuild: { endpoints in endpoints.first }, isToMany: false))\n    ]\n}"
+            "public static func relationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] {\n    [\n        RelationshipAdapterBox<Model>(TypedRelationshipPropertyAdapter<Model, Dest?, Dest>(\"dest\", keyPath: \\Model.dest, metadata: OSDCore.SchemaDescriptor.Relationship(inverse: nil), read: { model in model.dest }, endpoints: { value in value.map { [$0] } ?? [] }, build: { endpoints in endpoints.first }, inverseBuild: { endpoints in endpoints.first }, isToMany: false))\n    ]\n}"
         )
     }
 
@@ -587,9 +587,9 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.memberSources(declaration)[2],
             """
-            public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+            public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                 return [
-                    Schema.PropertyMetadata(name: "value", keypath: \\Metadata.value, defaultValue: nil, metadata: Schema.Relationship(deleteRule: .cascade), isExplicitRelationship: true)
+                    OSDCore.SchemaDescriptor.PropertyMetadata(name: "value", keypath: \\Metadata.value, defaultValue: nil, metadata: OSDCore.SchemaDescriptor.Relationship(deleteRule: .cascade), isExplicitRelationship: true)
                 ]
             }
             """)
@@ -620,7 +620,7 @@ final class CodeGenTests: XCTestCase {
         XCTAssertEqual(
             CodeGen.memberSources(declaration)[2],
             """
-            public static func schemaMetadata() -> [Schema.PropertyMetadata] {
+            public static func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {
                 return []
             }
             """)
@@ -804,10 +804,10 @@ final class CodeGenTests: XCTestCase {
         XCTAssertTrue(candidates.contains("keyPath: \\Household.optionalPets"))
         XCTAssertFalse(candidates.contains("keyPath: \\Household.label"))
         XCTAssertTrue(generated.contains("isInferredRelationship: true"))
-        XCTAssertTrue(generated.contains("metadata: Schema.Attribute(.codable)"))
-        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"tags\""))
-        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"optionalTags\""))
-        XCTAssertTrue(generated.contains("Schema.PropertyMetadata(name: \"numbers\""))
+        XCTAssertTrue(generated.contains("metadata: OSDCore.SchemaDescriptor.Attribute(.codable)"))
+        XCTAssertTrue(generated.contains("OSDCore.SchemaDescriptor.PropertyMetadata(name: \"tags\""))
+        XCTAssertTrue(generated.contains("OSDCore.SchemaDescriptor.PropertyMetadata(name: \"optionalTags\""))
+        XCTAssertTrue(generated.contains("OSDCore.SchemaDescriptor.PropertyMetadata(name: \"numbers\""))
         XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, [String]>(\"tags\""))
         XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, [String]?>(\"optionalTags\""))
         XCTAssertTrue(generated.contains("TypedPropertyAdapter<Household, Set<Int>>(\"numbers\""))
@@ -874,14 +874,14 @@ final class CodeGenTests: XCTestCase {
         for property in ["decimal", "url", "uuid", "date", "data"] {
             XCTAssertFalse(
                 generated.contains(
-                    "Schema.PropertyMetadata(name: \"\(property)\", keypath: \\QualifiedScalars.\(property), defaultValue: nil, metadata: Schema.Attribute(.codable)"
+                    "OSDCore.SchemaDescriptor.PropertyMetadata(name: \"\(property)\", keypath: \\QualifiedScalars.\(property), defaultValue: nil, metadata: OSDCore.SchemaDescriptor.Attribute(.codable)"
                 ))
             let type = try XCTUnwrap(CodeGen.propertyType(property, in: declaration))
             XCTAssertTrue(CodeGen.isSupportedScalarType(type), "Expected \(type) to be a supported scalar")
         }
         XCTAssertTrue(
             generated.contains(
-                "Schema.PropertyMetadata(name: \"customDecimal\", keypath: \\QualifiedScalars.customDecimal, defaultValue: nil, metadata: Schema.Attribute(.codable)"
+                "OSDCore.SchemaDescriptor.PropertyMetadata(name: \"customDecimal\", keypath: \\QualifiedScalars.customDecimal, defaultValue: nil, metadata: OSDCore.SchemaDescriptor.Attribute(.codable)"
             ))
         let customType = try XCTUnwrap(CodeGen.propertyType("customDecimal", in: declaration))
         XCTAssertFalse(CodeGen.isSupportedScalarType(customType))

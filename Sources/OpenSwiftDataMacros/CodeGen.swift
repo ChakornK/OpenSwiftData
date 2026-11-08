@@ -100,10 +100,10 @@ enum CodeGen {
             }
         }
         let rows = (uniqueIndexes.map { ($0, true) } + indexes.map { ($0, false) }).map { properties, unique in
-            "Schema.Index(properties: [\(properties.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", "))], isUnique: \(unique))"
+            "OSDCore.SchemaDescriptor.Index(properties: [\(properties.map { "\"\(escapeSwiftString($0))\"" }.joined(separator: ", "))], isUnique: \(unique))"
         }
         guard !rows.isEmpty else { return nil }
-        return "public static func schemaIndexes() -> [Schema.Index] { [\(rows.joined(separator: ", "))] }"
+        return "public static func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { [\(rows.joined(separator: ", "))] }"
     }
 
     private static func escapeSwiftString(_ value: String) -> String {
@@ -219,7 +219,7 @@ enum CodeGen {
                 if attributeName == "Relationship", argumentList.isEmpty {
                     resolvedMetadata = nil
                 } else {
-                    resolvedMetadata = "Schema.\(attributeName)(\(metadataArguments))"
+                    resolvedMetadata = "OSDCore.SchemaDescriptor.\(attributeName)(\(metadataArguments))"
                 }
                 // The inverse follows whichever attribute supplies the final metadata.
                 resolvedInverseKeyPath = nil
@@ -240,7 +240,7 @@ enum CodeGen {
                         .replacingOccurrences(of: "\\", with: "\\\\")
                         .replacingOccurrences(of: "\"", with: "\\\"")
                     resolvedMetadata =
-                        "Schema.Relationship(\((labels + ["inverseName: \"\(inverseName)\""]).joined(separator: ", ")))"
+                        "OSDCore.SchemaDescriptor.Relationship(\((labels + ["inverseName: \"\(inverseName)\""]).joined(separator: ", ")))"
                 }
             }
             metadata = resolvedMetadata
@@ -325,7 +325,7 @@ enum CodeGen {
             if property.isFlattened { return nil }
             let isExplicitAttribute = property.hasExplicitAttribute
             let isRelationshipProperty =
-                property.hasExplicitRelationship || property.metadata?.hasPrefix("Schema.Relationship") == true
+                property.hasExplicitRelationship || property.metadata?.hasPrefix("OSDCore.SchemaDescriptor.Relationship") == true
             guard !isRelationshipProperty else { return nil }
             let isOptionalScalar =
                 type.as(OptionalTypeSyntax.self).map { isSupportedScalarType($0.wrappedType) } ?? false
@@ -386,7 +386,7 @@ enum CodeGen {
             guard let type = propertyType(property.name, in: declaration) else { return nil }
             guard !property.hasExplicitAttribute else { return nil }
             let relationshipMetadata =
-                property.metadata?.hasPrefix("Schema.Relationship") == true
+                property.metadata?.hasPrefix("OSDCore.SchemaDescriptor.Relationship") == true
                 ? property.metadata : nil
             let explicitRelationship = property.hasExplicitRelationship
             let explicitAttribute = property.hasExplicitAttribute
@@ -505,7 +505,7 @@ enum CodeGen {
             let components =
                 property.isFlattened && propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) == nil
                 ? ", flattenedComponents: \(propertyType(property.name, in: declaration)?.trimmedDescription ?? "")"
-                    + ".flattenedComponentsForSchema.map { component in Schema.Attribute.Component(name: component.0, columnName: \"\(escapeSwiftString(property.name))_\\(component.0)\", type: component.1) }"
+                    + ".flattenedComponentsForSchema.map { component in OSDCore.SchemaDescriptor.Attribute.Component(name: component.0, columnName: \"\(escapeSwiftString(property.name))_\\(component.0)\", type: component.1) }"
                 : ""
             let metadata = property.metadata ?? "nil"
             let isOptional = propertyType(property.name, in: declaration)?.as(OptionalTypeSyntax.self) != nil
@@ -519,7 +519,7 @@ enum CodeGen {
                                         isSupportedScalarType($0.wrappedType)
                                     } == true))
                     } == true
-                ? "Schema.Attribute(.codable)" : metadata
+                ? "OSDCore.SchemaDescriptor.Attribute(.codable)" : metadata
             let inferredRelationship =
                 !property.hasExplicitRelationship && !property.hasExplicitAttribute && !property.isFlattened
                 && propertyType(property.name, in: declaration).map(isInferredRelationshipCandidate) == true
@@ -531,7 +531,7 @@ enum CodeGen {
                 property.attributeOptionNames.isEmpty
                 ? "" : ", options: [" + property.attributeOptionNames.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
             return
-                "Schema.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(inferredRelationshipArgument)\(explicitAttributeArgument)\(options)\(components))"
+                "OSDCore.SchemaDescriptor.PropertyMetadata(name: \"\(property.name)\", keypath: \\\((modelName)).\(property.escapedName), defaultValue: \(property.initializer ?? "nil"), metadata: \(codableMetadata), isExplicitRelationship: \(property.hasExplicitRelationship)\(inferredRelationshipArgument)\(explicitAttributeArgument)\(options)\(components))"
         }
         let ownMetadata = "[\n        \(metadataRows.joined(separator: ",\n        "))\n    ]"
         let metadataBody =
@@ -618,7 +618,7 @@ enum CodeGen {
             "@Transient\n\(backingAccess) var _$backingData: any BackingData<\(modelName)> = \(modelName).createBackingData()",
             "public var persistentBackingData: any BackingData<\(modelName)> {\n    get { _$backingData }\n    set { _$backingData = newValue }\n}",
             associatedModelSource,
-            "\(methodDeclarationAccess) func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            "\(methodDeclarationAccess) func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {\n\(metadataBody)\n}",
             keyPathTableBuilder,
             keyPathNameResolver,
             descriptorSource,
@@ -679,7 +679,7 @@ enum CodeGen {
             "\(typeOverrideAccess) class func inferredRelationshipAdapterCandidates() -> [any AnyRelationshipAdapterBox] { super.inferredRelationshipAdapterCandidates() + \(ownInferredRelationships) }"
         let inheritedIndexes =
             schemaIndexes
-            ?? "\(typeOverrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() }"
+            ?? "\(typeOverrideAccess) class func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { super.schemaIndexes() }"
         let initializer =
             "public required init(backingData: any BackingData<\(superclassName).Model>) {\n"
             + "    super.init(backingData: backingData)\n}"
@@ -694,7 +694,7 @@ enum CodeGen {
             + ["}"]).joined(separator: "\n")
         return [
             initializer,
-            "\(typeOverrideAccess) class func schemaMetadata() -> [Schema.PropertyMetadata] {\n\(metadataBody)\n}",
+            "\(typeOverrideAccess) class func schemaMetadata() -> [OSDCore.SchemaDescriptor.PropertyMetadata] {\n\(metadataBody)\n}",
             descriptors,
             "\(typeOverrideAccess) class func propertySlot(forKeyPath keyPath: AnyKeyPath) -> Int? { propertyDescriptorsByKeyPath()[keyPath]?.slot ?? propertyDescriptors.first(where: { $0.keyPath == keyPath })?.slot }",
             inheritedIndexes,
@@ -716,10 +716,10 @@ enum CodeGen {
     ) -> String? {
         guard let source else {
             if superclassName != nil {
-                return "\(overrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() }"
+                return "\(overrideAccess) class func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { super.schemaIndexes() }"
             }
             return declarationKind == "class"
-                ? "\(memberAccess) class func schemaIndexes() -> [Schema.Index] { [] }"
+                ? "\(memberAccess) class func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { [] }"
                 : nil
         }
         guard superclassName != nil else {
@@ -727,10 +727,10 @@ enum CodeGen {
                 ? source.replacingOccurrences(of: "public static func", with: "\(memberAccess) class func")
                 : source
         }
-        let prefix = "public static func schemaIndexes() -> [Schema.Index] { "
+        let prefix = "public static func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { "
         guard source.hasPrefix(prefix), source.hasSuffix(" }") else { return source }
         let own = String(source.dropFirst(prefix.count).dropLast(2))
-        return "\(overrideAccess) class func schemaIndexes() -> [Schema.Index] { super.schemaIndexes() + \(own) }"
+        return "\(overrideAccess) class func schemaIndexes() -> [OSDCore.SchemaDescriptor.Index] { super.schemaIndexes() + \(own) }"
     }
 
     static func isSupportedScalarType(_ type: TypeSyntax) -> Bool {

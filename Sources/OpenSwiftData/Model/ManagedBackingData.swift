@@ -10,7 +10,7 @@ enum ManagedValueState {
 /// An immutable database row snapshot with a copy-on-write overlay for edited attributes.
 public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyBackingData, @unchecked Sendable {
     private let lock = NSRecursiveLock()
-    private let metadata: [Schema.PropertyMetadata]
+    private let metadata: [SchemaDescriptor.PropertyMetadata]
     private var baseline: [AnyKeyPath: Any]
     private var overlay: [AnyKeyPath: Any] = [:]
     private var baselineSlots: [Any?]
@@ -35,7 +35,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
     private let faultLock = NSRecursiveLock()
     /// Creates managed storage for a row snapshot.
     public init(
-        metadata: [Schema.PropertyMetadata],
+        metadata: [SchemaDescriptor.PropertyMetadata],
         values: [AnyKeyPath: Any],
         context: ModelContext,
         storeIdentifier: String,

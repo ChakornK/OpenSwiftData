@@ -5,7 +5,7 @@ import OSDStorage
 private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, RuntimeSchemaProvidingStore {
     let driver: GRDBSQLiteDriver
     let externalDataColumns: Set<String>
-    let runtimeSchema: Schema
+    let runtimeSchema: SchemaDescriptor
     let persistentStoreIdentifier: String?
 
     func read<T>(_ body: (any RuntimeConnection) throws -> T) throws -> T {

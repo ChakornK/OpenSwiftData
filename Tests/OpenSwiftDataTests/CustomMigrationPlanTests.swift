@@ -11,55 +11,55 @@ final class MigrationPlanRecord {
 }
 
 private enum MigrationV1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(1, 0, 0)
+    static let versionIdentifier = SchemaDescriptor.Version(1, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
-    static let schema = Schema(
+    static let schema = SchemaDescriptor(
         [
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "MigrationPlanRecord",
-                attributes: [Schema.Attribute(name: "name", type: "String")])
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")])
         ], version: versionIdentifier)
 }
 
 private enum MigrationV2: VersionedSchema {
-    static let versionIdentifier = Schema.Version(2, 0, 0)
+    static let versionIdentifier = SchemaDescriptor.Version(2, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
-    static let schema = Schema(
+    static let schema = SchemaDescriptor(
         [
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "MigrationPlanRecord",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ], version: versionIdentifier)
 }
 
 private enum MigrationV2_1: VersionedSchema {
-    static let versionIdentifier = Schema.Version(2, 1, 0)
+    static let versionIdentifier = SchemaDescriptor.Version(2, 1, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
-    static let schema = Schema(
+    static let schema = SchemaDescriptor(
         [
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "MigrationPlanRecord",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
                 ])
         ], version: versionIdentifier)
 }
 
 private enum MigrationV3: VersionedSchema {
-    static let versionIdentifier = Schema.Version(3, 0, 0)
+    static let versionIdentifier = SchemaDescriptor.Version(3, 0, 0)
     static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
-    static let schema = Schema(
+    static let schema = SchemaDescriptor(
         [
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "MigrationPlanRecord",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "note", type: "String", isOptional: true),
-                    Schema.Attribute(name: "detail", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "note", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "detail", type: "String", isOptional: true),
                 ])
         ], version: versionIdentifier)
 }
@@ -191,8 +191,8 @@ private enum TestMigrationPlan: SchemaMigrationPlan {
                     MigrationStageRecorder.shared.append(
                         "will:\(context.container.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
-                        context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
-                        ["name"])
+                        Set(context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name) ?? []),
+                        Set(["name"]))
                     context.insert(MigrationPlanRecord(name: "from-v1"))
                     try context.save()
                 },
@@ -200,8 +200,8 @@ private enum TestMigrationPlan: SchemaMigrationPlan {
                     MigrationStageRecorder.shared.append(
                         "did:\(context.container.schema.declaredVersion?.identifier ?? "nil")")
                     XCTAssertEqual(
-                        context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name),
-                        ["name", "note"])
+                        Set(context.container.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name) ?? []),
+                        Set(["name", "note"]))
                     let records = try context.fetch(FetchDescriptor<MigrationPlanRecord>())
                     XCTAssertEqual(records.map(\.name), ["from-v1"])
                 })
@@ -388,7 +388,8 @@ final class CustomMigrationPlanTests: XCTestCase {
 
             XCTAssertEqual(migrated.schema.version, MigrationV2.versionIdentifier)
             XCTAssertEqual(
-                migrated.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name), ["name", "note"])
+                Set(migrated.schema.entity(forName: "MigrationPlanRecord")?.attributes.map(\.name) ?? []),
+                Set(["name", "note"]))
             let records = try migrated.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
             XCTAssertEqual(records.map(\.name), ["preserved"])
             XCTAssertEqual(records.first?.persistentModelID, originalID)
@@ -471,7 +472,7 @@ final class CustomMigrationPlanTests: XCTestCase {
 
     func testMigrationPlanRejectsSchemaVersionMismatch() {
         enum InvalidVersionedSchema: VersionedSchema {
-            static let versionIdentifier = Schema.Version(8, 0, 0)
+            static let versionIdentifier = SchemaDescriptor.Version(8, 0, 0)
             static var models: [any PersistentModel.Type] { [MigrationPlanRecord.self] }
             static let schema = MigrationV1.schema
         }

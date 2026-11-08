@@ -16,9 +16,12 @@ import Testing
 }
 
 enum SchemaParityV2: VersionedSchema {
-    static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
+    static var versionIdentifier: SchemaDescriptor.Version { SchemaDescriptor.Version(2, 0, 0) }
     static var models: [any PersistentModel.Type] { [SchemaParityTrip.self, SchemaParityStop.self] }
-    static var schema: Schema { Schema(models, version: versionIdentifier) }
+    static var schema: SchemaDescriptor {
+        (try? ModelContainer.inferredSchema(for: models, version: versionIdentifier))
+            ?? SchemaDescriptor([], version: versionIdentifier)
+    }
 }
 
 /// Schemas built from model types, as in Xcode's SwiftData templates.
@@ -42,7 +45,7 @@ enum SchemaParityV2: VersionedSchema {
     }
 
     @Test func `a versioned schema carries its version`() {
-        let schema = Schema(versionedSchema: SchemaParityV2.self)
+        let schema = Schema(versionedSchema: SchemaParityV2.schema)
         #expect(schema.version == Schema.Version(2, 0, 0))
         #expect(schema.entities.count == 2)
     }

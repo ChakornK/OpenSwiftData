@@ -409,7 +409,7 @@ final class SQLiteDriverTests: XCTestCase {
         try Data([1, 2, 3]).write(to: sidecarDirectory.appendingPathComponent("data-deadbeef.blob"))
         try Data([4]).write(to: sidecarDirectory.appendingPathComponent(".abandoned.tmp"))
         let driver = try LightweightMigration.openStore(
-            location: .file(databaseURL), schema: Schema([Schema.Entity(name: "Record")]))
+            location: .file(databaseURL), schema: SchemaDescriptor([SchemaDescriptor.Entity(name: "Record")]))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sidecarDirectory.path), [])
         try driver.close()
     }

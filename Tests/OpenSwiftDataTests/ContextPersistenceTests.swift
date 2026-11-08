@@ -357,7 +357,7 @@ final class ContextPersistenceTests: XCTestCase {
         let container = try ModelContainer(
             for: FlattenedCompositeFixture.self,
             configurations: .sqliteMemory("flattened-codable-composite"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "FlattenedCompositeFixture"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "FlattenedCompositeFixture"))
         let attribute = try XCTUnwrap(entity.attributes.first(where: { $0.name == "dimensions" }))
         XCTAssertTrue(attribute.options.contains(.flattened))
         XCTAssertEqual(attribute.components.map(\.columnName), ["dimensions_label", "dimensions_width"])
@@ -545,7 +545,7 @@ final class ContextPersistenceTests: XCTestCase {
         let container = try ModelContainer(
             for: CodableBlobFallbackFixture.self, configurations: .sqliteMemory("codable-blob-fallback"))
         let attribute = try XCTUnwrap(
-            container.schema.entity(forName: "CodableBlobFallbackFixture")?.attributes.first)
+            container.schemaDescriptor.entity(forName: "CodableBlobFallbackFixture")?.attributes.first)
         XCTAssertFalse(attribute.options.contains(.flattened))
         XCTAssertTrue(attribute.components.isEmpty)
         let context = container.mainContext
@@ -738,7 +738,7 @@ final class ContextPersistenceTests: XCTestCase {
         let someCapture: String? = "value"
         let somePredicate = #Predicate<ReverseOrderPersistenceFixture> { $0.optionalValue == someCapture }
         let schema = try XCTUnwrap(
-            container.schema.entity(forName: String(describing: ReverseOrderPersistenceFixture.self)))
+            container.schemaDescriptor.entity(forName: String(describing: ReverseOrderPersistenceFixture.self)))
         let tree = try PredicateRuntimeTreeBuilder.build(
             somePredicate.expression, modelType: ReverseOrderPersistenceFixture.self, entity: schema)
         guard let store = container.store as? any RuntimeQueryStore else {
@@ -765,7 +765,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-evaluate-inline"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let expression: Foundation.Expression<Int, Int> = #Expression<Int, Int> { value in value * 2 }
         let input = PredicateExpressions.build_KeyPath(
             root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
@@ -850,7 +850,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-partial-range"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let range: PartialRangeFrom<Int> = 3...
         let expression: Foundation.Expression<PartialRangeFrom<Int>, Int, Bool> =
             #Expression<PartialRangeFrom<Int>, Int, Bool> { range, value in range.contains(value) }
@@ -882,7 +882,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-multiple-inputs"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let expression: Foundation.Expression<Int, Int, Int> = #Expression<Int, Int, Int> { lhs, rhs in lhs + rhs }
         let lhs = PredicateExpressions.build_KeyPath(
             root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
@@ -917,7 +917,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-zero-input"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let expression: Foundation.Expression<Int> = #Expression<Int> { 42 }
         let evaluated = PredicateExpressions.build_evaluate(PredicateExpressions.Value(expression))
         let comparison = PredicateExpressions.build_Comparison(
@@ -949,7 +949,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("expression-integer-operators"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let input = PredicateExpressions.build_KeyPath(
             root: PredicateExpressions.Variable<PersistenceTestModel>(), keyPath: \PersistenceTestModel.count)
         let division: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 / 2 }
@@ -991,7 +991,7 @@ final class ContextPersistenceTests: XCTestCase {
         }
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("nested-expression-evaluate"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let inner: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 * 2 }
         let outer: Foundation.Expression<Int, Int> = #Expression<Int, Int> { $0 + 1 }
         let input = PredicateExpressions.build_KeyPath(
@@ -2046,7 +2046,7 @@ final class ContextPersistenceTests: XCTestCase {
         let container = try ModelContainer(
             for: PredicateAgreementFixture.self,
             configurations: .sqliteMemory("unary-minus-overflow"))
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PredicateAgreementFixture"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PredicateAgreementFixture"))
         let negativeMinimum = PredicateExpressions.build_UnaryMinus(PredicateExpressions.Value(Int.min))
 
         XCTAssertThrowsError(
@@ -2374,7 +2374,7 @@ final class ContextPersistenceTests: XCTestCase {
 
         let predicate = #Predicate<PredicateDoubleFixture> { $0.score == exact }
         let descriptor = FetchDescriptor<PredicateDoubleFixture>(predicate: predicate, includePendingChanges: false)
-        let entity = try XCTUnwrap(container.schema.entity(forName: String(describing: PredicateDoubleFixture.self)))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: String(describing: PredicateDoubleFixture.self)))
         let tree = try PredicateRuntimeTreeBuilder.build(
             predicate.expression, modelType: PredicateDoubleFixture.self, entity: entity)
 
@@ -2699,7 +2699,7 @@ final class ContextPersistenceTests: XCTestCase {
         let decodedDescriptor = FetchDescriptor<PersistenceTestModel>(
             predicate: #Predicate<PersistenceTestModel> { $0.persistentModelID == decodedIdentifier })
 
-        let entity = try XCTUnwrap(container.schema.entity(forName: "PersistenceTestModel"))
+        let entity = try XCTUnwrap(container.schemaDescriptor.entity(forName: "PersistenceTestModel"))
         let predicateTree = try PredicateRuntimeTreeBuilder.build(
             identifierPredicate.expression,
             modelType: PersistenceTestModel.self,
@@ -3570,7 +3570,7 @@ final class ContextPersistenceTests: XCTestCase {
 
     func testSortCollationMatchesScalarStorageSemantics() {
         func assertCollation(
-            for attribute: Schema.Attribute,
+            for attribute: SchemaDescriptor.Attribute,
             equals expectedCollation: String?,
             file: StaticString = #filePath,
             line: UInt = #line
@@ -3579,26 +3579,26 @@ final class ContextPersistenceTests: XCTestCase {
                 ModelContext.sortCollation(for: attribute), expectedCollation, attribute.name, file: file, line: line)
         }
         assertCollation(
-            for: Schema.Attribute(name: "string", type: "String"), equals: "swiftLocalizedStandardCompare")
+            for: SchemaDescriptor.Attribute(name: "string", type: "String"), equals: "swiftLocalizedStandardCompare")
         assertCollation(
-            for: Schema.Attribute(name: "optionalString", type: "Foundation.String?"),
+            for: SchemaDescriptor.Attribute(name: "optionalString", type: "Foundation.String?"),
             equals: "swiftLocalizedStandardCompare")
         assertCollation(
-            for: Schema.Attribute(name: "url", type: "URL"), equals: "swiftLocalizedStandardCompare")
+            for: SchemaDescriptor.Attribute(name: "url", type: "URL"), equals: "swiftLocalizedStandardCompare")
         assertCollation(
-            for: Schema.Attribute(name: "optionalURL", type: "Foundation.URL?"),
+            for: SchemaDescriptor.Attribute(name: "optionalURL", type: "Foundation.URL?"),
             equals: "swiftLocalizedStandardCompare")
-        assertCollation(for: Schema.Attribute(name: "decimal", type: "Decimal"), equals: "OSD_DECIMAL")
+        assertCollation(for: SchemaDescriptor.Attribute(name: "decimal", type: "Decimal"), equals: "OSD_DECIMAL")
         assertCollation(
-            for: Schema.Attribute(name: "optionalDecimal", type: "Foundation.Decimal?"), equals: "OSD_DECIMAL")
-        assertCollation(for: Schema.Attribute(name: "integer", type: "Int64"), equals: nil)
-        assertCollation(for: Schema.Attribute(name: "date", type: "Date"), equals: nil)
-        assertCollation(for: Schema.Attribute(name: "uuid", type: "UUID"), equals: nil)
-        assertCollation(for: Schema.Attribute(name: "data", type: "Data"), equals: nil)
+            for: SchemaDescriptor.Attribute(name: "optionalDecimal", type: "Foundation.Decimal?"), equals: "OSD_DECIMAL")
+        assertCollation(for: SchemaDescriptor.Attribute(name: "integer", type: "Int64"), equals: nil)
+        assertCollation(for: SchemaDescriptor.Attribute(name: "date", type: "Date"), equals: nil)
+        assertCollation(for: SchemaDescriptor.Attribute(name: "uuid", type: "UUID"), equals: nil)
+        assertCollation(for: SchemaDescriptor.Attribute(name: "data", type: "Data"), equals: nil)
         assertCollation(
-            for: Schema.Attribute(name: "codableString", type: "String", options: [.codable]), equals: nil)
+            for: SchemaDescriptor.Attribute(name: "codableString", type: "String", options: [.codable]), equals: nil)
         assertCollation(
-            for: Schema.Attribute(
+            for: SchemaDescriptor.Attribute(
                 name: "transformableString", type: "String", options: [.transformable(by: "Test")]),
             equals: nil)
     }
@@ -4086,11 +4086,11 @@ final class ContextPersistenceTests: XCTestCase {
             for: PersistentRelationshipOwner.self, PersistentRelationshipChild.self,
             configurations: .sqliteMemory("relationship-round-trip"))
         let ownerRelationship = try XCTUnwrap(
-            container.schema.entity(forName: "PersistentRelationshipOwner")?.relationships.first {
+            container.schemaDescriptor.entity(forName: "PersistentRelationshipOwner")?.relationships.first {
                 $0.name == "children"
             })
         let childRelationship = try XCTUnwrap(
-            container.schema.entity(forName: "PersistentRelationshipChild")?.relationships.first { $0.name == "owner" })
+            container.schemaDescriptor.entity(forName: "PersistentRelationshipChild")?.relationships.first { $0.name == "owner" })
         XCTAssertTrue(ownerRelationship.isToMany)
         XCTAssertFalse(childRelationship.isToMany)
         XCTAssertEqual(ownerRelationship.inverse, "owner")

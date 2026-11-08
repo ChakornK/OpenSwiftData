@@ -16,7 +16,7 @@ public protocol AnyRelationshipAdapterBox: Sendable {
     /// The explicitly declared inverse key path, when present.
     var explicitInverseKeyPath: AnyKeyPath? { get }
     /// The resolved schema relationship metadata, when available.
-    var metadata: Schema.Relationship? { get }
+    var metadata: SchemaDescriptor.Relationship? { get }
     /// Mutates the relationship through its resolved graph when the key path matches.
     func mutate(
         _ value: Any,
@@ -38,7 +38,7 @@ public protocol AnyRelationshipAdapterBox: Sendable {
     /// Assigns a typed relationship value without dispatching through a model property setter.
     func assign(_ value: Any, to owner: AnyObject) throws
     /// Returns a box carrying resolved schema relationship metadata.
-    func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox
+    func resolved(with relationship: SchemaDescriptor.Relationship) -> any AnyRelationshipAdapterBox
 }
 
 public extension AnyRelationshipAdapterBox {
@@ -56,7 +56,7 @@ public extension AnyRelationshipAdapterBox {
 /// Retains a typed relationship adapter while exposing checked owner-erased operations.
 public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAdapterBox, @unchecked Sendable {
     private let candidate: any RelationshipPropertyAdapter<Owner>
-    private let resolvedMetadata: Schema.Relationship?
+    private let resolvedMetadata: SchemaDescriptor.Relationship?
 
     /// The runtime identity of the owning model type.
     public var ownerType: ObjectIdentifier { ObjectIdentifier(Owner.self) }
@@ -71,7 +71,7 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
     /// The explicitly declared inverse key path, when present.
     public var explicitInverseKeyPath: AnyKeyPath? { candidate.explicitInverseKeyPath }
     /// The resolved schema relationship metadata, when available.
-    public var metadata: Schema.Relationship? { resolvedMetadata }
+    public var metadata: SchemaDescriptor.Relationship? { resolvedMetadata }
 
     /// Mutates the relationship through its resolved graph when the key path matches.
     public func mutate(
@@ -98,13 +98,13 @@ public struct RelationshipAdapterBox<Owner: PersistentModel>: AnyRelationshipAda
     }
 
     /// Creates a box with resolved schema metadata.
-    public init(_ candidate: any RelationshipPropertyAdapter<Owner>, resolved relationship: Schema.Relationship) {
+    public init(_ candidate: any RelationshipPropertyAdapter<Owner>, resolved relationship: SchemaDescriptor.Relationship) {
         self.candidate = candidate
         resolvedMetadata = relationship
     }
 
     /// Returns a new box with the supplied resolved relationship.
-    public func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox {
+    public func resolved(with relationship: SchemaDescriptor.Relationship) -> any AnyRelationshipAdapterBox {
         let resolvedCandidate = candidate.resolved(with: relationship)
         return RelationshipAdapterBox(resolvedCandidate, resolved: relationship)
     }
@@ -163,7 +163,7 @@ struct ReownedRelationshipAdapterBox: AnyRelationshipAdapterBox, @unchecked Send
     var destinationType: any PersistentModel.Type { adapter.destinationType }
     var isToMany: Bool { adapter.isToMany }
     var explicitInverseKeyPath: AnyKeyPath? { adapter.explicitInverseKeyPath }
-    var metadata: Schema.Relationship? { adapter.metadata }
+    var metadata: SchemaDescriptor.Relationship? { adapter.metadata }
 
     func mutate(
         _ value: Any,
@@ -180,7 +180,7 @@ struct ReownedRelationshipAdapterBox: AnyRelationshipAdapterBox, @unchecked Send
     func makeInverseValue(_ endpoints: [any PersistentModel]) throws -> Any { try adapter.makeInverseValue(endpoints) }
     func endpoints(in value: Any) throws -> [any PersistentModel] { try adapter.endpoints(in: value) }
     func assign(_ value: Any, to owner: AnyObject) throws { try adapter.assign(value, to: owner) }
-    func resolved(with relationship: Schema.Relationship) -> any AnyRelationshipAdapterBox {
+    func resolved(with relationship: SchemaDescriptor.Relationship) -> any AnyRelationshipAdapterBox {
         ReownedRelationshipAdapterBox(adapter.resolved(with: relationship), ownerType: ownerType)
     }
 }

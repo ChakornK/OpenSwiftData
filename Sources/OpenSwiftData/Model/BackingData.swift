@@ -209,7 +209,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, Any
     private let lock = NSRecursiveLock()
     private var identifier: PersistentIdentifier
     private let detachedIdentifier: PersistentIdentifier
-    private let metadata: [Schema.PropertyMetadata]
+    private let metadata: [SchemaDescriptor.PropertyMetadata]
     private weak var context: ModelContext?
     private weak var model: Model?
     private var contextState: ContextState?
@@ -218,7 +218,7 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, Any
     private var onChange: (() -> Void)?
 
     /// Creates detached storage for a model's schema.
-    public init(metadata: [Schema.PropertyMetadata]) {
+    public init(metadata: [SchemaDescriptor.PropertyMetadata]) {
         self.metadata = metadata
         slotValues = Array(repeating: nil, count: Model.propertyDescriptors.count)
         let detachedID = PersistentIdentifier(

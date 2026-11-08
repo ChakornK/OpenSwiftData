@@ -6,16 +6,16 @@ struct ModelTypeRegistration: @unchecked Sendable {
     let type: any PersistentModel.Type
     private let materializeBody:
         (
-            ModelContext, Schema.Entity, [Schema.Attribute], [RuntimeValue], String, Int, Int64, Int
+            ModelContext, SchemaDescriptor.Entity, [SchemaDescriptor.Attribute], [RuntimeValue], String, Int, Int64, Int
         ) throws -> any PersistentModel
-    private let relationshipFaultBody: (any PersistentModel, Schema.Entity, RelationshipFaultResolver) -> Void
+    private let relationshipFaultBody: (any PersistentModel, SchemaDescriptor.Entity, RelationshipFaultResolver) -> Void
     private let valueStateBody: (any PersistentModel, AnyKeyPath) -> ManagedValueState?
     private let setMaterializedValueBody: (any PersistentModel, AnyKeyPath, Any) -> Void
-    private let materializeDataStoreBody: (ModelContext, Schema.Entity, DataStoreSnapshot) throws -> any PersistentModel
+    private let materializeDataStoreBody: (ModelContext, SchemaDescriptor.Entity, DataStoreSnapshot) throws -> any PersistentModel
     private let installDataStoreFaultsBody:
-        (any PersistentModel, Schema.Entity, any DataStore, Set<String>) throws -> Void
+        (any PersistentModel, SchemaDescriptor.Entity, any DataStore, Set<String>) throws -> Void
     private let assignDataStoreRelationshipsBody: (any PersistentModel, [String: [any PersistentModel]]) throws -> Void
-    private let applyDataStoreValuesBody: (any PersistentModel, Schema.Entity, DataStoreSnapshot) throws -> Void
+    private let applyDataStoreValuesBody: (any PersistentModel, SchemaDescriptor.Entity, DataStoreSnapshot) throws -> Void
 
     init<Model: PersistentModel>(type: Model.Type) {
         self.type = type
@@ -108,7 +108,7 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 values[keyPath] = composite
             }
             let identifier = snapshot.persistentIdentifier
-            guard let entityID = context.optionalContainer?.schema.entityIDsByName[entity.name] else {
+            guard let entityID = context.optionalContainer?.schemaDescriptor.entityIDsByName[entity.name] else {
                 throw SwiftDataError.unsupportedStore(
                     "DataStore schema has no entity identifier for \(entity.name).")
             }
@@ -270,8 +270,8 @@ struct ModelTypeRegistration: @unchecked Sendable {
 
     func materialize(
         context: ModelContext,
-        entity: Schema.Entity,
-        attributes: [Schema.Attribute],
+        entity: SchemaDescriptor.Entity,
+        attributes: [SchemaDescriptor.Attribute],
         row: [RuntimeValue],
         storeIdentifier: String,
         entityID: Int,
@@ -282,14 +282,14 @@ struct ModelTypeRegistration: @unchecked Sendable {
     }
 
     func materializeDataStore(
-        context: ModelContext, entity: Schema.Entity, snapshot: DataStoreSnapshot
+        context: ModelContext, entity: SchemaDescriptor.Entity, snapshot: DataStoreSnapshot
     ) throws -> any PersistentModel {
         try materializeDataStoreBody(context, entity, snapshot)
     }
 
     func installDataStoreFaults(
         on model: any PersistentModel,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         dataStore: any DataStore,
         suppliedAttributeNames: Set<String>
     ) throws {
@@ -303,14 +303,14 @@ struct ModelTypeRegistration: @unchecked Sendable {
     }
 
     func applyDataStoreValues(
-        on model: any PersistentModel, entity: Schema.Entity, snapshot: DataStoreSnapshot
+        on model: any PersistentModel, entity: SchemaDescriptor.Entity, snapshot: DataStoreSnapshot
     ) throws {
         try applyDataStoreValuesBody(model, entity, snapshot)
     }
 
     func installRelationshipFaults(
         on model: any PersistentModel,
-        entity: Schema.Entity,
+        entity: SchemaDescriptor.Entity,
         resolver: RelationshipFaultResolver
     ) {
         relationshipFaultBody(model, entity, resolver)

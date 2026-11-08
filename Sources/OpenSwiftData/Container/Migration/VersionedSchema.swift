@@ -3,16 +3,19 @@ import OSDCore
 /// Provides a named, versioned schema and the model types it contains.
 public protocol VersionedSchema: Sendable {
     /// The version identity persisted with this schema.
-    static var versionIdentifier: Schema.Version { get }
+    static var versionIdentifier: SchemaDescriptor.Version { get }
     /// The model types used to materialize values during migration stages.
     static var models: [any PersistentModel.Type] { get }
     /// The schema layout for this version; defaults to the schema inferred from `models`.
-    static var schema: Schema { get }
+    static var schema: SchemaDescriptor { get }
 }
 
 extension VersionedSchema {
     /// A schema of `models` at `versionIdentifier`.
-    public static var schema: Schema { Schema(models, version: versionIdentifier) }
+    public static var schema: SchemaDescriptor {
+        (try? ModelContainer.inferredSchema(for: models, version: versionIdentifier))
+            ?? SchemaDescriptor([], version: versionIdentifier)
+    }
 }
 
 /// Declares the ordered schemas and transitions used to migrate a model container.
@@ -45,13 +48,13 @@ public enum MigrationStage: @unchecked Sendable {
         case custom
     }
 
-    var sourceVersion: Schema.Version {
+    var sourceVersion: SchemaDescriptor.Version {
         switch self {
         case .lightweight(let from, _), .custom(let from, _, _, _): from.versionIdentifier
         }
     }
 
-    var destinationVersion: Schema.Version {
+    var destinationVersion: SchemaDescriptor.Version {
         switch self {
         case .lightweight(_, let to), .custom(_, let to, _, _): to.versionIdentifier
         }
@@ -74,7 +77,7 @@ public enum MigrationStage: @unchecked Sendable {
 }
 
 struct MigrationPlanDescriptor: @unchecked Sendable {
-    let schemas: [(version: Schema.Version, schema: Schema, models: [any PersistentModel.Type])]
+    let schemas: [(version: SchemaDescriptor.Version, schema: SchemaDescriptor, models: [any PersistentModel.Type])]
     let stages: [MigrationStage]
 
     init(_ plan: any SchemaMigrationPlan.Type) throws {

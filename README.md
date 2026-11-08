@@ -93,7 +93,7 @@ OpenSwiftData uses its own SQLite store and cannot open Apple's SwiftData stores
 - Nondeterministic Apple behavior, such as unsorted order with pending changes or which duplicate survives when two are inserted in one save, is not matched.
 - Replicated Apple quirks: `.deny` is not enforced, and context deletes nullify related models.
 - Deleting an unsaved model keeps it attached and marked deleted until save or rollback. Batch deletes reject entities with `.deny` relationships and leave pending changes and registered model instances intact.
-- Apple's custom `DataStore` protocol API and class-based `Schema` shape (`Set`-typed attributes, `valueType`, and `CompositeAttribute`) are not implemented. OpenSwiftData schemas use value types and arrays for attributes and relationships.
+- `Schema` now exposes a class-based, Apple-shaped facade with `Set`-typed entities, attributes, and relationships, runtime attribute `valueType`, model-type initialization, and container/configuration routing. Storage and migration continue to use the internal `SchemaDescriptor`; exact Apple metadata parity, including composite attribute/value conversion and complete custom-store snapshot conversion, remains tracked in [issue #8](https://github.com/ChakornK/OpenSwiftData/issues/8). The custom-store API still uses prefixed Apple-shaped protocols and requires an explicit `AppleDataStoreBackendProviding` adapter. `AppleDefaultSnapshot`'s deprecated nonthrowing backing-data initializer captures identity only because backing data cannot safely expose model property values.
 
 ### Platform and storage limits
 

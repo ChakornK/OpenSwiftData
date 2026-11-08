@@ -70,7 +70,7 @@ final class SQLiteCompositionTests: XCTestCase {
         try container.mainContext.save()
 
         let sqliteDriver = try LightweightMigration.openStore(
-            location: .file(url), schema: container.schema,
+            location: .file(url), schema: container.schemaDescriptor,
             externalColumns: ["ZEXTERNALDATACOMPOSITIONFIXTURE.ZPAYLOAD"])
         let raw = try sqliteDriver.read { connection in
             try connection.rows("SELECT ZPAYLOAD FROM ZEXTERNALDATACOMPOSITIONFIXTURE").first?.first
@@ -147,7 +147,7 @@ final class SQLiteCompositionTests: XCTestCase {
         container.mainContext.insert(ExternalDataCompositionFixture(payload: payload))
         try container.mainContext.save()
         let driver = try LightweightMigration.openStore(
-            location: .file(url), schema: container.schema,
+            location: .file(url), schema: container.schemaDescriptor,
             externalColumns: ["ZEXTERNALDATACOMPOSITIONFIXTURE.ZPAYLOAD"])
         let raw = try driver.read { try $0.rows("SELECT ZPAYLOAD FROM ZEXTERNALDATACOMPOSITIONFIXTURE").first?.first }
         guard case let .blob(bytes)? = raw else { return XCTFail("Expected inline BLOB") }
@@ -168,8 +168,8 @@ final class SQLiteCompositionTests: XCTestCase {
                 IndexedPredicateFixture(rank: rank, identity: "identity-\(rank)", label: "label-\(rank)"))
         }
         try container.mainContext.save()
-        let entity: Schema.Entity = try XCTUnwrap(
-            container.schema.entity(forName: String(describing: IndexedPredicateFixture.self)))
+        let entity: SchemaDescriptor.Entity = try XCTUnwrap(
+            container.schemaDescriptor.entity(forName: String(describing: IndexedPredicateFixture.self)))
 
         let predicate = #Predicate<IndexedPredicateFixture> { $0.rank == 42 }
         let descriptor = FetchDescriptor<IndexedPredicateFixture>(
@@ -177,11 +177,11 @@ final class SQLiteCompositionTests: XCTestCase {
         let fetched: [IndexedPredicateFixture] = try container.mainContext.fetch(descriptor)
         XCTAssertEqual(fetched.map { $0.rank }, [42])
         XCTAssertEqual(
-            Set(container.schema.entity(forName: entity.name)?.indexes ?? []),
+            Set(container.schemaDescriptor.entity(forName: entity.name)?.indexes ?? []),
             Set([
-                Schema.Index(properties: ["label"], isUnique: true),
-                Schema.Index(properties: ["identity"], isUnique: true),
-                Schema.Index(properties: ["rank"]),
+                SchemaDescriptor.Index(properties: ["label"], isUnique: true),
+                SchemaDescriptor.Index(properties: ["identity"], isUnique: true),
+                SchemaDescriptor.Index(properties: ["rank"]),
             ]))
         let indexes = try store.read { try $0.rows("PRAGMA index_list(ZINDEXEDPREDICATEFIXTURE)", arguments: []) }
         XCTAssertTrue(
@@ -189,7 +189,7 @@ final class SQLiteCompositionTests: XCTestCase {
             "\(indexes)")
 
         let tree = try PredicateRuntimeTreeBuilder.build(
-            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schema)
+            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schemaDescriptor)
         let request = RuntimePredicateRequest(
             entityName: entity.name,
             root: tree.root,
@@ -282,9 +282,9 @@ final class SQLiteCompositionTests: XCTestCase {
             predicate: predicate, sortBy: [SortDescriptor(\.rank)], includePendingChanges: false)
         XCTAssertEqual(try container.mainContext.fetch(descriptor).map(\.rank), [997, 998, 999])
         let entity = try XCTUnwrap(
-            container.schema.entity(forName: String(describing: IndexedPredicateFixture.self)))
+            container.schemaDescriptor.entity(forName: String(describing: IndexedPredicateFixture.self)))
         let tree = try PredicateRuntimeTreeBuilder.build(
-            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schema)
+            predicate.expression, modelType: IndexedPredicateFixture.self, entity: entity, schema: container.schemaDescriptor)
         let compiled = try store.compile(
             RuntimePredicateRequest(
                 entityName: entity.name,
@@ -338,7 +338,7 @@ final class SQLiteCompositionTests: XCTestCase {
         XCTAssertEqual(try container.mainContext.fetch(descriptor).map(\.rank), [0, 1, 2, 3, 4])
 
         let entity = try XCTUnwrap(
-            container.schema.entity(forName: String(describing: IndexedPredicateFixture.self)))
+            container.schemaDescriptor.entity(forName: String(describing: IndexedPredicateFixture.self)))
         let query = FetchSQLBuilder.build(
             FetchSQLInput(
                 table: "Z\(entity.name.uppercased())",
@@ -386,10 +386,10 @@ final class SQLiteCompositionTests: XCTestCase {
         XCTAssertEqual(try container.mainContext.fetch(descriptor).compactMap(\.value), [capturedValue])
 
         let entity = try XCTUnwrap(
-            container.schema.entity(forName: String(describing: OptionalIndexedPredicateFixture.self)))
+            container.schemaDescriptor.entity(forName: String(describing: OptionalIndexedPredicateFixture.self)))
         let tree = try PredicateRuntimeTreeBuilder.build(
             predicate.expression, modelType: OptionalIndexedPredicateFixture.self, entity: entity,
-            schema: container.schema)
+            schema: container.schemaDescriptor)
         let compiled = try store.compile(
             RuntimePredicateRequest(
                 entityName: entity.name,
@@ -427,7 +427,7 @@ final class SQLiteCompositionTests: XCTestCase {
 
     func testLocalizedStandardContainsSQLiteFunctionMatchesFoundation() throws {
         let container = try ModelContainer(
-            for: Schema([Schema.Entity(name: "Probe")]), configurations: [.sqliteMemory("localized-function")])
+            for: SchemaDescriptor([SchemaDescriptor.Entity(name: "Probe")]), configurations: [.sqliteMemory("localized-function")])
         guard let store = container.store else { return XCTFail("Expected SQLite store") }
         let rows = try store.read { connection in
             try connection.rows(
@@ -440,7 +440,7 @@ final class SQLiteCompositionTests: XCTestCase {
 
     func testStringContainsSQLiteFunctionMatchesFoundation() throws {
         let container = try ModelContainer(
-            for: Schema([Schema.Entity(name: "Probe")]), configurations: [.sqliteMemory("string-function")])
+            for: SchemaDescriptor([SchemaDescriptor.Entity(name: "Probe")]), configurations: [.sqliteMemory("string-function")])
         guard let store = container.store else { return XCTFail("Expected SQLite store") }
         let rows = try store.read { connection in
             try connection.rows(
@@ -460,7 +460,7 @@ final class SQLiteCompositionTests: XCTestCase {
 
     func testStringStartsWithSQLiteFunctionMatchesFoundation() throws {
         let container = try ModelContainer(
-            for: Schema([Schema.Entity(name: "Probe")]), configurations: [.sqliteMemory("prefix-function")])
+            for: SchemaDescriptor([SchemaDescriptor.Entity(name: "Probe")]), configurations: [.sqliteMemory("prefix-function")])
         guard let store = container.store else { return XCTFail("Expected SQLite store") }
         let rows = try store.read { connection in
             try connection.rows(
@@ -488,10 +488,10 @@ final class SQLiteCompositionTests: XCTestCase {
     }
 
     func testMemoryConfigurationCreatesAndBootstrapsSchema() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Person",
-                attributes: [Schema.Attribute(name: "name", type: "String")]
+                attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]
             )
         ])
         let container = try ModelContainer(for: schema, configurations: [.sqliteMemory("memory-test")])
@@ -570,8 +570,8 @@ final class SQLiteCompositionTests: XCTestCase {
             try? FileManager.default.removeItem(atPath: url.path + "-shm")
             try? FileManager.default.removeItem(atPath: url.path + "-wal")
         }
-        let schema = Schema([
-            Schema.Entity(name: "Person", attributes: [Schema.Attribute(name: "value", type: "Opaque")])
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Person", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Opaque")])
         ])
         XCTAssertThrowsError(try ModelContainer(for: schema, configurations: [.sqliteFile("invalid", url: url)]))
     }

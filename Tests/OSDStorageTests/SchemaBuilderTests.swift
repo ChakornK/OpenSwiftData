@@ -6,7 +6,7 @@ final class SchemaBuilderTests: XCTestCase {
     func testInheritanceRejectsMissingParentAndCycles() {
         XCTAssertThrowsError(
             try SchemaBuilder.build(
-                Schema([Schema.Entity(name: "Child", superentityName: "Missing")]))
+                SchemaDescriptor([SchemaDescriptor.Entity(name: "Child", superentityName: "Missing")]))
         ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty = error else {
                 return XCTFail("Expected unsupportedSchemaProperty, got \(error)")
@@ -14,9 +14,9 @@ final class SchemaBuilderTests: XCTestCase {
         }
         XCTAssertThrowsError(
             try SchemaBuilder.build(
-                Schema([
-                    Schema.Entity(name: "First", superentityName: "Second"),
-                    Schema.Entity(name: "Second", superentityName: "First"),
+                SchemaDescriptor([
+                    SchemaDescriptor.Entity(name: "First", superentityName: "Second"),
+                    SchemaDescriptor.Entity(name: "Second", superentityName: "First"),
                 ]))
         ) { error in
             guard case SwiftDataError.unsupportedSchemaProperty = error else {
@@ -26,22 +26,22 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testRelationshipStorageOwnerUsesLogicalDeclarationAndAncestorInverse() throws {
-        let base = Schema.Entity(name: "Base")
-        let child = Schema.Entity(
+        let base = SchemaDescriptor.Entity(name: "Base")
+        let child = SchemaDescriptor.Entity(
             name: "Child",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "destination", destination: "Target", inverse: "sources",
                     declaringEntityName: "Child")
             ],
             superentityName: "Base")
-        let target = Schema.Entity(
+        let target = SchemaDescriptor.Entity(
             name: "Target",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "sources", destination: "Child", inverse: "destination")
             ])
-        let schema = Schema([base, child, target])
+        let schema = SchemaDescriptor([base, child, target])
         let childRelationship = try XCTUnwrap(child.relationships.first)
         let targetRelationship = try XCTUnwrap(target.relationships.first)
 
@@ -54,17 +54,17 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testRelationshipMappingRejectsDeclarationOutsideModelAncestry() {
-        let schema = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Sibling"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Sibling"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", declaringEntityName: "Sibling")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
 
         XCTAssertThrowsError(try SchemaBuilder.build(schema)) { error in
@@ -75,23 +75,23 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritedToOneRelationshipUsesDeclaredColumnOnRootTable() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", declaringEntityName: "Child")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "Target", declaringEntityName: "Child")
                 ],
                 superentityName: "Child"),
-            Schema.Entity(name: "Target", attributes: [Schema.Attribute(name: "title", type: "String")]),
+            SchemaDescriptor.Entity(name: "Target", attributes: [SchemaDescriptor.Attribute(name: "title", type: "String")]),
         ])
 
         let built = try SchemaBuilder.build(schema)
@@ -107,17 +107,17 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritedToOneRelationshipMayTargetAnotherHierarchy() throws {
-        let schema = Schema([
-            Schema.Entity(name: "OwnerBase"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "OwnerBase"),
+            SchemaDescriptor.Entity(
                 name: "OwnerChild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "TargetBase", declaringEntityName: "OwnerChild")
                 ],
                 superentityName: "OwnerBase"),
-            Schema.Entity(name: "TargetBase"),
-            Schema.Entity(name: "TargetChild", superentityName: "TargetBase"),
+            SchemaDescriptor.Entity(name: "TargetBase"),
+            SchemaDescriptor.Entity(name: "TargetChild", superentityName: "TargetBase"),
         ])
 
         let built = try SchemaBuilder.build(schema)
@@ -133,27 +133,27 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInverseNamesDeclaredOnMultipleDestinationSubtypesAreAmbiguous() {
-        let schema = Schema([
-            Schema.Entity(name: "OwnerBase"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "OwnerBase"),
+            SchemaDescriptor.Entity(
                 name: "OwnerChild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "TargetBase", inverse: "owners",
                         declaringEntityName: "OwnerChild")
                 ],
                 superentityName: "OwnerBase"),
-            Schema.Entity(name: "TargetBase"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "TargetBase"),
+            SchemaDescriptor.Entity(
                 name: "TargetFirst",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
                 ],
                 superentityName: "TargetBase"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "TargetSecond",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "owners", destination: "OwnerChild", isToMany: true)
                 ],
                 superentityName: "TargetBase"),
         ])
@@ -166,24 +166,24 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testHierarchyRootIndexesAndUniqueAttributesEmitOnRootTable() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "RecordBase",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "category", type: "String"),
+                    SchemaDescriptor.Attribute(name: "code", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "category", type: "String"),
                 ],
-                indexes: [Schema.Index(properties: ["category"]), Schema.Index(properties: ["code", "category"])]),
-            Schema.Entity(
+                indexes: [SchemaDescriptor.Index(properties: ["category"]), SchemaDescriptor.Index(properties: ["code", "category"])]),
+            SchemaDescriptor.Entity(
                 name: "RecordChild",
                 attributes: [
-                    Schema.Attribute(name: "code", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "category", type: "String"),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "code", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "category", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["category"]),
-                    Schema.Index(properties: ["code", "category"]),
+                    SchemaDescriptor.Index(properties: ["category"]),
+                    SchemaDescriptor.Index(properties: ["code", "category"]),
                 ],
                 superentityName: "RecordBase"),
         ])
@@ -200,42 +200,42 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testHierarchySubtypeIndexesAndUniqueAttributesUsePartialSubtreeIndexes() throws {
-        let rootIndex = Schema.Index(properties: ["rootKey"])
-        let childIndex = Schema.Index(properties: ["score"])
-        let childCompositeUnique = Schema.Index(properties: ["rootKey", "score"], isUnique: true)
-        let schema = Schema([
-            Schema.Entity(
+        let rootIndex = SchemaDescriptor.Index(properties: ["rootKey"])
+        let childIndex = SchemaDescriptor.Index(properties: ["score"])
+        let childCompositeUnique = SchemaDescriptor.Index(properties: ["rootKey", "score"], isUnique: true)
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Base",
                 attributes: [
-                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "token", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"),
                 ],
                 indexes: [rootIndex]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "token", type: "String"),
-                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"),
+                    SchemaDescriptor.Attribute(name: "score", type: "Int", options: [.unique]),
                 ],
                 indexes: [rootIndex, childIndex, childCompositeUnique],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "token", type: "String"),
-                    Schema.Attribute(name: "score", type: "Int", options: [.unique]),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"),
+                    SchemaDescriptor.Attribute(name: "score", type: "Int", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 indexes: [rootIndex, childIndex, childCompositeUnique],
                 superentityName: "Child"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Sibling",
                 attributes: [
-                    Schema.Attribute(name: "rootKey", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "token", type: "String"),
-                    Schema.Attribute(name: "label", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "rootKey", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "token", type: "String"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String", options: [.unique]),
                 ],
                 indexes: [rootIndex],
                 superentityName: "Base"),
@@ -272,48 +272,48 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritedToManyOwnerAndHierarchicalDestinationUseJoinTable() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "targets", destination: "Target", isToMany: true,
                         declaringEntityName: "Child")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
 
         let built = try SchemaBuilder.build(schema)
         XCTAssertTrue(
             built.statements.contains("CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);"))
 
-        let hierarchyDestination = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let hierarchyDestination = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "targets", destination: "Target", isToMany: true)
                 ],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target", superentityName: "Base"),
+            SchemaDescriptor.Entity(name: "Target", superentityName: "Base"),
         ])
         let hierarchyBuilt = try SchemaBuilder.build(hierarchyDestination)
         XCTAssertTrue(
             hierarchyBuilt.statements.contains("CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);"))
 
-        let oneToOneInverse = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let oneToOneInverse = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "target", destination: "Target", inverse: "child")
+                    SchemaDescriptor.Relationship(name: "target", destination: "Target", inverse: "child")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Target",
-                relationships: [Schema.Relationship(name: "child", destination: "Child", inverse: "target")]),
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "Child", inverse: "target")]),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(oneToOneInverse)) { error in
             guard case SwiftDataError.unsupportedSchemaProperty = error else {
@@ -323,33 +323,33 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritedToManyOwnerCreatesDeclaringEntityJoinTable() throws {
-        let base = Schema.Entity(name: "Base")
-        let child = Schema.Entity(
+        let base = SchemaDescriptor.Entity(name: "Base")
+        let child = SchemaDescriptor.Entity(
             name: "Child",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "targets", destination: "Target", isToMany: true,
                     declaringEntityName: "Child")
             ],
             superentityName: "Base")
-        let grandchild = Schema.Entity(
+        let grandchild = SchemaDescriptor.Entity(
             name: "Grandchild",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "targets", destination: "Target", isToMany: true,
                     declaringEntityName: "Child")
             ],
             superentityName: "Child")
-        let sibling = Schema.Entity(
+        let sibling = SchemaDescriptor.Entity(
             name: "Sibling",
             relationships: [
-                Schema.Relationship(
+                SchemaDescriptor.Relationship(
                     name: "targets", destination: "Target", isToMany: true,
                     declaringEntityName: "Sibling")
             ],
             superentityName: "Base")
-        let target = Schema.Entity(name: "Target")
-        let built = try SchemaBuilder.build(Schema([base, child, grandchild, sibling, target]))
+        let target = SchemaDescriptor.Entity(name: "Target")
+        let built = try SchemaBuilder.build(SchemaDescriptor([base, child, grandchild, sibling, target]))
 
         XCTAssertEqual(
             built.statements.filter { $0.hasSuffix("(Z_A INTEGER, Z_B INTEGER);") },
@@ -361,28 +361,28 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritedManyToManyInverseUsesOneCanonicalJoinTable() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "tags", destination: "Tag", isToMany: true, inverse: "owners",
                         declaringEntityName: "Child")
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "tags", destination: "Tag", isToMany: true, inverse: "owners",
                         declaringEntityName: "Child")
                 ],
                 superentityName: "Child"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Tag",
                 relationships: [
-                    Schema.Relationship(name: "owners", destination: "Child", isToMany: true, inverse: "tags")
+                    SchemaDescriptor.Relationship(name: "owners", destination: "Child", isToMany: true, inverse: "tags")
                 ]),
         ])
 
@@ -393,21 +393,21 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testToOneStorageOwnershipFindsInverseDeclaredOnDestinationSubtype() throws {
-        let schema = Schema([
-            Schema.Entity(name: "OwnerBase"),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "OwnerBase"),
+            SchemaDescriptor.Entity(
                 name: "OwnerChild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "target", destination: "TargetBase", inverse: "owners",
                         declaringEntityName: "OwnerChild")
                 ],
                 superentityName: "OwnerBase"),
-            Schema.Entity(name: "TargetBase"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(name: "TargetBase"),
+            SchemaDescriptor.Entity(
                 name: "TargetChild",
                 relationships: [
-                    Schema.Relationship(
+                    SchemaDescriptor.Relationship(
                         name: "owners", destination: "OwnerChild", isToMany: true, inverse: "target")
                 ],
                 superentityName: "TargetBase"),
@@ -424,21 +424,21 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritanceUsesRootTableAndNullableDescendantColumns() throws {
-        let schema = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "name", type: "String")]),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "name", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ],
                 superentityName: "Base"),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Grandchild",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "age", type: "Int"),
-                    Schema.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
                 ],
                 superentityName: "Child"),
         ])
@@ -459,79 +459,79 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testInheritanceRejectsUnsupportedRelationshipsIndexesAndConflictingColumns() throws {
-        let related = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
-                name: "Child", relationships: [Schema.Relationship(name: "parent", destination: "Base")],
+        let related = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
+                name: "Child", relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "Base")],
                 superentityName: "Base"),
         ])
         XCTAssertTrue(try SchemaBuilder.build(related).statements.contains { $0.contains("ZCHILD_PARENT") })
 
-        let toMany = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let toMany = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "targets", destination: "Target", isToMany: true)
+                    SchemaDescriptor.Relationship(name: "targets", destination: "Target", isToMany: true)
                 ],
                 superentityName: "Base"),
-            Schema.Entity(name: "Target"),
+            SchemaDescriptor.Entity(name: "Target"),
         ])
         XCTAssertTrue(
             try SchemaBuilder.build(toMany).statements.contains(
                 "CREATE TABLE Z_CHILD_TARGETS_TARGET (Z_A INTEGER, Z_B INTEGER);")
         )
 
-        let inverse = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(
+        let inverse = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parent", destination: "Base", inverse: "children")
+                    SchemaDescriptor.Relationship(name: "parent", destination: "Base", inverse: "children")
                 ],
                 superentityName: "Base"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(inverse))
 
-        let indexed = Schema([
-            Schema.Entity(name: "Base"),
-            Schema.Entity(name: "Child", indexes: [Schema.Index(properties: ["value"])], superentityName: "Base"),
+        let indexed = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base"),
+            SchemaDescriptor.Entity(name: "Child", indexes: [SchemaDescriptor.Index(properties: ["value"])], superentityName: "Base"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(indexed))
 
-        let conflicting = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "value", type: "String")]),
-            Schema.Entity(
-                name: "Child", attributes: [Schema.Attribute(name: "value", type: "Int")], superentityName: "Base"),
+        let conflicting = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "Child", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")], superentityName: "Base"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(conflicting))
 
-        let caseCollision = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "value", type: "String")]),
-            Schema.Entity(
-                name: "Child", attributes: [Schema.Attribute(name: "VALUE", type: "Int")], superentityName: "Base"),
+        let caseCollision = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "value", type: "String")]),
+            SchemaDescriptor.Entity(
+                name: "Child", attributes: [SchemaDescriptor.Attribute(name: "VALUE", type: "Int")], superentityName: "Base"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(caseCollision))
     }
 
     func testInheritanceRequiresRootAttributesInEveryDescendant() {
-        let missingRootValue = Schema([
-            Schema.Entity(name: "Base", attributes: [Schema.Attribute(name: "requiredValue", type: "Int")]),
-            Schema.Entity(name: "Child", superentityName: "Base"),
+        let missingRootValue = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "Base", attributes: [SchemaDescriptor.Attribute(name: "requiredValue", type: "Int")]),
+            SchemaDescriptor.Entity(name: "Child", superentityName: "Base"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(missingRootValue))
     }
 
     func testFlattenedAttributeEmitsScalarLeafColumns() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
                         components: [
-                            Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
-                            Schema.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
+                            SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int"),
+                            SchemaDescriptor.Attribute.Component(name: "label", columnName: "size_label", type: "String"),
                         ])
                 ])
         ])
@@ -543,44 +543,44 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testFlattenedComponentColumnCollisionFailsSchemaValidation() {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "size_width", type: "Int"),
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(name: "size_width", type: "Int"),
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
-                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")]),
+                        components: [SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int")]),
                 ])
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(schema))
     }
 
     func testFlattenedCompositeCannotBeIndexedAsWholeAttribute() {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "size", type: "Size", options: [.flattened],
-                        components: [Schema.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
+                        components: [SchemaDescriptor.Attribute.Component(name: "width", columnName: "size_width", type: "Int")])
                 ],
-                indexes: [Schema.Index(properties: ["size"])])
+                indexes: [SchemaDescriptor.Index(properties: ["size"])])
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(schema))
     }
 
     func testCompoundUniqueAndIndexDDLPreserveDeclaredColumnOrder() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Pair",
                 attributes: [
-                    Schema.Attribute(name: "left", type: "String"),
-                    Schema.Attribute(name: "right", type: "String"),
+                    SchemaDescriptor.Attribute(name: "left", type: "String"),
+                    SchemaDescriptor.Attribute(name: "right", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["right", "left"], isUnique: true),
-                    Schema.Index(properties: ["left", "right"]),
+                    SchemaDescriptor.Index(properties: ["right", "left"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["left", "right"]),
                 ])
         ])
         let statements = try SchemaBuilder.build(schema).statements
@@ -593,17 +593,17 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testExactDDLForSingleAndCompoundGeneratedIndexShapes() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Record",
                 attributes: [
-                    Schema.Attribute(name: "rank", type: "Int"),
-                    Schema.Attribute(name: "label", type: "String"),
+                    SchemaDescriptor.Attribute(name: "rank", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "label", type: "String"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["rank"]),
-                    Schema.Index(properties: ["label"], isUnique: true),
-                    Schema.Index(properties: ["rank", "label"]),
+                    SchemaDescriptor.Index(properties: ["rank"]),
+                    SchemaDescriptor.Index(properties: ["label"], isUnique: true),
+                    SchemaDescriptor.Index(properties: ["rank", "label"]),
                 ])
         ])
         let indexes = try SchemaBuilder.build(schema).statements.filter {
@@ -619,64 +619,64 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testIndexRejectsMissingPropertiesAndCollidingGeneratedNames() {
-        let missing = Schema([
-            Schema.Entity(
-                name: "Item", attributes: [Schema.Attribute(name: "value", type: "Int")],
-                indexes: [Schema.Index(properties: ["absent"])])
+        let missing = SchemaDescriptor([
+            SchemaDescriptor.Entity(
+                name: "Item", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")],
+                indexes: [SchemaDescriptor.Index(properties: ["absent"])])
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(missing))
 
-        let collision = Schema([
-            Schema.Entity(
+        let collision = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "A",
                 attributes: [
-                    Schema.Attribute(name: "value", type: "Int")
+                    SchemaDescriptor.Attribute(name: "value", type: "Int")
                 ],
-                relationships: [Schema.Relationship(name: "child", destination: "B")],
+                relationships: [SchemaDescriptor.Relationship(name: "child", destination: "B")],
                 indexes: [
-                    Schema.Index(properties: ["child"])
+                    SchemaDescriptor.Index(properties: ["child"])
                 ]),
-            Schema.Entity(name: "B"),
+            SchemaDescriptor.Entity(name: "B"),
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(collision))
 
-        let ambiguousEncoding = Schema([
-            Schema.Entity(
+        let ambiguousEncoding = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Pair",
                 attributes: [
-                    Schema.Attribute(name: "a_Zb", type: "Int"),
-                    Schema.Attribute(name: "a", type: "Int"),
-                    Schema.Attribute(name: "b", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "a_Zb", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "a", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "b", type: "Int"),
                 ],
                 indexes: [
-                    Schema.Index(properties: ["a_Zb"]),
-                    Schema.Index(properties: ["a", "b"]),
+                    SchemaDescriptor.Index(properties: ["a_Zb"]),
+                    SchemaDescriptor.Index(properties: ["a", "b"]),
                 ])
         ])
         XCTAssertThrowsError(try SchemaBuilder.build(ambiguousEncoding))
     }
 
     func testExactDDLForDocumentedSupportedShapeAndRows() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Trip",
                 attributes: [
-                    Schema.Attribute(name: "name", type: "String"),
-                    Schema.Attribute(name: "days", type: "Int"),
-                    Schema.Attribute(name: "notes", type: "String", isOptional: true),
+                    SchemaDescriptor.Attribute(name: "name", type: "String"),
+                    SchemaDescriptor.Attribute(name: "days", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "notes", type: "String", isOptional: true),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Person",
                 attributes: [
-                    Schema.Attribute(name: "email", type: "String", options: [.unique]),
-                    Schema.Attribute(name: "age", type: "Int"),
+                    SchemaDescriptor.Attribute(name: "email", type: "String", options: [.unique]),
+                    SchemaDescriptor.Attribute(name: "age", type: "Int"),
                 ]),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Stop",
                 attributes: [
-                    Schema.Attribute(name: "title", type: "String"),
-                    Schema.Attribute(name: "order", type: "Int"),
-                ], relationships: [Schema.Relationship(name: "trip", destination: "Trip")]),
+                    SchemaDescriptor.Attribute(name: "title", type: "String"),
+                    SchemaDescriptor.Attribute(name: "order", type: "Int"),
+                ], relationships: [SchemaDescriptor.Relationship(name: "trip", destination: "Trip")]),
         ])
         let built = try SchemaBuilder.build(schema)
         XCTAssertEqual(
@@ -701,11 +701,11 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testTransformableAttributesUseBlobColumns() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Item",
                 attributes: [
-                    Schema.Attribute(
+                    SchemaDescriptor.Attribute(
                         name: "payload", type: "CodablePayload", options: [.transformable(by: "Codec")])
                 ])
         ])
@@ -716,12 +716,12 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testDecimalAndURLUseVarcharColumns() throws {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Item",
                 attributes: [
-                    Schema.Attribute(name: "amount", type: "Decimal"),
-                    Schema.Attribute(name: "url", type: "URL"),
+                    SchemaDescriptor.Attribute(name: "amount", type: "Decimal"),
+                    SchemaDescriptor.Attribute(name: "url", type: "URL"),
                 ])
         ])
 
@@ -769,16 +769,16 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testOneToOneHasOneCanonicalOwnerAcrossInputOrders() throws {
-        let alpha = Schema.Entity(
+        let alpha = SchemaDescriptor.Entity(
             name: "Alpha",
-            relationships: [Schema.Relationship(name: "beta", destination: "Beta", inverse: "alpha")]
+            relationships: [SchemaDescriptor.Relationship(name: "beta", destination: "Beta", inverse: "alpha")]
         )
-        let beta = Schema.Entity(
+        let beta = SchemaDescriptor.Entity(
             name: "Beta",
-            relationships: [Schema.Relationship(name: "alpha", destination: "Alpha", inverse: "beta")]
+            relationships: [SchemaDescriptor.Relationship(name: "alpha", destination: "Alpha", inverse: "beta")]
         )
         for entities in [[alpha, beta], [beta, alpha]] {
-            let built = try SchemaBuilder.build(Schema(entities))
+            let built = try SchemaBuilder.build(SchemaDescriptor(entities))
             XCTAssertTrue(
                 built.statements.contains(
                     "CREATE TABLE ZALPHA (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZBETA INTEGER);"))
@@ -788,15 +788,15 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testTripStopsInverseToOneUsesOnlyStopForeignKey() throws {
-        let trip = Schema.Entity(
+        let trip = SchemaDescriptor.Entity(
             name: "Trip",
-            relationships: [Schema.Relationship(name: "stops", destination: "Stop", isToMany: true, inverse: "trip")]
+            relationships: [SchemaDescriptor.Relationship(name: "stops", destination: "Stop", isToMany: true, inverse: "trip")]
         )
-        let stop = Schema.Entity(
+        let stop = SchemaDescriptor.Entity(
             name: "Stop",
-            relationships: [Schema.Relationship(name: "trip", destination: "Trip", inverse: "stops")]
+            relationships: [SchemaDescriptor.Relationship(name: "trip", destination: "Trip", inverse: "stops")]
         )
-        let built = try SchemaBuilder.build(Schema([trip, stop]))
+        let built = try SchemaBuilder.build(SchemaDescriptor([trip, stop]))
         XCTAssertTrue(
             built.statements.contains(
                 "CREATE TABLE ZSTOP (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER, ZTRIP INTEGER);"))
@@ -807,57 +807,57 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testAcceptsAllSupportedInverseCardinalityPairs() throws {
-        let schemas: [Schema] = [
-            Schema([
-                Schema.Entity(
+        let schemas: [SchemaDescriptor] = [
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    relationships: [Schema.Relationship(name: "b", destination: "B", inverse: "a")]
+                    relationships: [SchemaDescriptor.Relationship(name: "b", destination: "B", inverse: "a")]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "B",
-                    relationships: [Schema.Relationship(name: "a", destination: "A", inverse: "b")]
+                    relationships: [SchemaDescriptor.Relationship(name: "a", destination: "A", inverse: "b")]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    relationships: [Schema.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "a")]
+                    relationships: [SchemaDescriptor.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "a")]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "B",
-                    relationships: [Schema.Relationship(name: "a", destination: "A", inverse: "bs")]
+                    relationships: [SchemaDescriptor.Relationship(name: "a", destination: "A", inverse: "bs")]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    relationships: [Schema.Relationship(name: "b", destination: "B", inverse: "as")]
+                    relationships: [SchemaDescriptor.Relationship(name: "b", destination: "B", inverse: "as")]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "B",
-                    relationships: [Schema.Relationship(name: "as", destination: "A", isToMany: true, inverse: "b")]
+                    relationships: [SchemaDescriptor.Relationship(name: "as", destination: "A", isToMany: true, inverse: "b")]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    relationships: [Schema.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "as")]
+                    relationships: [SchemaDescriptor.Relationship(name: "bs", destination: "B", isToMany: true, inverse: "as")]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "B",
-                    relationships: [Schema.Relationship(name: "as", destination: "A", isToMany: true, inverse: "bs")]
+                    relationships: [SchemaDescriptor.Relationship(name: "as", destination: "A", isToMany: true, inverse: "bs")]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "ZParent",
                     relationships: [
-                        Schema.Relationship(name: "children", destination: "AChild", isToMany: true, inverse: "parent")
+                        SchemaDescriptor.Relationship(name: "children", destination: "AChild", isToMany: true, inverse: "parent")
                     ]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "AChild",
-                    relationships: [Schema.Relationship(name: "parent", destination: "ZParent", inverse: "children")]
+                    relationships: [SchemaDescriptor.Relationship(name: "parent", destination: "ZParent", inverse: "children")]
                 ),
             ]),
         ]
@@ -871,17 +871,17 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testRejectsMismatchedReciprocalMetadata() {
-        let schema = Schema([
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(
                 name: "Parent",
                 relationships: [
-                    Schema.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
+                    SchemaDescriptor.Relationship(name: "children", destination: "Child", isToMany: true, inverse: "parent")
                 ]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "Child",
                 relationships: [
-                    Schema.Relationship(name: "parent", destination: "Parent", isToMany: true, inverse: "wrongName")
+                    SchemaDescriptor.Relationship(name: "parent", destination: "Parent", isToMany: true, inverse: "wrongName")
                 ]
             ),
         ])
@@ -894,13 +894,13 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testToManyWithoutInverseUsesOwnerJoinTable() throws {
-        let entity = Schema.Entity(
+        let entity = SchemaDescriptor.Entity(
             name: "Owner",
-            relationships: [Schema.Relationship(name: "items", destination: "Item", isToMany: true)]
+            relationships: [SchemaDescriptor.Relationship(name: "items", destination: "Item", isToMany: true)]
         )
-        let item = Schema.Entity(name: "Item")
+        let item = SchemaDescriptor.Entity(name: "Item")
 
-        let built = try SchemaBuilder.build(Schema([item, entity]))
+        let built = try SchemaBuilder.build(SchemaDescriptor([item, entity]))
         XCTAssertEqual(
             built.statements.suffix(3),
             [
@@ -912,52 +912,52 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testRejectsMalformedRelationshipMetadata() throws {
-        var invalidSchemas: [Schema] = [
-            Schema([
-                Schema.Entity(
+        var invalidSchemas: [SchemaDescriptor] = [
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
-                    relationships: [Schema.Relationship(name: "owner", destination: "Missing")])
+                    relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Missing")])
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
-                    relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
-                Schema.Entity(name: "Owner"),
+                    relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
+                SchemaDescriptor.Entity(name: "Owner"),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
-                    relationships: [Schema.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
-                Schema.Entity(
+                    relationships: [SchemaDescriptor.Relationship(name: "owner", destination: "Owner", inverse: "items")]),
+                SchemaDescriptor.Entity(
                     name: "Owner",
                     relationships: [
-                        Schema.Relationship(
+                        SchemaDescriptor.Relationship(
                             name: "items", destination: "Other", isToMany: true, inverse: "owner")
                     ]
                 ),
-                Schema.Entity(name: "Other"),
+                SchemaDescriptor.Entity(name: "Other"),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
                     relationships: [
-                        Schema.Relationship(
+                        SchemaDescriptor.Relationship(
                             name: "items", destination: "ItemDestination", isToMany: true, inverse: "other")
                     ]
                 ),
-                Schema.Entity(
+                SchemaDescriptor.Entity(
                     name: "ItemDestination",
                     relationships: [
-                        Schema.Relationship(
+                        SchemaDescriptor.Relationship(
                             name: "other", destination: "Item", isToMany: true, inverse: "missing")
                     ]
                 ),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
                     relationships: [
-                        Schema.Relationship(
+                        SchemaDescriptor.Relationship(
                             name: "items", destination: "Item", minimumModelCount: 2, maximumModelCount: 1)
                     ]
                 )
@@ -965,11 +965,11 @@ final class SchemaBuilderTests: XCTestCase {
         ]
 
         invalidSchemas.append(
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
                     relationships: [
-                        Schema.Relationship(name: "self", destination: "Item", inverse: "self")
+                        SchemaDescriptor.Relationship(name: "self", destination: "Item", inverse: "self")
                     ]
                 )
             ])
@@ -985,16 +985,16 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testManyToManyEmitsCanonicalJoinAfterSideAEntity() throws {
-        let owner = Schema.Entity(
+        let owner = SchemaDescriptor.Entity(
             name: "Owner",
-            relationships: [Schema.Relationship(name: "items", destination: "Item", isToMany: true, inverse: "owners")]
+            relationships: [SchemaDescriptor.Relationship(name: "items", destination: "Item", isToMany: true, inverse: "owners")]
         )
-        let item = Schema.Entity(
+        let item = SchemaDescriptor.Entity(
             name: "Item",
-            relationships: [Schema.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "items")]
+            relationships: [SchemaDescriptor.Relationship(name: "owners", destination: "Owner", isToMany: true, inverse: "items")]
         )
 
-        let built = try SchemaBuilder.build(Schema([item, owner]))
+        let built = try SchemaBuilder.build(SchemaDescriptor([item, owner]))
         XCTAssertEqual(
             built.statements,
             [
@@ -1011,20 +1011,20 @@ final class SchemaBuilderTests: XCTestCase {
 
     func testIndexNamesAreUniqueAcrossEntityAndJoinIndexes() {
         let entities = [
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "A",
-                attributes: [Schema.Attribute(name: "B_C", type: "Int", options: [.unique])],
-                relationships: [Schema.Relationship(name: "b_c", destination: "A")]
+                attributes: [SchemaDescriptor.Attribute(name: "B_C", type: "Int", options: [.unique])],
+                relationships: [SchemaDescriptor.Relationship(name: "b_c", destination: "A")]
             ),
-            Schema.Entity(
+            SchemaDescriptor.Entity(
                 name: "A_B",
-                relationships: [Schema.Relationship(name: "C_D", destination: "D", isToMany: true)]
+                relationships: [SchemaDescriptor.Relationship(name: "C_D", destination: "D", isToMany: true)]
             ),
-            Schema.Entity(name: "C", relationships: [Schema.Relationship(name: "D", destination: "A_B")]),
-            Schema.Entity(name: "D"),
+            SchemaDescriptor.Entity(name: "C", relationships: [SchemaDescriptor.Relationship(name: "D", destination: "A_B")]),
+            SchemaDescriptor.Entity(name: "D"),
         ]
 
-        XCTAssertThrowsError(try SchemaBuilder.build(Schema(entities))) { error in
+        XCTAssertThrowsError(try SchemaBuilder.build(SchemaDescriptor(entities))) { error in
             guard case SwiftDataError.unsupportedSchemaProperty = error else {
                 return XCTFail("Unexpected error: \\(error)")
             }
@@ -1032,40 +1032,40 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testRejectsCollidingIdentifiers() {
-        let collisions: [Schema] = [
-            Schema([Schema.Entity(name: "Thing"), Schema.Entity(name: "thing")]),
-            Schema([Schema.Entity(name: "_osd_meta", attributes: [Schema.Attribute(name: "value", type: "Int")])]),
-            Schema([
-                Schema.Entity(
+        let collisions: [SchemaDescriptor] = [
+            SchemaDescriptor([SchemaDescriptor.Entity(name: "Thing"), SchemaDescriptor.Entity(name: "thing")]),
+            SchemaDescriptor([SchemaDescriptor.Entity(name: "_osd_meta", attributes: [SchemaDescriptor.Attribute(name: "value", type: "Int")])]),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
                     attributes: [
-                        Schema.Attribute(name: "name", type: "String"),
-                        Schema.Attribute(name: "NAME", type: "Int"),
+                        SchemaDescriptor.Attribute(name: "name", type: "String"),
+                        SchemaDescriptor.Attribute(name: "NAME", type: "Int"),
                     ])
             ]),
-            Schema([Schema.Entity(name: "Item", attributes: [Schema.Attribute(name: "primarykey", type: "Int")])]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([SchemaDescriptor.Entity(name: "Item", attributes: [SchemaDescriptor.Attribute(name: "primarykey", type: "Int")])]),
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "Item",
-                    attributes: [Schema.Attribute(name: "id", type: "Int")],
-                    relationships: [Schema.Relationship(name: "ID", destination: "Item")]
+                    attributes: [SchemaDescriptor.Attribute(name: "id", type: "Int")],
+                    relationships: [SchemaDescriptor.Relationship(name: "ID", destination: "Item")]
                 )
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    attributes: [Schema.Attribute(name: "index", type: "Int", options: [.unique])],
-                    relationships: [Schema.Relationship(name: "index", destination: "B")]
+                    attributes: [SchemaDescriptor.Attribute(name: "index", type: "Int", options: [.unique])],
+                    relationships: [SchemaDescriptor.Relationship(name: "index", destination: "B")]
                 ),
-                Schema.Entity(name: "B"),
+                SchemaDescriptor.Entity(name: "B"),
             ]),
-            Schema([
-                Schema.Entity(
+            SchemaDescriptor([
+                SchemaDescriptor.Entity(
                     name: "A",
-                    relationships: [Schema.Relationship(name: "items", destination: "B", isToMany: true)]
+                    relationships: [SchemaDescriptor.Relationship(name: "items", destination: "B", isToMany: true)]
                 ),
-                Schema.Entity(name: "_A_ITEMS_B"),
-                Schema.Entity(name: "B"),
+                SchemaDescriptor.Entity(name: "_A_ITEMS_B"),
+                SchemaDescriptor.Entity(name: "B"),
             ]),
         ]
         for (index, schema) in collisions.enumerated() {
@@ -1078,11 +1078,11 @@ final class SchemaBuilderTests: XCTestCase {
     }
 
     func testSortingUsesUTF8ByteOrder() throws {
-        let schema = Schema([
-            Schema.Entity(name: "é", attributes: [Schema.Attribute(name: "é", type: "String")]),
-            Schema.Entity(
+        let schema = SchemaDescriptor([
+            SchemaDescriptor.Entity(name: "é", attributes: [SchemaDescriptor.Attribute(name: "é", type: "String")]),
+            SchemaDescriptor.Entity(
                 name: "Z",
-                attributes: [Schema.Attribute(name: "a", type: "Int"), Schema.Attribute(name: "é", type: "String")]),
+                attributes: [SchemaDescriptor.Attribute(name: "a", type: "Int"), SchemaDescriptor.Attribute(name: "é", type: "String")]),
         ])
         let built = try SchemaBuilder.build(schema)
         XCTAssertEqual(built.bootstrapRows.map(\.name), ["Z", "é"])

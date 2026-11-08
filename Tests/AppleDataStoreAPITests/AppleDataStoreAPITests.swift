@@ -84,7 +84,7 @@ private struct FixtureLegacyBackend: DataStore {
 struct AppleDataStoreAPITests {
     @Test
     func testAppleStoreConformanceCompiles() throws {
-        let schema = SchemaDescriptor([AppleStoreFixture.self])
+        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
         let config = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let store = try FixtureAppleStore(config, migrationPlan: nil)
         #expect(store.schema == schema)
@@ -115,12 +115,12 @@ struct AppleDataStoreAPITests {
 
     @Test @MainActor
     func testContainerRoutesAppleStoreConfigurationToBackend() throws {
-        let schema = SchemaDescriptor([AppleStoreFixture.self])
+        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
         let configuration = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let container = try ModelContainer(
             for: [AppleStoreFixture.self],
             configurations: [ModelConfiguration(
-                appleStore: "apple-fixture", schema: schema,
+                appleStore: "apple-fixture", schema: Schema(descriptor: schema),
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
     }

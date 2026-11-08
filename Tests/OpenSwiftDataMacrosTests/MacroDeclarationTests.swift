@@ -44,7 +44,7 @@ final class MacroDeclarationTests: XCTestCase {
         let container = try ModelContainer(
             for: [QualifiedRelationshipMacroFixture.self, OtherModel.self], configurations: [])
         let relationship = try XCTUnwrap(
-            container.schema.entity(forName: "QualifiedRelationshipMacroFixture")?.relationships.first)
+            container.schema.entity(for: "QualifiedRelationshipMacroFixture")?.relationships.first)
         XCTAssertEqual(relationship.name, "target")
         XCTAssertEqual(relationship.destination, "OtherModel")
         XCTAssertEqual(relationship.deleteRule, .cascade)

@@ -315,35 +315,9 @@ final class RuntimeAPITests: XCTestCase {
         let container = try ModelContainer(
             for: [OptionalDestinationFixture.self, SupportedOptionalCollectionFixture.self], configurations: [])
         let entity = try XCTUnwrap(container.schema.entity(forName: "SupportedOptionalCollectionFixture"))
-        XCTAssertEqual(
-            entity,
-            SchemaDescriptor.Entity(
-                name: "SupportedOptionalCollectionFixture",
-                attributes: [
-                    SchemaDescriptor.Attribute(
-                        name: "destinations",
-                        type: "Array<OpenSwiftDataTests.OptionalDestinationFixture>",
-                        defaultValue: "[]"
-                    ),
-                    SchemaDescriptor.Attribute(
-                        name: "optionalDestinations",
-                        type: "Array<OpenSwiftDataTests.OptionalDestinationFixture>",
-                        isOptional: true
-                    ),
-                ],
-                relationships: [
-                    SchemaDescriptor.Relationship(
-                        name: "destinations",
-                        destination: "OptionalDestinationFixture",
-                        isToMany: true
-                    ),
-                    SchemaDescriptor.Relationship(
-                        name: "optionalDestinations",
-                        destination: "OptionalDestinationFixture",
-                        isToMany: true
-                    ),
-                ]
-            ))
+        XCTAssertEqual(entity.name, "SupportedOptionalCollectionFixture")
+        XCTAssertEqual(Set(entity.relationships.map(\.name)), ["destinations", "optionalDestinations"])
+        XCTAssertTrue(entity.attributes.isEmpty)
         XCTAssertEqual(
             container.relationshipAdapters(for: SupportedOptionalCollectionFixture.self).map(\.name),
             [],

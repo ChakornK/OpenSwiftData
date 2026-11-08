@@ -18,7 +18,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// The CloudKit database selection.
     public let cloudKitDatabase: CloudKitDatabase
     /// The models stored by this configuration, or `nil` to store every model in the container's schema.
-    public var schema: SchemaDescriptor?
+    public var schema: Schema?
     /// Whether contexts may save changes to the store.
     public let allowsSave: Bool
     /// Whether the store lives only in memory.
@@ -78,7 +78,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a default-named configuration that stores the given model types.
     public init(for forTypes: any PersistentModel.Type..., isStoredInMemoryOnly: Bool = false) {
         self.init(
-            nil, schema: SchemaDescriptor(forTypes as [any PersistentModel.Type], version: nil),
+            nil, schema: Schema(forTypes as [any PersistentModel.Type]),
             isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
@@ -87,7 +87,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// A `nil` name means `"default"`. In-memory configurations use `/dev/null` as their URL.
     public init(
         _ name: String? = nil,
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         isStoredInMemoryOnly: Bool = false,
         allowsSave: Bool = true,
         groupContainer: GroupContainer = .automatic,
@@ -104,7 +104,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a configuration that stores data at an explicit file URL.
     public init(
         _ name: String? = nil,
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         url: URL,
         allowsSave: Bool = true,
         cloudKitDatabase: CloudKitDatabase = .automatic
@@ -118,7 +118,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     package init(
         _ name: String? = nil,
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         isStoredInMemoryOnly: Bool = false,
         allowsSave: Bool = true,
         groupContainer: GroupContainer = .automatic,
@@ -143,7 +143,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     package init(
         _ name: String? = nil,
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         url: URL,
         allowsSave: Bool = true,
         cloudKitDatabase: CloudKitDatabase = .automatic,
@@ -164,7 +164,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a configuration backed by a custom value-oriented data store.
     public init(
         _ name: String = "custom",
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         allowsSave: Bool = true,
         dataStoreConfiguration: any DataStoreConfiguration
     ) {
@@ -177,7 +177,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     /// Creates a configuration backed by an Apple-shaped custom data store.
     public init(
         appleStore name: String,
-        schema: SchemaDescriptor? = nil,
+        schema: Schema? = nil,
         allowsSave: Bool = true,
         appleDataStoreConfiguration: any AppleDataStoreConfiguration
     ) {
@@ -191,7 +191,7 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
     private init(
         name: String,
         url: URL,
-        schema: SchemaDescriptor?,
+        schema: Schema?,
         isStoredInMemoryOnly: Bool,
         allowsSave: Bool,
         groupContainer: GroupContainer,
@@ -218,6 +218,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
         self.appleDataStoreConfiguration = appleDataStoreConfiguration
     }
 
+    package var schemaDescriptor: SchemaDescriptor? { schema?.descriptor }
+
     /// Throws when the name cannot form a store file name.
     ///
     /// Names longer than 255 characters throw `configurationFileNameTooLong`; names containing
@@ -233,7 +235,8 @@ public struct ModelConfiguration: Identifiable, Hashable, Sendable, CustomDebugS
 
     /// Returns whether both configurations have the same name, URL, schema, save permission, and in-memory flag.
     public static func == (lhs: ModelConfiguration, rhs: ModelConfiguration) -> Bool {
-        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema == rhs.schema && lhs.allowsSave == rhs.allowsSave
+        lhs.name == rhs.name && lhs.url == rhs.url && lhs.schema?.descriptor == rhs.schema?.descriptor
+            && lhs.allowsSave == rhs.allowsSave
             && lhs.isStoredInMemoryOnly == rhs.isStoredInMemoryOnly
     }
 

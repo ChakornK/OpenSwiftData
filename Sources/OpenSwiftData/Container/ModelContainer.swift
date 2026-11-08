@@ -3,7 +3,8 @@ import Foundation
 /// Owns a schema and its associated model contexts.
 public final class ModelContainer: Sendable {
     /// The schema managed by this container.
-    public let schema: SchemaDescriptor
+    public let schema: Schema
+    package let schemaDescriptor: SchemaDescriptor
     /// The main context associated with this container, created on first access.
     @MainActor
     public var mainContext: ModelContext {
@@ -74,6 +75,17 @@ public final class ModelContainer: Sendable {
     /// An empty `configurations` array creates a schema-only container without a persistent store.
     public convenience init(for types: [any PersistentModel.Type], configurations: [ModelConfiguration]) throws {
         try self.init(inferredSchema: Self.inferredSchema(for: types), configurations: configurations)
+    }
+
+    /// Creates a container for schema models with a migration plan and an explicit schema.
+    public convenience init(
+        for types: [any PersistentModel.Type],
+        schema: Schema,
+        configurations: [ModelConfiguration]
+    ) throws {
+        var descriptor = schema.descriptor
+        descriptor.modelTypes = SchemaDescriptor.ModelTypes(types: types)
+        try self.init(inferredSchema: descriptor, configurations: configurations)
     }
 
     /// Infers a schema from model types and their ancestors, capturing the types for materialization.
@@ -439,7 +451,8 @@ public final class ModelContainer: Sendable {
             try? openedStore?.close()
             throw error
         }
-        self.schema = runtimeSchema
+        self.schemaDescriptor = runtimeSchema
+        self.schema = Schema(descriptor: runtimeSchema)
         configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
@@ -478,6 +491,40 @@ public final class ModelContainer: Sendable {
         }
     }
 
+    /// Creates a container for an Apple-shaped schema, migrating the store first when a plan is given.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: [ModelConfiguration]
+    ) throws {
+        if let error = schema.inferenceError { throw error }
+        if let migrationPlan {
+            try self.init(migrating: schema.modelTypes, plan: migrationPlan, configurations: configurations)
+            migrationPlanStorage.plan = migrationPlan
+        } else {
+            let types = schema.modelTypes
+            if types.isEmpty {
+                try self.init(for: schema.descriptor, configurations: configurations)
+            } else {
+                var descriptor = schema.descriptor
+                descriptor.modelTypes = SchemaDescriptor.ModelTypes(types: types)
+                try self.init(inferredSchema: descriptor, configurations: configurations)
+            }
+        }
+    }
+
+    /// Creates a container for an Apple-shaped schema and configurations.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: ModelConfiguration...
+    ) throws {
+        try self.init(
+            for: schema,
+            migrationPlan: migrationPlan,
+            configurations: Self.configurationsOrDefault(configurations))
+    }
+
     private convenience init(schemaOnly schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {
         if !schema.modelTypes.types.isEmpty || schema.modelTypes.inferenceError != nil {
             try self.init(inferredSchema: schema, configurations: configurations)
@@ -501,7 +548,8 @@ public final class ModelContainer: Sendable {
             try? openedStore?.close()
             throw error
         }
-        self.schema = runtimeSchema
+        self.schemaDescriptor = runtimeSchema
+        self.schema = Schema(descriptor: runtimeSchema)
         configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
@@ -555,7 +603,8 @@ public final class ModelContainer: Sendable {
             try? openedStore?.close()
             throw error
         }
-        self.schema = runtimeSchema
+        self.schemaDescriptor = runtimeSchema
+        self.schema = Schema(descriptor: runtimeSchema)
         configurationList = configurations
         dataStore = openedDataStore
         store = openedStore
@@ -581,7 +630,9 @@ public final class ModelContainer: Sendable {
                 "The container model types must match the latest migration-plan schema.")
         }
         let pendingMigration = try Self.runMigrationPlan(descriptor, configurations: configurations)
-        try self.init(for: destination.models, schema: destination.schema, configurations: configurations)
+        var destinationSchema = destination.schema
+        destinationSchema.modelTypes = SchemaDescriptor.ModelTypes(types: destination.models)
+        try self.init(for: destinationSchema, configurations: configurations)
         if pendingMigration != nil {
             try Self.setPendingMigration(nil, store: self.store)
         }
@@ -628,7 +679,7 @@ public final class ModelContainer: Sendable {
             }
             let stage = plan.stages[destinationIndex - 1]
             let destinationContainer = try ModelContainer(
-                for: destination.models, schema: destination.schema, configurations: configurations)
+                for: destination.models, schema: Schema(descriptor: destination.schema), configurations: configurations)
             defer { try? destinationContainer.store?.close() }
             if let didMigrate = stage.didMigrate {
                 let context = ModelContext(
@@ -666,7 +717,7 @@ public final class ModelContainer: Sendable {
 
         guard startIndex < plan.schemas.count - 1 else { return finalPendingMigration }
         if case .empty = versionState, let first = plan.schemas.first {
-            let initial = try ModelContainer(for: first.models, schema: first.schema, configurations: configurations)
+            let initial = try ModelContainer(for: first.models, schema: Schema(descriptor: first.schema), configurations: configurations)
             try initial.store?.close()
         }
 
@@ -675,7 +726,7 @@ public final class ModelContainer: Sendable {
             let destination = plan.schemas[index + 1]
             let stage = plan.stages[index]
             let sourceContainer = try ModelContainer(
-                for: source.models, schema: source.schema, configurations: configurations)
+                for: source.models, schema: Schema(descriptor: source.schema), configurations: configurations)
             defer { try? sourceContainer.store?.close() }
             if let willMigrate = stage.willMigrate {
                 let context = ModelContext(container: sourceContainer, autosaveEnabled: false, affinity: .unchecked)
@@ -684,7 +735,7 @@ public final class ModelContainer: Sendable {
             try setPendingMigration(destination.version.identifier, store: sourceContainer.store)
 
             let destinationContainer = try ModelContainer(
-                for: destination.models, schema: destination.schema, configurations: configurations)
+                for: destination.models, schema: Schema(descriptor: destination.schema), configurations: configurations)
             defer { try? destinationContainer.store?.close() }
             if let didMigrate = stage.didMigrate {
                 let context = ModelContext(
@@ -953,8 +1004,8 @@ public final class ModelContainer: Sendable {
             }
             try appleConfiguration.validate()
             let store = try appleConfiguration.makeStore(
-                schema: configuration.schema ?? schema, migrationPlan: migrationPlan)
-            guard store.schema == configuration.schema ?? schema else {
+                schema: configuration.schemaDescriptor ?? schema, migrationPlan: migrationPlan)
+            guard store.schema == configuration.schemaDescriptor ?? schema else {
                 throw SwiftDataError.unsupportedStore("AppleDataStore schema does not match the configured schema.")
             }
             guard let bridge = store as? any AppleDataStoreBackendProviding else {

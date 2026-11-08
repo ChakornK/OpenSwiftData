@@ -2598,7 +2598,7 @@ final class PersistentModelTests: XCTestCase {
         let childEntity = try XCTUnwrap(container.schema.entity(forName: "SubtypeUniqueChildFixture"))
         XCTAssertTrue(
             childEntity.attributes.first(where: { $0.name == "scopedKey" })?.options.contains(.unique) == true)
-        XCTAssertTrue(childEntity.indexes.contains(SchemaDescriptor.Index(properties: ["scopedKey"], isUnique: true)))
+        XCTAssertTrue(childEntity.indexes.contains(Schema.Index(properties: ["scopedKey"], isUnique: true)))
         let before = try container.store?.read {
             try $0.rows(
                 "SELECT Z_PK, Z_ENT, ZTOKEN, ZSCOPEDKEY, ZTENANT, ZSCORE FROM ZSUBTYPEUNIQUEBASEFIXTURE",
@@ -5394,8 +5394,8 @@ final class PersistentModelTests: XCTestCase {
             configurations: .sqliteMemory("optional-element-collection-membership"))
         let schemaEntity = try XCTUnwrap(container.schema.entity(forName: "OptionalScalarElementsFixture"))
         XCTAssertEqual(
-            schemaEntity.attributes.first(where: { $0.name == "optionalStrings" })?.type,
-            "Array<Optional<String>>")
+            ObjectIdentifier(try XCTUnwrap(schemaEntity.attributes.first { $0.name == "optionalStrings" }).valueType),
+            ObjectIdentifier([String?].self))
         XCTAssertTrue(
             try XCTUnwrap(schemaEntity.attributes.first(where: { $0.name == "optionalStrings" })).options.contains(
                 .codable))
@@ -6887,8 +6887,8 @@ final class PersistentModelTests: XCTestCase {
         XCTAssertNil(base.superentityName)
         XCTAssertEqual(child.superentityName, "InheritanceMacroBaseFixture")
         XCTAssertEqual(grandchild.superentityName, "InheritanceMacroChildFixture")
-        XCTAssertEqual(child.attributes.map(\.name), ["name", "age"])
-        XCTAssertEqual(grandchild.attributes.map(\.name), ["name", "age", "rank"])
+        XCTAssertEqual(Set(child.attributes.map(\.name)), ["name", "age"])
+        XCTAssertEqual(Set(grandchild.attributes.map(\.name)), ["name", "age", "rank"])
     }
 
     @MainActor

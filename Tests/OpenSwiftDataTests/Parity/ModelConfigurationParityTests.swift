@@ -59,7 +59,7 @@ import Testing
         #expect(configuration.isStoredInMemoryOnly)
 
         var mutable = ModelConfiguration("M")
-        mutable.schema = SchemaDescriptor([ConfigurationParityThing.self])
+        mutable.schema = Schema([ConfigurationParityThing.self])
         #expect(mutable.schema?.entities.count == 1)
     }
 
@@ -85,9 +85,9 @@ import Testing
         let url = URL(fileURLWithPath: "/tmp/q.store")
         #expect(ModelConfiguration(url: url) != ModelConfiguration("Z", url: url))
         #expect(
-            ModelConfiguration(schema: SchemaDescriptor([ConfigurationParityThing.self]))
-                != ModelConfiguration(schema: SchemaDescriptor([ConfigurationParityOther.self])))
-        #expect(ModelConfiguration() != ModelConfiguration(schema: SchemaDescriptor([ConfigurationParityThing.self])))
+            ModelConfiguration(schema: Schema([ConfigurationParityThing.self]))
+                != ModelConfiguration(schema: Schema([ConfigurationParityOther.self])))
+        #expect(ModelConfiguration() != ModelConfiguration(schema: Schema([ConfigurationParityThing.self])))
     }
 
     @Test func `cloud and group selections do not affect equality`() {
@@ -99,8 +99,8 @@ import Testing
     @Test func `hashing ignores the schema`() {
         #expect(ModelConfiguration().hashValue == ModelConfiguration().hashValue)
         #expect(
-            ModelConfiguration(schema: SchemaDescriptor([ConfigurationParityThing.self])).hashValue
-                == ModelConfiguration(schema: SchemaDescriptor([ConfigurationParityOther.self])).hashValue)
+            ModelConfiguration(schema: Schema([ConfigurationParityThing.self])).hashValue
+                == ModelConfiguration(schema: Schema([ConfigurationParityOther.self])).hashValue)
     }
 
     @Test func `debug description lists every setting`() {

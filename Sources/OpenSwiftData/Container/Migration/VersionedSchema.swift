@@ -12,7 +12,10 @@ public protocol VersionedSchema: Sendable {
 
 extension VersionedSchema {
     /// A schema of `models` at `versionIdentifier`.
-    public static var schema: SchemaDescriptor { SchemaDescriptor(models, version: versionIdentifier) }
+    public static var schema: SchemaDescriptor {
+        (try? ModelContainer.inferredSchema(for: models, version: versionIdentifier))
+            ?? SchemaDescriptor([], version: versionIdentifier)
+    }
 }
 
 /// Declares the ordered schemas and transitions used to migrate a model container.

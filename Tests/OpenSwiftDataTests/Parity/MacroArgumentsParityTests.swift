@@ -43,7 +43,7 @@ enum RenameSchemaV2 {
 /// `@Attribute` and `@Relationship` accept SwiftData's arguments and record them in the schema.
 @MainActor @Suite struct MacroArgumentsParityTests {
     @Test func `attribute and relationship arguments reach the schema`() throws {
-        let schema = SchemaDescriptor([MacroArgumentsOwner.self, MacroArgumentsChild.self, MacroArgumentsPartner.self])
+        let schema = Schema([MacroArgumentsOwner.self, MacroArgumentsChild.self, MacroArgumentsPartner.self])
         let owner = try #require(schema.entity(for: MacroArgumentsOwner.self))
         let key = try #require(owner.attributes.first { $0.name == "key" })
         #expect(key.originalName == "legacyKey")

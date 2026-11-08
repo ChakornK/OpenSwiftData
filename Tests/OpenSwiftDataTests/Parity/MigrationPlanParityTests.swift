@@ -40,8 +40,8 @@ enum ParityTripsPlan: SchemaMigrationPlan {
 /// Versioned schemas and migration plans written as for Apple's SwiftData.
 @MainActor @Suite struct MigrationPlanParityTests {
     @Test func `versioned schemas need only models and a version`() {
-        let schema = SchemaDescriptor(versionedSchema: ParityTripsV2.self)
-        #expect(schema.version == SchemaDescriptor.Version(2, 0, 0))
+        let schema = Schema(versionedSchema: ParityTripsV2.schema)
+        #expect(schema.version == Schema.Version(2, 0, 0))
         #expect(schema.entities.map(\.name) == ["Trip"])
         #expect(ParityTripsV1.schema.version == SchemaDescriptor.Version(1, 0, 0))
     }
@@ -73,7 +73,7 @@ enum ParityTripsPlan: SchemaMigrationPlan {
         defer { try? FileManager.default.removeItem(at: url) }
         do {
             let v1 = try ModelContainer(
-                for: SchemaDescriptor(versionedSchema: ParityTripsV1.self), configurations: ModelConfiguration(url: url))
+                for: Schema(versionedSchema: ParityTripsV1.schema), configurations: ModelConfiguration(url: url))
             v1.mainContext.insert(ParityTripsV1.Trip(name: "coast"))
             try v1.mainContext.save()
         }

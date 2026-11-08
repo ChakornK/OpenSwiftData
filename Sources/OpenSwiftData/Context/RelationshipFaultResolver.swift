@@ -32,7 +32,7 @@ final class RelationshipFaultResolver: @unchecked Sendable {
         self.state = state
         self.identityMap = identityMap
         self.store = store
-        schema = container.schema
+        schema = container.schemaDescriptor
         storeIdentifier = container.storeIdentifier
     }
 

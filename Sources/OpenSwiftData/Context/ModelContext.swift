@@ -227,8 +227,8 @@ public final class ModelContext {
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
             storeIdentifier: container?.storeIdentifier ?? "default",
-            entityIDsByName: container?.schema.entityIDsByName ?? [:],
-            entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }),
+            entityIDsByName: container?.schemaDescriptor.entityIDsByName ?? [:],
+            entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schemaDescriptor.entities ?? []).map { ($0.name, $0) }),
             onLocalChange: { [autosaveHandle] in autosaveHandle.changed() })
         autosaveEnabledStorage = autosaveEnabled
         allowsSave = container?.configurationList.first?.allowsSave ?? true
@@ -247,8 +247,8 @@ public final class ModelContext {
         state = ContextState(
             relationshipAdaptersByModel: container?.relationshipAdapterTable ?? [:],
             storeIdentifier: container?.storeIdentifier ?? "default",
-            entityIDsByName: container?.schema.entityIDsByName ?? [:],
-            entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schema.entities ?? []).map { ($0.name, $0) }))
+            entityIDsByName: container?.schemaDescriptor.entityIDsByName ?? [:],
+            entitiesByName: Dictionary(uniqueKeysWithValues: (container?.schemaDescriptor.entities ?? []).map { ($0.name, $0) }))
         autosaveEnabledStorage = false
         allowsSave = true
         testSaveHook = hook
@@ -350,7 +350,7 @@ public final class ModelContext {
             let managed = Model.createManagedBackingData(
                 values: insertionSnapshot.values, context: self,
                 storeIdentifier: storeIdentifier,
-                entityID: containerStorage?.schema.entityIDsByName[String(describing: Model.self)] ?? 0,
+                entityID: containerStorage?.schemaDescriptor.entityIDsByName[String(describing: Model.self)] ?? 0,
                 identifier: insertionSnapshot.identifier)
             model.persistentBackingData = managed
             model.anyBackingData.attach(to: self, model: model)
@@ -644,12 +644,12 @@ public final class ModelContext {
         }
         if hasWildcardChange {
             for (key, model) in identityMap.liveModels() where !model.hasChanges {
-                guard let entity = optionalContainer?.schema.entity(forName: key.entityName) else { continue }
+                guard let entity = optionalContainer?.schemaDescriptor.entity(forName: key.entityName) else { continue }
                 try refreshRegisteredModel(type(of: model), entity: entity, primaryKey: key.primaryKey, store: store)
             }
         }
         for key in changedKeys {
-            guard let entity = optionalContainer?.schema.entity(forName: key.entityName),
+            guard let entity = optionalContainer?.schemaDescriptor.entity(forName: key.entityName),
                 let type = optionalContainer?.modelType(forEntityName: key.entityName)
             else { continue }
             invalidateRelationships(on: type, entity: entity, primaryKey: key.primaryKey)
@@ -729,7 +729,7 @@ public final class ModelContext {
             if hasHierarchy {
                 guard row.count >= 3, case let .int(rawEntityID) = row[2],
                     let entityID = Int(exactly: rawEntityID),
-                    containerStorage?.schema.entityIDsByName[entity.name] == entityID
+                    containerStorage?.schemaDescriptor.entityIDsByName[entity.name] == entityID
                 else { return }
                 try refreshAttributes(
                     model, entity: entity, attributes: attributes, row: [row[0], row[1]] + row.dropFirst(3))
@@ -779,7 +779,7 @@ public final class ModelContext {
     ) throws {
         assertAffinity()
         guard let container = containerStorage else { throw unsupportedStore("Batch delete") }
-        if let entity = container.schema.entity(forName: String(describing: Model.self)),
+        if let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self)),
             let denied = entity.relationships.first(where: { $0.deleteRule == .deny })
         {
             throw NSError(
@@ -808,10 +808,10 @@ public final class ModelContext {
         assertAffinity()
         try processPendingChangesThrowing()
         guard let container = containerStorage else { throw unsupportedStore("Fetch") }
-        guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return [] }
+        guard let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self)) else { return [] }
         let hasHierarchy =
             entity.superentityName != nil
-            || container.schema.entities.contains {
+            || container.schemaDescriptor.entities.contains {
                 $0.superentityName == entity.name
             }
         if let dataStore = container.dataStore {
@@ -877,7 +877,7 @@ public final class ModelContext {
                 guard row.count >= 3, case let .int(rawEntityID) = row[2],
                     let concreteID = Int(exactly: rawEntityID),
                     let registration = container.modelRegistration(forEntityID: concreteID),
-                    let resolvedEntity = container.schema.entity(forID: concreteID),
+                    let resolvedEntity = container.schemaDescriptor.entity(forID: concreteID),
                     registration.type is Model.Type
                 else {
                     throw SwiftDataError.unsupportedStore("Hierarchy row has an unknown or incompatible Z_ENT.")
@@ -961,7 +961,7 @@ public final class ModelContext {
             _ = try sortProperties(descriptor.sortBy, entity: entity, type: Model.self)
         }
         let includedEntityNames = Set(
-            container.schema.entities.filter { isEntity($0.name, descendantOf: entity.name) }.map(\.name))
+            container.schemaDescriptor.entities.filter { isEntity($0.name, descendantOf: entity.name) }.map(\.name))
         let requestDescriptor = FetchDescriptor(
             predicate: descriptor.predicate,
             sortBy: descriptor.sortBy,
@@ -984,7 +984,7 @@ public final class ModelContext {
                     "DataStore returned duplicate snapshot identifier \(snapshot.persistentIdentifier).")
             }
             guard includedEntityNames.contains(snapshot.entityName),
-                let concreteEntity = container.schema.entity(forName: snapshot.entityName)
+                let concreteEntity = container.schemaDescriptor.entity(forName: snapshot.entityName)
             else {
                 throw SwiftDataError.unsupportedStore(
                     "DataStore returned snapshot \(snapshot.entityName) outside the requested entity subtree.")
@@ -1011,7 +1011,7 @@ public final class ModelContext {
         requestedAttributeNames: Set<String>? = nil
     ) throws -> any PersistentModel {
         if let cached = cache[snapshot.persistentIdentifier] { return cached }
-        guard let entity = container.schema.entity(forName: snapshot.entityName),
+        guard let entity = container.schemaDescriptor.entity(forName: snapshot.entityName),
             snapshot.persistentIdentifier.entityName == snapshot.entityName
         else {
             throw SwiftDataError.unsupportedStore("DataStore snapshot refers to an unknown entity.")
@@ -1163,11 +1163,11 @@ public final class ModelContext {
         if !descriptor.includePendingChanges {
             guard let container = optionalContainer,
                 let store = container.store,
-                let entity = container.schema.entity(forName: String(describing: Model.self))
+                let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self))
             else { throw unsupportedStore("Fetch count") }
             let hierarchyIDs =
                 entity.superentityName != nil
-                    || container.schema.entities.contains {
+                    || container.schemaDescriptor.entities.contains {
                         $0.superentityName == entity.name
                     } ? descendantEntityIDs(for: entity) : nil
             if let limit = descriptor.fetchLimit, limit < 0 {
@@ -1263,7 +1263,7 @@ public final class ModelContext {
         }
         guard let container = optionalContainer,
             let store = container.store,
-            let entity = container.schema.entity(forName: String(describing: Model.self))
+            let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self))
         else { throw unsupportedStore("Identifier fetch") }
         if let fetchLimit = descriptor.fetchLimit, fetchLimit < 0 {
             throw SwiftDataError.unsupportedPredicate("Negative fetch limit")
@@ -1282,7 +1282,7 @@ public final class ModelContext {
         }
         let hasHierarchy =
             entity.superentityName != nil
-            || container.schema.entities.contains {
+            || container.schemaDescriptor.entities.contains {
                 $0.superentityName == entity.name
             }
         let hierarchyIDs = hasHierarchy ? descendantEntityIDs(for: entity) : nil
@@ -1316,7 +1316,7 @@ public final class ModelContext {
             if hasHierarchy {
                 guard row.count > 1, case let .int(rawEntityID) = row[1],
                     let concreteID = Int(exactly: rawEntityID),
-                    let concreteEntity = container.schema.entity(forID: concreteID)
+                    let concreteEntity = container.schemaDescriptor.entity(forID: concreteID)
                 else { return nil }
                 concreteEntityName = concreteEntity.name
             } else {
@@ -1410,7 +1410,7 @@ public final class ModelContext {
                 !deletedObjects.contains(ObjectIdentifier(model)),
                 !model.isDeleted,
                 let concreteEntityName = modelEntityName(of: model),
-                container.schema.entity(forName: concreteEntityName) != nil,
+                container.schemaDescriptor.entity(forName: concreteEntityName) != nil,
                 !hasHierarchy || isEntity(concreteEntityName, descendantOf: entity.name)
             else { continue }
 
@@ -1523,14 +1523,14 @@ public final class ModelContext {
         }
         if let container = optionalContainer, container.store != nil,
             identifier.resolvedStoreIdentifier == storeIdentifier,
-            let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
-            let concreteEntity = container.schema.entity(forName: identifier.entityName),
+            let requestedEntity = container.schemaDescriptor.entity(forName: String(describing: Model.self)),
+            let concreteEntity = container.schemaDescriptor.entity(forName: identifier.entityName),
             requestedEntity.name != concreteEntity.name
                 || requestedEntity.superentityName != nil
                 || concreteEntity.superentityName != nil,
             rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
             requestedEntity.name == concreteEntity.name
-                || (container.schema.entityIDsByName[concreteEntity.name].map {
+                || (container.schemaDescriptor.entityIDsByName[concreteEntity.name].map {
                     descendantEntityIDs(for: requestedEntity).contains($0)
                 } == true)
         {
@@ -1548,8 +1548,8 @@ public final class ModelContext {
                 row.count >= 3,
                 case let .int(rawEntityID) = row[2],
                 let concreteID = Int(exactly: rawEntityID),
-                container.schema.entityIDsByName[concreteEntity.name] == concreteID,
-                container.schema.entity(forID: concreteID)?.name == identifier.entityName,
+                container.schemaDescriptor.entityIDsByName[concreteEntity.name] == concreteID,
+                container.schemaDescriptor.entity(forID: concreteID)?.name == identifier.entityName,
                 let registration = container.modelRegistration(forEntityID: concreteID),
                 registration.type is Model.Type
             else { return nil }
@@ -1595,8 +1595,8 @@ public final class ModelContext {
         }
         guard let container = optionalContainer,
             identifier.resolvedStoreIdentifier == storeIdentifier,
-            let entity = container.schema.entity(forName: identifier.entityName),
-            let modelEntity = container.schema.entity(forName: String(describing: Model.self)),
+            let entity = container.schemaDescriptor.entity(forName: identifier.entityName),
+            let modelEntity = container.schemaDescriptor.entity(forName: String(describing: Model.self)),
             isEntity(entity.name, descendantOf: modelEntity.name)
         else { throw unsupportedStore("Model lookup") }
         if let dataStore = container.dataStore {
@@ -1669,9 +1669,9 @@ public final class ModelContext {
         guard let container = optionalContainer,
             let key = identifier.primaryKey,
             identifier.resolvedStoreIdentifier == storeIdentifier,
-            let requestedEntity = container.schema.entity(forName: String(describing: Model.self)),
-            let concreteEntity = container.schema.entity(forName: identifier.entityName),
-            let concreteEntityID = container.schema.entityIDsByName[concreteEntity.name],
+            let requestedEntity = container.schemaDescriptor.entity(forName: String(describing: Model.self)),
+            let concreteEntity = container.schemaDescriptor.entity(forName: identifier.entityName),
+            let concreteEntityID = container.schemaDescriptor.entityIDsByName[concreteEntity.name],
             rootEntity(for: requestedEntity).name == rootEntity(for: concreteEntity).name,
             requestedEntity.name == concreteEntity.name
                 || descendantEntityIDs(for: requestedEntity).contains(concreteEntityID)
@@ -2049,7 +2049,7 @@ public final class ModelContext {
             model.setInsertionChanged()
             if reinsertsDeletedRow {
                 state.restoreDeletedModel(model, asInserted: true, snapshot: preUndoSnapshot)
-                if let entity = containerStorage?.schema.entity(forName: model.persistentModelID.entityName),
+                if let entity = containerStorage?.schemaDescriptor.entity(forName: model.persistentModelID.entityName),
                     let primaryKey = model.persistentModelID.primaryKey
                 {
                     identityMap.register(model, for: identityKey(for: entity, primaryKey: primaryKey))
@@ -2080,8 +2080,8 @@ public final class ModelContext {
         guard let container = optionalContainer else { throw unsupportedStore("Hierarchy schema lookup") }
         let identifiers = Set(descendantEntityIDs(for: entity))
         var attributesByName: [String: SchemaDescriptor.Attribute] = [:]
-        for candidate in container.schema.entities
-        where container.schema.entityIDsByName[candidate.name].map(
+        for candidate in container.schemaDescriptor.entities
+        where container.schemaDescriptor.entityIDsByName[candidate.name].map(
             identifiers.contains) == true
         {
             for attribute in candidate.attributes {
@@ -2183,7 +2183,7 @@ public final class ModelContext {
             predicate.expression,
             modelType: modelType,
             entity: entity,
-            schema: containerStorage?.schema,
+            schema: containerStorage?.schemaDescriptor,
             modelTypeForEntity: { [weak container = containerStorage] entityName in
                 container?.modelType(forEntityName: entityName)
             })
@@ -2191,7 +2191,7 @@ public final class ModelContext {
             ownerEntity: SchemaDescriptor.Entity,
             relationship: SchemaDescriptor.Relationship
         ) -> RuntimePredicateRelationship? {
-            guard let schema = containerStorage?.schema,
+            guard let schema = containerStorage?.schemaDescriptor,
                 let destination = schema.entity(forName: relationship.destination)
             else { return nil }
             if relationship.isToMany {
@@ -2260,7 +2260,7 @@ public final class ModelContext {
                 inverseOwnerEntityIDs: descendantEntityIDs(for: inverseOwner))
         }
         let relationshipPaths =
-            containerStorage?.schema.entities.flatMap { ownerEntity in
+            containerStorage?.schemaDescriptor.entities.flatMap { ownerEntity in
                 ownerEntity.relationships.compactMap {
                     relationshipDescriptor(ownerEntity: ownerEntity, relationship: $0)
                 }
@@ -2282,7 +2282,7 @@ public final class ModelContext {
                 relationshipPaths.contains(where: {
                     $0.ownerEntityName == ownerEntity.name && $0.propertyName == relationship.name && $0.isToMany
                 }),
-                let destination = containerStorage?.schema.entity(forName: relationship.destination)
+                let destination = containerStorage?.schemaDescriptor.entity(forName: relationship.destination)
             else { return }
             let path = prefix.isEmpty ? relationship.name : "\(prefix)[].\(relationship.name)"
             attributeNames.insert(path)
@@ -2305,7 +2305,7 @@ public final class ModelContext {
         for relationship in entity.relationships where relationship.isToMany {
             addCollectionPath(ownerEntity: entity, relationship: relationship, prefix: "", depth: 1)
         }
-        if let schema = containerStorage?.schema {
+        if let schema = containerStorage?.schemaDescriptor {
             func addRelationshipPaths(
                 ownerEntity: SchemaDescriptor.Entity,
                 prefix: [String],
@@ -2652,7 +2652,7 @@ public final class ModelContext {
             var endpoints = adapter.read(model) ?? []
             if let metadata = adapter.metadata,
                 let inverseName = metadata.inverse,
-                let schema = containerStorage?.schema,
+                let schema = containerStorage?.schemaDescriptor,
                 let destination = schema.entity(forName: metadata.destination),
                 schema.relationshipDeclaration(named: inverseName, onOrBelow: destination.name) != nil
             {
@@ -2744,7 +2744,7 @@ public final class ModelContext {
     ) throws -> [any PersistentModel] {
         guard !adapter.isToMany, let metadata = adapter.metadata,
             let inverseName = metadata.inverse,
-            let schema = containerStorage?.schema,
+            let schema = containerStorage?.schemaDescriptor,
             let inverse = schema.relationshipDeclaration(named: inverseName, onOrBelow: metadata.destination),
             !inverse.relationship.isToMany,
             schema.relationshipStorageMapping(
@@ -3165,7 +3165,7 @@ public final class ModelContext {
         for model: any PersistentModel, container: ModelContainer, connection: any RuntimeConnection
     ) throws {
         guard let primaryKey = model.persistentModelID.primaryKey else { return }
-        for entity in container.schema.entities {
+        for entity in container.schemaDescriptor.entities {
             for relationship in canonicalRelationships(for: entity) where relationship.isToMany {
                 let table: String
                 let sideAEntity: String
@@ -3173,13 +3173,13 @@ public final class ModelContext {
                 if relationship.inverse == nil {
                     guard let joinTable = joinTableName(for: entity, relationship) else { continue }
                     table = joinTable
-                    let mapping = container.schema.relationshipStorageMapping(
+                    let mapping = container.schemaDescriptor.relationshipStorageMapping(
                         modelEntityName: entity.name, relationshipName: relationship.name)
                     sideAEntity = mapping?.declaringEntityName ?? entity.name
                     sideBEntity = mapping?.destinationEntityName ?? relationship.destination
                 } else if isCanonicalSideA(entity, relationship),
                     let inverseName = relationship.inverse,
-                    let inverse = container.schema.relationshipDeclaration(
+                    let inverse = container.schemaDescriptor.relationshipDeclaration(
                         named: inverseName, onOrBelow: relationship.destination),
                     inverse.relationship.isToMany,
                     let joinTable = joinTableName(for: entity, relationship)
@@ -3201,13 +3201,13 @@ public final class ModelContext {
             }
         }
         var nulledColumns = Set<String>()
-        for ownerEntity in container.schema.entities {
+        for ownerEntity in container.schemaDescriptor.entities {
             for relationship in canonicalRelationships(for: ownerEntity) where !relationship.isToMany {
                 guard isEntity(model.persistentModelID.entityName, descendantOf: relationship.destination),
                     isToOneStorageOwner(ownerEntity, relationship)
                 else { continue }
                 if let inverseName = relationship.inverse,
-                    let inverse = container.schema.relationship(
+                    let inverse = container.schemaDescriptor.relationship(
                         named: inverseName, onOrBelow: relationship.destination),
                     inverse.deleteRule != .nullify
                 {
@@ -3251,15 +3251,15 @@ public final class ModelContext {
 
             if relationship.isToMany,
                 let inverseName = relationship.inverse,
-                let destinationEntity = optionalContainer?.schema.entity(forName: relationship.destination),
-                let inverse = optionalContainer?.schema.relationshipDeclaration(
+                let destinationEntity = optionalContainer?.schemaDescriptor.entity(forName: relationship.destination),
+                let inverse = optionalContainer?.schemaDescriptor.relationshipDeclaration(
                     named: inverseName, onOrBelow: relationship.destination),
                 inverse.relationship.isToMany
             {
                 let storageOwner = relationship.inverse == nil || isCanonicalSideA(entity, relationship)
                 let storageEntity =
                     storageOwner
-                    ? entity : (optionalContainer?.schema.entity(forName: inverse.entityName) ?? destinationEntity)
+                    ? entity : (optionalContainer?.schemaDescriptor.entity(forName: inverse.entityName) ?? destinationEntity)
                 let storageRelationship: SchemaDescriptor.Relationship
                 if storageOwner {
                     storageRelationship = relationship
@@ -3272,12 +3272,12 @@ public final class ModelContext {
                 rootColumnFirst = true
                 let ownerHasHierarchy =
                     entity.superentityName != nil
-                    || optionalContainer?.schema.entities.contains(where: { $0.superentityName == entity.name }) == true
+                    || optionalContainer?.schemaDescriptor.entities.contains(where: { $0.superentityName == entity.name }) == true
                 let ownerRoot = rootEntity(for: entity)
                 let ownerIDs = ownerHasHierarchy ? descendantEntityIDs(for: entity) : []
                 let destinationHasHierarchy =
                     destinationEntity.superentityName != nil
-                    || optionalContainer?.schema.entities.contains(where: {
+                    || optionalContainer?.schemaDescriptor.entities.contains(where: {
                         $0.superentityName == destinationEntity.name
                     })
                         == true
@@ -3332,8 +3332,8 @@ public final class ModelContext {
                 }
             } else if relationship.isToMany,
                 let inverseName = relationship.inverse,
-                let destinationEntity = optionalContainer?.schema.entity(forName: relationship.destination),
-                let inverseDeclaration = optionalContainer?.schema.relationshipDeclaration(
+                let destinationEntity = optionalContainer?.schemaDescriptor.entity(forName: relationship.destination),
+                let inverseDeclaration = optionalContainer?.schemaDescriptor.relationshipDeclaration(
                     named: inverseName, onOrBelow: relationship.destination),
                 !inverseDeclaration.relationship.isToMany
             {
@@ -3341,7 +3341,7 @@ public final class ModelContext {
                 rootColumnFirst = true
                 let inverseRelationship = inverseDeclaration.relationship
                 let inverseStorageEntity =
-                    optionalContainer?.schema.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
+                    optionalContainer?.schemaDescriptor.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
                 let storage = relationshipStorageLocation(
                     ownerEntity: inverseStorageEntity, relationship: inverseRelationship)
                 let inverseOwnerIDs = descendantEntityIDs(for: inverseStorageEntity)
@@ -3378,15 +3378,15 @@ public final class ModelContext {
                 }
             } else {
                 guard let inverseName = relationship.inverse,
-                    let destinationEntity = optionalContainer?.schema.entity(forName: relationship.destination),
-                    let inverseDeclaration = optionalContainer?.schema.relationshipDeclaration(
+                    let destinationEntity = optionalContainer?.schemaDescriptor.entity(forName: relationship.destination),
+                    let inverseDeclaration = optionalContainer?.schemaDescriptor.relationshipDeclaration(
                         named: inverseName, onOrBelow: relationship.destination)
                 else { continue }
                 destinationType = adapter.destinationType
                 rootColumnFirst = true
                 let inverseRelationship = inverseDeclaration.relationship
                 let inverseStorageEntity =
-                    optionalContainer?.schema.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
+                    optionalContainer?.schemaDescriptor.entity(forName: inverseDeclaration.entityName) ?? destinationEntity
                 let storage = relationshipStorageLocation(
                     ownerEntity: inverseStorageEntity, relationship: inverseRelationship)
                 rows = try store.read { connection in
@@ -3402,12 +3402,12 @@ public final class ModelContext {
                 }
             }
 
-            let destinationEntity = optionalContainer?.schema.entity(forName: relationship.destination)
+            let destinationEntity = optionalContainer?.schemaDescriptor.entity(forName: relationship.destination)
             var destinationModels: [Int64: any PersistentModel] = [:]
             if let destinationEntity {
                 let destinationHasHierarchy =
                     destinationEntity.superentityName != nil
-                    || optionalContainer?.schema.entities.contains(where: {
+                    || optionalContainer?.schemaDescriptor.entities.contains(where: {
                         $0.superentityName == destinationEntity.name
                     })
                         == true
@@ -3465,8 +3465,8 @@ public final class ModelContext {
                         guard row.count >= 3, case let .int(rawEntityID) = row[2],
                             let concreteEntityID = Int(exactly: rawEntityID),
                             let registration = container.modelRegistration(forEntityID: concreteEntityID),
-                            let concreteEntity = container.schema.entities.first(where: {
-                                container.schema.entityIDsByName[$0.name] == concreteEntityID
+                            let concreteEntity = container.schemaDescriptor.entities.first(where: {
+                                container.schemaDescriptor.entityIDsByName[$0.name] == concreteEntityID
                             })
                         else { continue }
                         let materializationRow = [row[0], row[1]] + row.dropFirst(3)
@@ -3498,7 +3498,7 @@ public final class ModelContext {
             }
 
             guard
-                let relationshipDestinationEntity = optionalContainer?.schema.entity(forName: relationship.destination)
+                let relationshipDestinationEntity = optionalContainer?.schemaDescriptor.entity(forName: relationship.destination)
             else {
                 throw SwiftDataError.unsupportedSchemaProperty(
                     "Relationship destination '\(relationship.destination)' is missing from the schema.")
@@ -3583,7 +3583,7 @@ public final class ModelContext {
 
     private func isToOneStorageOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = containerStorage?.schema.relationshipDeclaration(
+            let inverse = containerStorage?.schemaDescriptor.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination),
             !inverse.relationship.isToMany
         else { return true }
@@ -3594,7 +3594,7 @@ public final class ModelContext {
 
     private func isCanonicalSideA(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = containerStorage?.schema.relationshipDeclaration(
+            let inverse = containerStorage?.schemaDescriptor.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
         let current = "\(relationshipLogicalOwnerName(entity, relationship)).\(relationship.name)"
@@ -3604,7 +3604,7 @@ public final class ModelContext {
 
     private func joinSideAOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = containerStorage?.schema.relationshipDeclaration(
+            let inverse = containerStorage?.schemaDescriptor.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
         else { return relationship.inverse == nil }
         guard inverse.relationship.isToMany else { return false }
@@ -3613,14 +3613,14 @@ public final class ModelContext {
 
     private func isToManyStorageOwner(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> Bool {
         guard let inverseName = relationship.inverse,
-            let inverse = containerStorage?.schema.relationshipDeclaration(
+            let inverse = containerStorage?.schemaDescriptor.relationshipDeclaration(
                 named: inverseName, onOrBelow: relationship.destination)
         else { return true }
         return inverse.relationship.isToMany && !isCanonicalSideA(entity, relationship)
     }
 
     private func relationshipLogicalOwnerName(_ entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> String {
-        containerStorage?.schema.relationshipStorageMapping(
+        containerStorage?.schemaDescriptor.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)?.declaringEntityName ?? entity.name
     }
 
@@ -3630,12 +3630,12 @@ public final class ModelContext {
 
     private func joinTableName(for entity: SchemaDescriptor.Entity, _ relationship: SchemaDescriptor.Relationship) -> String? {
         guard relationship.isToMany else { return nil }
-        let mapping = containerStorage?.schema.relationshipStorageMapping(
+        let mapping = containerStorage?.schemaDescriptor.relationshipStorageMapping(
             modelEntityName: entity.name, relationshipName: relationship.name)
         let declaringEntityName = mapping?.declaringEntityName ?? entity.name
         let destinationEntityName = mapping?.destinationEntityName ?? relationship.destination
         guard let inverseName = relationship.inverse,
-            let inverse = containerStorage?.schema.relationshipDeclaration(
+            let inverse = containerStorage?.schemaDescriptor.relationshipDeclaration(
                 named: inverseName, onOrBelow: destinationEntityName)
         else {
             guard relationship.inverse == nil else { return nil }
@@ -3656,7 +3656,7 @@ public final class ModelContext {
     private func relationshipStorageLocation(
         ownerEntity: SchemaDescriptor.Entity, relationship: SchemaDescriptor.Relationship
     ) -> (tableName: String, columnName: String) {
-        let mapping = containerStorage?.schema.relationshipStorageMapping(
+        let mapping = containerStorage?.schemaDescriptor.relationshipStorageMapping(
             modelEntityName: ownerEntity.name, relationshipName: relationship.name)
         return (
             mapping?.ownerRootEntityName.uppercased() ?? ownerEntity.name.uppercased(),
@@ -3669,7 +3669,7 @@ public final class ModelContext {
         visited: inout Set<EntityPrimaryKey>, materializeRelations: Bool = true
     ) throws -> (any PersistentModel)? {
         func load<Model: PersistentModel>(_ type: Model.Type) throws -> Model? {
-            guard let entity = optionalContainer?.schema.entity(forName: String(describing: Model.self)) else {
+            guard let entity = optionalContainer?.schemaDescriptor.entity(forName: String(describing: Model.self)) else {
                 return nil
             }
             let key = EntityPrimaryKey(entityName: entity.name, primaryKey: primaryKey)
@@ -3769,14 +3769,14 @@ public final class ModelContext {
     }
 
     private func entityID(for name: String) throws -> Int {
-        guard let identifier = containerStorage?.schema.entityIDsByName[name] else {
+        guard let identifier = containerStorage?.schemaDescriptor.entityIDsByName[name] else {
             throw SwiftDataError.unsupportedSchemaProperty("Schema has no entity identifier for '\(name)'.")
         }
         return identifier
     }
 
     private func rootEntity(for entity: SchemaDescriptor.Entity) -> SchemaDescriptor.Entity {
-        guard let entities = containerStorage?.schema.entities else { return entity }
+        guard let entities = containerStorage?.schemaDescriptor.entities else { return entity }
         var current = entity
         var visited: Set<String> = []
         while let parentName = current.superentityName,
@@ -3789,7 +3789,7 @@ public final class ModelContext {
     }
 
     private func descendantEntityIDs(for entity: SchemaDescriptor.Entity) -> [Int] {
-        guard let schema = containerStorage?.schema else { return [] }
+        guard let schema = containerStorage?.schemaDescriptor else { return [] }
         return schema.entities.compactMap { candidate in
             var current: SchemaDescriptor.Entity? = candidate
             var visited = Set<String>()
@@ -3804,8 +3804,8 @@ public final class ModelContext {
     }
 
     private func isEntity(_ entityName: String, descendantOf ancestorName: String) -> Bool {
-        guard let ancestor = containerStorage?.schema.entity(forName: ancestorName),
-            let entityID = containerStorage?.schema.entityIDsByName[entityName]
+        guard let ancestor = containerStorage?.schemaDescriptor.entity(forName: ancestorName),
+            let entityID = containerStorage?.schemaDescriptor.entityIDsByName[entityName]
         else { return entityName == ancestorName }
         return descendantEntityIDs(for: ancestor).contains(entityID)
     }
@@ -3815,7 +3815,7 @@ public final class ModelContext {
         var visited = Set<String>()
         while let parentName = root.superentityName,
             visited.insert(root.name).inserted,
-            let parent = containerStorage?.schema.entity(forName: parentName)
+            let parent = containerStorage?.schemaDescriptor.entity(forName: parentName)
         {
             root = parent
         }
@@ -3823,7 +3823,7 @@ public final class ModelContext {
     }
 
     private func identityKey(forEntityName entityName: String, primaryKey: Int64) -> EntityPrimaryKey {
-        guard let entity = containerStorage?.schema.entity(forName: entityName) else {
+        guard let entity = containerStorage?.schemaDescriptor.entity(forName: entityName) else {
             return EntityPrimaryKey(entityName: entityName, primaryKey: primaryKey)
         }
         return identityKey(for: entity, primaryKey: primaryKey)
@@ -3854,7 +3854,7 @@ public final class ModelContext {
         for model in pending.inserted + pending.changed {
             try state.validateRequiredRelationships(for: model)
         }
-        let entityIDs = container.schema.entityIDsByName
+        let entityIDs = container.schemaDescriptor.entityIDsByName
         let models = pending.inserted + pending.changed
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
         var updatedKeys = Set(
@@ -3906,7 +3906,7 @@ public final class ModelContext {
         var tombstones: [StoreEntityKey: [String: StoredValue]] = [:]
         for model in pending.deleted {
             guard let primaryKey = model.persistentModelID.primaryKey,
-                let entity = container.schema.entity(forName: model.persistentModelID.entityName)
+                let entity = container.schemaDescriptor.entity(forName: model.persistentModelID.entityName)
             else { continue }
             let preserved = Set(
                 entity.attributes.filter { $0.options.contains(.preserveValueOnDeletion) }.map(\.name))
@@ -3919,7 +3919,7 @@ public final class ModelContext {
                 values
         }
         let orderedModels = relationshipOrderedEntities(models)
-        let externalDataColumns = Self.externalDataColumns(in: container.schema)
+        let externalDataColumns = Self.externalDataColumns(in: container.schemaDescriptor)
         let persisted: [PersistedModel] = try store.writeWithExternalData { connection, externalDataSession in
             var results: [PersistedModel] = []
             for model in orderedModels {
@@ -3934,7 +3934,7 @@ public final class ModelContext {
             let assignedIDs = Dictionary(
                 uniqueKeysWithValues: results.map { (ObjectIdentifier($0.model), $0.primaryKey) })
             for owner in models {
-                guard let entity = container.schema.entity(forName: String(describing: type(of: owner))),
+                guard let entity = container.schemaDescriptor.entity(forName: String(describing: type(of: owner))),
                     let adapters = container.relationshipAdapterTable[ObjectIdentifier(type(of: owner))],
                     let ownerPK = assignedIDs[ObjectIdentifier(owner)]
                 else { continue }
@@ -3953,7 +3953,7 @@ public final class ModelContext {
             }
             for event in pending.relationshipMutationEvents where !insertedIDs.contains(ObjectIdentifier(event.owner)) {
                 guard !event.relationship.isToMany,
-                    let entity = container.schema.entity(forName: String(describing: type(of: event.owner))),
+                    let entity = container.schemaDescriptor.entity(forName: String(describing: type(of: event.owner))),
                     isToOneStorageOwner(entity, event.relationship),
                     let ownerPK = event.owner.persistentModelID.primaryKey
                         ?? assignedIDs[ObjectIdentifier(event.owner)]
@@ -3978,7 +3978,7 @@ public final class ModelContext {
                 guard let pk = model.persistentModelID.primaryKey,
                     !mergedDuplicateIdentifiers.contains(model.persistentModelID)
                 else { continue }
-                guard let entity = container.schema.entity(forName: model.persistentModelID.entityName) else {
+                guard let entity = container.schemaDescriptor.entity(forName: model.persistentModelID.entityName) else {
                     throw SwiftDataError.unsupportedStore(
                         "No schema entity exists for deleted model '\(model.persistentModelID.entityName)'.")
                 }
@@ -4141,7 +4141,7 @@ public final class ModelContext {
         guard
             (inserted + updated).allSatisfy({
                 $0.persistentIdentifier.resolvedStoreIdentifier == dataStore.identifier
-                    && container.schema.entity(forName: $0.entityName) != nil
+                    && container.schemaDescriptor.entity(forName: $0.entityName) != nil
             }), deleted.allSatisfy({ $0.resolvedStoreIdentifier == dataStore.identifier })
         else {
             throw SwiftDataError.unsupportedStore("DataStore save request contains identifiers from another store.")
@@ -4308,7 +4308,7 @@ public final class ModelContext {
     ) throws -> DataStoreSnapshot {
         func typed<Model: PersistentModel>(_ model: Model) throws -> DataStoreSnapshot {
             let entityName = String(describing: Model.self)
-            guard let entity = container.schema.entity(forName: entityName) else {
+            guard let entity = container.schemaDescriptor.entity(forName: entityName) else {
                 throw SwiftDataError.unsupportedStore("DataStore model is not present in the container schema.")
             }
             var values: [String: StoredValue] = [:]
@@ -4364,7 +4364,7 @@ public final class ModelContext {
         externalDataSession: ExternalDataWriteSession
     ) throws {
         func typed<Model: PersistentModel>(_ model: Model) throws {
-            guard let entity = container.schema.entity(forName: String(describing: Model.self)) else { return }
+            guard let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self)) else { return }
             let adapters = Model.erasedPersistenceAdapters()
             let flattenedAdapters = Dictionary(grouping: Model.flattenedPropertyAdapters(), by: \.propertyName)
                 .mapValues { $0.sorted { $0.componentName.utf8.lexicographicallyPrecedes($1.componentName.utf8) } }
@@ -4546,7 +4546,7 @@ public final class ModelContext {
         var visited = Set<String>()
         while let value = current, visited.insert(value.name).inserted {
             ancestors.append(value)
-            current = value.superentityName.flatMap { containerStorage?.schema.entity(forName: $0) }
+            current = value.superentityName.flatMap { containerStorage?.schemaDescriptor.entity(forName: $0) }
         }
         let orderedAncestors = ancestors.reversed()
         var constraints: [(properties: [String], owner: SchemaDescriptor.Entity)] = []
@@ -4651,7 +4651,7 @@ public final class ModelContext {
                 (event.owner, event.relationship, event.newEndpoints)
         }
         for owner in insertedModels {
-            guard let entity = container.schema.entity(forName: String(describing: type(of: owner))),
+            guard let entity = container.schemaDescriptor.entity(forName: String(describing: type(of: owner))),
                 let adapters = container.relationshipAdapterTable[ObjectIdentifier(type(of: owner))]
             else { continue }
             for relationship in canonicalRelationships(for: entity) {
@@ -4668,7 +4668,7 @@ public final class ModelContext {
         var replacedRows: [String: (Set<Int64>, Set<Int64>)] = [:]
         var pairs: [String: [String: (Int64, Int64)]] = [:]
         for (owner, relationship, endpoints) in relationships.values {
-            guard let entity = container.schema.entity(forName: String(describing: type(of: owner))),
+            guard let entity = container.schemaDescriptor.entity(forName: String(describing: type(of: owner))),
                 let ownerPK = primaryKey(for: owner)
             else { throw SwiftDataError.unsupportedStore("Relationship owner has no persistent row identity.") }
             if !relationship.isToMany {
@@ -4687,9 +4687,9 @@ public final class ModelContext {
                 tableRelationship = relationship
             } else {
                 guard let inverseName = relationship.inverse,
-                    let inverse = container.schema.relationshipDeclaration(
+                    let inverse = container.schemaDescriptor.relationshipDeclaration(
                         named: inverseName, onOrBelow: relationship.destination),
-                    let destination = container.schema.entity(forName: inverse.entityName)
+                    let destination = container.schemaDescriptor.entity(forName: inverse.entityName)
                 else { continue }
                 tableEntity = destination
                 tableRelationship = inverse.relationship
@@ -4712,9 +4712,9 @@ public final class ModelContext {
                     continue
                 }
                 guard let endpointEntityName = modelEntityName(of: endpoint),
-                    let endpointEntity = container.schema.entity(forName: endpointEntityName),
-                    let destinationEntity = container.schema.entity(forName: relationship.destination),
-                    let endpointEntityID = container.schema.entityIDsByName[endpointEntity.name],
+                    let endpointEntity = container.schemaDescriptor.entity(forName: endpointEntityName),
+                    let destinationEntity = container.schemaDescriptor.entity(forName: relationship.destination),
+                    let endpointEntityID = container.schemaDescriptor.entityIDsByName[endpointEntity.name],
                     descendantEntityIDs(for: destinationEntity).contains(endpointEntityID)
                 else {
                     throw SwiftDataError.unsupportedStore(
@@ -4764,7 +4764,7 @@ public final class ModelContext {
         func visit(_ model: any PersistentModel) {
             let identifier = ObjectIdentifier(model)
             guard !visited.contains(identifier), visiting.insert(identifier).inserted else { return }
-            if let entity = optionalContainer?.schema.entity(forName: String(describing: type(of: model))),
+            if let entity = optionalContainer?.schemaDescriptor.entity(forName: String(describing: type(of: model))),
                 let adapters = optionalContainer?.relationshipAdapterTable[ObjectIdentifier(type(of: model))]
             {
                 for relationship in canonicalRelationships(for: entity) where !relationship.isToMany {
@@ -4786,7 +4786,7 @@ public final class ModelContext {
 
     private func relationshipOrderedEntities(_ models: [any PersistentModel]) -> [any PersistentModel] {
         var rankByModel: [ObjectIdentifier: Int] = [:]
-        for (rank, entity) in (optionalContainer?.schema.entities ?? []).enumerated() {
+        for (rank, entity) in (optionalContainer?.schemaDescriptor.entities ?? []).enumerated() {
             for model in models where String(describing: type(of: model)) == entity.name {
                 rankByModel[ObjectIdentifier(model)] = rank
             }

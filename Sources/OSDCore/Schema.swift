@@ -156,7 +156,8 @@ public struct SchemaDescriptor: Sendable {
             defaultValue: String? = nil,
             options: Set<Option> = [],
             originalName: String? = nil,
-            components: [Component] = []
+            components: [Component] = [],
+            hashModifier: String? = nil
         ) {
             self.name = name
             self.type = type
@@ -164,7 +165,7 @@ public struct SchemaDescriptor: Sendable {
             self.defaultValue = defaultValue
             self.options = options
             self.originalName = originalName
-            self.hashModifier = nil
+            self.hashModifier = hashModifier
             self.components = components.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         }
     }

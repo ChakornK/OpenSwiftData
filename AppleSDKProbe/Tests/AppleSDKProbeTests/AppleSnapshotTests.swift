@@ -141,7 +141,7 @@ private final class ProbeStore: DataStore {
             relatedSnapshots: snapshots)
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         lock.lock(); defer { lock.unlock() }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var next = (snapshots.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
@@ -160,7 +160,7 @@ private final class ProbeStore: DataStore {
             candidate[copied.persistentIdentifier] = copied
         }
         snapshots = candidate
-        return DataStoreSaveChangesResult(for: identifier, remappedIdentifiers: remappings)
+        return DataStoreSaveChangesResult<Snapshot>(for: identifier, remappedIdentifiers: remappings)
     }
 
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? {

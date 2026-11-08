@@ -461,17 +461,26 @@ package func projectSnapshotValues(
     let topLevelKeys = reservedKeys.union(attributeKeys)
     let valueContainerKeys = reservedKeys.union(["values"])
     let values: [String: Any]
-    if Set(object.keys) == topLevelKeys {
-        values = object
-    } else if Set(object.keys) == valueContainerKeys, let nested = object["values"] as? [String: Any],
+    let normalizedObject = object.reduce(into: [String: Any]()) { result, item in
+        if let codingKey = DataStoreSnapshotCodingKey(stringValue: item.key),
+            case let .modeledProperty(name) = codingKey
+        {
+            result[name] = item.value
+        } else {
+            result[item.key] = item.value
+        }
+    }
+    if Set(normalizedObject.keys) == topLevelKeys {
+        values = normalizedObject
+    } else if Set(normalizedObject.keys) == valueContainerKeys, let nested = normalizedObject["values"] as? [String: Any],
         Set(nested.keys) == attributeKeys
     {
         values = nested
     } else {
         throw SnapshotMaterializationError.unsupportedLayout(
             entity: entity.name,
-            missingKeys: topLevelKeys.subtracting(object.keys).sorted(),
-            extraKeys: Set(object.keys).subtracting(topLevelKeys).sorted())
+            missingKeys: topLevelKeys.subtracting(normalizedObject.keys).sorted(),
+            extraKeys: Set(normalizedObject.keys).subtracting(topLevelKeys).sorted())
     }
     var storedValues: [String: StoredValue] = [:]
     for attribute in entity.attributes {

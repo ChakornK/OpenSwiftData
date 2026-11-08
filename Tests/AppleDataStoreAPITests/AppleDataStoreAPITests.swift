@@ -809,6 +809,20 @@ struct AppleDataStoreAPITests {
     }
 
     @Test
+    func snapshotCodingKeyMaterializesModeledProperty() throws {
+        let entity = try #require(Schema([AppleStoreFixture.self]).descriptor.entity(forName: "AppleStoreFixture"))
+        let values = try projectSnapshotValues(
+            from: [
+                "persistentIdentifier": NSNull(),
+                "entityName": entity.name,
+                "relationships": [:],
+                DataStoreSnapshotCodingKey.modeledProperty("title").stringValue: "coded through Apple key",
+            ],
+            entity: entity)
+        #expect(values["title"] == .text("coded through Apple key"))
+    }
+
+    @Test
     func opaqueSnapshotLayoutFailsBeforeModelMaterialization() throws {
         let schema = Schema([AppleStoreFixture.self]).descriptor
         let entity = try #require(schema.entity(forName: "AppleStoreFixture"))

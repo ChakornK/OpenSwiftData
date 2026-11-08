@@ -133,7 +133,7 @@ private final class ProbeStore: DataStore {
         _ request: DataStoreFetchRequest<Model>
     ) throws -> DataStoreFetchResult<Model, Snapshot> {
         lock.lock(); defer { lock.unlock() }
-        DataStoreFetchResult(
+        return DataStoreFetchResult(
             descriptor: request.descriptor,
             fetchedSnapshots: snapshots.values.filter {
                 $0.persistentIdentifier.entityName == String(describing: Model.self)
@@ -144,13 +144,11 @@ private final class ProbeStore: DataStore {
     func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         lock.lock(); defer { lock.unlock() }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
-        var next = (snapshots.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
-        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
-            remappings[snapshot.persistentIdentifier] = PersistentIdentifier(
-                storeIdentifier: identifier,
+        for snapshot in request.inserted {
+            remappings[snapshot.persistentIdentifier] = try PersistentIdentifier.identifier(
+                for: identifier,
                 entityName: snapshot.persistentIdentifier.entityName,
-                primaryKey: next)
-            next += 1
+                primaryKey: UUID())
         }
         var candidate = snapshots
         for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }

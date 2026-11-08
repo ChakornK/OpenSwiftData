@@ -30,10 +30,14 @@ struct AppleParityRunner {
         let modelTypeResults = try AppleSchemaModelTypesAdapter.runAll()
         let storeIdentifierResults = try AppleStoreIdentifierAdapter.runAll()
         let identityResults = try AppleModelIdentityAdapter.runAll()
-        let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults)
+        let configurationResults = AppleModelConfigurationAdapter.runAll()
+        let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
+        let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
+            + configurationResults + configurationContainerResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(
+                schemaVersion: 2,
                 implementation: "apple-swiftdata",
                 gitSHA: ProcessInfo.processInfo.environment["GITHUB_SHA"] ?? "local",
                 scenarios: results.map(\.id)),

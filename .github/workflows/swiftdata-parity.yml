@@ -37,11 +37,12 @@ jobs:
         run: swift run --package-path Tests/SwiftDataParity/OSDRunner osd-parity-runner --output /tmp/osd-observations.json
       - name: Run Apple SwiftData parity scenarios
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --output /tmp/apple-observations.json
-      - name: Compare scenario observations
-        run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-compare --osd /tmp/osd-observations.json --apple /tmp/apple-observations.json --allowlist Tests/SwiftDataParity/parity-allowlist.json --report /tmp/parity-diff.json
       - name: Validate source coverage
         if: always()
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-validate
+      - name: Compare scenario observations
+        if: always()
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-compare --osd /tmp/osd-observations.json --apple /tmp/apple-observations.json --allowlist Tests/SwiftDataParity/parity-allowlist.json --matrix Tests/SwiftDataParity/parity-matrix.json --coverage-report parity-coverage-report.json --report /tmp/parity-diff.json
       - name: Upload parity artifacts
         if: always()
         uses: actions/upload-artifact@v4

@@ -424,6 +424,310 @@
           "conformance.observable"
         ]
       }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/the default configuration stores default.store in Application Support",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/the default configuration stores default.store in Application Support": [
+          "name",
+          "url.fileName",
+          "url.parent",
+          "idMatchesURL",
+          "inMemory",
+          "allowsSave",
+          "hasSchema",
+          "hasGroupIdentifier",
+          "hasCloudIdentifier"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/in-memory configurations use dev null",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/in-memory configurations use dev null"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/in-memory configurations use dev null": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/in-memory configurations use dev null": [
+          "default.inMemory",
+          "default.url",
+          "named.inMemory",
+          "named.url",
+          "named.name"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/named configurations use the name as the file stem",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/named configurations use the name as the file stem"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/named configurations use the name as the file stem": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/named configurations use the name as the file stem": [
+          "named.url.fileName",
+          "named.url.parent",
+          "nilName.defaults",
+          "slashName.fileName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/explicit URLs are kept and the name defaults",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/explicit URLs are kept and the name defaults": [
+          "url.kept",
+          "defaultName",
+          "explicitName"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/type-scoped configurations carry a schema",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/type-scoped configurations carry a schema": [
+          "typed.entities",
+          "typed.name",
+          "typed.inMemory",
+          "mutable.schemaEntityCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/cloud and group selections are reported",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/cloud and group selections are reported",
+        "ModelConfigurationParityTests/cloud and group selections are reported/cloud selection kind",
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind",
+        "ModelConfigurationParityTests/cloud and group selections are reported/default cloud selection kind",
+        "ModelConfigurationParityTests/cloud and group selections are reported/default group selection kind"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/cloud and group selections are reported": "compared",
+        "ModelConfigurationParityTests/cloud and group selections are reported/cloud selection kind": "non-comparable",
+        "ModelConfigurationParityTests/cloud and group selections are reported/group selection kind": "non-comparable",
+        "ModelConfigurationParityTests/cloud and group selections are reported/default cloud selection kind": "non-comparable",
+        "ModelConfigurationParityTests/cloud and group selections are reported/default group selection kind": "non-comparable"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/cloud and group selections are reported": [
+          "selected.cloudIdentifierMatches",
+          "selected.groupIdentifierMatches"
+        ]
+      },
+      "reasonCategory": "shim-only-api",
+      "rationale": "Apple's SwiftData CloudKitDatabase and GroupContainer selection wrappers do not expose Equatable or public selection discriminators."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/equality compares name, url, schema, save permission, and storage": [
+          "equality.defaults",
+          "equality.memoryDefaults",
+          "equality.nameDifference",
+          "equality.saveDifference",
+          "equality.memoryNameDifference",
+          "equality.sameURLDifferentName",
+          "equality.differentSchemas",
+          "equality.schemaPresence"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/cloud and group selections do not affect equality",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/cloud and group selections do not affect equality": [
+          "equality.cloudSelection",
+          "equality.groupSelection"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/hashing ignores the schema",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/hashing ignores the schema"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/hashing ignores the schema": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/hashing ignores the schema": [
+          "hash.sameConfiguration",
+          "hash.differentSchema"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/debug description lists every setting",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/debug description lists every setting"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/debug description lists every setting": "compared"
+      },
+      "observations": {
+        "ModelConfigurationParityTests/debug description lists every setting": [
+          "debug.defaultFieldsPresent",
+          "debug.customFieldsPresent"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/containers reject configurations with invalid names",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/containers reject configurations with invalid names": [
+          "invalidName.containerRejected"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/in-memory stores with the same name are independent": [
+          "secondStore.fetchCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationContainerParityTests/file stores create missing parent directories",
+      "scenarioIDs": [
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories"
+      ],
+      "outcomes": {
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories": "compared"
+      },
+      "observations": {
+        "ModelConfigurationContainerParityTests/file stores create missing parent directories": [
+          "saved.fileExists",
+          "saved.fetchNames"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/names up to 255 characters validate",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/names up to 255 characters validate"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/names up to 255 characters validate": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/reserved characters fail validation",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/reserved characters fail validation/'/'",
+        "ModelConfigurationParityTests/reserved characters fail validation/':'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\\\\'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'*'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'?'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'<'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'>'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'|'",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\"'"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/reserved characters fail validation/'/'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/':'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\\\\'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'*'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'?'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'<'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'>'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'|'": "non-comparable",
+        "ModelConfigurationParityTests/reserved characters fail validation/'\"'": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/other names validate",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/other names validate/'a\\x00b'",
+        "ModelConfigurationParityTests/other names validate/'a\\nb'",
+        "ModelConfigurationParityTests/other names validate/'a b'",
+        "ModelConfigurationParityTests/other names validate/'a~b'",
+        "ModelConfigurationParityTests/other names validate/'a.b'",
+        "ModelConfigurationParityTests/other names validate/'a..b'",
+        "ModelConfigurationParityTests/other names validate/'.'",
+        "ModelConfigurationParityTests/other names validate/'..'",
+        "ModelConfigurationParityTests/other names validate/''"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/other names validate/'a\\x00b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a\\nb'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a~b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a.b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'a..b'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'.'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/'..'": "non-comparable",
+        "ModelConfigurationParityTests/other names validate/''": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
+    },
+    {
+      "sourceCase": "ModelConfigurationParityTests/explicit URL configurations still validate their names",
+      "scenarioIDs": [
+        "ModelConfigurationParityTests/explicit URL configurations still validate their names"
+      ],
+      "outcomes": {
+        "ModelConfigurationParityTests/explicit URL configurations still validate their names": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "shim-only-api",
+      "rationale": "OpenSwiftData exposes ModelConfiguration.validate(); Apple SwiftData has no public equivalent."
     }
   ]
 }

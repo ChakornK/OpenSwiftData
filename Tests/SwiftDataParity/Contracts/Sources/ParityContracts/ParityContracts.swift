@@ -10,6 +10,14 @@ public struct ScenarioID: Codable, Hashable, Sendable, CustomStringConvertible {
     }
 
     public var description: String { "\(suite)/\(test)" }
+
+    public init?(description: String) {
+        guard let separator = description.firstIndex(of: "/") else { return nil }
+        let suite = String(description[..<separator])
+        let test = String(description[description.index(after: separator)...])
+        guard !suite.isEmpty, !test.isEmpty else { return nil }
+        self.init(suite: suite, test: test)
+    }
 }
 
 public enum ObservedValue: Codable, Equatable, Sendable {
@@ -103,13 +111,20 @@ public struct ParityObservation: Codable, Equatable, Sendable {
     }
 }
 
+public enum ScenarioDisposition: Codable, Equatable, Sendable {
+    case observed
+    case nonComparable(reasonCategory: String, rationale: String)
+}
+
 public struct ScenarioResult: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let observations: [ParityObservation]
+    public let disposition: ScenarioDisposition
 
-    public init(id: ScenarioID, observations: [ParityObservation]) {
+    public init(id: ScenarioID, observations: [ParityObservation], disposition: ScenarioDisposition = .observed) {
         self.id = id
         self.observations = observations
+        self.disposition = disposition
     }
 }
 
@@ -141,7 +156,7 @@ public struct RunnerManifest: Codable, Equatable, Sendable {
     public let gitSHA: String
     public let scenarios: [ScenarioID]
 
-    public init(schemaVersion: Int = 1, implementation: String, gitSHA: String, scenarios: [ScenarioID]) {
+    public init(schemaVersion: Int = 2, implementation: String, gitSHA: String, scenarios: [ScenarioID]) {
         self.schemaVersion = schemaVersion
         self.implementation = implementation
         self.gitSHA = gitSHA
@@ -185,6 +200,7 @@ public struct ParityComparison: Codable, Equatable, Sendable {
     public let differences: [ObservationDifference]
     public let missingOSDScenarios: [ScenarioID]
     public let missingAppleScenarios: [ScenarioID]
+    public let nonComparableScenarios: [ScenarioID]
 
     public var hasUnexpectedDifferences: Bool {
         !missingOSDScenarios.isEmpty || !missingAppleScenarios.isEmpty || differences.contains { !$0.isAllowed }
@@ -193,11 +209,13 @@ public struct ParityComparison: Codable, Equatable, Sendable {
     public init(
         differences: [ObservationDifference],
         missingOSDScenarios: [ScenarioID],
-        missingAppleScenarios: [ScenarioID]
+        missingAppleScenarios: [ScenarioID],
+        nonComparableScenarios: [ScenarioID] = []
     ) {
         self.differences = differences
         self.missingOSDScenarios = missingOSDScenarios
         self.missingAppleScenarios = missingAppleScenarios
+        self.nonComparableScenarios = nonComparableScenarios
     }
 }
 
@@ -233,6 +251,7 @@ public enum ParityComparator {
     public static func compare(
         osd: RunnerOutput,
         apple: RunnerOutput,
+        expectedDispositions: [ScenarioID: ScenarioDisposition],
         allowedDifferences: [AllowedDifference] = []
     ) throws -> ParityComparison {
         guard osd.manifest.implementation == "openswiftdata" else {
@@ -243,6 +262,9 @@ public enum ParityComparator {
         }
         guard osd.manifest.schemaVersion == apple.manifest.schemaVersion else {
             throw ComparisonError.schemaVersionMismatch(osd.manifest.schemaVersion, apple.manifest.schemaVersion)
+        }
+        guard osd.manifest.schemaVersion == 2 else {
+            throw ComparisonError.unsupportedRunnerSchemaVersion(osd.manifest.schemaVersion)
         }
 
         let osdResults = try uniqueResults(osd.results, implementation: "OSD")
@@ -256,10 +278,35 @@ public enum ParityComparator {
         guard appleIDs == Set(apple.manifest.scenarios) else {
             throw ComparisonError.manifestScenarioMismatch("Apple")
         }
+        guard osdIDs == Set(expectedDispositions.keys) else {
+            throw ComparisonError.dispositionScenarioMismatch("OSD")
+        }
+        guard appleIDs == Set(expectedDispositions.keys) else {
+            throw ComparisonError.dispositionScenarioMismatch("Apple")
+        }
         let sharedIDs = osdIDs.intersection(appleIDs).sorted { $0.description < $1.description }
         var differences: [ObservationDifference] = []
+        var nonComparableScenarios: [ScenarioID] = []
 
         for id in sharedIDs {
+            let osdResult = osdResults[id]!
+            let appleResult = appleResults[id]!
+            let expectedDisposition = expectedDispositions[id]!
+            guard osdResult.disposition == expectedDisposition, appleResult.disposition == expectedDisposition else {
+                throw ComparisonError.dispositionMismatch(id)
+            }
+            guard osdResult.disposition == appleResult.disposition else {
+                throw ComparisonError.dispositionMismatch(id)
+            }
+            if case let .nonComparable(reasonCategory, rationale) = osdResult.disposition {
+                guard !reasonCategory.isEmpty, !rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    osdResult.observations.isEmpty, appleResult.observations.isEmpty
+                else {
+                    throw ComparisonError.invalidNonComparableResult(id)
+                }
+                nonComparableScenarios.append(id)
+                continue
+            }
             let osdObservations = try uniqueObservations(osdResults[id]!.observations, scenarioID: id)
             let appleObservations = try uniqueObservations(appleResults[id]!.observations, scenarioID: id)
             let fields = Set(osdObservations.keys).union(appleObservations.keys).sorted()
@@ -287,7 +334,8 @@ public enum ParityComparator {
         return ParityComparison(
             differences: differences,
             missingOSDScenarios: appleIDs.subtracting(osdIDs).sorted { $0.description < $1.description },
-            missingAppleScenarios: osdIDs.subtracting(appleIDs).sorted { $0.description < $1.description })
+            missingAppleScenarios: osdIDs.subtracting(appleIDs).sorted { $0.description < $1.description },
+            nonComparableScenarios: nonComparableScenarios)
     }
 
     private static func uniqueResults(
@@ -353,8 +401,12 @@ private struct DifferenceKey: Hashable, Comparable, CustomStringConvertible {
 
 public enum ComparisonError: Error, Equatable {
     case schemaVersionMismatch(Int, Int)
+    case unsupportedRunnerSchemaVersion(Int)
     case unexpectedImplementation(String, String)
     case manifestScenarioMismatch(String)
+    case dispositionMismatch(ScenarioID)
+    case dispositionScenarioMismatch(String)
+    case invalidNonComparableResult(ScenarioID)
     case duplicateScenario(String, ScenarioID)
     case duplicateObservation(ScenarioID, String)
     case duplicateAllowlist(String)
@@ -660,6 +712,140 @@ public enum ModelIdentityScenarioCatalog {
     }
 }
 
+public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
+    public let id: ScenarioID
+    public let expectedObservations: [String: ObservedValue]
+
+    public init(id: ScenarioID, expectedObservations: [String: ObservedValue]) {
+        self.id = id
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum ModelConfigurationScenarioCatalog {
+    public static let defaultConfiguration = ModelConfigurationSpecification(
+        id: ScenarioID(
+            suite: "ModelConfigurationParityTests",
+            test: "the default configuration stores default.store in Application Support"),
+        expectedObservations: [
+            "name": .string("default"), "url.fileName": .string("default.store"),
+            "url.parent": .string("Application Support"),
+            "idMatchesURL": .bool(true), "inMemory": .bool(false), "allowsSave": .bool(true),
+            "hasSchema": .bool(false), "hasGroupIdentifier": .bool(false), "hasCloudIdentifier": .bool(false),
+        ])
+
+    public static let inMemoryConfiguration = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "in-memory configurations use dev null"),
+        expectedObservations: [
+            "default.inMemory": .bool(true), "default.url": .string("/dev/null"),
+            "named.inMemory": .bool(true), "named.url": .string("/dev/null"), "named.name": .string("Named"),
+        ])
+
+    public static let namedConfiguration = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "named configurations use the name as the file stem"),
+        expectedObservations: [
+            "named.url.fileName": .string("Named.store"), "nilName.defaults": .string("default"),
+            "named.url.parent": .string("Application Support"),
+            "slashName.fileName": .string("b.store"),
+        ])
+
+    public static let explicitURLConfiguration = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "explicit URLs are kept and the name defaults"),
+        expectedObservations: [
+            "url.kept": .bool(true), "defaultName": .string("default"), "explicitName": .string("X"),
+        ])
+
+    public static let typeScopedSchema = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "type-scoped configurations carry a schema"),
+        expectedObservations: [
+            "typed.entities": .stringSet(["ConfigurationParityThing"]), "typed.name": .string("default"),
+            "typed.inMemory": .bool(true), "mutable.schemaEntityCount": .integer(1),
+        ])
+
+    public static let cloudAndGroupSelections = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported"),
+        expectedObservations: [
+            "selected.cloudIdentifierMatches": .bool(true), "selected.groupIdentifierMatches": .bool(true),
+        ])
+
+    public static let cloudSelectionKind = ScenarioID(
+        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/cloud selection kind")
+    public static let groupSelectionKind = ScenarioID(
+        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/group selection kind")
+    public static let defaultCloudSelectionKind = ScenarioID(
+        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/default cloud selection kind")
+    public static let defaultGroupSelectionKind = ScenarioID(
+        suite: "ModelConfigurationParityTests", test: "cloud and group selections are reported/default group selection kind")
+
+    public static let equalityIncludesCoreFields = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "equality compares name, url, schema, save permission, and storage"),
+        expectedObservations: [
+            "equality.defaults": .bool(true), "equality.memoryDefaults": .bool(true),
+            "equality.nameDifference": .bool(false), "equality.saveDifference": .bool(false),
+            "equality.memoryNameDifference": .bool(false), "equality.sameURLDifferentName": .bool(false),
+            "equality.differentSchemas": .bool(false), "equality.schemaPresence": .bool(false),
+        ])
+
+    public static let cloudAndGroupExcludedFromEquality = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "cloud and group selections do not affect equality"),
+        expectedObservations: ["equality.cloudSelection": .bool(true), "equality.groupSelection": .bool(true)])
+
+    public static let hashIgnoresSchema = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "hashing ignores the schema"),
+        expectedObservations: ["hash.sameConfiguration": .bool(true), "hash.differentSchema": .bool(true)])
+
+    public static let debugDescription = ModelConfigurationSpecification(
+        id: ScenarioID(suite: "ModelConfigurationParityTests", test: "debug description lists every setting"),
+        expectedObservations: [
+            "debug.defaultFieldsPresent": .bool(true), "debug.customFieldsPresent": .bool(true),
+        ])
+
+    public static let all: [ModelConfigurationSpecification] = [
+        defaultConfiguration, inMemoryConfiguration, namedConfiguration, explicitURLConfiguration, typeScopedSchema,
+        cloudAndGroupSelections, equalityIncludesCoreFields, cloudAndGroupExcludedFromEquality, hashIgnoresSchema,
+        debugDescription,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+
+    public static var nonComparableSelectionIDs: [ScenarioID] {
+        [cloudSelectionKind, groupSelectionKind, defaultCloudSelectionKind, defaultGroupSelectionKind]
+    }
+
+    public static var nonComparableSelectionIDStrings: [String] {
+        nonComparableSelectionIDs.map(\.description)
+    }
+}
+
+public enum ModelConfigurationContainerScenarioCatalog {
+    public static let invalidName = ModelConfigurationSpecification(
+        id: ScenarioID(
+            suite: "ModelConfigurationContainerParityTests", test: "containers reject configurations with invalid names"),
+        expectedObservations: ["invalidName.containerRejected": .bool(true)])
+
+    public static let independentInMemoryStores = ModelConfigurationSpecification(
+        id: ScenarioID(
+            suite: "ModelConfigurationContainerParityTests", test: "in-memory stores with the same name are independent"),
+        expectedObservations: ["secondStore.fetchCount": .integer(0)])
+
+    public static let nestedFileStore = ModelConfigurationSpecification(
+        id: ScenarioID(
+            suite: "ModelConfigurationContainerParityTests", test: "file stores create missing parent directories"),
+        expectedObservations: ["saved.fileExists": .bool(true), "saved.fetchNames": .array([.string("x")])])
+
+    public static let all = [invalidName, independentInMemoryStores, nestedFileStore]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
 public enum ScenarioExpectationValidator {
     public static func validate(_ result: ScenarioResult, against specification: PredicateMembershipSpecification) -> Bool {
         guard result.id == specification.id else { return false }
@@ -707,10 +893,91 @@ public struct CoverageMatrixEntry: Codable, Equatable, Sendable {
     }
 }
 
+public struct CoverageValidationReport: Codable, Equatable, Sendable {
+    public let discoveredCaseCount: Int
+    public let coverageValid: Bool
+    public let mappedSourceCaseCount: Int
+    public let declaredComparedSourceCaseCount: Int
+    public let declaredDivergentSourceCaseCount: Int
+    public let declaredNonComparableSourceCaseCount: Int
+    public let declaredComparedScenarioCount: Int
+    public let declaredDivergentScenarioCount: Int
+    public let declaredNonComparableScenarioCount: Int
+    public let discoveredCases: [String]
+    public let pendingCases: [String]
+    public let validationIssues: [String]
+
+    public init(
+        discoveredCaseCount: Int,
+        coverageValid: Bool,
+        mappedSourceCaseCount: Int,
+        declaredComparedSourceCaseCount: Int,
+        declaredDivergentSourceCaseCount: Int,
+        declaredNonComparableSourceCaseCount: Int,
+        declaredComparedScenarioCount: Int,
+        declaredDivergentScenarioCount: Int,
+        declaredNonComparableScenarioCount: Int,
+        discoveredCases: [String],
+        pendingCases: [String],
+        validationIssues: [String]
+    ) {
+        self.discoveredCaseCount = discoveredCaseCount
+        self.coverageValid = coverageValid
+        self.mappedSourceCaseCount = mappedSourceCaseCount
+        self.declaredComparedSourceCaseCount = declaredComparedSourceCaseCount
+        self.declaredDivergentSourceCaseCount = declaredDivergentSourceCaseCount
+        self.declaredNonComparableSourceCaseCount = declaredNonComparableSourceCaseCount
+        self.declaredComparedScenarioCount = declaredComparedScenarioCount
+        self.declaredDivergentScenarioCount = declaredDivergentScenarioCount
+        self.declaredNonComparableScenarioCount = declaredNonComparableScenarioCount
+        self.discoveredCases = discoveredCases
+        self.pendingCases = pendingCases
+        self.validationIssues = validationIssues
+    }
+
+    public var hasCompleteCoverage: Bool {
+        coverageValid && validationIssues.isEmpty && pendingCases.isEmpty
+    }
+
+    public func isConsistent(with entries: [CoverageMatrixEntry]) -> Bool {
+        let discovered = Set(discoveredCases)
+        let mapped = Set(entries.map(\.sourceCase))
+        let pending = discovered.subtracting(mapped).sorted()
+        let sourceCounts = CoverageMatrixValidator.sourceCaseCounts(in: entries)
+        let outcomeCounts = CoverageMatrixValidator.outcomeCounts(in: entries)
+        return discovered.count == discoveredCases.count
+            && discoveredCaseCount == discoveredCases.count
+            && pendingCases == pending
+            && mappedSourceCaseCount == discovered.intersection(mapped).count
+            && declaredComparedSourceCaseCount == sourceCounts["compared", default: 0]
+            && declaredDivergentSourceCaseCount == sourceCounts["divergent", default: 0]
+            && declaredNonComparableSourceCaseCount == sourceCounts["non-comparable", default: 0]
+            && declaredComparedScenarioCount == outcomeCounts["compared", default: 0]
+            && declaredDivergentScenarioCount == outcomeCounts["divergent", default: 0]
+            && declaredNonComparableScenarioCount == outcomeCounts["non-comparable", default: 0]
+    }
+
+    public func hasValidMatrix(
+        schemaVersion: Int = CoverageMatrixValidator.supportedSchemaVersion,
+        entries: [CoverageMatrixEntry],
+        registry: [String: ScenarioContract]
+    ) -> Bool {
+        guard isConsistent(with: entries) else { return false }
+        let structuralIssues = CoverageMatrixValidator.validate(
+            schemaVersion: schemaVersion,
+            discovered: Set(entries.map(\.sourceCase)),
+            entries: entries,
+            registry: registry)
+        return structuralIssues.isEmpty
+            && coverageValid
+            && validationIssues == structuralIssues
+    }
+}
+
 public enum CoverageMatrixValidator {
     public static let supportedSchemaVersion = 1
     public static let permittedStatuses: Set<String> = ["compared", "divergent", "non-comparable"]
-    private static let permittedReasons: Set<String> = [
+    public static let permittedReasons: Set<String> = [
         "private-api", "unsupported-platform-or-version", "nondeterministic-apple-behavior", "shim-only-api",
     ]
 
@@ -742,6 +1009,11 @@ public enum CoverageMatrixValidator {
             }
             guard entry.scenarioIDs.count == Set(entry.scenarioIDs).count else {
                 errors.append("\(entry.sourceCase): scenarioIDs must be unique")
+                continue
+            }
+            let malformedScenarioIDs = entry.scenarioIDs.filter { ScenarioID(description: $0) == nil }
+            if !malformedScenarioIDs.isEmpty {
+                errors.append("\(entry.sourceCase): contains a malformed scenario ID")
                 continue
             }
             guard Set(entry.outcomes.keys) == Set(entry.scenarioIDs) else {
@@ -814,7 +1086,9 @@ public extension ParityScenarioCatalog {
             + Array(SchemaIntrospectionScenarioCatalog.contractsByID.values)
             + Array(SchemaModelTypesScenarioCatalog.contractsByID.values)
             + Array(StoreIdentifierScenarioCatalog.contractsByID.values)
-            + Array(ModelIdentityScenarioCatalog.contractsByID.values))
+            + Array(ModelIdentityScenarioCatalog.contractsByID.values)
+            + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
+            + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

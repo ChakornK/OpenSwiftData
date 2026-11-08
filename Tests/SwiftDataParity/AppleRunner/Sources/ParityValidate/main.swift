@@ -17,9 +17,9 @@ struct ParityValidate {
         let discovered = try SourceCaseDiscovery.discover(in: sourceDirectory)
         let matrix = try JSONDecoder().decode(CoverageMatrix.self, from: Data(contentsOf: matrixURL))
         let registry = ParityScenarioCatalog.allContractsByID
-        let problems = CoverageMatrixValidator.validate(
+        let structuralProblems = CoverageMatrixValidator.validate(
             schemaVersion: matrix.schemaVersion,
-            discovered: discovered,
+            discovered: Set(matrix.cases.map(\.sourceCase)),
             entries: matrix.cases,
             registry: registry)
         let reportURL = repositoryRoot.appending(path: "parity-coverage-report.json")
@@ -30,7 +30,7 @@ struct ParityValidate {
         let scenarioOutcomeCounts = CoverageMatrixValidator.outcomeCounts(in: matrix.cases)
         let report = CoverageValidationReport(
             discoveredCaseCount: discovered.count,
-            coverageValid: problems.isEmpty,
+            coverageValid: structuralProblems.isEmpty,
             mappedSourceCaseCount: mappedSourceCaseCount,
             declaredComparedSourceCaseCount: sourceCaseCounts["compared", default: 0],
             declaredDivergentSourceCaseCount: sourceCaseCounts["divergent", default: 0],
@@ -38,14 +38,19 @@ struct ParityValidate {
             declaredComparedScenarioCount: scenarioOutcomeCounts["compared", default: 0],
             declaredDivergentScenarioCount: scenarioOutcomeCounts["divergent", default: 0],
             declaredNonComparableScenarioCount: scenarioOutcomeCounts["non-comparable", default: 0],
+            discoveredCases: discovered.sorted(),
             pendingCases: pendingCases,
-            validationIssues: problems)
-        try CanonicalJSON.encode(report).write(to: reportURL, options: .atomic)
-        for problem in problems.prefix(20) { FileHandle.standardError.write(Data("\(problem)\n".utf8)) }
-        if problems.count > 20 {
-            FileHandle.standardError.write(Data("... and \(problems.count - 20) additional coverage issue(s); see \(reportURL.path)\n".utf8))
+            validationIssues: structuralProblems)
+        guard report.isConsistent(with: matrix.cases) else {
+            throw ValidationError.inconsistentCoverageReport
         }
-        guard problems.isEmpty else { Foundation.exit(EXIT_FAILURE) }
+        try CanonicalJSON.encode(report).write(to: reportURL, options: .atomic)
+        let coverageProblems = structuralProblems + pendingCases.map { "\($0): expected exactly one matrix record" }
+        for problem in coverageProblems.prefix(20) { FileHandle.standardError.write(Data("\(problem)\n".utf8)) }
+        if coverageProblems.count > 20 {
+            FileHandle.standardError.write(Data("... and \(coverageProblems.count - 20) additional coverage issue(s); see \(reportURL.path)\n".utf8))
+        }
+        guard coverageProblems.isEmpty else { Foundation.exit(EXIT_FAILURE) }
         print("Validated \(discovered.count) source test case(s).")
     }
 
@@ -63,20 +68,6 @@ struct ParityValidate {
         }
         throw ValidationError.repositoryRootNotFound
     }
-}
-
-private struct CoverageValidationReport: Codable {
-    let discoveredCaseCount: Int
-    let coverageValid: Bool
-    let mappedSourceCaseCount: Int
-    let declaredComparedSourceCaseCount: Int
-    let declaredDivergentSourceCaseCount: Int
-    let declaredNonComparableSourceCaseCount: Int
-    let declaredComparedScenarioCount: Int
-    let declaredDivergentScenarioCount: Int
-    let declaredNonComparableScenarioCount: Int
-    let pendingCases: [String]
-    let validationIssues: [String]
 }
 
 private enum SourceCaseDiscovery {
@@ -153,4 +144,5 @@ private enum DiscoveryFailure: Error, CustomStringConvertible {
 
 private enum ValidationError: Error {
     case repositoryRootNotFound
+    case inconsistentCoverageReport
 }

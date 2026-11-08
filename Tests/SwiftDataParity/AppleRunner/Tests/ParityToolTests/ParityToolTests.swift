@@ -9,7 +9,7 @@ import Testing
             id: id, observations: [ParityObservation(step: 0, field: "names", value: .array([.string("a")]))])
         let osd = makeOutput("openswiftdata", [result])
         let apple = makeOutput("apple-swiftdata", [result])
-        let comparison = try ParityComparator.compare(osd: osd, apple: apple)
+        let comparison = try compare(osd: osd, apple: apple)
         #expect(!comparison.hasUnexpectedDifferences)
         #expect(comparison.differences.isEmpty)
     }
@@ -18,16 +18,16 @@ import Testing
         let id = ParityScenarioCatalog.predicateMembership.id
         let osd = makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])])
         let apple = makeOutput("apple-swiftdata", [])
-        let comparison = try ParityComparator.compare(osd: osd, apple: apple)
-        #expect(comparison.missingAppleScenarios == [id])
-        #expect(comparison.hasUnexpectedDifferences)
+        #expect(throws: ComparisonError.dispositionScenarioMismatch("Apple")) {
+            try compare(osd: osd, apple: apple)
+        }
     }
 
     @Test func comparatorRejectsOSDArtifactMasqueradingAsApple() throws {
         let id = ParityScenarioCatalog.predicateMembership.id
         let output = makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])])
         #expect(throws: ComparisonError.unexpectedImplementation("apple", "openswiftdata")) {
-            try ParityComparator.compare(osd: output, apple: output)
+            try compare(osd: output, apple: output)
         }
     }
 
@@ -38,7 +38,7 @@ import Testing
             results: [ScenarioResult(id: id, observations: [])])
         let apple = makeOutput("apple-swiftdata", [])
         #expect(throws: ComparisonError.manifestScenarioMismatch("OSD")) {
-            try ParityComparator.compare(osd: osd, apple: apple)
+            try compare(osd: osd, apple: apple)
         }
     }
 
@@ -59,7 +59,7 @@ import Testing
             issueURL: URL(string: "https://example.invalid/issues/1")!,
             expiration: "2099-01-01")]
 
-        let comparison = try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: allowlist)
+        let comparison = try compare(osd: osd, apple: apple, allowedDifferences: allowlist)
         #expect(!comparison.hasUnexpectedDifferences)
         #expect(comparison.differences.map(\.isAllowed) == [true])
 
@@ -72,7 +72,7 @@ import Testing
             issueURL: URL(string: "https://example.invalid/issues/2")!,
             expiration: "2099-01-01")]
         #expect(throws: ComparisonError.unreferencedAllowlist(["\(id)#unused"])) {
-            try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: stale)
+            try compare(osd: osd, apple: apple, allowedDifferences: stale)
         }
     }
 
@@ -93,7 +93,7 @@ import Testing
             issueURL: URL(string: "https://example.invalid/issues/3")!,
             expiration: "2000-01-01")]
         #expect(throws: ComparisonError.expiredAllowlist("\(id)#names", "2000-01-01")) {
-            try ParityComparator.compare(osd: osd, apple: apple, allowedDifferences: expired)
+            try compare(osd: osd, apple: apple, allowedDifferences: expired)
         }
     }
 
@@ -101,5 +101,19 @@ import Testing
         RunnerOutput(
             manifest: RunnerManifest(implementation: implementation, gitSHA: "fixture", scenarios: results.map(\.id)),
             results: results)
+    }
+
+    private func compare(
+        osd: RunnerOutput,
+        apple: RunnerOutput,
+        expectedDispositions explicit: [ScenarioID: ScenarioDisposition] = [:],
+        allowedDifferences: [AllowedDifference] = []
+    ) throws -> ParityComparison {
+        let ids = Set(osd.results.map(\.id)).union(apple.results.map(\.id))
+        let dispositions = Dictionary(uniqueKeysWithValues: ids.map { id in
+            (id, explicit[id] ?? .observed)
+        })
+        return try ParityComparator.compare(
+            osd: osd, apple: apple, expectedDispositions: dispositions, allowedDifferences: allowedDifferences)
     }
 }

@@ -122,8 +122,11 @@ public final class ModelContainer: Sendable {
                 let propertyType = type(of: keyPath).valueType
                 guard let compositeType = propertyType as? any FlattenedCompositeMetadataProviding.Type else { continue }
                 if runtimeCompositeTypes[entityName] == nil { runtimeCompositeTypes[entityName] = [:] }
-                runtimeCompositeTypes[entityName]?[metadata.name] =
-                    Dictionary(uniqueKeysWithValues: compositeType.flattenedComponentTypesForSchema)
+                var componentTypes: [String: Any.Type] = [:]
+                for (componentName, componentType) in compositeType.flattenedComponentTypesForSchema {
+                    componentTypes[componentName] = componentType
+                }
+                runtimeCompositeTypes[entityName]?[metadata.name] = componentTypes
             }
         }
         let entities = try types.map { modelType in

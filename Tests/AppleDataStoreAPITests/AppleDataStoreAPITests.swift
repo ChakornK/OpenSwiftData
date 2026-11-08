@@ -7,6 +7,38 @@ final class AppleStoreFixture {
     init(title: String) { self.title = title }
 }
 
+@Model
+private final class AppleSnapshotRelatedFixture {
+    var value: Int
+    var owners: [AppleSnapshotOwnerFixture] = []
+    init(value: Int) { self.value = value }
+}
+
+@Model
+private final class AppleSnapshotOwnerFixture {
+    var title: String
+    var related: AppleSnapshotRelatedFixture?
+    init(title: String, related: AppleSnapshotRelatedFixture? = nil) {
+        self.title = title
+        self.related = related
+        related?.owners.append(self)
+    }
+}
+
+private struct AppleSnapshotComposite: Codable, Sendable, FlattenableComposite {
+    let count: Int
+    static var flattenedComponents: [FlattenedComponent<Self>] {
+        [FlattenedComponent("count", keyPath: \.count, set: { count, _ in Self(count: count) })]
+    }
+    static func emptyFlattenedValue() throws -> Self { Self(count: 0) }
+}
+
+@Model
+private final class AppleSnapshotCompositeFixture {
+    @Attribute(.flattened) var composite: AppleSnapshotComposite
+    init(composite: AppleSnapshotComposite) { self.composite = composite }
+}
+
 private struct FixtureSnapshot: AppleDataStoreSnapshot {
     let persistentIdentifier: PersistentIdentifier
     let title: String
@@ -82,6 +114,38 @@ private struct FixtureLegacyBackend: DataStore {
 
 @Suite
 struct AppleDataStoreAPITests {
+    @MainActor
+    @Test
+    func testDefaultSnapshotCaptureIncludesScalarAndRelatedValues() throws {
+        let related = AppleSnapshotRelatedFixture(value: 7)
+        let owner = AppleSnapshotOwnerFixture(title: "snapshot", related: related)
+        let schema = try ModelContainer.inferredSchema(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let snapshots = try AppleDefaultSnapshot.capture(from: owner, in: schema)
+        let ownerSnapshot = try #require(snapshots.first { $0.entityName == "AppleSnapshotOwnerFixture" })
+        let relatedSnapshot = try #require(snapshots.first { $0.entityName == "AppleSnapshotRelatedFixture" })
+
+        #expect(ownerSnapshot.values["title"] == .text("snapshot"))
+        #expect(ownerSnapshot.relationships["related"] == [related.persistentModelID])
+        #expect(relatedSnapshot.values["value"] == .int(7))
+        #expect(relatedSnapshot.relationships["owners"] == [owner.persistentModelID])
+        #expect(snapshots.count == 2)
+
+        let remappedOwner = PersistentIdentifier(
+            storeIdentifier: "snapshot.store", entityName: owner.persistentModelID.entityName, primaryKey: 30)
+        let remappedRelated = PersistentIdentifier(
+            storeIdentifier: "snapshot.store", entityName: related.persistentModelID.entityName, primaryKey: 31)
+        let remappings = [owner.persistentModelID: remappedOwner, related.persistentModelID: remappedRelated]
+        let copied = ownerSnapshot.copy(persistentIdentifier: remappedOwner, remappedIdentifiers: remappings)
+        #expect(copied.relationships["related"] == [remappedRelated])
+
+        let compositeModel = AppleSnapshotCompositeFixture(composite: AppleSnapshotComposite(count: 42))
+        let compositeSchema = try ModelContainer.inferredSchema(for: [AppleSnapshotCompositeFixture.self])
+        let compositeSnapshots = try AppleDefaultSnapshot.capture(from: compositeModel, in: compositeSchema)
+        let compositeSnapshot = try #require(compositeSnapshots.first)
+        #expect(compositeSnapshot.values["composite_count"] == .int(42))
+    }
+
     @Test
     func testAppleStoreConformanceCompiles() throws {
         let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])

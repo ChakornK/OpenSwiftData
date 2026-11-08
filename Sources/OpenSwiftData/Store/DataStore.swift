@@ -210,7 +210,7 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
         self.relationships = relationships
     }
 
-    /// Creates an identity-only snapshot because backing data does not expose model values.
+    /// Creates an identity-only snapshot because an untyped backing interface cannot expose registered model adapters.
     @available(*, deprecated, message: "Captures identity only; provide values explicitly until Schema API parity is implemented.")
     public init(
         from backingData: any BackingData,
@@ -235,6 +235,49 @@ public struct AppleDefaultSnapshot: AppleDataStoreSnapshot, Equatable {
             relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
     }
 
+}
+
+public extension AppleDefaultSnapshot {
+    /// Creates snapshots for a model and every reachable related model.
+    ///
+    /// Scalars use generated persistence adapters. Unsupported encodings throw instead of producing partial snapshots.
+    static func capture(from model: any PersistentModel, in schema: SchemaDescriptor) throws -> [Self] {
+        var snapshots: [PersistentIdentifier: Self] = [:]
+        var pending: [any PersistentModel] = [model]
+        while let current = pending.popLast() {
+            let identifier = current.persistentModelID
+            guard snapshots[identifier] == nil else { continue }
+            let entityName = identifier.entityName
+            guard let entity = schema.entity(forName: entityName) else {
+                throw SwiftDataError.unsupportedStore("Snapshot entity '\(entityName)' is not in the schema.")
+            }
+            var values: [String: StoredValue] = [:]
+            let propertyAdapters = type(of: current).erasedPersistenceAdapters()
+            for attribute in entity.attributes where !attribute.options.contains(.flattened) {
+                guard let adapter = propertyAdapters.first(where: { $0.name == attribute.name }) else { continue }
+                values[attribute.name] = try adapter.encoded(current)
+            }
+            for adapter in type(of: current).flattenedPropertyAdapters() {
+                values[adapter.columnName] = try adapter.encoded(current)
+            }
+            var relationships: [String: [PersistentIdentifier]] = [:]
+            if let modelType = type(of: current) as? any RelationshipModel.Type {
+                for adapter in modelType.relationshipAdapterCandidatesForMutation() {
+                    guard entity.relationships.contains(where: { $0.name == adapter.name }),
+                        let endpoints = adapter.read(current)
+                    else { continue }
+                    relationships[adapter.name] = endpoints.map(\.persistentModelID)
+                    pending.append(contentsOf: endpoints)
+                }
+            }
+            snapshots[identifier] = Self(
+                persistentIdentifier: identifier,
+                entityName: entityName,
+                values: values,
+                relationships: relationships)
+        }
+        return snapshots.values.sorted { $0.persistentIdentifier < $1.persistentIdentifier }
+    }
 }
 
 extension AppleDefaultSnapshot {

@@ -115,6 +115,11 @@ public protocol AnyFlattenedPropertyAdapter {
     func assign(_ composite: Any, to model: Any) throws
 }
 
+public extension AnyFlattenedPropertyAdapter {
+    /// Encodes this component from a persistent model.
+    func encoded(_ model: any PersistentModel) throws -> StoredValue { try encoded(model as Any) }
+}
+
 /// A typed adapter that persists one scalar component of a composite property.
 public struct FlattenedPropertyAdapter<Model: PersistentModel, Composite: FlattenableComposite>:
     AnyFlattenedPropertyAdapter

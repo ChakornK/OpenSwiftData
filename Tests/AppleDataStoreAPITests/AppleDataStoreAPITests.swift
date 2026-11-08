@@ -124,43 +124,54 @@ private struct CanonicalFixtureConfiguration: DataStoreConfiguration {
         self.schema = schema
     }
 
-    func makeSnapshotBridge(for storeType: any DataStore.Type, schema: Schema) throws -> DataStoreSnapshotBridgeOperations {
-        _ = storeType
-        return DataStoreSnapshotBridgeOperations(
-            encode: { snapshot in
-                try CanonicalFixtureSnapshot(openSwiftDataSnapshot: snapshot, in: schema)
-            },
-            decode: { snapshot in
-                guard let snapshot = snapshot as? CanonicalFixtureSnapshot else {
-                    throw SwiftDataError.unsupportedStore("Canonical fixture snapshot type mismatch.")
-                }
-                return try snapshot.makeOpenSwiftDataSnapshot(in: schema)
-            })
-    }
 }
 
-private struct CanonicalFixtureSnapshot: DataStoreSnapshot, Equatable {
+private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equatable {
     let persistentIdentifier: PersistentIdentifier
     let entityName: String
-    let values: [String: StoredValue]
+    let title: String?
+    let value: Int64?
     let relationships: [String: [PersistentIdentifier]]
+
+    var persistedValues: [String: DataStoreSnapshotValue] {
+        var values: [String: DataStoreSnapshotValue] = [:]
+        if let title { values["title"] = .text(title) }
+        if let value { values["value"] = .int(value) }
+        return values
+    }
 
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
-        values: [String: StoredValue],
+        title: String? = nil,
+        value: Int64? = nil,
         relationships: [String: [PersistentIdentifier]] = [:]
     ) {
         self.persistentIdentifier = persistentIdentifier
         self.entityName = entityName
-        self.values = values
+        self.title = title
+        self.value = value
         self.relationships = relationships
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        persistedValues: [String: DataStoreSnapshotValue],
+        relationships: [String: [PersistentIdentifier]]
+    ) {
+        self.init(
+            persistentIdentifier: persistentIdentifier,
+            entityName: entityName,
+            title: persistedValues["title"].flatMap { if case let .text(value) = $0 { value } else { nil } },
+            value: persistedValues["value"].flatMap { if case let .int(value) = $0 { value } else { nil } },
+            relationships: relationships)
     }
 
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
         _ = relatedBackingDatas
         let identifier = backingData.persistentModelID
-        self.init(persistentIdentifier: identifier, entityName: identifier.entityName, values: [:])
+        self.init(persistentIdentifier: identifier, entityName: identifier.entityName)
     }
 
     func copy(
@@ -170,23 +181,9 @@ private struct CanonicalFixtureSnapshot: DataStoreSnapshot, Equatable {
         Self(
             persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
             entityName: entityName,
-            values: values,
+            title: title,
+            value: value,
             relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
-    }
-
-}
-
-extension CanonicalFixtureSnapshot {
-    func makeOpenSwiftDataSnapshot(in schema: Schema) throws -> OpenSwiftDataDataStoreSnapshot {
-        OpenSwiftDataDataStoreSnapshot(
-            persistentIdentifier: persistentIdentifier, entityName: entityName, values: values,
-            relationships: relationships)
-    }
-
-    init(openSwiftDataSnapshot snapshot: OpenSwiftDataDataStoreSnapshot, in schema: Schema) throws {
-        self.init(
-            persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
-            values: snapshot.values, relationships: snapshot.relationships)
     }
 
 }

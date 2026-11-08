@@ -108,10 +108,14 @@ private struct ProbeSnapshot: DataStoreSnapshot {
     func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: DataStoreSnapshotCodingKey.self)
         try values.encode(persistentIdentifier, forKey: .persistentIdentifier)
-        try values.encodeIfPresent(title, forKey: .modeledProperty("title"))
-        try values.encodeIfPresent(count, forKey: .modeledProperty("count"))
-        try values.encodeIfPresent(related, forKey: .modeledProperty("related"))
-        try values.encode(records, forKey: .modeledProperty("records"))
+        if let title {
+            try values.encode(title, forKey: .modeledProperty("title"))
+            try values.encodeIfPresent(related, forKey: .modeledProperty("related"))
+        }
+        if let count {
+            try values.encode(count, forKey: .modeledProperty("count"))
+            try values.encode(records, forKey: .modeledProperty("records"))
+        }
     }
 }
 

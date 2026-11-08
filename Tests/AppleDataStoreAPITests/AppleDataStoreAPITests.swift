@@ -123,44 +123,310 @@ private struct CanonicalFixtureConfiguration: DataStoreConfiguration {
         self.name = name
         self.schema = schema
     }
+
+}
+
+private struct CanonicalFixtureSnapshot: DataStoreSnapshotValueProviding, Equatable {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let title: String?
+    let value: Int64?
+    let relationships: [String: [PersistentIdentifier]]
+
+    var persistedValues: [String: DataStoreSnapshotValue] {
+        var values: [String: DataStoreSnapshotValue] = [:]
+        if let title { values["title"] = .text(title) }
+        if let value { values["value"] = .int(value) }
+        return values
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        title: String? = nil,
+        value: Int64? = nil,
+        relationships: [String: [PersistentIdentifier]] = [:]
+    ) {
+        self.persistentIdentifier = persistentIdentifier
+        self.entityName = entityName
+        self.title = title
+        self.value = value
+        self.relationships = relationships
+    }
+
+    init(
+        persistentIdentifier: PersistentIdentifier,
+        entityName: String,
+        persistedValues: [String: DataStoreSnapshotValue],
+        relationships: [String: [PersistentIdentifier]]
+    ) {
+        self.init(
+            persistentIdentifier: persistentIdentifier,
+            entityName: entityName,
+            title: persistedValues["title"].flatMap { if case let .text(value) = $0 { value } else { nil } },
+            value: persistedValues["value"].flatMap { if case let .int(value) = $0 { value } else { nil } },
+            relationships: relationships)
+    }
+
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        let identifier = backingData.persistentModelID
+        self.init(persistentIdentifier: identifier, entityName: identifier.entityName)
+    }
+
+    func copy(
+        persistentIdentifier: PersistentIdentifier,
+        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?
+    ) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            entityName: entityName,
+            title: title,
+            value: value,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+
+}
+
+private struct CanonicalSourceShapeSnapshot: DataStoreSnapshot {
+    let persistentIdentifier: PersistentIdentifier
+    let entityName: String
+    let relationships: [String: [PersistentIdentifier]]
+    init(persistentIdentifier: PersistentIdentifier, relationships: [String: [PersistentIdentifier]] = [:]) {
+        self.persistentIdentifier = persistentIdentifier
+        entityName = persistentIdentifier.entityName
+        self.relationships = relationships
+    }
+    init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData]) {
+        _ = relatedBackingDatas
+        self.init(persistentIdentifier: backingData.persistentModelID)
+    }
+    func copy(persistentIdentifier: PersistentIdentifier, remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]?) -> Self {
+        Self(
+            persistentIdentifier: remappedIdentifiers?[self.persistentIdentifier] ?? persistentIdentifier,
+            relationships: relationships.mapValues { $0.map { remappedIdentifiers?[$0] ?? $0 } })
+    }
+}
+
+private struct UnbridgedCanonicalConfiguration: DataStoreConfiguration {
+    typealias StoreType = UnbridgedCanonicalStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
+    typealias Configuration = UnbridgedCanonicalConfiguration
+    typealias Snapshot = CanonicalSourceShapeSnapshot
+    let configuration: UnbridgedCanonicalConfiguration
+    let identifier = "unbridged.canonical"
+    var schema: Schema { configuration.schema ?? Schema() }
+    required init(_ configuration: UnbridgedCanonicalConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+    }
+    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot> {
+        DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [])
+    }
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        DataStoreSaveChangesResult(for: identifier)
+    }
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
+}
+
+private final class CanonicalStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [PersistentIdentifier: CanonicalFixtureSnapshot] = [:]
+    private var failsNextSave = false
+
+    func failNextSave() {
+        lock.lock(); defer { lock.unlock() }
+        failsNextSave = true
+    }
+
+    func snapshots() -> [CanonicalFixtureSnapshot] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(values.values)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) -> CanonicalFixtureSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return values[identifier]
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        if failsNextSave {
+            failsNextSave = false
+            throw SwiftDataError.unsupportedStore("injected canonical store save failure")
+        }
+        var candidate = values
+        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
+        var insertedMappings: [(CanonicalFixtureSnapshot, PersistentIdentifier)] = []
+        for snapshot in request.inserted {
+            let identifier = snapshot.persistentIdentifier
+            let permanent = identifier.isTemporary
+                ? PersistentIdentifier(storeIdentifier: storeIdentifier, entityName: identifier.entityName, primaryKey: nextKey)
+                : identifier
+            if identifier.isTemporary { nextKey += 1; remappings[identifier] = permanent }
+            insertedMappings.append((snapshot, permanent))
+        }
+        for (source, permanent) in insertedMappings {
+            let remapped = source.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
+            candidate[remapped.persistentIdentifier] = remapped
+        }
+        for snapshot in request.updated { candidate[snapshot.persistentIdentifier] = snapshot }
+        values = candidate
+        return DataStoreSaveChangesResult(for: storeIdentifier, remappedIdentifiers: remappings)
+    }
 }
 
 private final class CanonicalFixtureStore: DataStore, @unchecked Sendable {
     typealias Configuration = CanonicalFixtureConfiguration
-    typealias Snapshot = AppleDefaultSnapshot
+    typealias Snapshot = CanonicalFixtureSnapshot
     let configuration: CanonicalFixtureConfiguration
     let identifier = "canonical.fixture"
     var schema: Schema { configuration.schema ?? Schema() }
     var supportsInheritance: Bool { true }
-    private var snapshots: [PersistentIdentifier: AppleDefaultSnapshot] = [:]
+    let state: CanonicalStoreState
 
     required init(_ configuration: CanonicalFixtureConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
         self.configuration = configuration
+        state = Self.stateForConfiguration(configuration)
     }
 
     func fetch<Model: PersistentModel>(
         _ request: DataStoreFetchRequest<Model>
-    ) throws -> DataStoreFetchResult<Model, AppleDefaultSnapshot> {
-        let rows = snapshots.values.filter { $0.entityName == Schema.entityName(for: Model.self) }
+    ) throws -> DataStoreFetchResult<Model, CanonicalFixtureSnapshot> {
+        let rows = state.snapshots().filter { $0.entityName == Schema.entityName(for: Model.self) }
         return DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: Array(rows))
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>) throws -> DataStoreSaveChangesResult {
-        for identifier in request.deleted { snapshots.removeValue(forKey: identifier) }
-        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
-        for snapshot in request.inserted {
-            let permanent = PersistentIdentifier(
-                storeIdentifier: identifier,
-                entityName: snapshot.persistentIdentifier.entityName,
-                primaryKey: Int64(snapshots.count + 1))
-            remappings[snapshot.persistentIdentifier] = permanent
-            snapshots[permanent] = snapshot.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
-        }
-        for snapshot in request.updated { snapshots[snapshot.persistentIdentifier] = snapshot }
-        return DataStoreSaveChangesResult(for: identifier, remappedIdentifiers: remappings)
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>) throws -> DataStoreSaveChangesResult {
+        try state.save(request, storeIdentifier: identifier)
     }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> AppleDefaultSnapshot? { snapshots[identifier] }
+    func snapshot(for identifier: PersistentIdentifier) throws -> CanonicalFixtureSnapshot? { state.snapshot(for: identifier) }
+
+    private static let states = CanonicalStoreStates()
+    static func failNextSave(for name: String) { states.state(for: name).failNextSave() }
+    private static func stateForConfiguration(_ configuration: CanonicalFixtureConfiguration) -> CanonicalStoreState {
+        states.state(for: configuration.name)
+    }
+}
+
+private final class CanonicalStoreStates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String: CanonicalStoreState] = [:]
+    func state(for name: String) -> CanonicalStoreState {
+        lock.lock(); defer { lock.unlock() }
+        if let existing = storage[name] { return existing }
+        let state = CanonicalStoreState()
+        storage[name] = state
+        return state
+    }
+}
+
+private struct DefaultSnapshotConfiguration: DataStoreConfiguration {
+    typealias StoreType = DefaultSnapshotStore
+    let name: String
+    var schema: Schema?
+}
+
+private final class DefaultSnapshotStore: DataStore, @unchecked Sendable {
+    typealias Configuration = DefaultSnapshotConfiguration
+    typealias Snapshot = AppleDefaultSnapshot
+    let configuration: Configuration
+    let identifier: String
+    var schema: Schema { configuration.schema ?? Schema() }
+    private let state: CanonicalDefaultStoreState
+
+    required init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        state = CanonicalDefaultStoreStates.shared.state(for: configuration.name)
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: DataStoreFetchRequest<Model>
+    ) throws -> DataStoreFetchResult<Model, Snapshot> {
+        state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+        try state.save(request, storeIdentifier: identifier)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { state.snapshot(for: identifier) }
+
+    static func failNextSave(for name: String) { CanonicalDefaultStoreStates.shared.state(for: name).failNextSave() }
+}
+
+private final class CanonicalDefaultStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [PersistentIdentifier: AppleDefaultSnapshot] = [:]
+    private var failsNextSave = false
+
+    func failNextSave() {
+        lock.lock(); defer { lock.unlock() }
+        failsNextSave = true
+    }
+
+    func fetch<Model: PersistentModel>(
+        entityName: String, descriptor: FetchDescriptor<Model>
+    ) -> DataStoreFetchResult<Model, AppleDefaultSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        return DataStoreFetchResult(
+            descriptor: descriptor,
+            fetchedSnapshots: snapshots.values.filter { $0.entityName == entityName },
+            relatedSnapshots: snapshots)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) -> AppleDefaultSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return snapshots[identifier]
+    }
+
+    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        if failsNextSave {
+            failsNextSave = false
+            throw SwiftDataError.unsupportedStore("injected canonical default snapshot save failure")
+        }
+        var candidate = snapshots
+        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
+        for snapshot in request.inserted {
+            if snapshot.persistentIdentifier.isTemporary {
+                remappings[snapshot.persistentIdentifier] = PersistentIdentifier(
+                    storeIdentifier: storeIdentifier, entityName: snapshot.entityName, primaryKey: nextKey)
+                nextKey += 1
+            }
+        }
+        for snapshot in request.inserted {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            let copied = snapshot.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
+            candidate[copied.persistentIdentifier] = copied
+        }
+        for snapshot in request.updated { candidate[snapshot.persistentIdentifier] = snapshot }
+        snapshots = candidate
+        return DataStoreSaveChangesResult(for: storeIdentifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class CanonicalDefaultStoreStates: @unchecked Sendable {
+    static let shared = CanonicalDefaultStoreStates()
+    private let lock = NSLock()
+    private var states: [String: CanonicalDefaultStoreState] = [:]
+
+    func state(for name: String) -> CanonicalDefaultStoreState {
+        lock.lock(); defer { lock.unlock() }
+        if let state = states[name] { return state }
+        let state = CanonicalDefaultStoreState()
+        states[name] = state
+        return state
+    }
 }
 
 @Suite
@@ -172,6 +438,30 @@ struct AppleDataStoreAPITests {
         let store = try CanonicalFixtureStore(configuration, migrationPlan: nil)
         #expect(store.schema.entities.count == 1)
         #expect(store.name == "canonical.fixture")
+        let identifier = PersistentIdentifier(storeIdentifier: "canonical.fixture", entityName: "AppleStoreFixture", primaryKey: 1)
+        let sourceShapeSnapshot = CanonicalSourceShapeSnapshot(persistentIdentifier: identifier)
+        #expect(sourceShapeSnapshot.entityName == "AppleStoreFixture")
+    }
+
+    @Test
+    func canonicalSnapshotConformanceDoesNotRequireEngineConversions() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema)
+        let store = try UnbridgedCanonicalStore(configuration, migrationPlan: nil)
+        let result = try store.fetch(DataStoreFetchRequest(FetchDescriptor<AppleStoreFixture>()))
+        #expect(result.fetchedSnapshots.isEmpty)
+    }
+
+    @MainActor
+    @Test
+    func containerReportsMissingOptionalEngineBridgeAtConfigurationTime() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = ModelConfiguration(
+            canonicalStore: "unbridged", schema: schema,
+            canonicalDataStoreConfiguration: UnbridgedCanonicalConfiguration(name: "unbridged", schema: schema))
+        #expect(throws: SwiftDataError.unsupportedStore) {
+            try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+        }
     }
 
     @MainActor
@@ -188,6 +478,73 @@ struct AppleDataStoreAPITests {
         #expect(container.dataStore?.identifier == "canonical.fixture")
         let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         #expect(fetched.map(\.title) == ["canonical"])
+    }
+
+    @MainActor
+    @Test
+    func customStoreWithDefaultSnapshotRunsWithoutOpenSwiftDataBridge() throws {
+        let schema = Schema([AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let name = "canonical-default-snapshot-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: DefaultSnapshotConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self], configurations: [configuration])
+        let related = AppleSnapshotRelatedFixture(value: 73)
+        let owner = AppleSnapshotOwnerFixture(title: "native canonical snapshot", related: related)
+        container.mainContext.insert(owner)
+        DefaultSnapshotStore.failNextSave(for: name)
+
+        #expect(throws: (any Error).self) { try container.mainContext.save() }
+        #expect(owner.modelContext === container.mainContext)
+        try container.mainContext.save()
+
+        let fresh = container.makeContext()
+        let fetched = try #require(fresh.fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
+        #expect(fetched.title == "native canonical snapshot")
+        #expect(fetched.related?.value == 73)
+    }
+
+    @MainActor
+    @Test
+    func customCanonicalSnapshotRoutesRelationshipsAndFetch() throws {
+        let schema = Schema([AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self])
+        let name = "canonical-graph-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: CanonicalFixtureConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(
+            for: [AppleSnapshotOwnerFixture.self, AppleSnapshotRelatedFixture.self], configurations: [configuration])
+        let context = container.mainContext
+        let related = AppleSnapshotRelatedFixture(value: 41)
+        let owner = AppleSnapshotOwnerFixture(title: "custom snapshot", related: related)
+        context.insert(owner)
+        try context.save()
+
+        let fresh = container.makeContext()
+        let fetched = try #require(fresh.fetch(FetchDescriptor<AppleSnapshotOwnerFixture>()).first)
+        #expect(fetched.title == "custom snapshot")
+        #expect(fetched.related?.value == 41)
+    }
+
+    @MainActor
+    @Test
+    func customCanonicalSnapshotSaveFailurePreservesPendingModel() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "canonical-rollback-\(UUID().uuidString)"
+        let configuration = ModelConfiguration(
+            canonicalStore: name, schema: schema,
+            canonicalDataStoreConfiguration: CanonicalFixtureConfiguration(name: name, schema: schema))
+        let container = try ModelContainer(for: [AppleStoreFixture.self], configurations: [configuration])
+        let model = AppleStoreFixture(title: "retry")
+        container.mainContext.insert(model)
+        CanonicalFixtureStore.failNextSave(for: name)
+
+        #expect(throws: (any Error).self) { try container.mainContext.save() }
+        #expect(model.modelContext === container.mainContext)
+        #expect(model.title == "retry")
+        try container.mainContext.save()
+        #expect(try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>()).map(\.title) == ["retry"])
     }
 
     @MainActor

@@ -57,9 +57,11 @@ struct AppleParityRunner {
         let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
         let batchFetchResults = try AppleBatchFetchAdapter.runAll()
         let batchDeleteResults = try AppleBatchDeleteAdapter.runAll()
+        let codableResults = try AppleCodableParityAdapter.runAll()
+        let contextNotificationResults = try AppleContextNotificationAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
-            + batchDeleteResults)
+            + batchDeleteResults + codableResults + contextNotificationResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

@@ -1071,6 +1071,215 @@ public enum BatchDeleteExpectationValidator {
     }
 }
 
+public struct CodableParitySpecification: Codable, Equatable, Sendable {
+    public struct Place: Codable, Equatable, Sendable {
+        public let name: String
+        public let city: String
+        public let zip: Int64
+        public let unit: String?
+        public let latitude: Double
+        public let verified: Bool
+
+        public init(name: String, city: String, zip: Int64, unit: String? = nil, latitude: Double, verified: Bool) {
+            self.name = name
+            self.city = city
+            self.zip = zip
+            self.unit = unit
+            self.latitude = latitude
+            self.verified = verified
+        }
+    }
+
+    public enum Query: Codable, Equatable, Sendable {
+        case enumRoundTrip
+        case compositeRoundTrip
+        case cityEqualsParis
+        case zipGreaterThan(Int64)
+        case nestedMemberPredicates
+        case optionalUnitComparisons
+        case memberAndScalarCombined
+    }
+
+    public let id: ScenarioID
+    public let saveBeforeFetch: Bool
+    public let places: [Place]
+    public let query: Query
+    public let expectedObservations: [String: ObservedValue]
+
+    public init(
+        id: ScenarioID,
+        saveBeforeFetch: Bool,
+        places: [Place] = [],
+        query: Query,
+        expectedObservations: [String: ObservedValue]
+    ) {
+        self.id = id
+        self.saveBeforeFetch = saveBeforeFetch
+        self.places = places
+        self.query = query
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum CodableParityScenarioCatalog {
+    private static let places: [CodableParitySpecification.Place] = [
+        .init(name: "louvre", city: "Paris", zip: 75001, latitude: 48.86, verified: true),
+        .init(name: "flat", city: "Paris", zip: 75011, unit: "4B", latitude: 48.85, verified: false),
+        .init(name: "bouchon", city: "Lyon", zip: 69002, latitude: 45.76, verified: false),
+    ]
+
+    private static func memberCase(
+        _ test: String,
+        save: Bool,
+        query: CodableParitySpecification.Query,
+        field: String,
+        value: ObservedValue
+    ) -> CodableParitySpecification {
+        CodableParitySpecification(
+            id: ScenarioID(suite: "CodableMemberPredicateParityTests", test: "\(test)/save=\(save)"),
+            saveBeforeFetch: save,
+            places: places,
+            query: query,
+            expectedObservations: [field: value])
+    }
+
+    public static let enumRoundTrip = CodableParitySpecification(
+        id: ScenarioID(suite: "CodableAttributeParityTests", test: "codable enum attributes load in another context"),
+        saveBeforeFetch: true,
+        query: .enumRoundTrip,
+        expectedObservations: ["enum.name": .string("a"), "enum.kind": .string("b")])
+
+    public static let compositeRoundTrip = CodableParitySpecification(
+        id: ScenarioID(suite: "CodableCompositeParityTests", test: "codable composite values load in another context"),
+        saveBeforeFetch: true,
+        query: .compositeRoundTrip,
+        expectedObservations: [
+            "composite.address": .object(["city": .string("Paris"), "zip": .integer(75001)]),
+            "composite.tags": .array([.object(["city": .string("Lyon"), "zip": .integer(69001)])]),
+            "composite.nickname": .string("b"),
+        ])
+
+    public static let memberPredicates: [CodableParitySpecification] = [
+        memberCase("string member equality", save: false, query: .cityEqualsParis, field: "names", value: .array([.string("flat"), .string("louvre")])),
+        memberCase("string member equality", save: true, query: .cityEqualsParis, field: "names", value: .array([.string("flat"), .string("louvre")])),
+        memberCase("integer member ordering", save: false, query: .zipGreaterThan(70000), field: "names", value: .array([.string("flat"), .string("louvre")])),
+        memberCase("integer member ordering", save: true, query: .zipGreaterThan(70000), field: "names", value: .array([.string("flat"), .string("louvre")])),
+        memberCase("nested members", save: false, query: .nestedMemberPredicates, field: "nested", value: .object([
+            "verified": .array([.string("louvre")]), "latitudeBelow46": .array([.string("bouchon")]),
+        ])),
+        memberCase("nested members", save: true, query: .nestedMemberPredicates, field: "nested", value: .object([
+            "verified": .array([.string("louvre")]), "latitudeBelow46": .array([.string("bouchon")]),
+        ])),
+        memberCase("optional member comparisons", save: false, query: .optionalUnitComparisons, field: "optionalUnit", value: .object([
+            "nil": .array([.string("bouchon"), .string("louvre")]), "fourB": .array([.string("flat")]),
+        ])),
+        memberCase("optional member comparisons", save: true, query: .optionalUnitComparisons, field: "optionalUnit", value: .object([
+            "nil": .array([.string("bouchon"), .string("louvre")]), "fourB": .array([.string("flat")]),
+        ])),
+        memberCase("members combine with scalar attributes", save: false, query: .memberAndScalarCombined, field: "names", value: .array([.string("louvre")])),
+        memberCase("members combine with scalar attributes", save: true, query: .memberAndScalarCombined, field: "names", value: .array([.string("louvre")])),
+    ]
+
+    public static let all = [enumRoundTrip, compositeRoundTrip] + memberPredicates
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum CodableParityExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: CodableParitySpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        var actual: [String: ObservedValue] = [:]
+        for observation in result.observations {
+            guard actual.updateValue(observation.value.canonicalized, forKey: observation.field) == nil else { return false }
+        }
+        return actual == specification.expectedObservations.mapValues(\.canonicalized)
+    }
+}
+
+public struct ContextNotificationSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case rawValues
+        case saveNotifications
+        case editingState
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservations: [String: ObservedValue]
+
+    public init(id: ScenarioID, query: Query, expectedObservations: [String: ObservedValue]) {
+        self.id = id
+        self.query = query
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum ContextNotificationScenarioCatalog {
+    public static let rawValues = ContextNotificationSpecification(
+        id: ScenarioID(suite: "ContextNotificationsParityTests", test: "notification names and keys use SwiftData's raw values"),
+        query: .rawValues,
+        expectedObservations: [
+            "names": .array([.string("ModelContextWillSave"), .string("ModelContextDidSave")]),
+            "keys": .array([.string("newQueryGeneration"), .string("invalidatedAll"), .string("inserted"), .string("updated"), .string("deleted")]),
+            "insertedKeyRoundTrip": .bool(true),
+        ])
+
+    public static let saveNotifications = ContextNotificationSpecification(
+        id: ScenarioID(suite: "ContextNotificationsParityTests", test: "saves post willSave without info and didSave only when changes commit"),
+        query: .saveNotifications,
+        expectedObservations: [
+            "names": .array([
+                .string("ModelContextWillSave"), .string("ModelContextDidSave"),
+                .string("ModelContextWillSave"), .string("ModelContextDidSave"), .string("ModelContextWillSave"),
+            ]),
+            "willSaveInfoEmpty": .bool(true),
+            "firstInsertedCount": .integer(2),
+            "firstUpdatedCount": .integer(0),
+            "firstDeletedCount": .integer(0),
+            "secondInsertedCount": .integer(0),
+            "secondUpdatedCount": .integer(1),
+            "secondDeletedCount": .integer(1),
+        ])
+
+    public static let editingState = ContextNotificationSpecification(
+        id: ScenarioID(suite: "ContextNotificationsParityTests", test: "contexts expose author and a stable editing state"),
+        query: .editingState,
+        expectedObservations: [
+            "initialAuthorsNil": .bool(true),
+            "sameContextEditingIDStable": .bool(true),
+            "differentContextsHaveDifferentEditingIDs": .bool(true),
+            "updatedAuthor": .string("me"),
+            "contextsCompareByIdentity": .bool(true),
+        ])
+
+    public static let all = [rawValues, saveNotifications, editingState]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ContextNotificationExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: ContextNotificationSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        var actual: [String: ObservedValue] = [:]
+        for observation in result.observations {
+            guard actual.updateValue(observation.value.canonicalized, forKey: observation.field) == nil else { return false }
+        }
+        return actual == specification.expectedObservations.mapValues(\.canonicalized)
+    }
+}
+
 public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
@@ -1706,7 +1915,9 @@ public extension ParityScenarioCatalog {
             + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
             + Array(PendingFetchScenarioCatalog.contractsByID.values)
             + Array(BatchFetchScenarioCatalog.contractsByID.values)
-            + Array(BatchDeleteScenarioCatalog.contractsByID.values))
+             + Array(BatchDeleteScenarioCatalog.contractsByID.values)
+             + Array(CodableParityScenarioCatalog.contractsByID.values)
+             + Array(ContextNotificationScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

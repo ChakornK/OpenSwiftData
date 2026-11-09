@@ -965,6 +965,139 @@
       "observations": {
         "BatchDeleteParityTests/batch deletes with no matches change nothing": ["noMatch"]
       }
+    },
+    {
+      "sourceCase": "CodableAttributeParityTests/codable enum attributes load in another context",
+      "scenarioIDs": ["CodableAttributeParityTests/codable enum attributes load in another context"],
+      "outcomes": {
+        "CodableAttributeParityTests/codable enum attributes load in another context": "compared"
+      },
+      "observations": {
+        "CodableAttributeParityTests/codable enum attributes load in another context": ["enum.name", "enum.kind"]
+      }
+    },
+    {
+      "sourceCase": "CodableCompositeParityTests/codable composite values load in another context",
+      "scenarioIDs": ["CodableCompositeParityTests/codable composite values load in another context"],
+      "outcomes": {
+        "CodableCompositeParityTests/codable composite values load in another context": "compared"
+      },
+      "observations": {
+        "CodableCompositeParityTests/codable composite values load in another context": [
+          "composite.address", "composite.tags", "composite.nickname"
+        ]
+      }
+    },
+    {
+      "sourceCase": "CodableMemberPredicateParityTests/string member equality",
+      "scenarioIDs": [
+        "CodableMemberPredicateParityTests/string member equality/save=false",
+        "CodableMemberPredicateParityTests/string member equality/save=true"
+      ],
+      "outcomes": {
+        "CodableMemberPredicateParityTests/string member equality/save=false": "compared",
+        "CodableMemberPredicateParityTests/string member equality/save=true": "compared"
+      },
+      "observations": {
+        "CodableMemberPredicateParityTests/string member equality/save=false": ["names"],
+        "CodableMemberPredicateParityTests/string member equality/save=true": ["names"]
+      }
+    },
+    {
+      "sourceCase": "CodableMemberPredicateParityTests/integer member ordering",
+      "scenarioIDs": [
+        "CodableMemberPredicateParityTests/integer member ordering/save=false",
+        "CodableMemberPredicateParityTests/integer member ordering/save=true"
+      ],
+      "outcomes": {
+        "CodableMemberPredicateParityTests/integer member ordering/save=false": "compared",
+        "CodableMemberPredicateParityTests/integer member ordering/save=true": "compared"
+      },
+      "observations": {
+        "CodableMemberPredicateParityTests/integer member ordering/save=false": ["names"],
+        "CodableMemberPredicateParityTests/integer member ordering/save=true": ["names"]
+      }
+    },
+    {
+      "sourceCase": "CodableMemberPredicateParityTests/nested members",
+      "scenarioIDs": [
+        "CodableMemberPredicateParityTests/nested members/save=false",
+        "CodableMemberPredicateParityTests/nested members/save=true"
+      ],
+      "outcomes": {
+        "CodableMemberPredicateParityTests/nested members/save=false": "compared",
+        "CodableMemberPredicateParityTests/nested members/save=true": "compared"
+      },
+      "observations": {
+        "CodableMemberPredicateParityTests/nested members/save=false": ["nested"],
+        "CodableMemberPredicateParityTests/nested members/save=true": ["nested"]
+      }
+    },
+    {
+      "sourceCase": "CodableMemberPredicateParityTests/optional member comparisons",
+      "scenarioIDs": [
+        "CodableMemberPredicateParityTests/optional member comparisons/save=false",
+        "CodableMemberPredicateParityTests/optional member comparisons/save=true"
+      ],
+      "outcomes": {
+        "CodableMemberPredicateParityTests/optional member comparisons/save=false": "compared",
+        "CodableMemberPredicateParityTests/optional member comparisons/save=true": "compared"
+      },
+      "observations": {
+        "CodableMemberPredicateParityTests/optional member comparisons/save=false": ["optionalUnit"],
+        "CodableMemberPredicateParityTests/optional member comparisons/save=true": ["optionalUnit"]
+      }
+    },
+    {
+      "sourceCase": "CodableMemberPredicateParityTests/members combine with scalar attributes",
+      "scenarioIDs": [
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=false",
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true"
+      ],
+      "outcomes": {
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=false": "compared",
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true": "compared"
+      },
+      "observations": {
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=false": ["names"],
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true": ["names"]
+      }
+    },
+    {
+      "sourceCase": "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values",
+      "scenarioIDs": ["ContextNotificationsParityTests/notification names and keys use SwiftData's raw values"],
+      "outcomes": {
+        "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values": "compared"
+      },
+      "observations": {
+        "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values": ["names", "keys", "insertedKeyRoundTrip"]
+      }
+    },
+    {
+      "sourceCase": "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit",
+      "scenarioIDs": ["ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit"],
+      "outcomes": {
+        "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit": "compared"
+      },
+      "observations": {
+        "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit": [
+          "names", "willSaveInfoEmpty", "firstInsertedCount", "firstUpdatedCount", "firstDeletedCount",
+          "secondInsertedCount", "secondUpdatedCount", "secondDeletedCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ContextNotificationsParityTests/contexts expose author and a stable editing state",
+      "scenarioIDs": ["ContextNotificationsParityTests/contexts expose author and a stable editing state"],
+      "outcomes": {
+        "ContextNotificationsParityTests/contexts expose author and a stable editing state": "compared"
+      },
+      "observations": {
+        "ContextNotificationsParityTests/contexts expose author and a stable editing state": [
+          "initialAuthorsNil", "sameContextEditingIDStable", "differentContextsHaveDifferentEditingIDs",
+          "updatedAuthor", "contextsCompareByIdentity"
+        ]
+      }
     }
   ]
 }

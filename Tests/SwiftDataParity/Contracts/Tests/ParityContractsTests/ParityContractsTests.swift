@@ -183,17 +183,7 @@ import Testing
         #expect(specifications.map(\.id.description) == expectedIDs)
         #expect(Set(contracts.keys) == Set(expectedIDs))
         #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: contracts.keys))
-        #expect(ParityScenarioCatalog.allContractsByID.count
-            == ParityScenarioCatalog.contractsByID.count
-                + SchemaIntrospectionScenarioCatalog.contractsByID.count
-                + SchemaModelTypesScenarioCatalog.contractsByID.count
-                + StoreIdentifierScenarioCatalog.contractsByID.count
-                + ModelIdentityScenarioCatalog.contractsByID.count
-                + ModelConfigurationScenarioCatalog.contractsByID.count
-                + ModelConfigurationContainerScenarioCatalog.contractsByID.count
-                + PendingFetchScenarioCatalog.contractsByID.count
-                + BatchFetchScenarioCatalog.contractsByID.count
-                + BatchDeleteScenarioCatalog.contractsByID.count)
+        #expect(ParityScenarioCatalog.allContractsByID.count == expectedIDs.count)
         #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
         #expect(
             PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
@@ -378,6 +368,37 @@ import Testing
             registry: ParityScenarioCatalog.allContractsByID).isEmpty)
     }
 
+    @Test func codableParityContractsRegisterSevenDeclarationsAndTwelveScenarios() throws {
+        let specs = CodableParityScenarioCatalog.all
+        #expect(specs.count == 12)
+        #expect(CodableParityScenarioCatalog.memberPredicates.count == 10)
+        #expect(specs.allSatisfy { !ParityScenarioCatalog.allContractsByID.keys.contains($0.id.description) })
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: specs.map { $0.id.description }))
+        #expect(specs.allSatisfy { $0.expectedObservations.count > 0 })
+    }
+
+    @Test func codableParityExpectationValidatorRejectsMissingAndWrongValues() throws {
+        let specification = CodableParityScenarioCatalog.memberPredicates[0]
+        let matching = ScenarioResult(id: specification.id, observations: specification.expectedObservations.map {
+            ParityObservation(step: 0, field: $0.key, value: $0.value)
+        })
+        let missing = ScenarioResult(id: specification.id, observations: [])
+        let wrong = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "names", value: .array([.string("wrong")])),
+        ])
+        #expect(CodableParityExpectationValidator.validate(matching, against: specification))
+        #expect(!CodableParityExpectationValidator.validate(missing, against: specification))
+        #expect(!CodableParityExpectationValidator.validate(wrong, against: specification))
+    }
+
+    @Test func contextNotificationParityContractsRegisterAllThreeDeclarations() {
+        #expect(ContextNotificationScenarioCatalog.all.count == 3)
+        #expect(ContextNotificationScenarioCatalog.contractsByID.count == 3)
+        #expect(ContextNotificationScenarioCatalog.all.allSatisfy {
+            $0.contract.expectedObservationFields == Set($0.expectedObservations.keys)
+        })
+    }
+
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
         let specification = SchemaIntrospectionScenarioCatalog.entitiesByModelType
         let result = ScenarioResult(
@@ -401,7 +422,9 @@ import Testing
                 .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
                 .union(PendingFetchScenarioCatalog.contractsByID.keys)
                 .union(BatchFetchScenarioCatalog.contractsByID.keys)
-                .union(BatchDeleteScenarioCatalog.contractsByID.keys))
+                .union(BatchDeleteScenarioCatalog.contractsByID.keys)
+                .union(CodableParityScenarioCatalog.contractsByID.keys)
+                .union(ContextNotificationScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

@@ -3,7 +3,7 @@ import OpenSwiftData
 import ParityContracts
 
 @Model
-final class OSDContainerParityThing {
+final class ContainerParityThing {
     var name: String
     init(name: String) { self.name = name }
 }
@@ -28,8 +28,8 @@ public enum OSDModelContainerParityAdapter {
         switch specification.query {
         case .configurationsAndIdentity:
             let configuration = ModelConfiguration("A", isStoredInMemoryOnly: true)
-            let container = try ModelContainer(for: OSDContainerParityThing.self, configurations: configuration)
-            let other = try ModelContainer(for: OSDContainerParityThing.self, configurations: configuration)
+            let container = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
+            let other = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
             values = [
                 "configurationSetMatches": .bool(Set(container.configurations) == [configuration]),
                 "containerEqualsSelf": .bool(container == container),
@@ -53,12 +53,12 @@ public enum OSDModelContainerParityAdapter {
         let url = FileManager.default.temporaryDirectory.appending(path: "parity-erase-\(UUID().uuidString).store")
         defer { try? FileManager.default.removeItem(at: url) }
         let container = try ModelContainer(
-            for: OSDContainerParityThing.self, configurations: ModelConfiguration(url: url))
+            for: ContainerParityThing.self, configurations: ModelConfiguration(url: url))
         let context = container.mainContext
-        let saved = OSDContainerParityThing(name: "a")
+        let saved = ContainerParityThing(name: "a")
         context.insert(saved)
         try context.save()
-        context.insert(OSDContainerParityThing(name: "pending"))
+        context.insert(ContainerParityThing(name: "pending"))
 
         var lastCompletedStep = 0
         var eraseReturned = true
@@ -73,7 +73,7 @@ public enum OSDModelContainerParityAdapter {
         let savedAttached = saved.modelContext === context
         var fetchCountReturned = false
         var storedCount = -1
-        var stored = FetchDescriptor<OSDContainerParityThing>()
+        var stored = FetchDescriptor<ContainerParityThing>()
         stored.includePendingChanges = false
         if eraseReturned {
             do {
@@ -117,8 +117,8 @@ public enum OSDModelContainerParityAdapter {
 
     private static func eraseClearsHistory() throws -> [String: ObservedValue] {
         let container = try ModelContainer(
-            for: OSDContainerParityThing.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        container.mainContext.insert(OSDContainerParityThing(name: "a"))
+            for: ContainerParityThing.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        container.mainContext.insert(ContainerParityThing(name: "a"))
         try container.mainContext.save()
         var lastCompletedStep = 0
         var eraseReturned = true

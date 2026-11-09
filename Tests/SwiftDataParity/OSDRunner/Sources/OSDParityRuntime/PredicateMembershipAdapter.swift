@@ -152,10 +152,12 @@ public enum OSDScenarioAdapter {
         let uniqueConstraintResults = try OSDUniqueConstraintAdapter.runAll()
         let migrationPlanResults = try OSDMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try OSDModelContainerParityAdapter.runAll()
+        let relationshipDeleteRuleResults = try OSDRelationshipDeleteRuleAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
-            + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults)
+            + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
+            + relationshipDeleteRuleResults)
             .sorted { $0.id.description < $1.id.description }
     }
 

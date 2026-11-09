@@ -72,10 +72,12 @@ struct AppleParityRunner {
         let uniqueConstraintResults = try AppleUniqueConstraintAdapter.runAll()
         let migrationPlanResults = try AppleMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try AppleModelContainerParityAdapter.runAll()
+        let relationshipDeleteRuleResults = try AppleRelationshipDeleteRuleAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
-            + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults)
+            + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
+            + relationshipDeleteRuleResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

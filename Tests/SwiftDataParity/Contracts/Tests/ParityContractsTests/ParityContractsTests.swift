@@ -445,6 +445,13 @@ import Testing
             of: ModelContainerParityScenarioCatalog.contractsByID.keys))
     }
 
+    @Test func relationshipDeleteRuleParityContractsRegisterEightDeclarations() {
+        #expect(RelationshipDeleteRuleScenarioCatalog.all.count == 8)
+        #expect(RelationshipDeleteRuleScenarioCatalog.contractsByID.count == 8)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: RelationshipDeleteRuleScenarioCatalog.contractsByID.keys))
+    }
+
 
     @Test func deletedInsertionRollbackUsesExactPerImplementationExpectations() {
         let specification = ModelContextParityScenarioCatalog.rollbackDeletedInsertion
@@ -631,7 +638,8 @@ import Testing
                 .union(HistoryParityScenarioCatalog.contractsByID.keys)
                 .union(UniqueConstraintScenarioCatalog.contractsByID.keys)
                 .union(MigrationPlanScenarioCatalog.contractsByID.keys)
-                .union(ModelContainerParityScenarioCatalog.contractsByID.keys))
+                .union(ModelContainerParityScenarioCatalog.contractsByID.keys)
+                .union(RelationshipDeleteRuleScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

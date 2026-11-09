@@ -5,7 +5,7 @@ import SwiftData
 import Darwin
 
 @Model
-final class AppleContainerParityThing {
+final class ContainerParityThing {
     var name: String
     init(name: String) { self.name = name }
 }
@@ -48,8 +48,8 @@ enum AppleModelContainerParityAdapter {
         switch specification.query {
         case .configurationsAndIdentity:
             let configuration = ModelConfiguration("A", isStoredInMemoryOnly: true)
-            let container = try ModelContainer(for: AppleContainerParityThing.self, configurations: configuration)
-            let other = try ModelContainer(for: AppleContainerParityThing.self, configurations: configuration)
+            let container = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
+            let other = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
             values = [
                 "configurationSetMatches": .bool(Set(container.configurations) == [configuration]),
                 "containerEqualsSelf": .bool(container == container),
@@ -154,12 +154,12 @@ enum AppleModelContainerParityAdapter {
         let url = FileManager.default.temporaryDirectory.appending(path: "parity-apple-erase-\(UUID().uuidString).store")
         defer { try? FileManager.default.removeItem(at: url) }
         let container = try ModelContainer(
-            for: AppleContainerParityThing.self, configurations: ModelConfiguration(url: url))
+            for: ContainerParityThing.self, configurations: ModelConfiguration(url: url))
         let context = container.mainContext
-        let saved = AppleContainerParityThing(name: "a")
+        let saved = ContainerParityThing(name: "a")
         context.insert(saved)
         try context.save()
-        context.insert(AppleContainerParityThing(name: "pending"))
+        context.insert(ContainerParityThing(name: "pending"))
         var values: [String: ObservedValue] = [
             "eraseReturned": .bool(false), "fileExistsAfterErase": .bool(false),
             "contextHasChangesAfterErase": .bool(false), "savedObjectAttachedAfterErase": .bool(false),
@@ -187,7 +187,7 @@ enum AppleModelContainerParityAdapter {
         values["savedObjectAttachedAfterErase"] = .bool(saved.modelContext === context)
         values["lastCompletedStep"] = .integer(1)
         try checkpoint()
-        var stored = FetchDescriptor<AppleContainerParityThing>()
+        var stored = FetchDescriptor<ContainerParityThing>()
         stored.includePendingChanges = false
         do {
             let storedCount = try ModelContext(container).fetchCount(stored)
@@ -222,8 +222,8 @@ enum AppleModelContainerParityAdapter {
 
     private static func eraseClearsHistoryCheckpointed(to outputURL: URL) throws -> [String: ObservedValue] {
         let container = try ModelContainer(
-            for: AppleContainerParityThing.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        container.mainContext.insert(AppleContainerParityThing(name: "a"))
+            for: ContainerParityThing.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        container.mainContext.insert(ContainerParityThing(name: "a"))
         try container.mainContext.save()
         var values: [String: ObservedValue] = [
             "eraseReturned": .bool(false), "historyFetchReturned": .bool(false), "historyEmpty": .bool(false),

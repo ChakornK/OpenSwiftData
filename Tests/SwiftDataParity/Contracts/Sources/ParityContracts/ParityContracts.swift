@@ -2180,6 +2180,111 @@ public enum ModelContainerParityExpectationValidator {
     }
 }
 
+public struct RelationshipDeleteRuleSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case cascadeImmediateAndRecursive
+        case deletedRowsDoNotReuseIDs
+        case denyThenNullifyOnSave
+        case nullifyOnSave
+        case removeFromCollectionClearsInverse
+        case rollbackRestoresCascade
+        case appendDetachedInserts
+        case insertRecursivelyInsertsRelated
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum RelationshipDeleteRuleScenarioCatalog {
+    private static func scenario(
+        _ suite: String,
+        _ test: String,
+        _ query: RelationshipDeleteRuleSpecification.Query,
+        _ fields: Set<String>
+    ) -> RelationshipDeleteRuleSpecification {
+        RelationshipDeleteRuleSpecification(
+            id: ScenarioID(suite: suite, test: test), query: query, expectedObservationFields: fields)
+    }
+
+    public static let cascadeImmediateAndRecursive = scenario(
+        "DeleteRuleParityTests", "cascade destinations are marked deleted immediately and recursively",
+        .cascadeImmediateAndRecursive,
+        [
+            "thingDeletedBeforeSave", "partDeletedBeforeSave", "deletedCountBeforeSave", "storedThingCountAfterSave",
+            "storedPartCountAfterSave", "thingDetachedAfterSave", "thingNotDeletedAfterSave",
+        ])
+
+    public static let deletedRowsDoNotReuseIDs = scenario(
+        "DeleteRuleParityTests", "deleted rows never reuse primary keys", .deletedRowsDoNotReuseIDs,
+        ["identifiersDiffer"])
+
+    public static let denyThenNullifyOnSave = scenario(
+        "DeleteRuleParityTests", "deny rules are not enforced and related models are nullified on save",
+        .denyThenNullifyOnSave,
+        [
+            "deleteApplied", "relatedModelAttachedBeforeSave", "relatedModelHasInverseBeforeSave", "saveReturned",
+            "storedOwnerCount", "storedRelatedCount", "inverseNilAfterSave", "contextCleanAfterSave",
+        ])
+
+    public static let nullifyOnSave = scenario(
+        "DeleteRuleParityTests", "nullify applies when saving", .nullifyOnSave,
+        ["inversePresentImmediatelyAfterDelete", "inversePresentAfterSave", "storedRelatedCount"])
+
+    public static let removeFromCollectionClearsInverse = scenario(
+        "DeleteRuleParityTests", "removing a model from a collection clears its inverse immediately",
+        .removeFromCollectionClearsInverse,
+        ["inverseNilImmediately", "childNotDeleted"])
+
+    public static let rollbackRestoresCascade = scenario(
+        "DeleteRuleParityTests", "rolling back restores cascaded deletions", .rollbackRestoresCascade,
+        [
+            "destinationDeletedBeforeRollback", "destinationNotDeletedAfterRollback", "ownerNotDeletedAfterRollback",
+            "relationshipRestored",
+        ])
+
+    public static let appendDetachedInserts = scenario(
+        "RelationshipGraphParityTests", "appending a detached model to a managed collection inserts it",
+        .appendDetachedInserts,
+        ["childManagedImmediately", "inverseSetImmediately", "insertedCount"])
+
+    public static let insertRecursivelyInsertsRelated = scenario(
+        "RelationshipGraphParityTests", "inserting a model inserts the detached models it relates to",
+        .insertRecursivelyInsertsRelated,
+        [
+            "childInverseSetBeforeInsert", "insertedCountAfterInsert", "childManagedAfterInsert", "toyManagedAfterInsert",
+            "storedChildCount", "storedToyCount",
+        ])
+
+    public static let all = [
+        cascadeImmediateAndRecursive, deletedRowsDoNotReuseIDs, denyThenNullifyOnSave, nullifyOnSave,
+        removeFromCollectionClearsInverse, rollbackRestoresCascade, appendDetachedInserts, insertRecursivelyInsertsRelated,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum RelationshipDeleteRuleExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: RelationshipDeleteRuleSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
 public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
@@ -2569,7 +2674,8 @@ public extension ParityScenarioCatalog {
               + Array(HistoryParityScenarioCatalog.contractsByID.values)
               + Array(UniqueConstraintScenarioCatalog.contractsByID.values)
               + Array(MigrationPlanScenarioCatalog.contractsByID.values)
-              + Array(ModelContainerParityScenarioCatalog.contractsByID.values))
+              + Array(ModelContainerParityScenarioCatalog.contractsByID.values)
+              + Array(RelationshipDeleteRuleScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

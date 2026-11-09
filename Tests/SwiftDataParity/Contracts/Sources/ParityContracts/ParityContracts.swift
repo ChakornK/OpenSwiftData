@@ -1280,6 +1280,258 @@ public enum ContextNotificationExpectationValidator {
     }
 }
 
+public struct RollbackParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case committedValues
+        case committedRelationship
+        case relatedInsertion
+        case repeatedEdits
+        case editedDeletion
+        case insertionAndDeletion
+        case relationshipNotSaved
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservations: [String: ObservedValue]
+    public let expectedOSDObservations: [String: ObservedValue]?
+
+    public init(
+        id: ScenarioID,
+        query: Query,
+        expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
+    ) {
+        self.id = id
+        self.query = query
+        self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum RollbackParityScenarioCatalog {
+    private static func scenario(
+        _ test: String,
+        _ query: RollbackParitySpecification.Query,
+        _ expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil,
+        suite: String = "RollbackParityTests"
+    ) -> RollbackParitySpecification {
+        RollbackParitySpecification(
+            id: ScenarioID(suite: suite, test: test), query: query,
+            expectedObservations: expectedObservations, expectedOSDObservations: expectedOSDObservations)
+    }
+
+    public static let committedValues = scenario(
+        "rollback restores committed values immediately and clears change tracking", .committedValues, [
+            "age": .integer(1), "name": .string("a"), "tag": .null, "tags": .array([]),
+            "modelHasChanges": .bool(false), "contextHasChanges": .bool(false),
+            "modelRemainsAttached": .bool(true), "storedAges": .array([.integer(1)]),
+            "sameRegisteredInstance": .bool(true),
+        ])
+
+    public static let committedRelationship = scenario(
+        "rollback restores committed relationship edits", .committedRelationship, [
+            "ownerItemCount": .integer(1), "itemOwnerAbsent": .bool(false), "contextHasChanges": .bool(false),
+        ], expectedOSDObservations: [
+            "ownerItemCount": .integer(0), "itemOwnerAbsent": .bool(true), "contextHasChanges": .bool(false),
+        ])
+
+    public static let relatedInsertion = scenario(
+        "rollback detaches related insertions and restores saved graph", .relatedInsertion, [
+            "ownerItemCount": .integer(1), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(false),
+            "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
+        ], expectedOSDObservations: [
+            "ownerItemCount": .integer(0), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(true),
+            "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
+        ])
+
+    public static let repeatedEdits = scenario(
+        "rollback restores first committed values after repeated edits", .repeatedEdits, [
+            "ageAfterFirstRollback": .integer(3), "unchangedAfterFirstRollback": .bool(true),
+            "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(4),
+            "unchangedAfterSecondRollback": .bool(true),
+        ], expectedOSDObservations: [
+            "ageAfterFirstRollback": .integer(1), "unchangedAfterFirstRollback": .bool(true),
+            "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(1),
+            "unchangedAfterSecondRollback": .bool(true),
+        ])
+
+    public static let editedDeletion = scenario(
+        "rollback restores values when an edited model is deleted", .editedDeletion, [
+            "age": .integer(2), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
+            "contextHasChanges": .bool(false),
+        ], expectedOSDObservations: [
+            "age": .integer(1), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
+            "contextHasChanges": .bool(false),
+        ])
+
+    public static let insertionAndDeletion = scenario(
+        "rollback detaches insertions and restores deletions", .insertionAndDeletion, [
+            "rolledBackInsertionDetached": .bool(true), "rolledBackInsertionNotDeleted": .bool(true),
+            "insertedModelsEmpty": .bool(true), "insertionValueRetained": .string("b"),
+            "deletionWasApplied": .bool(true), "restoredDeletionNotDeleted": .bool(true),
+            "restoredDeletionAttached": .bool(true), "storedOwnerCount": .integer(1),
+        ])
+
+    public static let relationshipNotSaved = scenario(
+        "rolled back relationship edits are not saved", .relationshipNotSaved, [
+            "changedModelsEmpty": .bool(true), "storedRelationshipCount": .integer(0),
+        ], suite: "RollbackRelationshipParityTests")
+
+    public static let all = [
+        committedValues, committedRelationship, relatedInsertion, repeatedEdits, editedDeletion,
+        insertionAndDeletion, relationshipNotSaved,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum RollbackParityExpectationValidator {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: RollbackParitySpecification,
+        implementation: String = "apple"
+    ) -> Bool {
+        guard result.id == specification.id else { return false }
+        var actual: [String: ObservedValue] = [:]
+        for observation in result.observations {
+            guard actual.updateValue(observation.value.canonicalized, forKey: observation.field) == nil else { return false }
+        }
+        let expectedObservations = implementation == "openswiftdata"
+            ? specification.expectedOSDObservations ?? specification.expectedObservations
+            : specification.expectedObservations
+        return actual == expectedObservations.mapValues(\.canonicalized)
+    }
+}
+
+public struct ModelContextParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case temporaryModelLookup
+        case crossContextModelLookup
+        case processPendingChanges
+        case transactionSavesChanges
+        case deletedInsertionState
+        case reinsertDeletedInsertion
+        case rollbackDeletedInsertion
+        case fetchDescriptorDefaults
+        case fetchDescriptorProperties
+        case fetchDescriptorEquality
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservations: [String: ObservedValue]
+
+    public init(id: ScenarioID, query: Query, expectedObservations: [String: ObservedValue]) {
+        self.id = id
+        self.query = query
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum ModelContextParityScenarioCatalog {
+    private static func scenario(
+        _ suite: String,
+        _ test: String,
+        _ query: ModelContextParitySpecification.Query,
+        _ expected: [String: ObservedValue]
+    ) -> ModelContextParitySpecification {
+        ModelContextParitySpecification(
+            id: ScenarioID(suite: suite, test: test), query: query, expectedObservations: expected)
+    }
+
+    public static let temporaryModelLookup = scenario(
+        "ModelContextParityTests", "model(for:) returns the registered instance, including for temporary identifiers",
+        .temporaryModelLookup, ["sameInstanceBeforeSave": .bool(true), "sameInstanceAfterSave": .bool(true)])
+
+    public static let crossContextModelLookup = scenario(
+        "ModelContextParityTests", "model(for:) loads and registers saved models in another context",
+        .crossContextModelLookup, [
+            "name": .string("a"), "attachedToOtherContext": .bool(true), "unchanged": .bool(true),
+            "notDeleted": .bool(true), "lookupStable": .bool(true), "registeredLookupStable": .bool(true),
+        ])
+
+    public static let processPendingChanges = scenario(
+        "ModelContextParityTests", "processing pending changes keeps them pending", .processPendingChanges, [
+            "hasChanges": .bool(true), "insertedCount": .integer(1),
+        ])
+
+    public static let transactionSavesChanges = scenario(
+        "ModelContextParityTests", "a transaction saves changes made before and inside it", .transactionSavesChanges, [
+            "hasChangesAfterTransaction": .bool(false), "savedCount": .integer(2),
+        ])
+
+    public static let deletedInsertionState = scenario(
+        "DeletedInsertionParityTests", "a deleted insertion is reported as inserted and deleted until saved",
+        .deletedInsertionState, [
+            "deletedBeforeSave": .bool(true), "attachedBeforeSave": .bool(true), "hasChangesBeforeSave": .bool(true),
+            "insertedCountBeforeSave": .integer(1), "deletedCountBeforeSave": .integer(1),
+            "fetchCountBeforeSave": .integer(0), "detachedAfterSave": .bool(true),
+            "notDeletedAfterSave": .bool(true), "hasChangesAfterSave": .bool(false),
+            "insertedCountAfterSave": .integer(0), "deletedCountAfterSave": .integer(0),
+            "storedCountAfterSave": .integer(0),
+        ])
+
+    public static let reinsertDeletedInsertion = scenario(
+        "DeletedInsertionParityTests", "inserting a deleted insertion again does nothing", .reinsertDeletedInsertion, [
+            "stillDeleted": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(1),
+        ])
+
+    public static let rollbackDeletedInsertion = scenario(
+        "DeletedInsertionParityTests", "rolling back detaches a deleted insertion", .rollbackDeletedInsertion, [
+            "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(false),
+        ])
+
+    public static let fetchDescriptorDefaults = scenario(
+        "FetchDescriptorParityTests", "defaults match SwiftData", .fetchDescriptorDefaults, [
+            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
+            "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
+            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
+        ])
+
+    public static let fetchDescriptorProperties = scenario(
+        "FetchDescriptorParityTests", "properties to fetch is a mutable array", .fetchDescriptorProperties,
+        ["propertyCount": .integer(1), "containsName": .bool(true)])
+
+    public static let fetchDescriptorEquality = scenario(
+        "FetchDescriptorParityTests", "descriptors compare every option", .fetchDescriptorEquality, [
+            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
+            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
+        ])
+
+    public static let all = [
+        temporaryModelLookup, crossContextModelLookup, processPendingChanges, transactionSavesChanges,
+        deletedInsertionState, reinsertDeletedInsertion, rollbackDeletedInsertion,
+        fetchDescriptorDefaults, fetchDescriptorProperties, fetchDescriptorEquality,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ModelContextParityExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: ModelContextParitySpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        var actual: [String: ObservedValue] = [:]
+        for observation in result.observations {
+            guard actual.updateValue(observation.value.canonicalized, forKey: observation.field) == nil else { return false }
+        }
+        return actual == specification.expectedObservations.mapValues(\.canonicalized)
+    }
+}
+
 public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
@@ -1917,7 +2169,9 @@ public extension ParityScenarioCatalog {
             + Array(BatchFetchScenarioCatalog.contractsByID.values)
              + Array(BatchDeleteScenarioCatalog.contractsByID.values)
              + Array(CodableParityScenarioCatalog.contractsByID.values)
-             + Array(ContextNotificationScenarioCatalog.contractsByID.values))
+             + Array(ContextNotificationScenarioCatalog.contractsByID.values)
+             + Array(RollbackParityScenarioCatalog.contractsByID.values)
+             + Array(ModelContextParityScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

@@ -1098,6 +1098,200 @@
           "updatedAuthor", "contextsCompareByIdentity"
         ]
       }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback restores committed values immediately and clears change tracking",
+      "scenarioIDs": ["RollbackParityTests/rollback restores committed values immediately and clears change tracking"],
+      "outcomes": {
+        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": "compared"
+      },
+      "observations": {
+        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": [
+          "age", "name", "tag", "tags", "modelHasChanges", "contextHasChanges",
+          "modelRemainsAttached", "storedAges", "sameRegisteredInstance"
+        ]
+      }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback restores committed relationship edits",
+      "scenarioIDs": ["RollbackParityTests/rollback restores committed relationship edits"],
+      "outcomes": {
+        "RollbackParityTests/rollback restores committed relationship edits": "divergent"
+      },
+      "observations": {
+        "RollbackParityTests/rollback restores committed relationship edits": ["ownerItemCount", "itemOwnerAbsent", "contextHasChanges"]
+      }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback detaches related insertions and restores saved graph",
+      "scenarioIDs": ["RollbackParityTests/rollback detaches related insertions and restores saved graph"],
+      "outcomes": {
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": "divergent"
+      },
+      "observations": {
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": [
+          "ownerItemCount", "itemDetached", "itemOwnerAbsent", "ownerHasChanges", "contextHasChanges", "storedItemCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback restores first committed values after repeated edits",
+      "scenarioIDs": ["RollbackParityTests/rollback restores first committed values after repeated edits"],
+      "outcomes": {
+        "RollbackParityTests/rollback restores first committed values after repeated edits": "divergent"
+      },
+      "observations": {
+        "RollbackParityTests/rollback restores first committed values after repeated edits": [
+          "ageAfterFirstRollback", "unchangedAfterFirstRollback", "hasChangesAfterSecondEdit",
+          "ageAfterSecondRollback", "unchangedAfterSecondRollback"
+        ]
+      }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback restores values when an edited model is deleted",
+      "scenarioIDs": ["RollbackParityTests/rollback restores values when an edited model is deleted"],
+      "outcomes": {
+        "RollbackParityTests/rollback restores values when an edited model is deleted": "divergent"
+      },
+      "observations": {
+        "RollbackParityTests/rollback restores values when an edited model is deleted": [
+          "age", "notDeleted", "modelRemainsAttached", "contextHasChanges"
+        ]
+      }
+    },
+    {
+      "sourceCase": "RollbackParityTests/rollback detaches insertions and restores deletions",
+      "scenarioIDs": ["RollbackParityTests/rollback detaches insertions and restores deletions"],
+      "outcomes": {
+        "RollbackParityTests/rollback detaches insertions and restores deletions": "compared"
+      },
+      "observations": {
+        "RollbackParityTests/rollback detaches insertions and restores deletions": [
+          "rolledBackInsertionDetached", "rolledBackInsertionNotDeleted", "insertedModelsEmpty", "insertionValueRetained",
+          "deletionWasApplied", "restoredDeletionNotDeleted", "restoredDeletionAttached", "storedOwnerCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "RollbackRelationshipParityTests/rolled back relationship edits are not saved",
+      "scenarioIDs": ["RollbackRelationshipParityTests/rolled back relationship edits are not saved"],
+      "outcomes": {
+        "RollbackRelationshipParityTests/rolled back relationship edits are not saved": "compared"
+      },
+      "observations": {
+        "RollbackRelationshipParityTests/rolled back relationship edits are not saved": ["changedModelsEmpty", "storedRelationshipCount"]
+      }
+    },
+    {
+      "sourceCase": "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers",
+      "scenarioIDs": ["ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers"],
+      "outcomes": {
+        "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers": "compared"
+      },
+      "observations": {
+        "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers": ["sameInstanceBeforeSave", "sameInstanceAfterSave"]
+      }
+    },
+    {
+      "sourceCase": "ModelContextParityTests/model(for:) loads and registers saved models in another context",
+      "scenarioIDs": ["ModelContextParityTests/model(for:) loads and registers saved models in another context"],
+      "outcomes": {
+        "ModelContextParityTests/model(for:) loads and registers saved models in another context": "compared"
+      },
+      "observations": {
+        "ModelContextParityTests/model(for:) loads and registers saved models in another context": [
+          "name", "attachedToOtherContext", "unchanged", "notDeleted", "lookupStable", "registeredLookupStable"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelContextParityTests/processing pending changes keeps them pending",
+      "scenarioIDs": ["ModelContextParityTests/processing pending changes keeps them pending"],
+      "outcomes": {
+        "ModelContextParityTests/processing pending changes keeps them pending": "compared"
+      },
+      "observations": {
+        "ModelContextParityTests/processing pending changes keeps them pending": ["hasChanges", "insertedCount"]
+      }
+    },
+    {
+      "sourceCase": "ModelContextParityTests/a transaction saves changes made before and inside it",
+      "scenarioIDs": ["ModelContextParityTests/a transaction saves changes made before and inside it"],
+      "outcomes": {
+        "ModelContextParityTests/a transaction saves changes made before and inside it": "compared"
+      },
+      "observations": {
+        "ModelContextParityTests/a transaction saves changes made before and inside it": ["hasChangesAfterTransaction", "savedCount"]
+      }
+    },
+    {
+      "sourceCase": "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved",
+      "scenarioIDs": ["DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved"],
+      "outcomes": {
+        "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved": "compared"
+      },
+      "observations": {
+        "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved": [
+          "deletedBeforeSave", "attachedBeforeSave", "hasChangesBeforeSave", "insertedCountBeforeSave",
+          "deletedCountBeforeSave", "fetchCountBeforeSave", "detachedAfterSave", "notDeletedAfterSave",
+          "hasChangesAfterSave", "insertedCountAfterSave", "deletedCountAfterSave", "storedCountAfterSave"
+        ]
+      }
+    },
+    {
+      "sourceCase": "DeletedInsertionParityTests/inserting a deleted insertion again does nothing",
+      "scenarioIDs": ["DeletedInsertionParityTests/inserting a deleted insertion again does nothing"],
+      "outcomes": {
+        "DeletedInsertionParityTests/inserting a deleted insertion again does nothing": "compared"
+      },
+      "observations": {
+        "DeletedInsertionParityTests/inserting a deleted insertion again does nothing": ["stillDeleted", "insertedCount", "deletedCount"]
+      }
+    },
+    {
+      "sourceCase": "DeletedInsertionParityTests/rolling back detaches a deleted insertion",
+      "scenarioIDs": ["DeletedInsertionParityTests/rolling back detaches a deleted insertion"],
+      "outcomes": {
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "compared"
+      },
+      "observations": {
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": ["detached", "notDeleted", "hasChanges"]
+      }
+    },
+    {
+      "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",
+      "scenarioIDs": ["FetchDescriptorParityTests/defaults match SwiftData"],
+      "outcomes": {
+        "FetchDescriptorParityTests/defaults match SwiftData": "compared"
+      },
+      "observations": {
+        "FetchDescriptorParityTests/defaults match SwiftData": [
+          "predicateAbsent", "sortEmpty", "fetchLimitAbsent", "fetchOffsetAbsent", "includePendingChanges",
+          "propertiesToFetchEmpty", "prefetchRelationshipsEmpty"
+        ]
+      }
+    },
+    {
+      "sourceCase": "FetchDescriptorParityTests/properties to fetch is a mutable array",
+      "scenarioIDs": ["FetchDescriptorParityTests/properties to fetch is a mutable array"],
+      "outcomes": {
+        "FetchDescriptorParityTests/properties to fetch is a mutable array": "compared"
+      },
+      "observations": {
+        "FetchDescriptorParityTests/properties to fetch is a mutable array": ["propertyCount", "containsName"]
+      }
+    },
+    {
+      "sourceCase": "FetchDescriptorParityTests/descriptors compare every option",
+      "scenarioIDs": ["FetchDescriptorParityTests/descriptors compare every option"],
+      "outcomes": {
+        "FetchDescriptorParityTests/descriptors compare every option": "compared"
+      },
+      "observations": {
+        "FetchDescriptorParityTests/descriptors compare every option": [
+          "samePredicateAndSortEqual", "differentPredicateUnequal", "differentLimitUnequal", "differentPendingOptionUnequal"
+        ]
+      }
     }
   ]
 }

@@ -11,6 +11,8 @@ import Testing
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
         let contextNotificationResults = try OSDContextNotificationAdapter.runAll()
+        let rollbackResults = try OSDRollbackAdapter.runAll()
+        let modelContextResults = try OSDModelContextParityAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
@@ -20,6 +22,8 @@ import Testing
             + BatchDeleteScenarioCatalog.all.map(\.id)
             + CodableParityScenarioCatalog.all.map(\.id)
             + ContextNotificationScenarioCatalog.all.map(\.id)
+            + RollbackParityScenarioCatalog.all.map(\.id)
+            + ModelContextParityScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -84,6 +88,21 @@ import Testing
         for specification in ContextNotificationScenarioCatalog.all {
             let result = try #require(contextNotificationResults.first { $0.id == specification.id })
             #expect(ContextNotificationExpectationValidator.validate(result, against: specification))
+        }
+        #expect(rollbackResults.map(\.id) == RollbackParityScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in RollbackParityScenarioCatalog.all {
+            let result = try #require(rollbackResults.first { $0.id == specification.id })
+            #expect(RollbackParityExpectationValidator.validate(
+                result, against: specification, implementation: "openswiftdata"))
+        }
+        #expect(modelContextResults.map(\.id) == ModelContextParityScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in ModelContextParityScenarioCatalog.all {
+            let result = try #require(modelContextResults.first { $0.id == specification.id })
+            #expect(ModelContextParityExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

@@ -146,9 +146,11 @@ public enum OSDScenarioAdapter {
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
         let contextNotificationResults = try OSDContextNotificationAdapter.runAll()
+        let rollbackResults = try OSDRollbackAdapter.runAll()
+        let modelContextResults = try OSDModelContextParityAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
-            + batchDeleteResults + codableResults + contextNotificationResults)
+            + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults)
             .sorted { $0.id.description < $1.id.description }
     }
 

@@ -129,17 +129,17 @@ final class CustomHierarchyRelationshipOwnerChild: CustomHierarchyRelationshipOw
     }
 }
 
-private final class DictionaryDataStore: DataStore, @unchecked Sendable {
+private final class DictionaryDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
     let identifier = "custom.dictionary"
     let supportsInheritance = true
     private let lock = NSRecursiveLock()
     private var nextPrimaryKey: Int64 = 1
-    private var snapshots: [PersistentIdentifier: DataStoreSnapshot] = [:]
+    private var snapshots: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
     private var reservations: [PersistentIdentifier: PersistentIdentifier] = [:]
     private(set) var lastFetchedValueKeys: Set<String>?
     private var snapshotReadIdentifiers: [PersistentIdentifier] = []
 
-    func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
+    func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         lock.lock()
         defer { lock.unlock() }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
@@ -153,7 +153,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         return remappings
     }
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         lock.lock()
         defer { lock.unlock() }
         var rows = snapshots.values.filter { request.includedEntityNames.contains($0.entityName) }
@@ -163,7 +163,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         if let limit = request.descriptor.fetchLimit { rows = Array(rows.prefix(limit)) }
         guard case let keyPaths = request.descriptor.propertiesToFetch, !keyPaths.isEmpty else {
             lastFetchedValueKeys = rows.first.map { Set($0.values.keys) }
-            return DataStoreFetchResult(snapshots: rows)
+            return OpenSwiftDataDataStoreFetchResult(snapshots: rows)
         }
         let requestedProperties = Set(keyPaths.compactMap(Model.propertyName(forKeyPath:)))
         let requested = Set(
@@ -171,34 +171,34 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
                 attribute.options.contains(.flattened) ? attribute.components.map(\.columnName) : [attribute.name]
             })
         let partialRows = rows.map { snapshot in
-            DataStoreSnapshot(
+            OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: snapshot.persistentIdentifier,
                 entityName: snapshot.entityName,
                 values: snapshot.values.filter { requested.contains($0.key) },
                 relationships: snapshot.relationships)
         }
         lastFetchedValueKeys = partialRows.first.map { Set($0.values.keys) }
-        return DataStoreFetchResult(snapshots: partialRows)
+        return OpenSwiftDataDataStoreFetchResult(snapshots: partialRows)
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
         lock.lock()
         defer { lock.unlock() }
         for snapshot in request.inserted {
             let identifier = snapshot.persistentIdentifier
-            snapshots[identifier] = DataStoreSnapshot(
+            snapshots[identifier] = OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: identifier, entityName: snapshot.entityName,
                 values: snapshot.values,
                 relationships: snapshot.relationships)
         }
         for snapshot in request.updated {
-            snapshots[snapshot.persistentIdentifier] = DataStoreSnapshot(
+            snapshots[snapshot.persistentIdentifier] = OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: snapshot.persistentIdentifier, entityName: snapshot.entityName,
                 values: snapshot.values,
                 relationships: snapshot.relationships)
         }
         for identifier in request.deleted { snapshots.removeValue(forKey: identifier) }
-        return DataStoreSaveResult(
+        return OpenSwiftDataDataStoreSaveResult(
             identifierRemappings: [:],
             updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
             deletedIdentifiers: Set(request.deleted))
@@ -211,7 +211,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         relationships.mapValues { $0.map { remappings[$0] ?? $0 } }
     }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         lock.lock()
         defer { lock.unlock() }
         snapshotReadIdentifiers.append(identifier)
@@ -230,7 +230,7 @@ private final class DictionaryDataStore: DataStore, @unchecked Sendable {
         lock.unlock()
     }
 
-    func storedSnapshots() -> [DataStoreSnapshot] {
+    func storedSnapshots() -> [OpenSwiftDataDataStoreSnapshot] {
         lock.lock()
         defer { lock.unlock() }
         return Array(snapshots.values)
@@ -293,84 +293,84 @@ private final class ClosingRuntimeSchemaStore: RuntimeSchemaProvidingStore, @unc
     }
 }
 
-private struct UnsupportedHierarchyDataStore: DataStore {
+private struct UnsupportedHierarchyDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.flat-only"
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        DataStoreFetchResult(snapshots: [])
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct MismatchedHierarchySnapshotDataStore: DataStore {
+private struct MismatchedHierarchySnapshotDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.hierarchy.mismatched"
     let supportsInheritance = true
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         let identifier = PersistentIdentifier(
             storeIdentifier: self.identifier, entityName: "CustomHierarchyChild", primaryKey: 1)
-        return DataStoreFetchResult(
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: identifier,
                     entityName: "CustomHierarchyGrandchild",
                     values: ["name": .text("bad"), "score": .int(1), "rank": .int(2)])
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct OutsideHierarchySnapshotDataStore: DataStore {
+private struct OutsideHierarchySnapshotDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.hierarchy.outside"
     let supportsInheritance = true
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         let identifier = PersistentIdentifier(
             storeIdentifier: self.identifier, entityName: "CustomDataStoreFixture", primaryKey: 1)
-        return DataStoreFetchResult(
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: identifier,
                     entityName: "CustomDataStoreFixture",
                     values: ["value": .int(1)])
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct DuplicateHierarchySnapshotDataStore: DataStore {
+private struct DuplicateHierarchySnapshotDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.hierarchy.duplicate"
     let supportsInheritance = true
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         let identifier = PersistentIdentifier(
             storeIdentifier: self.identifier, entityName: "CustomHierarchyChild", primaryKey: 5)
-        let original = DataStoreSnapshot(
+        let original = OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identifier,
             entityName: "CustomHierarchyChild",
             values: ["name": .text("first"), "score": .int(1)])
-        let conflicting = DataStoreSnapshot(
+        let conflicting = OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identifier,
             entityName: "CustomHierarchyChild",
             values: ["name": .text("second"), "score": .int(2)])
-        return DataStoreFetchResult(snapshots: [original, conflicting])
+        return OpenSwiftDataDataStoreFetchResult(snapshots: [original, conflicting])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct InvalidHierarchyRelationshipDataStore: DataStore {
+private struct InvalidHierarchyRelationshipDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.hierarchy.invalid-relationship"
     let supportsInheritance = true
     private let ownerIdentifier = PersistentIdentifier(
@@ -378,11 +378,11 @@ private struct InvalidHierarchyRelationshipDataStore: DataStore {
     private let wrongTargetIdentifier = PersistentIdentifier(
         storeIdentifier: "custom.hierarchy.invalid-relationship", entityName: "CustomDataStoreFixture", primaryKey: 2)
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        guard request.entity.name == "CustomHierarchyOwner" else { return DataStoreFetchResult(snapshots: []) }
-        return DataStoreFetchResult(
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        guard request.entity.name == "CustomHierarchyOwner" else { return OpenSwiftDataDataStoreFetchResult(snapshots: []) }
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomHierarchyOwner",
                     values: ["label": .text("owner")],
@@ -390,18 +390,18 @@ private struct InvalidHierarchyRelationshipDataStore: DataStore {
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard identifier == wrongTargetIdentifier else { return nil }
-        return DataStoreSnapshot(
+        return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: wrongTargetIdentifier,
             entityName: "CustomDataStoreFixture",
             values: ["value": .int(1)])
     }
 }
 
-private struct HierarchyDestinationRelationshipDataStore: DataStore {
+private struct HierarchyDestinationRelationshipDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.hierarchy.destination-relationship"
     let supportsInheritance = true
     let targetEntityName: String
@@ -414,11 +414,11 @@ private struct HierarchyDestinationRelationshipDataStore: DataStore {
         PersistentIdentifier(storeIdentifier: identifier, entityName: targetEntityName, primaryKey: 2)
     }
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        guard request.entity.name == "CustomHierarchyChildOwner" else { return DataStoreFetchResult(snapshots: []) }
-        return DataStoreFetchResult(
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        guard request.entity.name == "CustomHierarchyChildOwner" else { return OpenSwiftDataDataStoreFetchResult(snapshots: []) }
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomHierarchyChildOwner",
                     values: ["label": .text("owner")],
@@ -426,9 +426,9 @@ private struct HierarchyDestinationRelationshipDataStore: DataStore {
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard identifier == targetIdentifier else { return nil }
         let values: [String: StoredValue]
         switch targetEntityName {
@@ -439,12 +439,12 @@ private struct HierarchyDestinationRelationshipDataStore: DataStore {
         default:
             values = ["name": .text("base")]
         }
-        return DataStoreSnapshot(
+        return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: targetIdentifier, entityName: targetEntityName, values: values)
     }
 }
 
-private struct MultipleTargetsForToOneDataStore: DataStore {
+private struct MultipleTargetsForToOneDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.store.multiple-to-one-targets"
     private let ownerIdentifier = PersistentIdentifier(
         storeIdentifier: "custom.store.multiple-to-one-targets", entityName: "CustomDataStoreOwner", primaryKey: 1)
@@ -455,11 +455,11 @@ private struct MultipleTargetsForToOneDataStore: DataStore {
         storeIdentifier: "custom.store.multiple-to-one-targets", entityName: "CustomDataStoreDestination", primaryKey: 3
     )
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        guard request.entity.name == "CustomDataStoreOwner" else { return DataStoreFetchResult(snapshots: []) }
-        return DataStoreFetchResult(
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        guard request.entity.name == "CustomDataStoreOwner" else { return OpenSwiftDataDataStoreFetchResult(snapshots: []) }
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomDataStoreOwner",
                     values: ["name": .text("owner")],
@@ -467,11 +467,11 @@ private struct MultipleTargetsForToOneDataStore: DataStore {
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard identifier == firstTargetIdentifier || identifier == secondTargetIdentifier else { return nil }
-        return DataStoreSnapshot(
+        return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identifier,
             entityName: "CustomDataStoreDestination",
             values: ["title": .text("target")],
@@ -479,16 +479,16 @@ private struct MultipleTargetsForToOneDataStore: DataStore {
     }
 }
 
-private struct EmptyToOneRelationshipDataStore: DataStore {
+private struct EmptyToOneRelationshipDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.store.empty-to-one-target"
     private let ownerIdentifier = PersistentIdentifier(
         storeIdentifier: "custom.store.empty-to-one-target", entityName: "CustomDataStoreOwner", primaryKey: 1)
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        guard request.entity.name == "CustomDataStoreOwner" else { return DataStoreFetchResult(snapshots: []) }
-        return DataStoreFetchResult(
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        guard request.entity.name == "CustomDataStoreOwner" else { return OpenSwiftDataDataStoreFetchResult(snapshots: []) }
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomDataStoreOwner",
                     values: ["name": .text("owner")],
@@ -496,12 +496,12 @@ private struct EmptyToOneRelationshipDataStore: DataStore {
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct MultipleTargetsForToManyDataStore: DataStore {
+private struct MultipleTargetsForToManyDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.store.multiple-to-many-targets"
     private let ownerIdentifier = PersistentIdentifier(
         storeIdentifier: "custom.store.multiple-to-many-targets", entityName: "CustomDataStoreCollectionOwner",
@@ -513,13 +513,13 @@ private struct MultipleTargetsForToManyDataStore: DataStore {
         storeIdentifier: "custom.store.multiple-to-many-targets", entityName: "CustomDataStoreCollectionDestination",
         primaryKey: 3)
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         guard request.entity.name == "CustomDataStoreCollectionOwner" else {
-            return DataStoreFetchResult(snapshots: [])
+            return OpenSwiftDataDataStoreFetchResult(snapshots: [])
         }
-        return DataStoreFetchResult(
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: [
-                DataStoreSnapshot(
+                OpenSwiftDataDataStoreSnapshot(
                     persistentIdentifier: ownerIdentifier,
                     entityName: "CustomDataStoreCollectionOwner",
                     values: ["name": .text("owner")],
@@ -531,24 +531,24 @@ private struct MultipleTargetsForToManyDataStore: DataStore {
             ])
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         guard identifier == firstTargetIdentifier || identifier == secondTargetIdentifier else { return nil }
-        return DataStoreSnapshot(
+        return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identifier,
             entityName: "CustomDataStoreCollectionDestination",
             values: ["title": .text("target")])
     }
 }
 
-private final class FailsOnceDataStore: DataStore, @unchecked Sendable {
+private final class FailsOnceDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
     let identifier = "custom.dictionary.fails-once"
     let supportsInheritance = true
     private let lock = NSLock()
     private let failOnSaveNumber: Int
     private var saveCount = 0
-    private var rows: [PersistentIdentifier: DataStoreSnapshot] = [:]
+    private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
     private var nextID: Int64 = 1
     private var reservations: [PersistentIdentifier: PersistentIdentifier] = [:]
 
@@ -556,14 +556,14 @@ private final class FailsOnceDataStore: DataStore, @unchecked Sendable {
         self.failOnSaveNumber = failOnSaveNumber
     }
 
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         lock.lock()
         defer { lock.unlock() }
-        return DataStoreFetchResult(
+        return OpenSwiftDataDataStoreFetchResult(
             snapshots: rows.values.filter { request.includedEntityNames.contains($0.entityName) })
     }
 
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
         lock.lock()
         defer { lock.unlock() }
         saveCount += 1
@@ -572,25 +572,25 @@ private final class FailsOnceDataStore: DataStore, @unchecked Sendable {
         }
         for snapshot in request.inserted {
             let identifier = snapshot.persistentIdentifier
-            rows[identifier] = DataStoreSnapshot(
+            rows[identifier] = OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: identifier, entityName: snapshot.entityName,
                 values: snapshot.values, relationships: snapshot.relationships)
         }
         for snapshot in request.updated {
-            rows[snapshot.persistentIdentifier] = DataStoreSnapshot(
+            rows[snapshot.persistentIdentifier] = OpenSwiftDataDataStoreSnapshot(
                 persistentIdentifier: snapshot.persistentIdentifier,
                 entityName: snapshot.entityName,
                 values: snapshot.values,
                 relationships: snapshot.relationships)
         }
         for identifier in request.deleted { rows.removeValue(forKey: identifier) }
-        return DataStoreSaveResult(
+        return OpenSwiftDataDataStoreSaveResult(
             identifierRemappings: [:],
             updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
             deletedIdentifiers: Set(request.deleted))
     }
 
-    func reserveIdentifiers(for snapshots: [DataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
+    func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         lock.lock()
         defer { lock.unlock() }
         var result: [PersistentIdentifier: PersistentIdentifier] = [:]
@@ -608,13 +608,13 @@ private final class FailsOnceDataStore: DataStore, @unchecked Sendable {
         return result
     }
 
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? {
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {
         lock.lock()
         defer { lock.unlock() }
         return rows[identifier]
     }
 
-    func storedSnapshots() -> [DataStoreSnapshot] {
+    func storedSnapshots() -> [OpenSwiftDataDataStoreSnapshot] {
         lock.lock()
         defer { lock.unlock() }
         return Array(rows.values)
@@ -1410,36 +1410,36 @@ final class DataStoreTests: XCTestCase {
     }
 }
 
-private struct FailingDictionaryDataStore: DataStore {
+private struct FailingDictionaryDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.dictionary.failure"
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        DataStoreFetchResult(snapshots: [])
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
     }
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
-        throw SwiftDataError.unsupportedStore("injected custom DataStore failure")
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        throw SwiftDataError.unsupportedStore("injected custom OpenSwiftDataDataStore failure")
     }
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct InvalidSaveResultDataStore: DataStore {
+private struct InvalidSaveResultDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.dictionary.invalid-result"
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
-        DataStoreFetchResult(snapshots: [])
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
     }
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult {
-        DataStoreSaveResult()
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        OpenSwiftDataDataStoreSaveResult()
     }
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }
 
-private struct MalformedSnapshotDataStore: DataStore {
+private struct MalformedSnapshotDataStore: OpenSwiftDataDataStore {
     let identifier = "custom.dictionary.malformed"
-    func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult {
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
         let identifier = PersistentIdentifier(
             storeIdentifier: self.identifier, entityName: request.entity.name, primaryKey: 1)
-        return DataStoreFetchResult(
-            snapshots: [DataStoreSnapshot(persistentIdentifier: identifier, entityName: request.entity.name)])
+        return OpenSwiftDataDataStoreFetchResult(
+            snapshots: [OpenSwiftDataDataStoreSnapshot(persistentIdentifier: identifier, entityName: request.entity.name)])
     }
-    func save(_ request: DataStoreSaveRequest) throws -> DataStoreSaveResult { DataStoreSaveResult() }
-    func snapshot(for identifier: PersistentIdentifier) throws -> DataStoreSnapshot? { nil }
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult { OpenSwiftDataDataStoreSaveResult() }
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
 }

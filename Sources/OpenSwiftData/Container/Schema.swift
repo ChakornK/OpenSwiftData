@@ -58,6 +58,30 @@ public final class Schema: @unchecked Sendable {
 
     }
 
+    /// Describes a composite property and its recursively nested attributes.
+    public struct CompositeAttribute: Hashable {
+        public let name: String
+        public let valueType: Any.Type
+        public let attributes: [Attribute]
+
+        public init(name: String, valueType: Any.Type, attributes: [Attribute]) {
+            self.name = name
+            self.valueType = valueType
+            self.attributes = attributes
+        }
+
+        public static func == (lhs: CompositeAttribute, rhs: CompositeAttribute) -> Bool {
+            lhs.name == rhs.name && ObjectIdentifier(lhs.valueType) == ObjectIdentifier(rhs.valueType)
+                && lhs.attributes == rhs.attributes
+        }
+
+        public func hash(into hasher: inout Hasher) {
+            hasher.combine(name)
+            hasher.combine(ObjectIdentifier(valueType))
+            hasher.combine(attributes)
+        }
+    }
+
     public struct Index: Hashable {
         public let properties: [String]
         public let isUnique: Bool
@@ -110,9 +134,34 @@ public final class Schema: @unchecked Sendable {
             superentityName = superentity?.name
         }
 
-        fileprivate init(_ entity: SchemaDescriptor.Entity) {
+        fileprivate init(
+            _ entity: SchemaDescriptor.Entity,
+            runtimeTypes: [String: Any.Type] = [:],
+            compositeTypes: [String: [String: Any.Type]] = [:]
+        ) {
             name = entity.name
-            let orderedAttributes = entity.attributes.map(Attribute.init)
+            let orderedAttributes = entity.attributes.map { attribute in
+                let runtimeType = runtimeTypes[attribute.name]
+                let composite: CompositeAttribute?
+                if attribute.options.contains(.flattened), let runtimeType {
+                    let children = attribute.components.map { component in
+                        let childType = compositeTypes[attribute.name]?[component.name]
+                            ?? Attribute.descriptorRuntimeType(component.type)
+                        let nestedComposite: CompositeAttribute? = childType is any FlattenedCompositeMetadataProviding.Type
+                            ? CompositeAttribute(
+                                name: component.name,
+                                valueType: childType,
+                                attributes: ((childType as? any FlattenedCompositeMetadataProviding.Type)?
+                                    .flattenedComponentTypesForSchema ?? []).map { Attribute($0.0, valueType: $0.1) })
+                            : nil
+                        return Attribute(component.name, valueType: childType, compositeAttribute: nestedComposite)
+                    }
+                    composite = CompositeAttribute(name: attribute.name, valueType: runtimeType, attributes: children)
+                } else {
+                    composite = nil
+                }
+                return Attribute(attribute, runtimeType: runtimeType, compositeAttribute: composite)
+            }
             let orderedRelationships = entity.relationships.map(Relationship.init)
             attributes = Set(orderedAttributes)
             relationships = Set(orderedRelationships)
@@ -149,29 +198,7 @@ public final class Schema: @unchecked Sendable {
 
     /// Describes a persisted attribute.
     public final class Attribute: Hashable, SchemaProperty {
-        public struct CompositeAttribute: Hashable {
-            public let name: String
-            public let valueType: Any.Type
-            public let attributes: Set<Attribute>
-
-            public init(name: String, valueType: Any.Type, attributes: Set<Attribute>) {
-                self.name = name
-                self.valueType = valueType
-                self.attributes = attributes
-            }
-
-            public static func == (lhs: CompositeAttribute, rhs: CompositeAttribute) -> Bool {
-                lhs.name == rhs.name && ObjectIdentifier(lhs.valueType) == ObjectIdentifier(rhs.valueType)
-                    && lhs.attributes == rhs.attributes
-            }
-
-            public func hash(into hasher: inout Hasher) {
-                hasher.combine(name)
-                hasher.combine(ObjectIdentifier(valueType))
-                hasher.combine(attributes)
-            }
-        }
-
+        public let compositeAttribute: CompositeAttribute?
         public typealias Component = SchemaDescriptor.Attribute.Component
 
         public enum Option: Hashable, Sendable {
@@ -210,11 +237,13 @@ public final class Schema: @unchecked Sendable {
         public let originalName: String?
         public let hashModifier: String?
         public let components: [SchemaDescriptor.Attribute.Component]
+        public let defaultValue: String?
         public var isAttribute: Bool { true }
         public var isRelationship: Bool { false }
         public var isTransient: Bool { false }
         public var isUnique: Bool { options.contains(.unique) }
         public var isTransformable: Bool { options.contains { if case .transformable = $0 { true } else { false } } }
+        public var composite: CompositeAttribute? { compositeAttribute }
 
         public init(
             _ name: String,
@@ -223,7 +252,9 @@ public final class Schema: @unchecked Sendable {
             isOptional: Bool = false,
             originalName: String? = nil,
             hashModifier: String? = nil,
-            components: [SchemaDescriptor.Attribute.Component] = []
+            components: [SchemaDescriptor.Attribute.Component] = [],
+            compositeAttribute: CompositeAttribute? = nil,
+            defaultValue: String? = nil
         ) {
             self.name = name
             self.valueType = valueType
@@ -232,17 +263,24 @@ public final class Schema: @unchecked Sendable {
             self.originalName = originalName
             self.hashModifier = hashModifier
             self.components = components
+            self.compositeAttribute = compositeAttribute
+            self.defaultValue = defaultValue
         }
 
         fileprivate convenience init(_ attribute: SchemaDescriptor.Attribute) {
-            self.init(
-                attribute.name,
-                valueType: Self.resolveType(attribute.type),
-                options: Set(attribute.options.compactMap(\.schemaOption)),
-                isOptional: attribute.isOptional,
-                originalName: attribute.originalName,
-                hashModifier: attribute.hashModifier,
-                components: attribute.components)
+            self.init(attribute, runtimeType: nil, compositeAttribute: nil)
+        }
+
+        fileprivate convenience init(
+            _ attribute: SchemaDescriptor.Attribute,
+            runtimeType: Any.Type?,
+            compositeAttribute: CompositeAttribute? = nil
+        ) {
+            self.init(attribute.name, valueType: runtimeType ?? Self.resolveType(attribute.type),
+                options: Set(attribute.options.compactMap(\.schemaOption)), isOptional: attribute.isOptional,
+                originalName: attribute.originalName, hashModifier: attribute.hashModifier,
+                components: attribute.components, compositeAttribute: compositeAttribute,
+                defaultValue: attribute.defaultValue)
         }
 
         fileprivate var descriptor: SchemaDescriptor.Attribute {
@@ -250,6 +288,7 @@ public final class Schema: @unchecked Sendable {
                 name: name,
                 type: Self.descriptorTypeName(valueType),
                 isOptional: isOptional,
+                defaultValue: defaultValue,
                 options: Set(options.compactMap(\.descriptorOption)),
                 originalName: originalName,
                 components: components,
@@ -301,6 +340,8 @@ public final class Schema: @unchecked Sendable {
             default: Any.self
             }
         }
+
+        fileprivate static func descriptorRuntimeType(_ name: String) -> Any.Type { resolveType(name) }
 
         fileprivate static func descriptorTypeName(_ type: Any.Type) -> String {
             let name = String(reflecting: type)
@@ -457,10 +498,12 @@ public final class Schema: @unchecked Sendable {
     package let inferenceError: (any Error)?
     private let sourceDescriptor: SchemaDescriptor?
     private let preservesEntityIDs: Bool
+    private let runtimeTypes: SchemaDescriptor.RuntimePropertyTypes
 
     public var propertyMetadata: [PropertyMetadata] {
         models.flatMap { $0.schemaMetadata().map(PropertyMetadata.init) }
     }
+
 
     public init(_ entities: Set<Entity>, version: Version = Version(1, 0, 0)) {
         self.entities = entities.sorted { $0.name < $1.name }
@@ -470,6 +513,7 @@ public final class Schema: @unchecked Sendable {
         inferenceError = nil
         sourceDescriptor = nil
         preservesEntityIDs = false
+        runtimeTypes = .init()
     }
 
     public convenience init(_ entities: Entity..., version: Version = Version(1, 0, 0)) {
@@ -500,7 +544,13 @@ public final class Schema: @unchecked Sendable {
     }
 
     public convenience init(descriptor: SchemaDescriptor) {
-        self.init(descriptor: descriptor, entities: Set(descriptor.entities.map(Entity.init)))
+        let entities = Set(descriptor.entities.map { entity in
+            Entity(
+                entity,
+                runtimeTypes: descriptor.runtimePropertyTypes.values[entity.name] ?? [:],
+                compositeTypes: descriptor.runtimePropertyTypes.compositeValues[entity.name] ?? [:])
+        })
+        self.init(descriptor: descriptor, entities: entities)
     }
 
     private init(
@@ -516,6 +566,7 @@ public final class Schema: @unchecked Sendable {
         self.inferenceError = inferenceError
         sourceDescriptor = nil
         preservesEntityIDs = false
+        runtimeTypes = .init()
     }
 
     private init(descriptor: SchemaDescriptor, entities: Set<Entity>) {
@@ -526,6 +577,7 @@ public final class Schema: @unchecked Sendable {
         inferenceError = descriptor.modelTypes.inferenceError
         sourceDescriptor = descriptor
         preservesEntityIDs = true
+        runtimeTypes = descriptor.runtimePropertyTypes
     }
 
     package var descriptor: SchemaDescriptor {

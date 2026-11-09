@@ -27,7 +27,7 @@ public final class ModelContainer: Sendable {
     package var storeIdentifier: String {
         dataStore?.identifier ?? store?.persistentStoreIdentifier ?? configurationList.first?.name ?? "default"
     }
-    package let dataStore: (any DataStore)?
+    package let dataStore: (any OpenSwiftDataDataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
     let modelTypesByEntityName: [String: ModelTypeRegistration]
@@ -112,6 +112,23 @@ public final class ModelContainer: Sendable {
             }
         }
         let effectivePropertiesByEntity = propertiesByEntity.mapValues(Self.effectiveProperties)
+        var runtimePropertyTypes: [String: [String: Any.Type]] = [:]
+        var runtimeCompositeTypes: [String: [String: [String: Any.Type]]] = [:]
+        for (entityName, properties) in propertiesByEntity {
+            runtimePropertyTypes[entityName] = Dictionary(uniqueKeysWithValues: properties.map { metadata, keyPath in
+                (metadata.name, type(of: keyPath).valueType)
+            })
+            for (metadata, keyPath) in properties where metadata.options.contains("flattened") {
+                let propertyType = type(of: keyPath).valueType
+                guard let compositeType = propertyType as? any FlattenedCompositeMetadataProviding.Type else { continue }
+                if runtimeCompositeTypes[entityName] == nil { runtimeCompositeTypes[entityName] = [:] }
+                var componentTypes: [String: Any.Type] = [:]
+                for (componentName, componentType) in compositeType.flattenedComponentTypesForSchema {
+                    componentTypes[componentName] = componentType
+                }
+                runtimeCompositeTypes[entityName]?[metadata.name] = componentTypes
+            }
+        }
         let entities = try types.map { modelType in
             let properties = propertiesByEntity[Self.unqualifiedTypeName(String(describing: modelType))] ?? []
             let schemaProperties = try properties.map {
@@ -411,6 +428,8 @@ public final class ModelContainer: Sendable {
         var schema = SchemaDescriptor(inferredEntities, version: version)
         try schema.validateRelationshipStorageMappings()
         schema.modelTypes = SchemaDescriptor.ModelTypes(types: types)
+        schema.runtimePropertyTypes = SchemaDescriptor.RuntimePropertyTypes(values: runtimePropertyTypes)
+        schema.runtimePropertyTypes.compositeValues = runtimeCompositeTypes
         return schema
     }
 
@@ -948,7 +967,8 @@ public final class ModelContainer: Sendable {
         guard configuration.cloudKitDatabase.privateDatabaseName == nil else {
             throw SwiftDataError.unsupportedStore("CloudKit stores are not supported.")
         }
-        if configuration.dataStoreConfiguration != nil || configuration.appleDataStoreConfiguration != nil { return nil }
+        if configuration.dataStoreConfiguration != nil || configuration.appleDataStoreConfiguration != nil
+            || configuration.canonicalStoreFactory != nil { return nil }
         guard let factory = configuration.storeFactory else {
             throw SwiftDataError.unsupportedStore("The configured store backend/provider is unavailable.")
         }
@@ -960,14 +980,14 @@ public final class ModelContainer: Sendable {
     }
 
     private static func validateDataStoreInheritanceSupport(
-        schema: SchemaDescriptor, dataStore: (any DataStore)?
+        schema: SchemaDescriptor, dataStore: (any OpenSwiftDataDataStore)?
     ) throws {
         guard schema.entities.contains(where: { $0.superentityName != nil }),
             let dataStore,
             !dataStore.supportsInheritance
         else { return }
         throw SwiftDataError.unsupportedStore(
-            "The configured DataStore does not support model inheritance.")
+            "The configured OpenSwiftDataDataStore does not support model inheritance.")
     }
 
     private static func runtimeSchema(requested: SchemaDescriptor, store: (any RuntimeStore)?) throws -> SchemaDescriptor {
@@ -985,12 +1005,13 @@ public final class ModelContainer: Sendable {
         schema: SchemaDescriptor,
         migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
         configurations: [ModelConfiguration]
-    ) throws -> (any DataStore)? {
+    ) throws -> (any OpenSwiftDataDataStore)? {
         guard configurations.contains(where: {
             $0.dataStoreConfiguration != nil || $0.appleDataStoreConfiguration != nil
+                || $0.canonicalStoreFactory != nil
         }) else { return nil }
         guard configurations.count == 1, let configuration = configurations.first else {
-            throw SwiftDataError.unsupportedStore("Exactly one custom DataStore configuration is supported.")
+            throw SwiftDataError.unsupportedStore("Exactly one custom data store configuration is supported.")
         }
         if let appleConfiguration = configuration.appleDataStoreConfiguration {
             guard configuration.dataStoreConfiguration == nil,
@@ -1014,13 +1035,26 @@ public final class ModelContainer: Sendable {
             }
             return try bridge.makeBackend(schema: schema, migrationPlan: migrationPlan)
         }
+        if let canonicalStoreFactory = configuration.canonicalStoreFactory {
+            guard configuration.dataStoreConfiguration == nil,
+                configuration.appleDataStoreConfiguration == nil,
+                configuration.cloudKitDatabase.privateDatabaseName == nil,
+                configuration.storeFactory == nil,
+                configuration.schemaVersionReader == nil,
+                !configuration.isStoredInMemoryOnly
+            else {
+                throw SwiftDataError.unsupportedStore("Canonical DataStore configurations cannot be combined with another backend.")
+            }
+            let publicSchema = configuration.schema ?? Schema(descriptor: schema)
+            return try canonicalStoreFactory(publicSchema, migrationPlan)
+        }
         guard let dataStoreConfiguration = configuration.dataStoreConfiguration else { return nil }
         guard configuration.cloudKitDatabase.privateDatabaseName == nil,
             configuration.storeFactory == nil, configuration.schemaVersionReader == nil,
             !configuration.isStoredInMemoryOnly
         else {
             throw SwiftDataError.unsupportedStore(
-                "Custom DataStore configurations cannot be combined with another backend.")
+                "Custom data store configurations cannot be combined with another backend.")
         }
         return try dataStoreConfiguration.makeStore(schema: schema)
     }

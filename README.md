@@ -88,12 +88,42 @@ OpenSwiftData uses its own SQLite store and cannot open Apple's SwiftData stores
 
 ### Behavior differences
 
-- Apple bugs that lose data or crash are not replicated. Examples include a pending rename lost after a batch delete, crashes on fetch after `erase()`, and crashes on `fetchCount` with an offset.
-- Where Apple returns results that contradict Swift semantics, OpenSwiftData follows Swift semantics. For example, Apple's `name.count == 4` doesn't match `"beta"`.
-- Nondeterministic Apple behavior, such as unsorted order with pending changes or which duplicate survives when two are inserted in one save, is not matched.
-- Replicated Apple quirks: `.deny` is not enforced, and context deletes nullify related models.
-- Deleting an unsaved model keeps it attached and marked deleted until save or rollback. Batch deletes reject entities with `.deny` relationships and leave pending changes and registered model instances intact.
-- `Schema` now exposes a class-based, Apple-shaped facade with `Set`-typed entities, attributes, and relationships, runtime attribute `valueType`, model-type initialization, and container/configuration routing. Storage and migration continue to use the internal `SchemaDescriptor`; exact Apple metadata parity, including composite attribute/value conversion and complete custom-store snapshot conversion, remains tracked in [issue #8](https://github.com/ChakornK/OpenSwiftData/issues/8). The custom-store API still uses prefixed Apple-shaped protocols and requires an explicit `AppleDataStoreBackendProviding` adapter. `AppleDefaultSnapshot`'s deprecated nonthrowing backing-data initializer captures identity only because backing data cannot safely expose model property values.
+The parity suite tracks behavior and API differences. Expand the list for details:
+
+<details>
+<summary>Show all</summary>
+
+1. Batch delete, `delete.state`: the saved model remains registered and not deleted in Apple; OpenSwiftData marks it deleted and unregisters it.
+2. Deleted insertion rollback, `hasChanges`: Apple reports changes; OpenSwiftData reports none.
+3. Fetch descriptor defaults, `fetchOffsetAbsent`: Apple's offset is present; OpenSwiftData's is absent.
+4. Fetch descriptor equality, `samePredicateAndSortEqual`: Apple reports unequal; OpenSwiftData reports equal.
+5. Container configurations, `configurationSetMatches`: OpenSwiftData's configurations form the expected set; Apple's do not.
+6. Erase, `lastCompletedStep`: Apple's probe checkpoints step 2 before its post-erase save traps; OpenSwiftData completes step 4.
+7. Erase, `pendingFetchReturned`: the Apple probe does not complete the fetch after its save trap; OpenSwiftData completes it.
+8. Erase, `pendingNamesAfterSave`: the Apple probe has no fetched names after its save trap; OpenSwiftData fetches `[\"pending\"]`.
+9. Erase, `pendingSaveReturned`: the Apple probe does not complete the save after `erase()`; OpenSwiftData completes it.
+10. Rollback detaching related insertions, `itemOwnerAbsent`: Apple keeps the inverse relationship; OpenSwiftData clears it.
+11. Rollback detaching related insertions, `ownerItemCount`: Apple retains one related item; OpenSwiftData retains none.
+12. Rollback of committed relationship edits, `itemOwnerAbsent`: Apple keeps the inverse relationship; OpenSwiftData clears it.
+13. Rollback of committed relationship edits, `ownerItemCount`: Apple retains one related item; OpenSwiftData retains none.
+14. Repeated-edit rollback, `ageAfterFirstRollback`: Apple reports 3; OpenSwiftData reports 1.
+15. Repeated-edit rollback, `ageAfterSecondRollback`: Apple reports 4; OpenSwiftData reports 1.
+16. Rollback after editing then deleting, `age`: Apple reports 2; OpenSwiftData reports 1.
+17. Schema indices, `book.indices`: OpenSwiftData reports `title`; Apple reports `binary` and `title` for the index.
+18. Schema relationship flags, `author.books.flags`: OpenSwiftData marks `books` as a relationship; Apple's flag is false.
+19. Schema Codable round-trip, `roundTrip.book.indices`: OpenSwiftData preserves the `title` index; Apple returns no indices.
+20. Store reopen, `reopened.identifierEqual`: OpenSwiftData's fetched model has the original identifier; Apple's fetched model does not.
+21. Store reopen, `reopened.registeredName`: OpenSwiftData resolves the registered model as `a`; Apple returns `missing`.
+22. Saved optional `flatMap`, `nick.empty.false`: OpenSwiftData matches `délta`; Apple returns no matches.
+23. Saved optional `flatMap`, `nick.isEmpty.direct`: OpenSwiftData matches `délta`; Apple returns no matches.
+24. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
+25. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
+26. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
+27. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData fetches only `z/2/nil`; Apple fetches `z/1/nil` and `z/2/nil`.
+
+28. Apple's custom `DataStore` protocol API is not implemented. OpenSwiftData uses value types and arrays for schema properties, unlike Apple's class-based `Schema` with `Set`-typed attributes, `valueType`, and `CompositeAttribute`.
+
+</details>
 
 ### Platform and storage limits
 

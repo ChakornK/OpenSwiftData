@@ -1,0 +1,741 @@
+{
+  "differences": [
+    {
+      "scenarioID": {
+        "suite": "BatchDeleteParityTests",
+        "test": "batch deletes leave pending changes and registered instances alone"
+      },
+      "field": "delete.state",
+      "osdExpected": {
+        "object": {
+          "afterSaveNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              },
+              {
+                "string": "c",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "deletedCount": {
+            "integer": 0,
+            "type": "integer"
+          },
+          "hasChanges": {
+            "bool": true,
+            "type": "bool"
+          },
+          "insertedCount": {
+            "integer": 1,
+            "type": "integer"
+          },
+          "mainContextNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              },
+              {
+                "string": "c",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "otherContextNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "pendingCRegistered": {
+            "bool": true,
+            "type": "bool"
+          },
+          "savedADeleted": {
+            "bool": true,
+            "type": "bool"
+          },
+          "savedARegistered": {
+            "bool": false,
+            "type": "bool"
+          }
+        },
+        "type": "object"
+      },
+      "appleExpected": {
+        "object": {
+          "afterSaveNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              },
+              {
+                "string": "c",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "deletedCount": {
+            "integer": 0,
+            "type": "integer"
+          },
+          "hasChanges": {
+            "bool": true,
+            "type": "bool"
+          },
+          "insertedCount": {
+            "integer": 1,
+            "type": "integer"
+          },
+          "mainContextNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              },
+              {
+                "string": "c",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "otherContextNames": {
+            "array": [
+              {
+                "string": "b",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "pendingCRegistered": {
+            "bool": true,
+            "type": "bool"
+          },
+          "savedADeleted": {
+            "bool": false,
+            "type": "bool"
+          },
+          "savedARegistered": {
+            "bool": true,
+            "type": "bool"
+          }
+        },
+        "type": "object"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "DeletedInsertionParityTests",
+        "test": "rolling back detaches a deleted insertion"
+      },
+      "field": "hasChanges",
+      "osdExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "FetchDescriptorParityTests",
+        "test": "defaults match SwiftData"
+      },
+      "field": "fetchOffsetAbsent",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "FetchDescriptorParityTests",
+        "test": "descriptors compare every option"
+      },
+      "field": "samePredicateAndSortEqual",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "ModelContainerParityTests",
+        "test": "configurations are a set and containers compare by identity"
+      },
+      "field": "configurationSetMatches",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "ModelContainerParityTests",
+        "test": "erasing removes stored models and keeps the store usable"
+      },
+      "field": "lastCompletedStep",
+      "osdExpected": {
+        "integer": 4,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 2,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "ModelContainerParityTests",
+        "test": "erasing removes stored models and keeps the store usable"
+      },
+      "field": "pendingFetchReturned",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "ModelContainerParityTests",
+        "test": "erasing removes stored models and keeps the store usable"
+      },
+      "field": "pendingNamesAfterSave",
+      "osdExpected": {
+        "array": [
+          {
+            "string": "pending",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "ModelContainerParityTests",
+        "test": "erasing removes stored models and keeps the store usable"
+      },
+      "field": "pendingSaveReturned",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback detaches related insertions and restores saved graph"
+      },
+      "field": "itemOwnerAbsent",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback detaches related insertions and restores saved graph"
+      },
+      "field": "ownerItemCount",
+      "osdExpected": {
+        "integer": 0,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 1,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback restores committed relationship edits"
+      },
+      "field": "itemOwnerAbsent",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback restores committed relationship edits"
+      },
+      "field": "ownerItemCount",
+      "osdExpected": {
+        "integer": 0,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 1,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback restores first committed values after repeated edits"
+      },
+      "field": "ageAfterFirstRollback",
+      "osdExpected": {
+        "integer": 1,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 3,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback restores first committed values after repeated edits"
+      },
+      "field": "ageAfterSecondRollback",
+      "osdExpected": {
+        "integer": 1,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 4,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "RollbackParityTests",
+        "test": "rollback restores values when an edited model is deleted"
+      },
+      "field": "age",
+      "osdExpected": {
+        "integer": 1,
+        "type": "integer"
+      },
+      "appleExpected": {
+        "integer": 2,
+        "type": "integer"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "SchemaIntrospectionParityTests",
+        "test": "constraints and indices are listed by property name"
+      },
+      "field": "book.indices",
+      "osdExpected": {
+        "array": [
+          {
+            "array": [
+              {
+                "string": "title",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [
+          {
+            "array": [
+              {
+                "string": "binary",
+                "type": "string"
+              },
+              {
+                "string": "title",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "SchemaIntrospectionParityTests",
+        "test": "property flags describe attributes and relationships"
+      },
+      "field": "author.books.flags",
+      "osdExpected": {
+        "object": {
+          "attribute": {
+            "bool": false,
+            "type": "bool"
+          },
+          "deleteRule": {
+            "string": "cascade",
+            "type": "string"
+          },
+          "inverse": {
+            "string": "author",
+            "type": "string"
+          },
+          "relationship": {
+            "bool": true,
+            "type": "bool"
+          },
+          "toOne": {
+            "bool": false,
+            "type": "bool"
+          }
+        },
+        "type": "object"
+      },
+      "appleExpected": {
+        "object": {
+          "attribute": {
+            "bool": false,
+            "type": "bool"
+          },
+          "deleteRule": {
+            "string": "cascade",
+            "type": "string"
+          },
+          "inverse": {
+            "string": "author",
+            "type": "string"
+          },
+          "relationship": {
+            "bool": false,
+            "type": "bool"
+          },
+          "toOne": {
+            "bool": false,
+            "type": "bool"
+          }
+        },
+        "type": "object"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "SchemaIntrospectionParityTests",
+        "test": "schemas round-trip through Codable and files"
+      },
+      "field": "roundTrip.book.indices",
+      "osdExpected": {
+        "array": [
+          {
+            "array": [
+              {
+                "string": "title",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StoreIdentifierParityTests",
+        "test": "the store identifier survives reopening the store"
+      },
+      "field": "reopened.identifierEqual",
+      "osdExpected": {
+        "bool": true,
+        "type": "bool"
+      },
+      "appleExpected": {
+        "bool": false,
+        "type": "bool"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StoreIdentifierParityTests",
+        "test": "the store identifier survives reopening the store"
+      },
+      "field": "reopened.registeredName",
+      "osdExpected": {
+        "string": "a",
+        "type": "string"
+      },
+      "appleExpected": {
+        "string": "missing",
+        "type": "string"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StringPredicateParityTests",
+        "test": "optional flatMap over a string/saved"
+      },
+      "field": "nick.empty.false",
+      "osdExpected": {
+        "array": [
+          {
+            "string": "délta",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StringPredicateParityTests",
+        "test": "optional flatMap over a string/saved"
+      },
+      "field": "nick.isEmpty.direct",
+      "osdExpected": {
+        "array": [
+          {
+            "string": "délta",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StringPredicateParityTests",
+        "test": "string count counts characters/saved"
+      },
+      "field": "length.4",
+      "osdExpected": {
+        "array": [
+          {
+            "string": "beta",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StringPredicateParityTests",
+        "test": "string count counts characters/saved"
+      },
+      "field": "length.5",
+      "osdExpected": {
+        "stringSet": [
+          "Alpha",
+          "Gamma",
+          "délta"
+        ],
+        "type": "stringSet"
+      },
+      "appleExpected": {
+        "stringSet": [],
+        "type": "stringSet"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "StringPredicateParityTests",
+        "test": "string count counts characters/saved"
+      },
+      "field": "length.gt5",
+      "osdExpected": {
+        "array": [
+          {
+            "string": "Épsilon",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "appleExpected": {
+        "array": [
+          {
+            "string": "Alpha",
+            "type": "string"
+          },
+          {
+            "string": "beta",
+            "type": "string"
+          },
+          {
+            "string": "délta",
+            "type": "string"
+          },
+          {
+            "string": "Épsilon",
+            "type": "string"
+          },
+          {
+            "string": "Gamma",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    },
+    {
+      "scenarioID": {
+        "suite": "UniqueConstraintParityTests",
+        "test": "duplicates inserted in one save collapse into one row"
+      },
+      "field": "survivorsObserved",
+      "osdExpected": {
+        "stringSet": [
+          "z/2/nil"
+        ],
+        "type": "stringSet"
+      },
+      "appleExpected": {
+        "stringSet": [
+          "z/1/nil",
+          "z/2/nil"
+        ],
+        "type": "stringSet"
+      },
+      "reason": "deferred-behavior-gap: not implemented yet",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/8",
+      "expiration": "2027-11-09"
+    }
+  ]
+}

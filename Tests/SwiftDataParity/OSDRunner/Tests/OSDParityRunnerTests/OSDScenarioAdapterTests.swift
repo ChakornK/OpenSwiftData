@@ -4,6 +4,30 @@ import Testing
 
 @Suite struct OSDScenarioAdapterTests {
     @MainActor
+    @Test func uniqueConstraintScenariosMatchSharedContracts() throws {
+        let results = try OSDUniqueConstraintAdapter.runAll()
+        #expect(results.map(\.id) == UniqueConstraintScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in UniqueConstraintScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(UniqueConstraintExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
+    @Test func historyScenariosMatchSharedExpectations() throws {
+        let results = try OSDHistoryParityAdapter.runAll()
+        #expect(results.map(\.id) == HistoryParityScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in HistoryParityScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(HistoryParityExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
     @Test func predicateMembershipMatchesSharedExpectations() throws {
         let results = try OSDScenarioAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
@@ -14,6 +38,7 @@ import Testing
         let rollbackResults = try OSDRollbackAdapter.runAll()
         let modelContextResults = try OSDModelContextParityAdapter.runAll()
         let historyResults = try OSDHistoryParityAdapter.runAll()
+        let uniqueConstraintResults = try OSDUniqueConstraintAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
@@ -26,6 +51,7 @@ import Testing
             + RollbackParityScenarioCatalog.all.map(\.id)
             + ModelContextParityScenarioCatalog.all.map(\.id)
             + HistoryParityScenarioCatalog.all.map(\.id)
+            + UniqueConstraintScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -113,6 +139,13 @@ import Testing
         for specification in HistoryParityScenarioCatalog.all {
             let result = try #require(historyResults.first { $0.id == specification.id })
             #expect(HistoryParityExpectationValidator.validate(result, against: specification))
+        }
+        #expect(uniqueConstraintResults.map(\.id) == UniqueConstraintScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in UniqueConstraintScenarioCatalog.all {
+            let result = try #require(uniqueConstraintResults.first { $0.id == specification.id })
+            #expect(UniqueConstraintExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

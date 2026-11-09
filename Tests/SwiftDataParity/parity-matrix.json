@@ -1343,6 +1343,83 @@
           "remainingAfterPrefixDelete", "laterTokenExpired", "deletedTokenExpired", "emptyAfterDeleteAll"
         ]
       }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance",
+      "scenarioIDs": ["UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance"],
+      "outcomes": {
+        "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance": [
+          "preSaveCount", "storedRows", "originalValue", "originalAttached", "originalDeleted", "duplicateAttached",
+          "duplicateIDChangedOnSave", "contextClean", "fetchedOriginalInstance"
+        ]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store",
+      "scenarioIDs": ["UniqueConstraintParityTests/edits to a merged duplicate do not reach the store"],
+      "outcomes": {
+        "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store": ["hasChangesAfterEdit", "storedRowsAfterSecondSave"]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier",
+      "scenarioIDs": ["UniqueConstraintParityTests/a merged duplicate gets a permanent identifier"],
+      "outcomes": {
+        "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier": [
+          "duplicateIDChangedOnSave", "duplicateRegistered", "duplicateIDDiffersFromSurvivor"
+        ]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row",
+      "scenarioIDs": ["UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row"],
+      "outcomes": {
+        "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row": ["storedRowsAfterDelete"]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row",
+      "scenarioIDs": ["UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"],
+      "outcomes": {
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": ["storedCount", "storedRows"]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",
+      "scenarioIDs": ["UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row"],
+      "outcomes": {
+        "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row": [
+          "storedRows", "updatedIDUnchanged", "updatedAttached", "updatedDeleted", "updatedValue"
+        ]
+      }
+    },
+    {
+      "sourceCase": "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts",
+      "scenarioIDs": ["UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts"],
+      "outcomes": {
+        "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": "compared"
+      },
+      "observations": {
+        "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": ["storedRows"]
+      }
     }
   ]
 }

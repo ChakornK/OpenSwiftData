@@ -41,7 +41,7 @@ public enum OSDHistoryParityAdapter {
 
         switch specification.query {
         case .recordsChangedTransactions:
-            values = try recordHistory(in: context).observations
+            values = try recordHistory(in: context)
         case .descriptors:
             _ = try recordHistory(in: context)
             let all = try context.fetchHistory(Transactions())
@@ -51,8 +51,9 @@ public enum OSDHistoryParityAdapter {
             var limited = Transactions()
             limited.fetchLimit = 2
             let limitedResults = try context.fetchHistory(limited)
-            let reversed = try context.fetchHistory(
-                Transactions(sortBy: [SortDescriptor(\.transactionIdentifier, order: .reverse)]))
+            var reversedDescriptor = Transactions()
+            reversedDescriptor.sortBy = [SortDescriptor(\.transactionIdentifier, order: .reverse)]
+            let reversed = try context.fetchHistory(reversedDescriptor)
             values = [
                 "tokenFilterCount": .integer(Int64(tokenFiltered.count)),
                 "authorFilterCount": .integer(Int64(authorFiltered.count)),
@@ -80,10 +81,10 @@ public enum OSDHistoryParityAdapter {
             try context.deleteHistory(Transactions(predicate: #Predicate { $0.token <= second }))
             let remaining = try context.fetchHistory(Transactions())
             let laterTokenExpired = catchesExpiredHistoryToken {
-                try context.fetchHistory(Transactions(predicate: #Predicate { $0.token > second }))
+                _ = try context.fetchHistory(Transactions(predicate: #Predicate { $0.token > second }))
             }
             let deletedTokenExpired = catchesExpiredHistoryToken {
-                try context.fetchHistory(Transactions(predicate: #Predicate { $0.token > first }))
+                _ = try context.fetchHistory(Transactions(predicate: #Predicate { $0.token > first }))
             }
             try context.deleteHistory(Transactions())
             values = [
@@ -100,9 +101,7 @@ public enum OSDHistoryParityAdapter {
             })
     }
 
-    private static func recordHistory(in context: ModelContext) throws -> (
-        a: HistoryParityModel, b: HistoryParityModel, observations: [String: ObservedValue]
-    ) {
+    private static func recordHistory(in context: ModelContext) throws -> [String: ObservedValue] {
         let initialCount = try context.fetchHistory(Transactions()).count
         context.author = "alice"
         let a = HistoryParityModel(name: "a", count: 1, code: "A")
@@ -121,13 +120,15 @@ public enum OSDHistoryParityAdapter {
         try context.transaction { context.insert(HistoryParityModel(name: "c", count: 3, code: "C")) }
 
         let history = try context.fetchHistory(Transactions())
-        let update: DefaultHistoryUpdate<HistoryParityModel>? = history.dropFirst().first?.changes.first.flatMap {
-            if case .update(let value) = $0 { return value as? DefaultHistoryUpdate<HistoryParityModel> }
-            return nil
+        let update: (any HistoryUpdate<HistoryParityModel>)? = history.dropFirst().first?.changes.first.flatMap {
+            change -> (any HistoryUpdate<HistoryParityModel>)? in
+            guard case .update(let value) = change else { return nil }
+            return value as? any HistoryUpdate<HistoryParityModel>
         }
-        let deletion: DefaultHistoryDelete<HistoryParityModel>? = history.dropFirst(2).first?.changes.first.flatMap {
-            if case .delete(let value) = $0 { return value as? DefaultHistoryDelete<HistoryParityModel> }
-            return nil
+        let deletion: (any HistoryDelete<HistoryParityModel>)? = history.dropFirst(2).first?.changes.first.flatMap {
+            change -> (any HistoryDelete<HistoryParityModel>)? in
+            guard case .delete(let value) = change else { return nil }
+            return value as? any HistoryDelete<HistoryParityModel>
         }
         let firstChanges = history.first?.changes ?? []
         let authors = history.map { $0.author.map(ObservedValue.string) ?? .null }
@@ -146,8 +147,8 @@ public enum OSDHistoryParityAdapter {
             "updatedAttributes": .stringSet(update.map { update in
                 update.updatedAttributes.compactMap { attribute in
                     let keyPath = attribute as AnyKeyPath
-                    if keyPath == \\HistoryParityModel.count { return "count" }
-                    if keyPath == \\HistoryParityModel.name { return "name" }
+                    if keyPath == \HistoryParityModel.count { return "count" }
+                    if keyPath == \HistoryParityModel.name { return "name" }
                     return nil
                 }
             } ?? []),
@@ -156,7 +157,7 @@ public enum OSDHistoryParityAdapter {
             "deletedNameAbsent": .bool(deletion?.tombstone[\HistoryParityModel.name] == nil),
             "tombstoneCount": .integer(Int64(deletion.map { Array($0.tombstone).count } ?? 0)),
         ]
-        return (a, b, values)
+        return values
     }
 
     private static func required<Value>(_ value: Value?) throws -> Value {

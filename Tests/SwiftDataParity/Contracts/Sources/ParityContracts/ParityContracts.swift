@@ -1902,6 +1902,99 @@ public enum ModelIdentityScenarioCatalog {
     }
 }
 
+public struct UniqueConstraintSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case insertingDuplicateOverwrites
+        case mergedDuplicateEditsDoNotPersist
+        case mergedDuplicateIdentifier
+        case deletingMergedDuplicate
+        case duplicatesInOneSave
+        case updatingIntoConflict
+        case compositeConstraints
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(
+        id: ScenarioID,
+        query: Query,
+        expectedObservationFields: Set<String>
+    ) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum UniqueConstraintScenarioCatalog {
+    private static func scenario(
+        _ test: String,
+        _ query: UniqueConstraintSpecification.Query,
+        _ fields: Set<String>
+    ) -> UniqueConstraintSpecification {
+        UniqueConstraintSpecification(
+            id: ScenarioID(suite: "UniqueConstraintParityTests", test: test),
+            query: query,
+            expectedObservationFields: fields)
+    }
+
+    public static let insertingDuplicateOverwrites = scenario(
+        "inserting a duplicate overwrites the stored row and refreshes the existing instance",
+        .insertingDuplicateOverwrites,
+        [
+            "preSaveCount", "storedRows", "originalValue", "originalAttached", "originalDeleted",
+            "duplicateAttached", "duplicateIDChangedOnSave", "contextClean", "fetchedOriginalInstance",
+        ])
+
+    public static let mergedDuplicateEditsDoNotPersist = scenario(
+        "edits to a merged duplicate do not reach the store", .mergedDuplicateEditsDoNotPersist,
+        ["hasChangesAfterEdit", "storedRowsAfterSecondSave"])
+
+    public static let mergedDuplicateIdentifier = scenario(
+        "a merged duplicate gets a permanent identifier", .mergedDuplicateIdentifier,
+        ["duplicateIDChangedOnSave", "duplicateRegistered", "duplicateIDDiffersFromSurvivor"])
+
+    public static let deletingMergedDuplicate = scenario(
+        "deleting a merged duplicate leaves the merged row", .deletingMergedDuplicate,
+        ["storedRowsAfterDelete"])
+
+    public static let duplicatesInOneSave = scenario(
+        "duplicates inserted in one save collapse into one row", .duplicatesInOneSave,
+        ["storedCount", "storedRows"])
+
+    public static let updatingIntoConflict = scenario(
+        "updating into a conflict merges the changed values and removes the updated row",
+        .updatingIntoConflict,
+        ["storedRows", "updatedIDUnchanged", "updatedAttached", "updatedDeleted", "updatedValue"])
+
+    public static let compositeConstraints = scenario(
+        "composite and multiple constraints each merge conflicting inserts", .compositeConstraints,
+        ["storedRows"])
+
+    public static let all = [
+        insertingDuplicateOverwrites, mergedDuplicateEditsDoNotPersist, mergedDuplicateIdentifier,
+        deletingMergedDuplicate, duplicatesInOneSave, updatingIntoConflict, compositeConstraints,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum UniqueConstraintExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: UniqueConstraintSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
 public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
@@ -2163,7 +2256,8 @@ public enum CoverageMatrixValidator {
     public static let supportedSchemaVersion = 1
     public static let permittedStatuses: Set<String> = ["compared", "divergent", "non-comparable"]
     public static let permittedReasons: Set<String> = [
-        "private-api", "unsupported-platform-or-version", "nondeterministic-apple-behavior", "shim-only-api",
+        "deferred-behavior-gap", "private-api", "unsupported-platform-or-version",
+        "nondeterministic-apple-behavior", "shim-only-api",
     ]
 
     public static func validate(
@@ -2287,7 +2381,8 @@ public extension ParityScenarioCatalog {
              + Array(ContextNotificationScenarioCatalog.contractsByID.values)
              + Array(RollbackParityScenarioCatalog.contractsByID.values)
              + Array(ModelContextParityScenarioCatalog.contractsByID.values)
-             + Array(HistoryParityScenarioCatalog.contractsByID.values))
+             + Array(HistoryParityScenarioCatalog.contractsByID.values)
+             + Array(UniqueConstraintScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

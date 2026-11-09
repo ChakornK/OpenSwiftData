@@ -356,10 +356,11 @@ import Testing
 
     @Test func batchDeleteMatrixEntriesMatchSharedContracts() throws {
         let entries = BatchDeleteScenarioCatalog.all.map { specification in
-            CoverageMatrixEntry(
+            let isDivergent = specification.id == BatchDeleteScenarioCatalog.pendingAndRegisteredState.id
+            return CoverageMatrixEntry(
                 sourceCase: specification.id.description,
                 scenarioIDs: [specification.id.description],
-                outcomes: [specification.id.description: "compared"],
+                outcomes: [specification.id.description: isDivergent ? "divergent" : "compared"],
                 observations: [specification.id.description: specification.expectedObservations.map(\.field)])
         }
         #expect(CoverageMatrixValidator.validate(
@@ -421,6 +422,13 @@ import Testing
         #expect(HistoryParityScenarioCatalog.all.allSatisfy {
             $0.contract.expectedObservationFields == Set($0.expectedObservations.keys)
         })
+    }
+
+    @Test func uniqueConstraintParityContractsRegisterSevenDeclarations() {
+        #expect(UniqueConstraintScenarioCatalog.all.count == 7)
+        #expect(UniqueConstraintScenarioCatalog.contractsByID.count == 7)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: UniqueConstraintScenarioCatalog.contractsByID.keys))
     }
 
     @Test func deletedInsertionRollbackUsesExactPerImplementationExpectations() {
@@ -605,7 +613,8 @@ import Testing
                 .union(ContextNotificationScenarioCatalog.contractsByID.keys)
                 .union(RollbackParityScenarioCatalog.contractsByID.keys)
                 .union(ModelContextParityScenarioCatalog.contractsByID.keys)
-                .union(HistoryParityScenarioCatalog.contractsByID.keys))
+                .union(HistoryParityScenarioCatalog.contractsByID.keys)
+                .union(UniqueConstraintScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {
@@ -1035,6 +1044,21 @@ import Testing
         #expect(validEntry.sourceStatus == "non-comparable")
         #expect(CoverageMatrixValidator.validate(discovered: [sourceCase], entries: [invalidEntry], registry: [:])
             == ["\(sourceCase): non-comparable outcome needs a valid reason and rationale"])
+    }
+
+    @Test func coverageMatrixAcceptsDeferredBehaviorGapsAsNonComparable() throws {
+        let sourceCase = "PredicateParityTests/apple behavior intentionally deferred"
+        let entry = CoverageMatrixEntry(
+            sourceCase: sourceCase,
+            scenarioIDs: ["PredicateParityTests/apple behavior intentionally deferred"],
+            outcomes: ["PredicateParityTests/apple behavior intentionally deferred": "non-comparable"],
+            observations: [:],
+            reasonCategory: "deferred-behavior-gap",
+            rationale: "The README documents this Apple behavior as intentionally unmatched for now.")
+
+        #expect(CoverageMatrixValidator.validate(discovered: [sourceCase], entries: [entry], registry: [:]).isEmpty)
+        #expect(entry.sourceStatus == "non-comparable")
+        #expect(CoverageMatrixValidator.runnerScenarioIDs(in: [entry]).isEmpty)
     }
 
     @Test func coverageMatrixSupportsMixedComparableAndNonComparableScenarios() throws {

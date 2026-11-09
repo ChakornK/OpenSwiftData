@@ -149,10 +149,11 @@ public enum OSDScenarioAdapter {
         let rollbackResults = try OSDRollbackAdapter.runAll()
         let modelContextResults = try OSDModelContextParityAdapter.runAll()
         let historyResults = try OSDHistoryParityAdapter.runAll()
+        let uniqueConstraintResults = try OSDUniqueConstraintAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
-            + historyResults)
+            + historyResults + uniqueConstraintResults)
             .sorted { $0.id.description < $1.id.description }
     }
 

@@ -199,8 +199,15 @@ enum AppleModelContainerParityAdapter {
             return values
         }
         try checkpoint()
+        // Saving the stale mainContext after erase traps in Apple SwiftData (DefaultStore API contract
+        // violation), so prove the store stays usable by saving and fetching through a fresh context
+        // instead. The pending insertion left in the stale context is intentionally abandoned; the
+        // contextHasChangesAfterErase observation above already captured that the stale context still
+        // holds the pending change, matching OpenSwiftData.
+        let pendingContext = ModelContext(container)
+        pendingContext.insert(ContainerParityThing(name: "pending"))
         do {
-            try context.save()
+            try pendingContext.save()
         } catch {
             try checkpoint()
             return values

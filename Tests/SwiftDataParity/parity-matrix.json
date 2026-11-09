@@ -1393,10 +1393,10 @@
       "sourceCase": "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row",
       "scenarioIDs": ["UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"],
       "outcomes": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "compared"
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "divergent"
       },
       "observations": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": ["storedCount", "storedRows"]
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": ["everyTrialHasOneRow", "survivorsObserved"]
       }
     },
     {
@@ -1419,6 +1419,97 @@
       },
       "observations": {
         "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": ["storedRows"]
+      }
+    }
+,
+    {
+      "sourceCase": "MigrationPlanParityTests/versioned schemas need only models and a version",
+      "scenarioIDs": ["MigrationPlanParityTests/versioned schemas need only models and a version"],
+      "outcomes": {
+        "MigrationPlanParityTests/versioned schemas need only models and a version": "compared"
+      },
+      "observations": {
+        "MigrationPlanParityTests/versioned schemas need only models and a version": ["versionMatchesV2", "entityNames", "v1VersionMatchesV1"]
+      }
+    },
+    {
+      "sourceCase": "MigrationPlanParityTests/migration stages are enum cases",
+      "scenarioIDs": ["MigrationPlanParityTests/migration stages are enum cases"],
+      "outcomes": {
+        "MigrationPlanParityTests/migration stages are enum cases": "compared"
+      },
+      "observations": {
+        "MigrationPlanParityTests/migration stages are enum cases": [
+          "lightweightStage", "lightweightFromMatchesV1", "lightweightToMatchesV2",
+          "customStage", "willMigrateAbsent", "didMigratePresent"
+        ]
+      }
+    },
+    {
+      "sourceCase": "MigrationPlanParityTests/containers without a plan report none",
+      "scenarioIDs": ["MigrationPlanParityTests/containers without a plan report none"],
+      "outcomes": {
+        "MigrationPlanParityTests/containers without a plan report none": "compared"
+      },
+      "observations": {
+        "MigrationPlanParityTests/containers without a plan report none": ["migrationPlanAbsent"]
+      }
+    },
+    {
+      "sourceCase": "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks",
+      "scenarioIDs": ["MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks"],
+      "outcomes": {
+        "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks": "compared"
+      },
+      "observations": {
+        "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks": ["migrationPlanMatches", "tripNames", "tripNights"]
+      }
+    },
+    {
+      "sourceCase": "UnversionedStoreMigrationParityTests/a plan migrates a store created without one",
+      "scenarioIDs": ["UnversionedStoreMigrationParityTests/a plan migrates a store created without one"],
+      "outcomes": {
+        "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": "compared"
+      },
+      "observations": {
+        "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": ["tripNames", "tripNights"]
+      }
+    }
+,
+    {
+      "sourceCase": "ModelContainerParityTests/configurations are a set and containers compare by identity",
+      "scenarioIDs": ["ModelContainerParityTests/configurations are a set and containers compare by identity"],
+      "outcomes": {
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": "compared"
+      },
+      "observations": {
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": ["configurationSetMatches", "containerEqualsSelf", "differentContainersUnequal", "schemaEntityNames"]
+      }
+    },
+    {
+      "sourceCase": "ModelContainerParityTests/erasing removes stored models and keeps the store usable",
+      "scenarioIDs": ["ModelContainerParityTests/erasing removes stored models and keeps the store usable"],
+      "outcomes": {
+        "ModelContainerParityTests/erasing removes stored models and keeps the store usable": "compared"
+      },
+      "observations": {
+        "ModelContainerParityTests/erasing removes stored models and keeps the store usable": [
+          "eraseReturned", "fileExistsAfterErase", "contextHasChangesAfterErase", "savedObjectAttachedAfterErase",
+          "fetchCountReturned", "storedCountAfterErase", "pendingSaveReturned", "pendingFetchReturned",
+          "pendingNamesAfterSave", "lastCompletedStep"
+        ]
+      }
+    },
+    {
+      "sourceCase": "ModelContainerParityTests/erasing also clears history",
+      "scenarioIDs": ["ModelContainerParityTests/erasing also clears history"],
+      "outcomes": {
+        "ModelContainerParityTests/erasing also clears history": "compared"
+      },
+      "observations": {
+        "ModelContainerParityTests/erasing also clears history": [
+          "eraseReturned", "historyFetchReturned", "historyEmpty", "lastCompletedStep"
+        ]
       }
     }
   ]

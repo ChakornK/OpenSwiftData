@@ -24,6 +24,7 @@ on:
 jobs:
   compare-swiftdata-behavior:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7

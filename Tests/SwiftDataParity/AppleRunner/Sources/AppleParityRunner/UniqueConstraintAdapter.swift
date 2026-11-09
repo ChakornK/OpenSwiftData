@@ -112,13 +112,21 @@ enum AppleUniqueConstraintAdapter {
             try context.save()
             values = ["storedRowsAfterDelete": .array(try storedKeyed(in: container))]
         case .duplicatesInOneSave:
-            context.insert(AppleUniqueParityKeyedModel("z", 1))
-            context.insert(AppleUniqueParityKeyedModel("z", 2))
-            try context.save()
-            let rows = try ModelContext(container).fetch(FetchDescriptor<AppleUniqueParityKeyedModel>())
+            var survivors: [String] = []
+            var everyTrialHasOneRow = true
+            for _ in 0..<20 {
+                let trialContainer = try makeContainer()
+                let trialContext = trialContainer.mainContext
+                trialContext.insert(AppleUniqueParityKeyedModel("z", 1))
+                trialContext.insert(AppleUniqueParityKeyedModel("z", 2))
+                try trialContext.save()
+                let rows = try ModelContext(trialContainer).fetch(FetchDescriptor<AppleUniqueParityKeyedModel>())
+                everyTrialHasOneRow = everyTrialHasOneRow && rows.count == 1
+                survivors.append(contentsOf: rows.map { "\($0.key)/\($0.value)/\($0.note ?? "nil")" })
+            }
             values = [
-                "storedCount": .integer(Int64(rows.count)),
-                "storedRows": .array(rows.map(keyedProjection)),
+                "everyTrialHasOneRow": .bool(everyTrialHasOneRow),
+                "survivorsObserved": .stringSet(survivors),
             ]
         case .updatingIntoConflict:
             context.insert(AppleUniqueParityKeyedModel("k", 2))
@@ -156,6 +164,12 @@ enum AppleUniqueConstraintAdapter {
     private static func storedKeyed(in container: ModelContainer) throws -> [ObservedValue] {
         try ModelContext(container).fetch(
             FetchDescriptor<AppleUniqueParityKeyedModel>(sortBy: [SortDescriptor(\.key)])).map(keyedProjection)
+    }
+
+    private static func makeContainer() throws -> ModelContainer {
+        try ModelContainer(
+            for: AppleUniqueParityKeyedModel.self, AppleUniqueParityCompositeModel.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
 
     private static func keyedProjection(_ model: AppleUniqueParityKeyedModel) -> ObservedValue {

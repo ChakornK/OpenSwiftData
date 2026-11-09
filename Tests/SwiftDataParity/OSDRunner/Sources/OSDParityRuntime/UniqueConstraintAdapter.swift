@@ -112,13 +112,21 @@ public enum OSDUniqueConstraintAdapter {
             try context.save()
             values = ["storedRowsAfterDelete": .array(try storedKeyed(in: container))]
         case .duplicatesInOneSave:
-            context.insert(UniqueParityKeyedModel("z", 1))
-            context.insert(UniqueParityKeyedModel("z", 2))
-            try context.save()
-            let rows = try ModelContext(container).fetch(FetchDescriptor<UniqueParityKeyedModel>())
+            var survivors: [String] = []
+            var everyTrialHasOneRow = true
+            for _ in 0..<20 {
+                let trialContainer = try makeContainer()
+                let trialContext = trialContainer.mainContext
+                trialContext.insert(UniqueParityKeyedModel("z", 1))
+                trialContext.insert(UniqueParityKeyedModel("z", 2))
+                try trialContext.save()
+                let rows = try ModelContext(trialContainer).fetch(FetchDescriptor<UniqueParityKeyedModel>())
+                everyTrialHasOneRow = everyTrialHasOneRow && rows.count == 1
+                survivors.append(contentsOf: rows.map { "\($0.key)/\($0.value)/\($0.note ?? "nil")" })
+            }
             values = [
-                "storedCount": .integer(Int64(rows.count)),
-                "storedRows": .array(rows.map(keyedProjection)),
+                "everyTrialHasOneRow": .bool(everyTrialHasOneRow),
+                "survivorsObserved": .stringSet(survivors),
             ]
         case .updatingIntoConflict:
             context.insert(UniqueParityKeyedModel("k", 2))
@@ -158,6 +166,12 @@ public enum OSDUniqueConstraintAdapter {
     private static func storedKeyed(in container: ModelContainer) throws -> [ObservedValue] {
         try ModelContext(container).fetch(
             FetchDescriptor<UniqueParityKeyedModel>(sortBy: [SortDescriptor(\.key)])).map(keyedProjection)
+    }
+
+    private static func makeContainer() throws -> ModelContainer {
+        try ModelContainer(
+            for: UniqueParityKeyedModel.self, UniqueParityCompositeModel.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
 
     private static func keyedProjection(_ model: UniqueParityKeyedModel) -> ObservedValue {

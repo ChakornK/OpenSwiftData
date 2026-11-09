@@ -18,6 +18,13 @@ final class MembershipScenarioRow {
 struct AppleParityRunner {
     @MainActor
     static func run() throws {
+        if let probeIndex = CommandLine.arguments.firstIndex(of: "--model-container-erase-probe-child"),
+            CommandLine.arguments.indices.contains(probeIndex + 1),
+            let query = ModelContainerParitySpecification.Query(rawValue: CommandLine.arguments[probeIndex + 1])
+        {
+            try AppleModelContainerParityAdapter.runEraseProbeChild(query, outputURL: outputURL(from: CommandLine.arguments))
+            return
+        }
         if CommandLine.arguments.contains("--batch-delete-probe") {
             let observations = try AppleBatchDeleteProbe.run()
             let data = try CanonicalJSON.encode(observations)
@@ -63,10 +70,12 @@ struct AppleParityRunner {
         let modelContextResults = try AppleModelContextParityAdapter.runAll()
         let historyResults = try AppleHistoryParityAdapter.runAll()
         let uniqueConstraintResults = try AppleUniqueConstraintAdapter.runAll()
+        let migrationPlanResults = try AppleMigrationPlanAdapter.runAll()
+        let modelContainerParityResults = try AppleModelContainerParityAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
-            + historyResults + uniqueConstraintResults)
+            + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

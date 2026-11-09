@@ -4,6 +4,30 @@ import Testing
 
 @Suite struct OSDScenarioAdapterTests {
     @MainActor
+    @Test func modelContainerScenariosMatchSharedContracts() throws {
+        let results = try OSDModelContainerParityAdapter.runAll()
+        #expect(results.map(\.id) == ModelContainerParityScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in ModelContainerParityScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(ModelContainerParityExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
+    @Test func migrationPlanScenariosMatchSharedContracts() throws {
+        let results = try OSDMigrationPlanAdapter.runAll()
+        #expect(results.map(\.id) == MigrationPlanScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in MigrationPlanScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(MigrationPlanExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
     @Test func uniqueConstraintScenariosMatchSharedContracts() throws {
         let results = try OSDUniqueConstraintAdapter.runAll()
         #expect(results.map(\.id) == UniqueConstraintScenarioCatalog.all.map(\.id).sorted {
@@ -39,6 +63,8 @@ import Testing
         let modelContextResults = try OSDModelContextParityAdapter.runAll()
         let historyResults = try OSDHistoryParityAdapter.runAll()
         let uniqueConstraintResults = try OSDUniqueConstraintAdapter.runAll()
+        let migrationPlanResults = try OSDMigrationPlanAdapter.runAll()
+        let modelContainerResults = try OSDModelContainerParityAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
@@ -52,6 +78,8 @@ import Testing
             + ModelContextParityScenarioCatalog.all.map(\.id)
             + HistoryParityScenarioCatalog.all.map(\.id)
             + UniqueConstraintScenarioCatalog.all.map(\.id)
+            + MigrationPlanScenarioCatalog.all.map(\.id)
+            + ModelContainerParityScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -146,6 +174,17 @@ import Testing
         for specification in UniqueConstraintScenarioCatalog.all {
             let result = try #require(uniqueConstraintResults.first { $0.id == specification.id })
             #expect(UniqueConstraintExpectationValidator.validate(result, against: specification))
+        }
+        #expect(migrationPlanResults.map(\.id) == MigrationPlanScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in MigrationPlanScenarioCatalog.all {
+            let result = try #require(migrationPlanResults.first { $0.id == specification.id })
+            #expect(MigrationPlanExpectationValidator.validate(result, against: specification))
+        }
+        for specification in ModelContainerParityScenarioCatalog.all {
+            let result = try #require(modelContainerResults.first { $0.id == specification.id })
+            #expect(ModelContainerParityExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

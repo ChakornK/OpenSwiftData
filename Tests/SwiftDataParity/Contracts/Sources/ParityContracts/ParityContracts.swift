@@ -1966,7 +1966,7 @@ public enum UniqueConstraintScenarioCatalog {
 
     public static let duplicatesInOneSave = scenario(
         "duplicates inserted in one save collapse into one row", .duplicatesInOneSave,
-        ["storedCount", "storedRows"])
+        ["everyTrialHasOneRow", "survivorsObserved"])
 
     public static let updatingIntoConflict = scenario(
         "updating into a conflict merges the changed values and removes the updated row",
@@ -1989,6 +1989,191 @@ public enum UniqueConstraintScenarioCatalog {
 
 public enum UniqueConstraintExpectationValidator {
     public static func validate(_ result: ScenarioResult, against specification: UniqueConstraintSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
+public struct MigrationPlanSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case versionedSchemas
+        case stages
+        case noPlan
+        case plannedUpgrade
+        case unversionedUpgrade
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum MigrationPlanScenarioCatalog {
+    private static func scenario(
+        _ test: String,
+        _ query: MigrationPlanSpecification.Query,
+        _ fields: Set<String>,
+        suite: String = "MigrationPlanParityTests"
+    ) -> MigrationPlanSpecification {
+        MigrationPlanSpecification(
+            id: ScenarioID(suite: suite, test: test), query: query, expectedObservationFields: fields)
+    }
+
+    public static let versionedSchemas = scenario(
+        "versioned schemas need only models and a version", .versionedSchemas,
+        ["versionMatchesV2", "entityNames", "v1VersionMatchesV1"])
+
+    public static let stages = scenario(
+        "migration stages are enum cases", .stages,
+        ["lightweightStage", "lightweightFromMatchesV1", "lightweightToMatchesV2", "customStage", "willMigrateAbsent", "didMigratePresent"])
+
+    public static let noPlan = scenario(
+        "containers without a plan report none", .noPlan,
+        ["migrationPlanAbsent"])
+
+    public static let plannedUpgrade = scenario(
+        "a migration plan upgrades a store and runs its stage callbacks", .plannedUpgrade,
+        ["migrationPlanMatches", "tripNames", "tripNights"])
+
+    public static let unversionedUpgrade = scenario(
+        "a plan migrates a store created without one", .unversionedUpgrade,
+        ["tripNames", "tripNights"], suite: "UnversionedStoreMigrationParityTests")
+
+    public static let all = [versionedSchemas, stages, noPlan, plannedUpgrade, unversionedUpgrade]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum MigrationPlanExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: MigrationPlanSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
+public struct ModelActorSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case ownContext
+        case wrappingExistingContext
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum ModelActorScenarioCatalog {
+    public static let ownContext = ModelActorSpecification(
+        id: ScenarioID(suite: "ModelActorParityTests", test: "a model actor works with its own context"),
+        query: .ownContext,
+        expectedObservationFields: [
+            "containerMatches", "executorConforms", "savedCount", "lookupName", "missingLookupIsNil",
+        ])
+
+    public static let wrappingExistingContext = ModelActorSpecification(
+        id: ScenarioID(suite: "ModelActorParityTests", test: "executors can wrap an existing context"),
+        query: .wrappingExistingContext,
+        expectedObservationFields: ["executorUsesContext", "serialExecutorConforms"])
+
+    public static let all = [ownContext, wrappingExistingContext]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ModelActorExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: ModelActorSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
+public struct ModelContainerParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case configurationsAndIdentity
+        case eraseKeepsStoreUsable
+        case eraseClearsHistory
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum ModelContainerParityScenarioCatalog {
+    public static let configurationsAndIdentity = ModelContainerParitySpecification(
+        id: ScenarioID(
+            suite: "ModelContainerParityTests", test: "configurations are a set and containers compare by identity"),
+        query: .configurationsAndIdentity,
+        expectedObservationFields: [
+            "configurationSetMatches", "containerEqualsSelf", "differentContainersUnequal", "schemaEntityNames",
+        ])
+
+    public static let eraseKeepsStoreUsable = ModelContainerParitySpecification(
+        id: ScenarioID(
+            suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"),
+        query: .eraseKeepsStoreUsable,
+        expectedObservationFields: [
+            "eraseReturned", "fileExistsAfterErase", "contextHasChangesAfterErase", "savedObjectAttachedAfterErase",
+            "fetchCountReturned", "storedCountAfterErase", "pendingSaveReturned", "pendingFetchReturned",
+            "pendingNamesAfterSave", "lastCompletedStep",
+        ])
+
+    public static let eraseClearsHistory = ModelContainerParitySpecification(
+        id: ScenarioID(suite: "ModelContainerParityTests", test: "erasing also clears history"),
+        query: .eraseClearsHistory,
+        expectedObservationFields: [
+            "eraseReturned", "historyFetchReturned", "historyEmpty", "lastCompletedStep",
+        ])
+
+    public static let all = [configurationsAndIdentity, eraseKeepsStoreUsable, eraseClearsHistory]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ModelContainerParityExpectationValidator {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: ModelContainerParitySpecification
+    ) -> Bool {
         guard result.id == specification.id else { return false }
         let fields = result.observations.map(\.field)
         return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
@@ -2380,9 +2565,11 @@ public extension ParityScenarioCatalog {
              + Array(CodableParityScenarioCatalog.contractsByID.values)
              + Array(ContextNotificationScenarioCatalog.contractsByID.values)
              + Array(RollbackParityScenarioCatalog.contractsByID.values)
-             + Array(ModelContextParityScenarioCatalog.contractsByID.values)
-             + Array(HistoryParityScenarioCatalog.contractsByID.values)
-             + Array(UniqueConstraintScenarioCatalog.contractsByID.values))
+              + Array(ModelContextParityScenarioCatalog.contractsByID.values)
+              + Array(HistoryParityScenarioCatalog.contractsByID.values)
+              + Array(UniqueConstraintScenarioCatalog.contractsByID.values)
+              + Array(MigrationPlanScenarioCatalog.contractsByID.values)
+              + Array(ModelContainerParityScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

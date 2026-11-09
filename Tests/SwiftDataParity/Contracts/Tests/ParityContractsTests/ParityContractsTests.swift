@@ -431,6 +431,21 @@ import Testing
             of: UniqueConstraintScenarioCatalog.contractsByID.keys))
     }
 
+    @Test func migrationPlanParityContractsRegisterFiveDeclarations() {
+        #expect(MigrationPlanScenarioCatalog.all.count == 5)
+        #expect(MigrationPlanScenarioCatalog.contractsByID.count == 5)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: MigrationPlanScenarioCatalog.contractsByID.keys))
+    }
+
+    @Test func modelContainerParityContractsRegisterThreeDeclarations() {
+        #expect(ModelContainerParityScenarioCatalog.all.count == 3)
+        #expect(ModelContainerParityScenarioCatalog.contractsByID.count == 3)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: ModelContainerParityScenarioCatalog.contractsByID.keys))
+    }
+
+
     @Test func deletedInsertionRollbackUsesExactPerImplementationExpectations() {
         let specification = ModelContextParityScenarioCatalog.rollbackDeletedInsertion
         let apple = ScenarioResult(id: specification.id, observations: [
@@ -614,7 +629,9 @@ import Testing
                 .union(RollbackParityScenarioCatalog.contractsByID.keys)
                 .union(ModelContextParityScenarioCatalog.contractsByID.keys)
                 .union(HistoryParityScenarioCatalog.contractsByID.keys)
-                .union(UniqueConstraintScenarioCatalog.contractsByID.keys))
+                .union(UniqueConstraintScenarioCatalog.contractsByID.keys)
+                .union(MigrationPlanScenarioCatalog.contractsByID.keys)
+                .union(ModelContainerParityScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

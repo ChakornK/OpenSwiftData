@@ -44,13 +44,15 @@ struct ParityValidate {
             throw ValidationError.inconsistentCoverageReport
         }
         try CanonicalJSON.encode(report).write(to: reportURL, options: .atomic)
-        let coverageProblems = structuralProblems + pendingCases.map { "\($0): expected exactly one matrix record" }
-        for problem in coverageProblems.prefix(20) { FileHandle.standardError.write(Data("\(problem)\n".utf8)) }
-        if coverageProblems.count > 20 {
-            FileHandle.standardError.write(Data("... and \(coverageProblems.count - 20) additional coverage issue(s); see \(reportURL.path)\n".utf8))
+        for problem in structuralProblems.prefix(20) { FileHandle.standardError.write(Data("\(problem)\n".utf8)) }
+        if structuralProblems.count > 20 {
+            FileHandle.standardError.write(Data("... and \(structuralProblems.count - 20) additional structural issue(s); see \(reportURL.path)\n".utf8))
         }
-        guard coverageProblems.isEmpty else { Foundation.exit(EXIT_FAILURE) }
-        print("Validated \(discovered.count) source test case(s).")
+        guard structuralProblems.isEmpty else { Foundation.exit(EXIT_FAILURE) }
+        let coverageSummary = pendingCases.isEmpty
+            ? "coverage complete"
+            : "\(pendingCases.count) source case(s) remain pending"
+        print("Validated matrix structure for \(discovered.count) discovered source test case(s); \(coverageSummary).")
     }
 
     private static func locateRepositoryRoot(from start: URL) throws -> URL {

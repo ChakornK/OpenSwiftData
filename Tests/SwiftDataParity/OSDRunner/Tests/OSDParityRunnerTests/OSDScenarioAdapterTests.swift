@@ -16,6 +16,18 @@ import Testing
     }
 
     @MainActor
+    @Test func pendingFetchRelationshipScenariosMatchSharedContracts() throws {
+        let results = try OSDPendingFetchRelationshipAdapter.runAll()
+        #expect(results.map(\.id) == PendingFetchRelationshipScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in PendingFetchRelationshipScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(PendingFetchRelationshipExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
     @Test func modelContainerScenariosMatchSharedContracts() throws {
         let results = try OSDModelContainerParityAdapter.runAll()
         #expect(results.map(\.id) == ModelContainerParityScenarioCatalog.all.map(\.id).sorted {
@@ -67,6 +79,7 @@ import Testing
     @Test func predicateMembershipMatchesSharedExpectations() throws {
         let results = try OSDScenarioAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
+        let pendingFetchRelationshipResults = try OSDPendingFetchRelationshipAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
@@ -83,6 +96,7 @@ import Testing
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
             + ModelConfigurationContainerScenarioCatalog.all.map(\.id)
             + PendingFetchScenarioCatalog.all.map(\.id)
+            + PendingFetchRelationshipScenarioCatalog.all.map(\.id)
             + BatchFetchScenarioCatalog.all.map(\.id)
             + BatchDeleteScenarioCatalog.all.map(\.id)
             + CodableParityScenarioCatalog.all.map(\.id)
@@ -130,6 +144,10 @@ import Testing
             #expect(result.observations.map(\.field) == specification.expectedObservations.map(\.field))
             let directResult = try #require(pendingFetchResults.first { $0.id == specification.id })
             #expect(directResult == result)
+        }
+        for specification in PendingFetchRelationshipScenarioCatalog.all {
+            let result = try #require(pendingFetchRelationshipResults.first { $0.id == specification.id })
+            #expect(PendingFetchRelationshipExpectationValidator.validate(result, against: specification))
         }
         #expect(batchFetchResults.map(\.id) == BatchFetchScenarioCatalog.all.map(\.id).sorted {
             $0.description < $1.description

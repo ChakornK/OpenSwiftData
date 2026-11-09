@@ -62,6 +62,7 @@ struct AppleParityRunner {
         let configurationResults = AppleModelConfigurationAdapter.runAll()
         let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
         let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
+        let pendingFetchRelationshipResults = try ApplePendingFetchRelationshipAdapter.runAll()
         let batchFetchResults = try AppleBatchFetchAdapter.runAll()
         let batchDeleteResults = try AppleBatchDeleteAdapter.runAll()
         let codableResults = try AppleCodableParityAdapter.runAll()
@@ -74,7 +75,8 @@ struct AppleParityRunner {
         let modelContainerParityResults = try AppleModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try AppleRelationshipDeleteRuleAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
+            + configurationResults + configurationContainerResults + pendingFetchResults
+            + pendingFetchRelationshipResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
             + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
             + relationshipDeleteRuleResults)

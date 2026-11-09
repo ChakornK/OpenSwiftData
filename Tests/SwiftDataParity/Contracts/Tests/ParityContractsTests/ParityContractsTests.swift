@@ -195,6 +195,13 @@ import Testing
             == [.insert(.init(name: "p1", age: 20)), .updateAge(name: "s1", age: 60), .delete(name: "s2")])
     }
 
+    @Test func pendingFetchRelationshipContractsRegisterThreeDeclarations() {
+        #expect(PendingFetchRelationshipScenarioCatalog.all.count == 3)
+        #expect(PendingFetchRelationshipScenarioCatalog.contractsByID.count == 3)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: PendingFetchRelationshipScenarioCatalog.contractsByID.keys))
+    }
+
     @Test func pendingFetchExpectationValidatorRejectsMissingAndDuplicateObservations() throws {
         let specification = PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge
         let observations = specification.expectedObservations.map { observation in
@@ -262,6 +269,20 @@ import Testing
         #expect(CoverageMatrixValidator.runnerScenarioIDs(in: entries) == Set(expectedStatuses.keys))
         #expect(CoverageMatrixValidator.sourceCaseCounts(in: entries) == ["compared": 4])
         #expect(CoverageMatrixValidator.outcomeCounts(in: entries) == ["compared": 4])
+    }
+
+    @Test func pendingFetchRelationshipMatrixEntriesMatchSharedContracts() {
+        let entries = PendingFetchRelationshipScenarioCatalog.all.map { specification in
+            CoverageMatrixEntry(
+                sourceCase: specification.id.description,
+                scenarioIDs: [specification.id.description],
+                outcomes: [specification.id.description: "compared"],
+                observations: [specification.id.description: specification.expectedObservationFields.sorted()])
+        }
+        #expect(CoverageMatrixValidator.validate(
+            discovered: Set(PendingFetchRelationshipScenarioCatalog.contractsByID.keys),
+            entries: entries,
+            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
     }
 
     @Test func batchFetchContractsRegisterAllScenariosAndArguments() throws {
@@ -629,6 +650,7 @@ import Testing
                 .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
                 .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
                 .union(PendingFetchScenarioCatalog.contractsByID.keys)
+                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys)
                 .union(BatchFetchScenarioCatalog.contractsByID.keys)
                 .union(BatchDeleteScenarioCatalog.contractsByID.keys)
                 .union(CodableParityScenarioCatalog.contractsByID.keys)
@@ -639,7 +661,8 @@ import Testing
                 .union(UniqueConstraintScenarioCatalog.contractsByID.keys)
                 .union(MigrationPlanScenarioCatalog.contractsByID.keys)
                 .union(ModelContainerParityScenarioCatalog.contractsByID.keys)
-                .union(RelationshipDeleteRuleScenarioCatalog.contractsByID.keys))
+                .union(RelationshipDeleteRuleScenarioCatalog.contractsByID.keys)
+                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {
@@ -1237,7 +1260,7 @@ import Testing
         #expect(discovered.subtracting([entry.sourceCase]).sorted() == [pendingSourceCase])
         #expect(report.isConsistent(with: [entry]))
         #expect(!report.hasCompleteCoverage)
-        #expect(report.hasValidMatrix(
+        #expect(!report.hasValidMatrix(
             entries: [entry], registry: ParityScenarioCatalog.allContractsByID))
         let encodedReport = try CanonicalJSON.encode(report)
         #expect(try JSONDecoder().decode(CoverageValidationReport.self, from: encodedReport) == report)

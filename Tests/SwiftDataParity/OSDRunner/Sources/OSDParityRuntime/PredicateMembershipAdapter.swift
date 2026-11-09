@@ -142,6 +142,7 @@ public enum OSDScenarioAdapter {
         let configurationResults = OSDModelConfigurationAdapter.runAll()
         let configurationContainerResults = try OSDModelConfigurationContainerAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
+        let pendingFetchRelationshipResults = try OSDPendingFetchRelationshipAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
@@ -154,7 +155,8 @@ public enum OSDScenarioAdapter {
         let modelContainerParityResults = try OSDModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try OSDRelationshipDeleteRuleAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
+            + configurationResults + configurationContainerResults + pendingFetchResults
+            + pendingFetchRelationshipResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
             + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
             + relationshipDeleteRuleResults)

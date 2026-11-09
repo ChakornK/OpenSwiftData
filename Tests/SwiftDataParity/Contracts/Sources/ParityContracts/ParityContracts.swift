@@ -684,6 +684,68 @@ public enum PendingFetchExpectationValidator {
     }
 }
 
+public struct PendingFetchRelationshipSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case relatedEditsDoNotAffectUnchangedOwners
+        case relationshipMembershipReevaluatesOwner
+        case detachedRelationshipAssignmentUpdatesInverse
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum PendingFetchRelationshipScenarioCatalog {
+    public static let relatedEditsDoNotAffectUnchangedOwners = PendingFetchRelationshipSpecification(
+        id: ScenarioID(
+            suite: "PendingFetchParityTests", test: "edits to related models do not affect unchanged owners until saved"),
+        query: .relatedEditsDoNotAffectUnchangedOwners,
+        expectedObservationFields: [
+            "ownerHasChangesAfterLeafEdit", "containsFlagAfterFirstLeafEdit", "partnerUnflaggedAfterPartnerEdit",
+            "containsFlagAfterSecondLeafEdit", "containsFlagAfterSave", "partnerUnflaggedAfterSave",
+        ])
+
+    public static let relationshipMembershipReevaluatesOwner = PendingFetchRelationshipSpecification(
+        id: ScenarioID(
+            suite: "PendingFetchParityTests", test: "relationship membership changes re-evaluate the owner"),
+        query: .relationshipMembershipReevaluatesOwner,
+        expectedObservationFields: ["ownerHasChanges", "matchingOwners"])
+
+    public static let detachedRelationshipAssignmentUpdatesInverse = PendingFetchRelationshipSpecification(
+        id: ScenarioID(
+            suite: "PendingFetchParityTests", test: "assigning a relationship on a detached model updates the managed inverse"),
+        query: .detachedRelationshipAssignmentUpdatesInverse,
+        expectedObservationFields: ["leafManagedImmediately", "ownerHasChanges", "ownerLeafCount"])
+
+    public static let all = [
+        relatedEditsDoNotAffectUnchangedOwners, relationshipMembershipReevaluatesOwner,
+        detachedRelationshipAssignmentUpdatesInverse,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum PendingFetchRelationshipExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: PendingFetchRelationshipSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
 public struct BatchFetchSpecification: Codable, Equatable, Sendable {
     public struct Row: Codable, Equatable, Sendable {
         public let name: String
@@ -2530,7 +2592,7 @@ public struct CoverageValidationReport: Codable, Equatable, Sendable {
         entries: [CoverageMatrixEntry],
         registry: [String: ScenarioContract]
     ) -> Bool {
-        guard isConsistent(with: entries) else { return false }
+        guard isConsistent(with: entries), pendingCases.isEmpty else { return false }
         let structuralIssues = CoverageMatrixValidator.validate(
             schemaVersion: schemaVersion,
             discovered: Set(entries.map(\.sourceCase)),
@@ -2665,6 +2727,7 @@ public extension ParityScenarioCatalog {
             + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
             + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
             + Array(PendingFetchScenarioCatalog.contractsByID.values)
+            + Array(PendingFetchRelationshipScenarioCatalog.contractsByID.values)
             + Array(BatchFetchScenarioCatalog.contractsByID.values)
              + Array(BatchDeleteScenarioCatalog.contractsByID.values)
              + Array(CodableParityScenarioCatalog.contractsByID.values)

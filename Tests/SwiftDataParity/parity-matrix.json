@@ -1603,6 +1603,41 @@
           "storedChildCount", "storedToyCount"
         ]
       }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved",
+      "scenarioIDs": ["PendingFetchParityTests/edits to related models do not affect unchanged owners until saved"],
+      "outcomes": {
+        "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved": [
+          "ownerHasChangesAfterLeafEdit", "containsFlagAfterFirstLeafEdit", "partnerUnflaggedAfterPartnerEdit",
+          "containsFlagAfterSecondLeafEdit", "containsFlagAfterSave", "partnerUnflaggedAfterSave"
+        ]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/relationship membership changes re-evaluate the owner",
+      "scenarioIDs": ["PendingFetchParityTests/relationship membership changes re-evaluate the owner"],
+      "outcomes": {
+        "PendingFetchParityTests/relationship membership changes re-evaluate the owner": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/relationship membership changes re-evaluate the owner": ["ownerHasChanges", "matchingOwners"]
+      }
+    },
+    {
+      "sourceCase": "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse",
+      "scenarioIDs": ["PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse"],
+      "outcomes": {
+        "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse": "compared"
+      },
+      "observations": {
+        "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse": [
+          "leafManagedImmediately", "ownerHasChanges", "ownerLeafCount"
+        ]
+      }
     }
   ]
 }

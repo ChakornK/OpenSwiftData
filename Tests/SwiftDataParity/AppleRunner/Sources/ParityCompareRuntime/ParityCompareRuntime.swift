@@ -30,12 +30,14 @@ public enum ComparisonInputError: Error, Equatable, Sendable, CustomStringConver
     case missingArtifact(URL)
     case unreadableArtifact(URL, String)
     case invalidCoverageMatrix
+    case incompleteSourceCoverage([String])
 
     public var description: String {
         switch self {
         case let .missingArtifact(url): "Required parity artifact is missing: \(url.path)"
         case let .unreadableArtifact(url, reason): "Unable to read parity artifact at \(url.path): \(reason)"
         case .invalidCoverageMatrix: "Coverage report is inconsistent with the parity matrix"
+        case let .incompleteSourceCoverage(cases): "Source coverage is incomplete (\(cases.count) pending declaration(s))"
         }
     }
 }
@@ -46,6 +48,9 @@ public enum ParityComparisonRuntime {
             schemaVersion: inputs.matrixSchemaVersion,
             entries: inputs.matrixEntries,
             coverage: inputs.coverage)
+        guard inputs.coverage.hasCompleteCoverage else {
+            throw ComparisonInputError.incompleteSourceCoverage(inputs.coverage.pendingCases)
+        }
         return try ParityComparator.compare(
             osd: inputs.osd,
             apple: inputs.apple,

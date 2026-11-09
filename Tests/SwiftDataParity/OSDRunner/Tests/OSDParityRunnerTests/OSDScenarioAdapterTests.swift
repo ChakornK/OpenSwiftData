@@ -28,6 +28,40 @@ import Testing
     }
 
     @MainActor
+    @Test func macroArgumentsScenariosMatchSharedContracts() throws {
+        let results = try OSDMacroArgumentsAdapter.runAll()
+        #expect(results.map(\.id) == MacroArgumentsScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in MacroArgumentsScenarioCatalog.all {
+            let result = try #require(results.first { $0.id == specification.id })
+            #expect(MacroArgumentsExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
+    @Test func sortingAndModelContextInitScenariosMatchSharedContracts() throws {
+        let sorting = try OSDSortingParityAdapter.runAll()
+        let expectedSorting = SortingParityScenarioCatalog.all.filter { specification in
+            #if canImport(Darwin)
+                true
+            #else
+                specification.query != .nameLocalizedStandard && specification.query != .nameLocalized
+            #endif
+        }
+        #expect(sorting.map(\.id) == expectedSorting.map(\.id).sorted { $0.description < $1.description })
+        for specification in expectedSorting {
+            let result = try #require(sorting.first { $0.id == specification.id })
+            #expect(SortingParityExpectationValidator.validate(result, against: specification))
+        }
+        let contexts = try OSDModelContextInitAdapter.runAll()
+        for specification in ModelContextInitScenarioCatalog.all {
+            let result = try #require(contexts.first { $0.id == specification.id })
+            #expect(ModelContextInitExpectationValidator.validate(result, against: specification))
+        }
+    }
+
+    @MainActor
     @Test func modelContainerScenariosMatchSharedContracts() throws {
         let results = try OSDModelContainerParityAdapter.runAll()
         #expect(results.map(\.id) == ModelContainerParityScenarioCatalog.all.map(\.id).sorted {
@@ -80,6 +114,9 @@ import Testing
         let results = try OSDScenarioAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
         let pendingFetchRelationshipResults = try OSDPendingFetchRelationshipAdapter.runAll()
+        let macroArgumentsResults = try OSDMacroArgumentsAdapter.runAll()
+        let sortingResults = try OSDSortingParityAdapter.runAll()
+        let modelContextInitResults = try OSDModelContextInitAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
@@ -97,6 +134,15 @@ import Testing
             + ModelConfigurationContainerScenarioCatalog.all.map(\.id)
             + PendingFetchScenarioCatalog.all.map(\.id)
             + PendingFetchRelationshipScenarioCatalog.all.map(\.id)
+            + MacroArgumentsScenarioCatalog.all.map(\.id)
+            + SortingParityScenarioCatalog.all.filter { specification in
+                #if canImport(Darwin)
+                    true
+                #else
+                    specification.query != .nameLocalizedStandard && specification.query != .nameLocalized
+                #endif
+            }.map(\.id)
+            + ModelContextInitScenarioCatalog.all.map(\.id)
             + BatchFetchScenarioCatalog.all.map(\.id)
             + BatchDeleteScenarioCatalog.all.map(\.id)
             + CodableParityScenarioCatalog.all.map(\.id)
@@ -148,6 +194,18 @@ import Testing
         for specification in PendingFetchRelationshipScenarioCatalog.all {
             let result = try #require(pendingFetchRelationshipResults.first { $0.id == specification.id })
             #expect(PendingFetchRelationshipExpectationValidator.validate(result, against: specification))
+        }
+        for specification in MacroArgumentsScenarioCatalog.all {
+            let result = try #require(macroArgumentsResults.first { $0.id == specification.id })
+            #expect(MacroArgumentsExpectationValidator.validate(result, against: specification))
+        }
+        for result in sortingResults {
+            let specification = try #require(SortingParityScenarioCatalog.all.first { $0.id == result.id })
+            #expect(SortingParityExpectationValidator.validate(result, against: specification))
+        }
+        for specification in ModelContextInitScenarioCatalog.all {
+            let result = try #require(modelContextInitResults.first { $0.id == specification.id })
+            #expect(ModelContextInitExpectationValidator.validate(result, against: specification))
         }
         #expect(batchFetchResults.map(\.id) == BatchFetchScenarioCatalog.all.map(\.id).sorted {
             $0.description < $1.description

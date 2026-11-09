@@ -1420,8 +1420,7 @@
       "observations": {
         "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": ["storedRows"]
       }
-    }
-,
+    },
     {
       "sourceCase": "MigrationPlanParityTests/versioned schemas need only models and a version",
       "scenarioIDs": ["MigrationPlanParityTests/versioned schemas need only models and a version"],
@@ -1636,6 +1635,111 @@
       "observations": {
         "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse": [
           "leafManagedImmediately", "ownerHasChanges", "ownerLeafCount"
+        ]
+      }
+    }
+,
+    {
+      "sourceCase": "MacroArgumentsParityTests/attribute and relationship arguments reach the schema",
+      "scenarioIDs": ["MacroArgumentsParityTests/attribute and relationship arguments reach the schema"],
+      "outcomes": {
+        "MacroArgumentsParityTests/attribute and relationship arguments reach the schema": "compared"
+      },
+      "observations": {
+        "MacroArgumentsParityTests/attribute and relationship arguments reach the schema": [
+          "key.originalName", "key.unique", "cacheAbsent", "children.deleteRuleCascade",
+          "children.maximumCount", "children.originalName", "children.inverseConnected"
+        ]
+      }
+    },
+    {
+      "sourceCase": "MacroArgumentsParityTests/delete rules use SwiftData's raw values",
+      "scenarioIDs": ["MacroArgumentsParityTests/delete rules use SwiftData's raw values"],
+      "outcomes": {
+        "MacroArgumentsParityTests/delete rules use SwiftData's raw values": "compared"
+      },
+      "observations": {
+        "MacroArgumentsParityTests/delete rules use SwiftData's raw values": ["deleteRuleRawValues", "cascadeRawValueRoundTrip"]
+      }
+    },
+    {
+      "sourceCase": "MacroArgumentsParityTests/an original name migrates a renamed attribute",
+      "scenarioIDs": ["MacroArgumentsParityTests/an original name migrates a renamed attribute"],
+      "outcomes": {
+        "MacroArgumentsParityTests/an original name migrates a renamed attribute": "compared"
+      },
+      "observations": {
+        "MacroArgumentsParityTests/an original name migrates a renamed attribute": ["renamedValues"]
+      }
+    },
+    {
+      "sourceCase": "MacroNamingParityTests/a model named Root persists and relates",
+      "scenarioIDs": ["MacroNamingParityTests/a model named Root persists and relates"],
+      "outcomes": {
+        "MacroNamingParityTests/a model named Root persists and relates": "compared"
+      },
+      "observations": {
+        "MacroNamingParityTests/a model named Root persists and relates": ["inverseMatches", "rootEntityName", "storedRootNames"]
+      }
+    }
+,
+    {
+      "sourceCase": "SortingParityTests/string and numeric orderings match for pending and saved models",
+      "scenarioIDs": [
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-ascending",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-reverse",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-lexical",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-ascending",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-reverse",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/rank-reverse",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized-standard",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized"
+      ],
+      "outcomes": {
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-ascending": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-reverse": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-lexical": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-ascending": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-reverse": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/rank-reverse": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized-standard": "compared",
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized": "compared"
+      },
+      "observations": {
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-ascending": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-reverse": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-lexical": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-ascending": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-reverse": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/rank-reverse": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized-standard": ["pending.names", "saved.names"],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized": ["pending.names", "saved.names"]
+      }
+    },
+    {
+      "sourceCase": "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders",
+      "scenarioIDs": [
+        "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders"
+      ],
+      "outcomes": {
+        "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders": "compared"
+      },
+      "observations": {
+        "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders": ["sortOrderPreserved"]
+      }
+    },
+    {
+      "sourceCase": "ModelContextInitParityTests/a context made from a container enables autosave and references the container",
+      "scenarioIDs": [
+        "ModelContextInitParityTests/a context made from a container enables autosave and references the container"
+      ],
+      "outcomes": {
+        "ModelContextInitParityTests/a context made from a container enables autosave and references the container": "compared"
+      },
+      "observations": {
+        "ModelContextInitParityTests/a context made from a container enables autosave and references the container": [
+          "contextAutosaveEnabled", "containerIdentityMatches", "undoManagerAbsent",
+          "contextHasNoChanges", "mainContextAutosaveEnabled"
         ]
       }
     }

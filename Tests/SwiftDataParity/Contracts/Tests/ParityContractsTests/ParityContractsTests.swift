@@ -202,6 +202,62 @@ import Testing
             of: PendingFetchRelationshipScenarioCatalog.contractsByID.keys))
     }
 
+    @Test func macroArgumentsContractsRegisterFourDeclarations() {
+        #expect(MacroArgumentsScenarioCatalog.all.count == 4)
+        #expect(MacroArgumentsScenarioCatalog.contractsByID.count == 4)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: MacroArgumentsScenarioCatalog.contractsByID.keys))
+    }
+
+    @Test func sortingAndModelContextInitContractsRegisterExpectedScenarios() {
+        #expect(SortingParityScenarioCatalog.all.count == 9)
+        #expect(ModelContextInitScenarioCatalog.all.count == 1)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: Set(SortingParityScenarioCatalog.contractsByID.keys)
+                .union(ModelContextInitScenarioCatalog.contractsByID.keys)))
+    }
+
+    @Test func sortingAndModelContextInitMatrixEntriesMatchSharedContracts() {
+        let sortingEntry = CoverageMatrixEntry(
+            sourceCase: "SortingParityTests/string and numeric orderings match for pending and saved models",
+            scenarioIDs: SortingParityScenarioCatalog.all.filter { $0.query != .descriptorAcceptsSortOrder }.map { $0.id.description },
+            outcomes: Dictionary(uniqueKeysWithValues: SortingParityScenarioCatalog.all
+                .filter { $0.query != .descriptorAcceptsSortOrder }.map { ($0.id.description, "compared") }),
+            observations: Dictionary(uniqueKeysWithValues: SortingParityScenarioCatalog.all
+                .filter { $0.query != .descriptorAcceptsSortOrder }
+                .map { ($0.id.description, $0.expectedObservationFields.sorted()) }))
+        let descriptor = SortingParityScenarioCatalog.descriptorAcceptsSortOrder
+        let descriptorEntry = CoverageMatrixEntry(
+            sourceCase: descriptor.id.description,
+            scenarioIDs: [descriptor.id.description],
+            outcomes: [descriptor.id.description: "compared"],
+            observations: [descriptor.id.description: descriptor.expectedObservationFields.sorted()])
+        let context = ModelContextInitScenarioCatalog.containerInitializer
+        let contextEntry = CoverageMatrixEntry(
+            sourceCase: context.id.description,
+            scenarioIDs: [context.id.description],
+            outcomes: [context.id.description: "compared"],
+            observations: [context.id.description: context.expectedObservationFields.sorted()])
+        let entries = [sortingEntry, descriptorEntry, contextEntry]
+        let discovered = Set(entries.map(\.sourceCase))
+        #expect(CoverageMatrixValidator.validate(
+            discovered: discovered, entries: entries, registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+    }
+
+    @Test func macroArgumentsMatrixEntriesMatchSharedContracts() {
+        let entries = MacroArgumentsScenarioCatalog.all.map { specification in
+            CoverageMatrixEntry(
+                sourceCase: specification.id.description,
+                scenarioIDs: [specification.id.description],
+                outcomes: [specification.id.description: "compared"],
+                observations: [specification.id.description: specification.expectedObservationFields.sorted()])
+        }
+        #expect(CoverageMatrixValidator.validate(
+            discovered: Set(MacroArgumentsScenarioCatalog.contractsByID.keys),
+            entries: entries,
+            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+    }
+
     @Test func pendingFetchExpectationValidatorRejectsMissingAndDuplicateObservations() throws {
         let specification = PendingFetchScenarioCatalog.storedPaginationBeforePendingMerge
         let observations = specification.expectedObservations.map { observation in
@@ -651,6 +707,9 @@ import Testing
                 .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
                 .union(PendingFetchScenarioCatalog.contractsByID.keys)
                 .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys)
+                .union(MacroArgumentsScenarioCatalog.contractsByID.keys)
+                .union(SortingParityScenarioCatalog.contractsByID.keys)
+                .union(ModelContextInitScenarioCatalog.contractsByID.keys)
                 .union(BatchFetchScenarioCatalog.contractsByID.keys)
                 .union(BatchDeleteScenarioCatalog.contractsByID.keys)
                 .union(CodableParityScenarioCatalog.contractsByID.keys)
@@ -1260,7 +1319,7 @@ import Testing
         #expect(discovered.subtracting([entry.sourceCase]).sorted() == [pendingSourceCase])
         #expect(report.isConsistent(with: [entry]))
         #expect(!report.hasCompleteCoverage)
-        #expect(!report.hasValidMatrix(
+        #expect(report.hasValidMatrix(
             entries: [entry], registry: ParityScenarioCatalog.allContractsByID))
         let encodedReport = try CanonicalJSON.encode(report)
         #expect(try JSONDecoder().decode(CoverageValidationReport.self, from: encodedReport) == report)

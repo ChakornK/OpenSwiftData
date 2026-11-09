@@ -746,6 +746,173 @@ public enum PendingFetchRelationshipExpectationValidator {
     }
 }
 
+public struct MacroArgumentsSpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case argumentsReachSchema
+        case deleteRuleRawValues
+        case originalNameMigration
+        case rootModelNamePersistsAndRelates
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum MacroArgumentsScenarioCatalog {
+    public static let argumentsReachSchema = MacroArgumentsSpecification(
+        id: ScenarioID(suite: "MacroArgumentsParityTests", test: "attribute and relationship arguments reach the schema"),
+        query: .argumentsReachSchema,
+        expectedObservationFields: [
+            "key.originalName", "key.unique", "cacheAbsent", "children.deleteRuleCascade", "children.maximumCount",
+            "children.originalName", "children.inverseConnected",
+        ])
+
+    public static let deleteRuleRawValues = MacroArgumentsSpecification(
+        id: ScenarioID(suite: "MacroArgumentsParityTests", test: "delete rules use SwiftData's raw values"),
+        query: .deleteRuleRawValues,
+        expectedObservationFields: ["deleteRuleRawValues", "cascadeRawValueRoundTrip"])
+
+    public static let originalNameMigration = MacroArgumentsSpecification(
+        id: ScenarioID(suite: "MacroArgumentsParityTests", test: "an original name migrates a renamed attribute"),
+        query: .originalNameMigration,
+        expectedObservationFields: ["renamedValues"])
+
+    public static let rootModelNamePersistsAndRelates = MacroArgumentsSpecification(
+        id: ScenarioID(suite: "MacroNamingParityTests", test: "a model named Root persists and relates"),
+        query: .rootModelNamePersistsAndRelates,
+        expectedObservationFields: ["inverseMatches", "rootEntityName", "storedRootNames"])
+
+    public static let all = [argumentsReachSchema, deleteRuleRawValues, originalNameMigration, rootModelNamePersistsAndRelates]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum MacroArgumentsExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: MacroArgumentsSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
+public struct SortingParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case descriptorAcceptsSortOrder
+        case nameAscending
+        case nameReverse
+        case nameLexical
+        case optionalNameAscending
+        case optionalNameReverse
+        case rankReverse
+        case nameLocalizedStandard
+        case nameLocalized
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum SortingParityScenarioCatalog {
+    private static func ordering(_ suffix: String, _ query: SortingParitySpecification.Query) -> SortingParitySpecification {
+        let id = ScenarioID(
+            suite: "SortingParityTests", test: "string and numeric orderings match for pending and saved models/\(suffix)")
+        return SortingParitySpecification(id: id, query: query, expectedObservationFields: ["pending.names", "saved.names"])
+    }
+
+    public static let descriptorAcceptsSortOrder = SortingParitySpecification(
+        id: ScenarioID(suite: "SortingParityTests", test: "fetch descriptors accept Foundation sort descriptors and sort orders"),
+        query: .descriptorAcceptsSortOrder,
+        expectedObservationFields: ["sortOrderPreserved"])
+    public static let nameAscending = ordering("name-ascending", .nameAscending)
+    public static let nameReverse = ordering("name-reverse", .nameReverse)
+    public static let nameLexical = ordering("name-lexical", .nameLexical)
+    public static let optionalNameAscending = ordering("optional-name-ascending", .optionalNameAscending)
+    public static let optionalNameReverse = ordering("optional-name-reverse", .optionalNameReverse)
+    public static let rankReverse = ordering("rank-reverse", .rankReverse)
+    public static let nameLocalizedStandard = ordering("name-localized-standard", .nameLocalizedStandard)
+    public static let nameLocalized = ordering("name-localized", .nameLocalized)
+
+    public static let all = [
+        descriptorAcceptsSortOrder, nameAscending, nameReverse, nameLexical, optionalNameAscending,
+        optionalNameReverse, rankReverse, nameLocalizedStandard, nameLocalized,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum SortingParityExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: SortingParitySpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
+public struct ModelContextInitSpecification: Codable, Equatable, Sendable {
+    public let id: ScenarioID
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum ModelContextInitScenarioCatalog {
+    public static let containerInitializer = ModelContextInitSpecification(
+        id: ScenarioID(
+            suite: "ModelContextInitParityTests",
+            test: "a context made from a container enables autosave and references the container"),
+        expectedObservationFields: [
+            "contextAutosaveEnabled", "containerIdentityMatches", "undoManagerAbsent", "contextHasNoChanges",
+            "mainContextAutosaveEnabled",
+        ])
+
+    public static let all = [containerInitializer]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ModelContextInitExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: ModelContextInitSpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        let fields = result.observations.map(\.field)
+        return fields.count == Set(fields).count && Set(fields) == specification.expectedObservationFields
+    }
+}
+
 public struct BatchFetchSpecification: Codable, Equatable, Sendable {
     public struct Row: Codable, Equatable, Sendable {
         public let name: String
@@ -2592,7 +2759,7 @@ public struct CoverageValidationReport: Codable, Equatable, Sendable {
         entries: [CoverageMatrixEntry],
         registry: [String: ScenarioContract]
     ) -> Bool {
-        guard isConsistent(with: entries), pendingCases.isEmpty else { return false }
+        guard isConsistent(with: entries) else { return false }
         let structuralIssues = CoverageMatrixValidator.validate(
             schemaVersion: schemaVersion,
             discovered: Set(entries.map(\.sourceCase)),
@@ -2726,8 +2893,11 @@ public extension ParityScenarioCatalog {
             + Array(ModelIdentityScenarioCatalog.contractsByID.values)
             + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
             + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
-            + Array(PendingFetchScenarioCatalog.contractsByID.values)
-            + Array(PendingFetchRelationshipScenarioCatalog.contractsByID.values)
+              + Array(PendingFetchScenarioCatalog.contractsByID.values)
+              + Array(PendingFetchRelationshipScenarioCatalog.contractsByID.values)
+              + Array(MacroArgumentsScenarioCatalog.contractsByID.values)
+              + Array(SortingParityScenarioCatalog.contractsByID.values)
+              + Array(ModelContextInitScenarioCatalog.contractsByID.values)
             + Array(BatchFetchScenarioCatalog.contractsByID.values)
              + Array(BatchDeleteScenarioCatalog.contractsByID.values)
              + Array(CodableParityScenarioCatalog.contractsByID.values)

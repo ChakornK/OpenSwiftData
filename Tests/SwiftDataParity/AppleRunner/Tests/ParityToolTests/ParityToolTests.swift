@@ -16,6 +16,46 @@ import Testing
         #expect(comparison.differences.isEmpty)
     }
 
+    @Test func comparisonRuntimeRejectsStructurallyValidButIncompleteCoverage() throws {
+        let specification = ParityScenarioCatalog.predicateMembership
+        let pendingID = "FixtureSuite/unmapped declaration"
+        let result = ScenarioResult(
+            id: specification.id,
+            observations: [
+                ParityObservation(step: 0, field: "pending.names", value: .array([.string("a")])),
+                ParityObservation(step: 1, field: "saved.names", value: .array([.string("a")])),
+            ])
+        let entry = CoverageMatrixEntry(
+            sourceCase: specification.id.description,
+            scenarioIDs: [specification.id.description],
+            outcomes: [specification.id.description: "compared"],
+            observations: [specification.id.description: ["pending.names", "saved.names"]])
+        let report = CoverageValidationReport(
+            discoveredCaseCount: 2,
+            coverageValid: true,
+            mappedSourceCaseCount: 1,
+            declaredComparedSourceCaseCount: 1,
+            declaredDivergentSourceCaseCount: 0,
+            declaredNonComparableSourceCaseCount: 0,
+            declaredComparedScenarioCount: 1,
+            declaredDivergentScenarioCount: 0,
+            declaredNonComparableScenarioCount: 0,
+            discoveredCases: [specification.id.description, pendingID],
+            pendingCases: [pendingID],
+            validationIssues: [])
+        let inputs = ComparisonInputs(
+            osd: makeOutput("openswiftdata", [result]),
+            apple: makeOutput("apple-swiftdata", [result]),
+            allowlist: [],
+            matrixSchemaVersion: CoverageMatrixValidator.supportedSchemaVersion,
+            matrixEntries: [entry],
+            coverage: report)
+
+        #expect(throws: ComparisonInputError.incompleteSourceCoverage([pendingID])) {
+            try ParityComparisonRuntime.compare(inputs)
+        }
+    }
+
     @Test func comparatorRejectsMissingAppleScenario() throws {
         let id = ParityScenarioCatalog.predicateMembership.id
         let osd = makeOutput("openswiftdata", [ScenarioResult(id: id, observations: [])])

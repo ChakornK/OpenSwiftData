@@ -1148,6 +1148,38 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
+    func containerAcceptsDataStoreConfigurationDirectly() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "direct-configuration-\(UUID().uuidString)"
+        let configuration = CanonicalFixtureConfiguration(name: name, schema: schema)
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "direct")
+        context.insert(model)
+        try context.save()
+
+        let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
+        #expect(fetched.map(\.title) == ["direct"])
+        #expect(container.dataStore?.identifier == "canonical.fixture")
+    }
+
+    @MainActor
+    @Test
+    func containerVariadicAcceptsDataStoreConfigurationDirectly() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "direct-variadic-\(UUID().uuidString)"
+        let configuration = CanonicalFixtureConfiguration(name: name, schema: schema)
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        context.insert(AppleStoreFixture(title: "variadic"))
+        try context.save()
+
+        let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
+        #expect(fetched.map(\.title) == ["variadic"])
+    }
+
+    @MainActor
+    @Test
     func renamedBaseOnlySnapshotFailsDeterministicallyDuringContainerFetch() throws {
         let schema = Schema([AppleStoreFixture.self])
         let name = "renamed-snapshot-\(UUID().uuidString)"

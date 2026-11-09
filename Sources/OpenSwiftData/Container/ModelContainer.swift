@@ -541,7 +541,40 @@ public final class ModelContainer: Sendable {
         try self.init(
             for: schema,
             migrationPlan: migrationPlan,
-            configurations: Self.configurationsOrDefault(configurations))
+            configurations: Self.configurationsOrDefault(configurations))    }
+
+    /// Creates a container whose store comes from an Apple-style custom data store configuration.
+    ///
+    /// The configuration's `schema` is assigned before its store is created; the store must expose the
+    /// container's schema. This entry point matches Apple's `ModelContainer(for:configurations:)` usage
+    /// with a custom `DataStoreConfiguration`.
+    public convenience init(
+        for types: any PersistentModel.Type...,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: any DataStoreConfiguration
+    ) throws {
+        let configuration = try Self.canonicalConfiguration(from: configurations)
+        try self.init(
+            for: types, schema: Schema(types), configurations: [configuration])
+    }
+
+    /// Creates a container for a schema backed by an Apple-style custom data store configuration.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: any DataStoreConfiguration
+    ) throws {
+        try self.init(
+            for: schema, migrationPlan: migrationPlan,
+            configurations: [try Self.canonicalConfiguration(from: configurations)])
+    }
+
+    /// Wraps a custom data store configuration in a model configuration for the canonical store path.
+    private static func canonicalConfiguration(
+        from configuration: any DataStoreConfiguration
+    ) throws -> ModelConfiguration {
+        ModelConfiguration(
+            canonicalStore: configuration.name, canonicalDataStoreConfiguration: configuration)
     }
 
     private convenience init(schemaOnly schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {

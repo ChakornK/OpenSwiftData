@@ -44,12 +44,14 @@ enum AppleParityRenameV2 {
 }
 
 enum AppleParityRootNaming {
+    @available(macOS 26, *)
     @Model final class Root {
         var name: String
         @Relationship(inverse: \Leaf.root) var leaves: [Leaf] = []
         init(name: String) { self.name = name }
     }
 
+    @available(macOS 26, *)
     @Model final class Leaf {
         var root: Root?
         init() {}
@@ -83,12 +85,12 @@ enum AppleMacroArgumentsAdapter {
             let macroChild = AppleParityMacroChild()
             macroOwner.children.append(macroChild)
             values = [
-                "key.originalName": .string(key.originalName ?? ""),
+                "key.originalName": .string(key.originalName),
                 "key.unique": .bool(key.options.contains(.unique)),
                 "cacheAbsent": .bool(!owner.attributes.contains { $0.name == "cache" }),
                 "children.deleteRuleCascade": .bool(children.deleteRule == .cascade),
                 "children.maximumCount": children.maximumModelCount.map { .integer(Int64($0)) } ?? .null,
-                "children.originalName": .string(children.originalName ?? ""),
+                "children.originalName": .string(children.originalName),
                 "children.inverseConnected": .bool(macroChild.owner === macroOwner),
             ]
         case .deleteRuleRawValues:
@@ -114,20 +116,12 @@ enum AppleMacroArgumentsAdapter {
                     .map { .string($0.name) }),
             ]
         case .rootModelNamePersistsAndRelates:
-            let container = try ModelContainer(
-                for: AppleParityRootNaming.Root.self, AppleParityRootNaming.Leaf.self,
-                configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-            let root = AppleParityRootNaming.Root(name: "r")
-            let leaf = AppleParityRootNaming.Leaf()
-            container.mainContext.insert(root)
-            container.mainContext.insert(leaf)
-            root.leaves.append(leaf)
-            try container.mainContext.save()
-            values = [
-                "inverseMatches": .bool(leaf.root === root),
-                "rootEntityName": .string(Schema([AppleParityRootNaming.Root.self, AppleParityRootNaming.Leaf.self]).entities.first { $0.name == "Root" }?.name ?? ""),
-                "storedRootNames": .array(try ModelContext(container).fetch(FetchDescriptor<AppleParityRootNaming.Root>()).map { .string($0.name) }),
-            ]
+            if #available(macOS 26, *) {
+                return try rootModelNameValues(for: specification)
+            }
+            throw NSError(domain: "AppleMacroArgumentsAdapter", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Root model-name parity requires macOS 26 or newer.",
+            ])
         }
         return ScenarioResult(
             id: specification.id,
@@ -139,5 +133,27 @@ enum AppleMacroArgumentsAdapter {
     private static func require<Value>(_ value: Value?, scenarioID: ScenarioID) throws -> Value {
         guard let value else { throw ScenarioExpectationError(id: scenarioID, observations: []) }
         return value
+    }
+
+    @available(macOS 26, *)
+    private static func rootModelNameValues(for specification: MacroArgumentsSpecification) throws -> ScenarioResult {
+        let container = try ModelContainer(
+            for: AppleParityRootNaming.Root.self, AppleParityRootNaming.Leaf.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let root = AppleParityRootNaming.Root(name: "r")
+        let leaf = AppleParityRootNaming.Leaf()
+        container.mainContext.insert(root)
+        container.mainContext.insert(leaf)
+        root.leaves.append(leaf)
+        try container.mainContext.save()
+        let schema = Schema([AppleParityRootNaming.Root.self, AppleParityRootNaming.Leaf.self])
+        let values: [String: ObservedValue] = [
+            "inverseMatches": .bool(leaf.root === root),
+            "rootEntityName": .string(schema.entities.first { $0.name == "Root" }?.name ?? ""),
+            "storedRootNames": .array(try ModelContext(container).fetch(FetchDescriptor<AppleParityRootNaming.Root>()).map { .string($0.name) }),
+        ]
+        return ScenarioResult(
+            id: specification.id,
+            observations: values.keys.sorted().map { ParityObservation(step: 0, field: $0, value: values[$0]!) })
     }
 }

@@ -146,6 +146,7 @@ public enum OSDScenarioAdapter {
         let macroArgumentsResults = try OSDMacroArgumentsAdapter.runAll()
         let sortingResults = try OSDSortingParityAdapter.runAll()
         let modelContextInitResults = try OSDModelContextInitAdapter.runAll()
+        let modelActorResults = try OSDModelActorParityAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
@@ -159,7 +160,8 @@ public enum OSDScenarioAdapter {
         let relationshipDeleteRuleResults = try OSDRelationshipDeleteRuleAdapter.runAll()
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults
-            + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults + batchFetchResults
+            + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults
+            + modelActorResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
             + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
             + relationshipDeleteRuleResults)

@@ -1473,8 +1473,7 @@
       "observations": {
         "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": ["tripNames", "tripNights"]
       }
-    }
-,
+    },
     {
       "sourceCase": "ModelContainerParityTests/configurations are a set and containers compare by identity",
       "scenarioIDs": ["ModelContainerParityTests/configurations are a set and containers compare by identity"],
@@ -1741,6 +1740,27 @@
           "contextAutosaveEnabled", "containerIdentityMatches", "undoManagerAbsent",
           "contextHasNoChanges", "mainContextAutosaveEnabled"
         ]
+      }
+    }
+,
+    {
+      "sourceCase": "ModelActorParityTests/a model actor works with its own context",
+      "scenarioIDs": ["ModelActorParityTests/a model actor works with its own context"],
+      "outcomes": {
+        "ModelActorParityTests/a model actor works with its own context": "non-comparable"
+      },
+      "observations": {},
+      "reasonCategory": "private-api",
+      "rationale": "The external OSDRunner @ModelActor macro expansion calls package-scoped DefaultSerialModelExecutor.make(container:), so this source scenario cannot be compiled from the parity runner package without changing OpenSwiftData implementation visibility."
+    },
+    {
+      "sourceCase": "ModelActorParityTests/executors can wrap an existing context",
+      "scenarioIDs": ["ModelActorParityTests/executors can wrap an existing context"],
+      "outcomes": {
+        "ModelActorParityTests/executors can wrap an existing context": "compared"
+      },
+      "observations": {
+        "ModelActorParityTests/executors can wrap an existing context": ["executorContextIdentityMatches"]
       }
     }
   ]

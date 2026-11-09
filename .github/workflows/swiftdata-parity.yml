@@ -3,28 +3,13 @@ name: SwiftData behavior parity
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "Tests/OpenSwiftDataTests/Parity/**"
-      - "Tests/SwiftDataParity/**"
-      - "Sources/**"
-      - "Package.swift"
-      - "Package.resolved"
-      - ".github/workflows/swiftdata-parity.yml"
   push:
     branches: [main]
-    paths:
-      - "Tests/OpenSwiftDataTests/Parity/**"
-      - "Tests/SwiftDataParity/**"
-      - "Sources/**"
-      - "Package.swift"
-      - "Package.resolved"
-      - ".github/workflows/swiftdata-parity.yml"
   workflow_dispatch:
 
 jobs:
   compare-swiftdata-behavior:
     runs-on: macos-latest
-    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -40,10 +25,6 @@ jobs:
         run: swift run --package-path Tests/SwiftDataParity/OSDRunner osd-parity-runner --output /tmp/osd-observations.json
       - name: Run Apple SwiftData parity scenarios
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --output /tmp/apple-observations.json
-      - name: Probe Apple batch-fetch behavior
-        run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --batch-fetch-probe --output /tmp/apple-batch-fetch-probe.json
-      - name: Probe Apple batch-delete behavior
-        run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --batch-delete-probe --output /tmp/apple-batch-delete-probe.json
       - name: Validate source coverage
         if: always()
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-validate
@@ -52,14 +33,12 @@ jobs:
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-compare --osd /tmp/osd-observations.json --apple /tmp/apple-observations.json --allowlist Tests/SwiftDataParity/parity-allowlist.json --matrix Tests/SwiftDataParity/parity-matrix.json --coverage-report parity-coverage-report.json --report /tmp/parity-diff.json
       - name: Upload parity artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swiftdata-parity-${{ github.sha }}
           path: |
             /tmp/osd-observations.json
             /tmp/apple-observations.json
-            /tmp/apple-batch-fetch-probe.json
-            /tmp/apple-batch-delete-probe.json
             /tmp/parity-diff.json
             parity-coverage-report.json
           if-no-files-found: warn

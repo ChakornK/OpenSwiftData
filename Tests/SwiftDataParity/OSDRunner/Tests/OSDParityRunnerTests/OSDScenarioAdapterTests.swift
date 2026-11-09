@@ -62,6 +62,19 @@ import Testing
     }
 
     @MainActor
+    @Test func modelActorScenariosMatchDeclaredDispositions() throws {
+        let results = try OSDModelActorParityAdapter.runAll()
+        #expect(results.map(\.id) == [ModelActorParityScenarioCatalog.wrapExistingContext.id])
+        #expect(ModelActorParityScenarioCatalog.ownContextNonComparableRationale.contains("DefaultSerialModelExecutor.make(container:)"))
+        #expect(results.map(\.id) == [ModelActorParityScenarioCatalog.wrapExistingContext.id].sorted {
+            $0.description < $1.description
+        })
+        let specification = ModelActorParityScenarioCatalog.wrapExistingContext
+        let result = try #require(results.first { $0.id == specification.id })
+        #expect(ModelActorParityExpectationValidator.validate(result, against: specification))
+    }
+
+    @MainActor
     @Test func modelContainerScenariosMatchSharedContracts() throws {
         let results = try OSDModelContainerParityAdapter.runAll()
         #expect(results.map(\.id) == ModelContainerParityScenarioCatalog.all.map(\.id).sorted {
@@ -117,6 +130,7 @@ import Testing
         let macroArgumentsResults = try OSDMacroArgumentsAdapter.runAll()
         let sortingResults = try OSDSortingParityAdapter.runAll()
         let modelContextInitResults = try OSDModelContextInitAdapter.runAll()
+        let modelActorResults = try OSDModelActorParityAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
         let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let codableResults = try OSDCodableParityAdapter.runAll()
@@ -143,6 +157,7 @@ import Testing
                 #endif
             }.map(\.id)
             + ModelContextInitScenarioCatalog.all.map(\.id)
+            + [ModelActorParityScenarioCatalog.wrapExistingContext.id]
             + BatchFetchScenarioCatalog.all.map(\.id)
             + BatchDeleteScenarioCatalog.all.map(\.id)
             + CodableParityScenarioCatalog.all.map(\.id)
@@ -206,6 +221,10 @@ import Testing
         for specification in ModelContextInitScenarioCatalog.all {
             let result = try #require(modelContextInitResults.first { $0.id == specification.id })
             #expect(ModelContextInitExpectationValidator.validate(result, against: specification))
+        }
+        for specification in ModelActorParityScenarioCatalog.all {
+            let result = try #require(modelActorResults.first { $0.id == specification.id })
+            #expect(ModelActorParityExpectationValidator.validate(result, against: specification))
         }
         #expect(batchFetchResults.map(\.id) == BatchFetchScenarioCatalog.all.map(\.id).sorted {
             $0.description < $1.description

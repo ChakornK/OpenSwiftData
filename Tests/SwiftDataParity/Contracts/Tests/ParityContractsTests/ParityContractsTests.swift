@@ -217,6 +217,28 @@ import Testing
                 .union(ModelContextInitScenarioCatalog.contractsByID.keys)))
     }
 
+    @Test func modelActorContractsRegisterBothSourceDeclarations() {
+        #expect(ModelActorParityScenarioCatalog.all.count == 2)
+        #expect(ModelActorParityScenarioCatalog.contractsByID.count == 2)
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(
+            of: ModelActorParityScenarioCatalog.contractsByID.keys))
+        #expect(ModelActorParityScenarioCatalog.ownContext.expectedObservationFields.isEmpty)
+    }
+
+    @Test func modelActorMatrixEntryDeclaresOneExplicitlyNonComparableScenario() {
+        let unavailable = ModelActorParityScenarioCatalog.ownContext
+        let compared = ModelActorParityScenarioCatalog.wrapExistingContext
+        let entry = CoverageMatrixEntry(
+            sourceCase: "ModelActorParityTests/model actor scenarios",
+            scenarioIDs: [unavailable.id.description, compared.id.description],
+            outcomes: [unavailable.id.description: "non-comparable", compared.id.description: "compared"],
+            observations: [compared.id.description: compared.expectedObservationFields.sorted()],
+            reasonCategory: "private-api",
+            rationale: ModelActorParityScenarioCatalog.ownContextNonComparableRationale)
+        #expect(CoverageMatrixValidator.validate(
+            discovered: [entry.sourceCase], entries: [entry], registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+    }
+
     @Test func sortingAndModelContextInitMatrixEntriesMatchSharedContracts() {
         let sortingEntry = CoverageMatrixEntry(
             sourceCase: "SortingParityTests/string and numeric orderings match for pending and saved models",
@@ -710,6 +732,7 @@ import Testing
                 .union(MacroArgumentsScenarioCatalog.contractsByID.keys)
                 .union(SortingParityScenarioCatalog.contractsByID.keys)
                 .union(ModelContextInitScenarioCatalog.contractsByID.keys)
+                .union(ModelActorParityScenarioCatalog.contractsByID.keys)
                 .union(BatchFetchScenarioCatalog.contractsByID.keys)
                 .union(BatchDeleteScenarioCatalog.contractsByID.keys)
                 .union(CodableParityScenarioCatalog.contractsByID.keys)

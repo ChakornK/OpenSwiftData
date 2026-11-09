@@ -913,6 +913,63 @@ public enum ModelContextInitExpectationValidator {
     }
 }
 
+public struct ModelActorParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case ownContext
+        case wrapExistingContext
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservationFields: Set<String>
+
+    public init(id: ScenarioID, query: Query, expectedObservationFields: Set<String>) {
+        self.id = id
+        self.query = query
+        self.expectedObservationFields = expectedObservationFields
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: expectedObservationFields)
+    }
+}
+
+public enum ModelActorParityScenarioCatalog {
+    public static let ownContext = ModelActorParitySpecification(
+        id: ScenarioID(suite: "ModelActorParityTests", test: "a model actor works with its own context"),
+        query: .ownContext,
+        expectedObservationFields: [])
+
+    public static let wrapExistingContext = ModelActorParitySpecification(
+        id: ScenarioID(suite: "ModelActorParityTests", test: "executors can wrap an existing context"),
+        query: .wrapExistingContext,
+        expectedObservationFields: ["executorContextIdentityMatches"])
+
+    public static let ownContextNonComparableRationale =
+        "The external OSDRunner @ModelActor macro expansion calls package-scoped DefaultSerialModelExecutor.make(container:), so this source scenario cannot be compiled from the parity runner package without changing OpenSwiftData implementation visibility."
+
+    public static let all = [ownContext, wrapExistingContext]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum ModelActorParityExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: ModelActorParitySpecification) -> Bool {
+        guard result.id == specification.id else { return false }
+        if specification.query == .ownContext {
+            return result.disposition == .nonComparable(
+                reasonCategory: "private-api", rationale: ModelActorParityScenarioCatalog.ownContextNonComparableRationale)
+                && result.observations.isEmpty
+        }
+        let fields = result.observations.map(\.field)
+        return result.disposition == .observed
+            && fields.count == Set(fields).count
+            && Set(fields) == specification.expectedObservationFields
+    }
+}
+
 public struct BatchFetchSpecification: Codable, Equatable, Sendable {
     public struct Row: Codable, Equatable, Sendable {
         public let name: String
@@ -2898,6 +2955,7 @@ public extension ParityScenarioCatalog {
               + Array(MacroArgumentsScenarioCatalog.contractsByID.values)
               + Array(SortingParityScenarioCatalog.contractsByID.values)
               + Array(ModelContextInitScenarioCatalog.contractsByID.values)
+              + Array(ModelActorParityScenarioCatalog.contractsByID.values)
             + Array(BatchFetchScenarioCatalog.contractsByID.values)
              + Array(BatchDeleteScenarioCatalog.contractsByID.values)
              + Array(CodableParityScenarioCatalog.contractsByID.values)

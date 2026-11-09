@@ -15,8 +15,11 @@ final class BatchFetchScenarioRow {
 @MainActor
 public enum OSDBatchFetchAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try BatchFetchScenarioCatalog.all.map(runAndValidate)
-            .sorted { $0.id.description < $1.id.description }
+        var results: [ScenarioResult] = []
+        for specification in BatchFetchScenarioCatalog.all {
+            results.append(try runAndValidate(specification))
+        }
+        return results.sorted { $0.id.description < $1.id.description }
     }
 
     public static func runAndValidate(_ specification: BatchFetchSpecification) throws -> ScenarioResult {
@@ -31,7 +34,7 @@ public enum OSDBatchFetchAdapter {
         let container = try ModelContainer(
             for: BatchFetchScenarioRow.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        let context = ModelContext(container)
+        let context = container.mainContext
         var observations: [ParityObservation] = []
         var snapshot: FetchResultsCollection<BatchFetchScenarioRow>?
 
@@ -41,6 +44,9 @@ public enum OSDBatchFetchAdapter {
             }
             if let pendingRow = step.insertPendingRow {
                 context.insert(BatchFetchScenarioRow(name: pendingRow.name, rank: Int(pendingRow.rank)))
+            }
+            if step.saveBeforeObservation {
+                try context.save()
             }
             let value = try observe(step.operation, context: context, snapshot: &snapshot)
             observations.append(ParityObservation(step: stepIndex, field: step.observationField, value: value))
@@ -76,18 +82,22 @@ public enum OSDBatchFetchAdapter {
                 _ = try context.fetchIdentifiers(
                     FetchDescriptor<BatchFetchScenarioRow>(sortBy: [SortDescriptor(\.name)]))
             } == .sortingPendingChangesWithIdentifiers)
+        case .saveSeed:
+            return .null
         case let .savedIdentifierCount(sorted):
             var descriptor = FetchDescriptor<BatchFetchScenarioRow>(
                 sortBy: sorted ? [SortDescriptor(\.rank)] : [])
             descriptor.includePendingChanges = false
             return .integer(Int64(try context.fetchIdentifiers(descriptor).count))
         case .randomAccessBatch:
-            let descriptor = try sortedDescriptor()
+            let descriptor = sortedDescriptor()
             let results = try context.fetch(descriptor, batchSize: 3)
             let ranks = results.map(\.rank)
             let ordinaryFirst = try context.fetch(descriptor).first
             let repeatedAccessSameInstance = results[0] === results[0]
             let sameInstanceAsOrdinaryFetch = results[0] === ordinaryFirst
+            let slice: [ObservedValue] = results[2..<4].map { .integer(Int64($0.rank)) }
+            let reversed: [ObservedValue] = results.reversed().map { .integer(Int64($0.rank)) }
             return .object([
                 "count": .integer(Int64(results.count)),
                 "startIndex": .integer(Int64(results.startIndex)),
@@ -95,8 +105,8 @@ public enum OSDBatchFetchAdapter {
                 "ranks": .array(ranks.map { .integer(Int64($0)) }),
                 "first": .integer(Int64(results.first?.rank ?? -1)),
                 "last": .integer(Int64(results.last?.rank ?? -1)),
-                "slice": .array(results[2..<4].map { .integer(Int64($0.rank)) }),
-                "reversed": .array(results.reversed().map { .integer(Int64($0.rank)) }),
+                "slice": .array(slice),
+                "reversed": .array(reversed),
                 "repeatedAccessSameInstance": .bool(repeatedAccessSameInstance),
                 "sameInstanceAsOrdinaryFetch": .bool(sameInstanceAsOrdinaryFetch),
             ])
@@ -109,12 +119,10 @@ public enum OSDBatchFetchAdapter {
                 predicate: predicate, sortBy: [SortDescriptor(\.rank)])
             descriptor.includePendingChanges = false
             return .array(try context.fetch(descriptor, batchSize: 2).map { .integer(Int64($0.rank)) })
-        case let .batchSizeCounts(batchSizes):
-            return .array(try batchSizes.map { batchSize in
-                .integer(Int64(try context.fetch(sortedDescriptor(), batchSize: batchSize).count))
-            })
+        case let .batchSizeCount(batchSize):
+            return .integer(Int64(try context.fetch(sortedDescriptor(), batchSize: batchSize).count))
         case .identifierCount:
-            let descriptor = try sortedDescriptor()
+            let descriptor = sortedDescriptor()
             let batched = try context.fetchIdentifiers(descriptor, batchSize: 2)
             let unbatched = try context.fetchIdentifiers(descriptor)
             return .bool(Array(batched) == unbatched)

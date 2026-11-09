@@ -47,6 +47,9 @@ enum AppleBatchFetchAdapter {
             if let pendingRow = step.insertPendingRow {
                 context.insert(AppleBatchFetchScenarioRow(name: pendingRow.name, rank: Int(pendingRow.rank)))
             }
+            if step.saveBeforeObservation {
+                try context.save()
+            }
             let value = try observe(step.operation, context: context, snapshot: &snapshot)
             observations.append(ParityObservation(step: stepIndex, field: step.observationField, value: value))
             if step.save {
@@ -75,6 +78,9 @@ enum AppleBatchFetchAdapter {
                 _ = try context.fetchIdentifiers(
                     FetchDescriptor<AppleBatchFetchScenarioRow>(sortBy: [SortDescriptor(\.name)]))
             } == .sortingPendingChangesWithIdentifiers)
+        case .saveSeed:
+            try context.save()
+            return .null
         case let .savedIdentifierCount(sorted):
             var descriptor = FetchDescriptor<AppleBatchFetchScenarioRow>(
                 sortBy: sorted ? [SortDescriptor(\.rank)] : [])
@@ -109,10 +115,8 @@ enum AppleBatchFetchAdapter {
             var descriptor = FetchDescriptor(predicate: predicate, sortBy: [SortDescriptor(\.rank)])
             descriptor.includePendingChanges = false
             return .array(try context.fetch(descriptor, batchSize: 2).map { .integer(Int64($0.rank)) })
-        case let .batchSizeCounts(batchSizes):
-            return .array(try batchSizes.map { batchSize in
-                .integer(Int64(try context.fetch(sortedDescriptor(), batchSize: batchSize).count))
-            })
+        case let .batchSizeCount(batchSize):
+            return .integer(Int64(try context.fetch(sortedDescriptor(), batchSize: batchSize).count))
         case .identifierCount:
             let descriptor = sortedDescriptor()
             let batched = try context.fetchIdentifiers(descriptor, batchSize: 2)
@@ -142,6 +146,8 @@ enum AppleBatchFetchAdapter {
     }
 
     private static func sortedDescriptor() -> FetchDescriptor<AppleBatchFetchScenarioRow> {
-        FetchDescriptor<AppleBatchFetchScenarioRow>(sortBy: [SortDescriptor(\.rank)], includePendingChanges: false)
+        var descriptor = FetchDescriptor<AppleBatchFetchScenarioRow>(sortBy: [SortDescriptor(\.rank)])
+        descriptor.includePendingChanges = false
+        return descriptor
     }
 }

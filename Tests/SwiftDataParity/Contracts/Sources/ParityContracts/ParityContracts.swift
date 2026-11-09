@@ -699,11 +699,12 @@ public struct BatchFetchSpecification: Codable, Equatable, Sendable {
         case expectModelBatchError
         case expectIdentifierBatchError
         case expectSortedIdentifierError
+        case saveSeed
         case savedIdentifierCount(sorted: Bool)
         case randomAccessBatch
         case pageBatch
         case filteredBatch
-        case batchSizeCounts([Int])
+        case batchSizeCount(Int)
         case identifierCount
         case snapshotCounts
     }
@@ -724,6 +725,7 @@ public struct BatchFetchSpecification: Codable, Equatable, Sendable {
         public let seedRows: Bool
         public let insertPendingRow: Row?
         public let save: Bool
+        public let saveBeforeObservation: Bool
         public let operation: Operation
         public let observationField: String
 
@@ -731,12 +733,14 @@ public struct BatchFetchSpecification: Codable, Equatable, Sendable {
             seedRows: Bool = false,
             insertPendingRow: Row? = nil,
             save: Bool = false,
+            saveBeforeObservation: Bool = false,
             observationField: String,
             operation: Operation
         ) {
             self.seedRows = seedRows
             self.insertPendingRow = insertPendingRow
             self.save = save
+            self.saveBeforeObservation = saveBeforeObservation
             self.operation = operation
             self.observationField = observationField
         }
@@ -796,20 +800,22 @@ public enum BatchFetchScenarioCatalog {
         seedRows: seedRows,
         steps: [
             .init(observationField: "pending.sortedIdentifier.throwsExpected", operation: .expectSortedIdentifierError),
-            .init(seedRows: true, save: true, observationField: "saved.identifierCount", operation: .savedIdentifierCount(sorted: false)),
+            .init(seedRows: true, saveBeforeObservation: true, observationField: "seed.saved", operation: .saveSeed),
+            .init(observationField: "saved.identifierCount", operation: .savedIdentifierCount(sorted: false)),
             .init(observationField: "saved.sortedIdentifierCount", operation: .savedIdentifierCount(sorted: true)),
         ],
         expectedObservations: [
             .init(step: 0, field: "pending.sortedIdentifier.throwsExpected", value: .bool(true)),
-            .init(step: 1, field: "saved.identifierCount", value: .integer(7)),
-            .init(step: 2, field: "saved.sortedIdentifierCount", value: .integer(7)),
+            .init(step: 1, field: "seed.saved", value: .null),
+            .init(step: 2, field: "saved.identifierCount", value: .integer(7)),
+            .init(step: 3, field: "saved.sortedIdentifierCount", value: .integer(7)),
         ])
 
     public static let randomAccessFetchOrder = BatchFetchSpecification(
         id: ScenarioID(suite: "BatchFetchParityTests", test: "batched results are a random access collection in fetch order"),
         seedRows: seedRows,
         steps: [
-            .init(seedRows: true, save: true, observationField: "collection.values", operation: .randomAccessBatch),
+            .init(seedRows: true, saveBeforeObservation: true, observationField: "collection.values", operation: .randomAccessBatch),
         ],
         expectedObservations: [
             .init(step: 0, field: "collection.values", value: .object([
@@ -830,7 +836,7 @@ public enum BatchFetchScenarioCatalog {
         id: ScenarioID(suite: "BatchFetchParityTests", test: "batched fetches honor predicates, limits, and offsets"),
         seedRows: seedRows,
         steps: [
-            .init(seedRows: true, save: true, observationField: "page.ranks", operation: .pageBatch),
+            .init(seedRows: true, saveBeforeObservation: true, observationField: "page.ranks", operation: .pageBatch),
             .init(observationField: "filtered.ranks", operation: .filteredBatch),
         ],
         expectedObservations: [
@@ -844,7 +850,7 @@ public enum BatchFetchScenarioCatalog {
                 suite: "BatchFetchParityTests", test: "any batch size returns every result/\(batchSize)"),
             seedRows: seedRows,
             steps: [
-                .init(seedRows: true, save: true, observationField: "count", operation: .batchSizeCounts([batchSize])),
+                .init(seedRows: true, saveBeforeObservation: true, observationField: "count", operation: .batchSizeCount(batchSize)),
             ],
             expectedObservations: [
                 .init(step: 0, field: "count", value: .integer(7)),
@@ -855,10 +861,10 @@ public enum BatchFetchScenarioCatalog {
         id: ScenarioID(suite: "BatchFetchParityTests", test: "batched identifiers match unbatched identifiers"),
         seedRows: seedRows,
         steps: [
-            .init(seedRows: true, save: true, observationField: "identifiers.count", operation: .identifierCount),
+            .init(seedRows: true, saveBeforeObservation: true, observationField: "identifiers.count", operation: .identifierCount),
         ],
         expectedObservations: [
-            .init(step: 0, field: "identifiers.count", value: .integer(7)),
+            .init(step: 0, field: "identifiers.count", value: .bool(true)),
         ])
 
     public static let batchedResultsExcludePendingInsertionsAndKeepSnapshot = BatchFetchSpecification(
@@ -866,7 +872,7 @@ public enum BatchFetchScenarioCatalog {
             suite: "BatchFetchParityTests", test: "batched results exclude pending insertions and keep their snapshot"),
         seedRows: seedRows,
         steps: [
-            .init(seedRows: true, save: true, observationField: "snapshot.beforeSave.count", operation: .snapshotCounts),
+            .init(seedRows: true, saveBeforeObservation: true, observationField: "snapshot.beforeSave.count", operation: .snapshotCounts),
             .init(insertPendingRow: .init(name: "pending", rank: 100), observationField: "snapshot.pendingCount", operation: .snapshotCounts),
             .init(save: true, observationField: "snapshot.afterSave.count", operation: .snapshotCounts),
         ],
@@ -904,6 +910,159 @@ public enum BatchFetchExpectationValidator {
             }
         }
         let expected = Dictionary(uniqueKeysWithValues: specification.expectedObservations.map {
+            ($0.field, ($0.step, $0.value.canonicalized))
+        })
+        return actual.count == expected.count && actual.allSatisfy { field, value in
+            expected[field]?.0 == value.0 && expected[field]?.1 == value.1
+        }
+    }
+}
+
+public struct BatchDeleteSpecification: Codable, Equatable, Sendable {
+    public struct Row: Codable, Equatable, Sendable {
+        public let name: String
+
+        public init(name: String) { self.name = name }
+    }
+
+    public enum Operation: Codable, Equatable, Sendable {
+        case pendingAndRegisteredState
+        case cascadePetCount
+        case notificationCount
+        case denyError
+        case transactionRemainingCount
+        case noMatchState
+    }
+
+    public struct Step: Codable, Equatable, Sendable {
+        public let operation: Operation
+        public let observationField: String
+
+        public init(operation: Operation, observationField: String) {
+            self.operation = operation
+            self.observationField = observationField
+        }
+    }
+
+    public struct ExpectedObservation: Codable, Equatable, Sendable {
+        public let step: Int
+        public let field: String
+        public let value: ObservedValue
+
+        public init(step: Int, field: String, value: ObservedValue) {
+            self.step = step
+            self.field = field
+            self.value = value
+        }
+    }
+
+    public let id: ScenarioID
+    public let steps: [Step]
+    public let expectedObservations: [ExpectedObservation]
+    public let expectedOSDObservations: [ExpectedObservation]?
+
+    public init(
+        id: ScenarioID,
+        steps: [Step],
+        expectedObservations: [ExpectedObservation],
+        expectedOSDObservations: [ExpectedObservation]? = nil
+    ) {
+        self.id = id
+        self.steps = steps
+        self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.map(\.field)))
+    }
+
+    public var hasValidObservationSchedule: Bool {
+        let fields = steps.map(\.observationField)
+        let expectedFields = expectedObservations.map(\.field)
+        return fields.count == Set(fields).count
+            && expectedFields.count == Set(expectedFields).count
+            && fields == expectedFields
+            && expectedObservations.enumerated().allSatisfy { $0.offset == $0.element.step }
+    }
+}
+
+public enum BatchDeleteScenarioCatalog {
+    public static let pendingAndRegisteredState = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes leave pending changes and registered instances alone"),
+        steps: [.init(operation: .pendingAndRegisteredState, observationField: "delete.state")],
+        expectedObservations: [.init(step: 0, field: "delete.state", value: .object([
+            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
+            "savedADeleted": .bool(false), "savedARegistered": .bool(true), "pendingCRegistered": .bool(true),
+            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
+            "afterSaveNames": .array([.string("b"), .string("c")]),
+        ]))],
+        expectedOSDObservations: [.init(step: 0, field: "delete.state", value: .object([
+            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
+            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
+            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
+            "afterSaveNames": .array([.string("b"), .string("c")]),
+        ]))])
+
+    public static let cascadeRules = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes apply cascade rules"),
+        steps: [.init(operation: .cascadePetCount, observationField: "cascade.petCount")],
+        expectedObservations: [.init(step: 0, field: "cascade.petCount", value: .integer(0))])
+
+    public static let noSaveNotifications = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes post no save notifications"),
+        steps: [.init(operation: .notificationCount, observationField: "notifications.count")],
+        expectedObservations: [.init(step: 0, field: "notifications.count", value: .integer(0))])
+
+    public static let denyRuleError = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "deny rules make batch deletes throw without deleting"),
+        steps: [.init(operation: .denyError, observationField: "deny.error")],
+        expectedObservations: [.init(step: 0, field: "deny.error", value: .object([
+            "threw": .bool(true), "domain": .string("NSCocoaErrorDomain"), "code": .integer(134060),
+            "relationship": .string("BatchParityKeeper.toys"),
+            "reason": .string("Delete rule is not supported for batch deletes"),
+            "remainingKeepers": .integer(1), "toyStillLinked": .bool(true),
+        ]))])
+
+    public static let failedTransactionKeepsDeletes = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes inside a failed transaction stay applied"),
+        steps: [.init(operation: .transactionRemainingCount, observationField: "transaction.remainingCount")],
+        expectedObservations: [.init(step: 0, field: "transaction.remainingCount", value: .integer(0))])
+
+    public static let noMatchesChangeNothing = BatchDeleteSpecification(
+        id: ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes with no matches change nothing"),
+        steps: [.init(operation: .noMatchState, observationField: "noMatch")],
+        expectedObservations: [.init(step: 0, field: "noMatch", value: .object([
+            "hasChanges": .bool(false), "count": .integer(1),
+        ]))])
+
+    public static let all = [
+        pendingAndRegisteredState, cascadeRules, noSaveNotifications,
+        denyRuleError, failedTransactionKeepsDeletes, noMatchesChangeNothing,
+    ]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum BatchDeleteExpectationValidator {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: BatchDeleteSpecification,
+        implementation: String = "apple"
+    ) -> Bool {
+        guard result.id == specification.id, specification.hasValidObservationSchedule else { return false }
+        var actual: [String: (Int, ObservedValue)] = [:]
+        for observation in result.observations {
+            guard actual.updateValue((observation.step, observation.value.canonicalized), forKey: observation.field) == nil else {
+                return false
+            }
+        }
+        let expectedObservations = implementation == "openswiftdata"
+            ? specification.expectedOSDObservations ?? specification.expectedObservations
+            : specification.expectedObservations
+        let expected = Dictionary(uniqueKeysWithValues: expectedObservations.map {
             ($0.field, ($0.step, $0.value.canonicalized))
         })
         return actual.count == expected.count && actual.allSatisfy { field, value in
@@ -1546,7 +1705,8 @@ public extension ParityScenarioCatalog {
             + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
             + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
             + Array(PendingFetchScenarioCatalog.contractsByID.values)
-            + Array(BatchFetchScenarioCatalog.contractsByID.values))
+            + Array(BatchFetchScenarioCatalog.contractsByID.values)
+            + Array(BatchDeleteScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

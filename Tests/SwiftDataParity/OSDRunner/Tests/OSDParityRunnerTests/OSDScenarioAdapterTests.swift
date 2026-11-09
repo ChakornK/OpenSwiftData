@@ -8,12 +8,16 @@ import Testing
         let results = try OSDScenarioAdapter.runAll()
         let pendingFetchResults = try OSDPendingFetchAdapter.runAll()
         let batchFetchResults = try OSDBatchFetchAdapter.runAll()
+        let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
+        let batchDeleteResults = try OSDBatchDeleteAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
             + ModelConfigurationContainerScenarioCatalog.all.map(\.id)
             + PendingFetchScenarioCatalog.all.map(\.id)
             + BatchFetchScenarioCatalog.all.map(\.id)
+            + BatchDeleteScenarioCatalog.all.map(\.id)
+            + BatchDeleteScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -57,6 +61,20 @@ import Testing
         for specification in BatchFetchScenarioCatalog.all {
             let result = try #require(batchFetchResults.first { $0.id == specification.id })
             #expect(BatchFetchExpectationValidator.validate(result, against: specification))
+        }
+        #expect(batchDeleteResults.map(\.id) == BatchDeleteScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in BatchDeleteScenarioCatalog.all {
+            let result = try #require(batchDeleteResults.first { $0.id == specification.id })
+            #expect(BatchDeleteExpectationValidator.validate(result, against: specification))
+        }
+        #expect(batchDeleteResults.map(\.id) == BatchDeleteScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in BatchDeleteScenarioCatalog.all {
+            let result = try #require(batchDeleteResults.first { $0.id == specification.id })
+            #expect(BatchDeleteExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

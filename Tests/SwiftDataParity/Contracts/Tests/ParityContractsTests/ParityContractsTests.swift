@@ -192,7 +192,8 @@ import Testing
                 + ModelConfigurationScenarioCatalog.contractsByID.count
                 + ModelConfigurationContainerScenarioCatalog.contractsByID.count
                 + PendingFetchScenarioCatalog.contractsByID.count
-                + BatchFetchScenarioCatalog.contractsByID.count)
+                + BatchFetchScenarioCatalog.contractsByID.count
+                + BatchDeleteScenarioCatalog.contractsByID.count)
         #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
         #expect(
             PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
@@ -321,6 +322,62 @@ import Testing
             registry: ParityScenarioCatalog.allContractsByID).isEmpty)
     }
 
+    @Test func batchDeleteContractsRegisterSixDeclarations() throws {
+        let specifications = BatchDeleteScenarioCatalog.all
+        let expectedIDs = [
+            "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone",
+            "BatchDeleteParityTests/batch deletes apply cascade rules",
+            "BatchDeleteParityTests/batch deletes post no save notifications",
+            "BatchDeleteParityTests/deny rules make batch deletes throw without deleting",
+            "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied",
+            "BatchDeleteParityTests/batch deletes with no matches change nothing",
+        ]
+        #expect(specifications.map(\.id.description) == expectedIDs)
+        #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
+        #expect(Set(ParityScenarioCatalog.allContractsByID.keys).isSuperset(of: expectedIDs))
+        #expect(BatchDeleteScenarioCatalog.denyRuleError.expectedObservations[0].value == .object([
+            "threw": .bool(true), "domain": .string("NSCocoaErrorDomain"), "code": .integer(134060),
+            "relationship": .string("BatchParityKeeper.toys"),
+            "reason": .string("Delete rule is not supported for batch deletes"),
+            "remainingKeepers": .integer(1), "toyStillLinked": .bool(true),
+        ]))
+        let divergent = try #require(BatchDeleteScenarioCatalog.pendingAndRegisteredState.expectedOSDObservations?.first)
+        #expect(divergent.value == .object([
+            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
+            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
+            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
+            "afterSaveNames": .array([.string("b"), .string("c")]),
+        ]))
+    }
+
+    @Test func batchDeleteExpectationValidatorRejectsMissingAndWrongObservations() throws {
+        let specification = BatchDeleteScenarioCatalog.cascadeRules
+        let matching = ScenarioResult(id: specification.id, observations: specification.expectedObservations.map {
+            ParityObservation(step: $0.step, field: $0.field, value: $0.value)
+        })
+        let missing = ScenarioResult(id: specification.id, observations: [])
+        let wrong = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "cascade.petCount", value: .integer(1)),
+        ])
+        #expect(BatchDeleteExpectationValidator.validate(matching, against: specification))
+        #expect(!BatchDeleteExpectationValidator.validate(missing, against: specification))
+        #expect(!BatchDeleteExpectationValidator.validate(wrong, against: specification))
+    }
+
+    @Test func batchDeleteMatrixEntriesMatchSharedContracts() throws {
+        let entries = BatchDeleteScenarioCatalog.all.map { specification in
+            CoverageMatrixEntry(
+                sourceCase: specification.id.description,
+                scenarioIDs: [specification.id.description],
+                outcomes: [specification.id.description: "compared"],
+                observations: [specification.id.description: specification.expectedObservations.map(\.field)])
+        }
+        #expect(CoverageMatrixValidator.validate(
+            discovered: Set(entries.map(\.sourceCase)),
+            entries: entries,
+            registry: ParityScenarioCatalog.allContractsByID).isEmpty)
+    }
+
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
         let specification = SchemaIntrospectionScenarioCatalog.entitiesByModelType
         let result = ScenarioResult(
@@ -343,7 +400,8 @@ import Testing
                 .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
                 .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
                 .union(PendingFetchScenarioCatalog.contractsByID.keys)
-                .union(BatchFetchScenarioCatalog.contractsByID.keys))
+                .union(BatchFetchScenarioCatalog.contractsByID.keys)
+                .union(BatchDeleteScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

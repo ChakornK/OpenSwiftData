@@ -816,6 +816,7 @@
       "observations": {
         "BatchFetchParityTests/sorted identifier fetches require excluding pending changes": [
           "pending.sortedIdentifier.throwsExpected",
+          "seed.saved",
           "saved.identifierCount",
           "saved.sortedIdentifierCount"
         ]
@@ -899,6 +900,70 @@
           "snapshot.pendingCount",
           "snapshot.afterSave.count"
         ]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone",
+      "scenarioIDs": [
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone"
+      ],
+      "outcomes": {
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "divergent"
+      },
+      "observations": {
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": [
+          "delete.state"
+        ]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/batch deletes apply cascade rules",
+      "scenarioIDs": ["BatchDeleteParityTests/batch deletes apply cascade rules"],
+      "outcomes": {
+        "BatchDeleteParityTests/batch deletes apply cascade rules": "compared"
+      },
+      "observations": {
+        "BatchDeleteParityTests/batch deletes apply cascade rules": ["cascade.petCount"]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/batch deletes post no save notifications",
+      "scenarioIDs": ["BatchDeleteParityTests/batch deletes post no save notifications"],
+      "outcomes": {
+        "BatchDeleteParityTests/batch deletes post no save notifications": "compared"
+      },
+      "observations": {
+        "BatchDeleteParityTests/batch deletes post no save notifications": ["notifications.count"]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/deny rules make batch deletes throw without deleting",
+      "scenarioIDs": ["BatchDeleteParityTests/deny rules make batch deletes throw without deleting"],
+      "outcomes": {
+        "BatchDeleteParityTests/deny rules make batch deletes throw without deleting": "compared"
+      },
+      "observations": {
+        "BatchDeleteParityTests/deny rules make batch deletes throw without deleting": ["deny.error"]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied",
+      "scenarioIDs": ["BatchDeleteParityTests/batch deletes inside a failed transaction stay applied"],
+      "outcomes": {
+        "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied": "compared"
+      },
+      "observations": {
+        "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied": ["transaction.remainingCount"]
+      }
+    },
+    {
+      "sourceCase": "BatchDeleteParityTests/batch deletes with no matches change nothing",
+      "scenarioIDs": ["BatchDeleteParityTests/batch deletes with no matches change nothing"],
+      "outcomes": {
+        "BatchDeleteParityTests/batch deletes with no matches change nothing": "compared"
+      },
+      "observations": {
+        "BatchDeleteParityTests/batch deletes with no matches change nothing": ["noMatch"]
       }
     }
   ]

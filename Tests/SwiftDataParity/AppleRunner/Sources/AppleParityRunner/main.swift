@@ -18,11 +18,25 @@ final class MembershipScenarioRow {
 struct AppleParityRunner {
     @MainActor
     static func run() throws {
+        if CommandLine.arguments.contains("--batch-delete-probe") {
+            let observations = try AppleBatchDeleteProbe.run()
+            let data = try CanonicalJSON.encode(observations)
+            try data.write(to: outputURL(from: CommandLine.arguments), options: .atomic)
+            print("Wrote Apple batch-delete probe observations")
+            return
+        }
         if CommandLine.arguments.contains("--batch-fetch-probe") {
             let observations = try AppleBatchFetchProbe.run()
             let data = try CanonicalJSON.encode(observations)
             try data.write(to: outputURL(from: CommandLine.arguments), options: .atomic)
             print("Wrote Apple batch-fetch probe observations")
+            return
+        }
+        if CommandLine.arguments.contains("--batch-delete-probe") {
+            let observations = try AppleBatchDeleteProbe.run()
+            let data = try CanonicalJSON.encode(observations)
+            try data.write(to: outputURL(from: CommandLine.arguments), options: .atomic)
+            print("Wrote Apple batch-delete probe observations")
             return
         }
 
@@ -42,8 +56,10 @@ struct AppleParityRunner {
         let configurationContainerResults = try AppleModelConfigurationContainerAdapter.runAll()
         let pendingFetchResults = try ApplePendingFetchAdapter.runAll()
         let batchFetchResults = try AppleBatchFetchAdapter.runAll()
+        let batchDeleteResults = try AppleBatchDeleteAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
-            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults)
+            + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
+            + batchDeleteResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

@@ -41,6 +41,8 @@ jobs:
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --output /tmp/apple-observations.json
       - name: Probe Apple batch-fetch behavior
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --batch-fetch-probe --output /tmp/apple-batch-fetch-probe.json
+      - name: Probe Apple batch-delete behavior
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner apple-parity-runner --batch-delete-probe --output /tmp/apple-batch-delete-probe.json
       - name: Validate source coverage
         if: always()
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-validate
@@ -56,6 +58,7 @@ jobs:
             /tmp/osd-observations.json
             /tmp/apple-observations.json
             /tmp/apple-batch-fetch-probe.json
+            /tmp/apple-batch-delete-probe.json
             /tmp/parity-diff.json
             parity-coverage-report.json
           if-no-files-found: warn

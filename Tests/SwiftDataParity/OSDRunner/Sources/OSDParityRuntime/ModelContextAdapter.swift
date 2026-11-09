@@ -17,7 +17,8 @@ public enum OSDModelContextParityAdapter {
 
     public static func runAndValidate(_ specification: ModelContextParitySpecification) throws -> ScenarioResult {
         let result = try run(specification)
-        guard ModelContextParityExpectationValidator.validate(result, against: specification) else {
+        guard ModelContextParityExpectationValidator.validate(
+            result, against: specification, implementation: "openswiftdata") else {
             throw ScenarioExpectationError(id: result.id, observations: result.observations)
         }
         return result

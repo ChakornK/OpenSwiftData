@@ -61,9 +61,11 @@ struct AppleParityRunner {
         let contextNotificationResults = try AppleContextNotificationAdapter.runAll()
         let rollbackResults = try AppleRollbackAdapter.runAll()
         let modelContextResults = try AppleModelContextParityAdapter.runAll()
+        let historyResults = try AppleHistoryParityAdapter.runAll()
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults + batchFetchResults
-            + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults)
+            + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
+            + historyResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

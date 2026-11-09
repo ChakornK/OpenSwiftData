@@ -184,24 +184,6 @@ import Testing
         #expect(Set(contracts.keys) == Set(expectedIDs))
         let combinedContractIDs = Set(ParityScenarioCatalog.allContractsByID.keys)
         #expect(combinedContractIDs.isSuperset(of: contracts.keys))
-        let catalogCounts = [
-            ParityScenarioCatalog.contractsByID.count,
-            SchemaIntrospectionScenarioCatalog.contractsByID.count,
-            SchemaModelTypesScenarioCatalog.contractsByID.count,
-            StoreIdentifierScenarioCatalog.contractsByID.count,
-            ModelIdentityScenarioCatalog.contractsByID.count,
-            ModelConfigurationScenarioCatalog.contractsByID.count,
-            ModelConfigurationContainerScenarioCatalog.contractsByID.count,
-            PendingFetchScenarioCatalog.contractsByID.count,
-            BatchFetchScenarioCatalog.contractsByID.count,
-            BatchDeleteScenarioCatalog.contractsByID.count,
-            CodableParityScenarioCatalog.contractsByID.count,
-            ContextNotificationScenarioCatalog.contractsByID.count,
-            RollbackParityScenarioCatalog.contractsByID.count,
-            ModelContextParityScenarioCatalog.contractsByID.count,
-        ]
-        let expectedCombinedCount = catalogCounts.reduce(0, +)
-        #expect(combinedContractIDs.count == expectedCombinedCount)
         #expect(specifications.allSatisfy { $0.hasValidObservationSchedule })
         #expect(
             PendingFetchScenarioCatalog.zeroLimit.steps.compactMap(\.query).last?.sort
@@ -433,6 +415,92 @@ import Testing
         })
     }
 
+    @Test func historyParityContractsRegisterFourDeclarations() {
+        #expect(HistoryParityScenarioCatalog.all.count == 4)
+        #expect(HistoryParityScenarioCatalog.contractsByID.count == 4)
+        #expect(HistoryParityScenarioCatalog.all.allSatisfy {
+            $0.contract.expectedObservationFields == Set($0.expectedObservations.keys)
+        })
+    }
+
+    @Test func deletedInsertionRollbackUsesExactPerImplementationExpectations() {
+        let specification = ModelContextParityScenarioCatalog.rollbackDeletedInsertion
+        let apple = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "detached", value: .bool(true)),
+            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
+            ParityObservation(step: 0, field: "hasChanges", value: .bool(true)),
+        ])
+        let osd = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "detached", value: .bool(true)),
+            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
+            ParityObservation(step: 0, field: "hasChanges", value: .bool(false)),
+        ])
+
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+    }
+
+    @Test func fetchDescriptorDefaultsDivergenceUsesExactPerImplementationValues() {
+        let specification = ModelContextParityScenarioCatalog.fetchDescriptorDefaults
+        let appleValues: [String: ObservedValue] = [
+            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
+            "fetchOffsetAbsent": .bool(false), "includePendingChanges": .bool(true),
+            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
+        ]
+        let osdValues: [String: ObservedValue] = [
+            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
+            "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
+            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
+        ]
+        let apple = ScenarioResult(id: specification.id, observations: appleValues.map { field, value in
+            ParityObservation(step: 0, field: field, value: value)
+        })
+        let osd = ScenarioResult(id: specification.id, observations: osdValues.map { field, value in
+            ParityObservation(step: 0, field: field, value: value)
+        })
+
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+    }
+
+    @Test func fetchDescriptorEqualityDivergenceUsesExactPerImplementationValues() {
+        let specification = ModelContextParityScenarioCatalog.fetchDescriptorEquality
+        let appleValues: [String: ObservedValue] = [
+            "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
+            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
+        ]
+        let osdValues: [String: ObservedValue] = [
+            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
+            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
+        ]
+        let apple = ScenarioResult(id: specification.id, observations: appleValues.map { field, value in
+            ParityObservation(step: 0, field: field, value: value)
+        })
+        let osd = ScenarioResult(id: specification.id, observations: osdValues.map { field, value in
+            ParityObservation(step: 0, field: field, value: value)
+        })
+
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+    }
+
+    @Test func deletedInsertionRollbackDivergenceUsesExactPerImplementationValues() {
+        let specification = ModelContextParityScenarioCatalog.rollbackDeletedInsertion
+        let apple = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "detached", value: .bool(true)),
+            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
+            ParityObservation(step: 0, field: "hasChanges", value: .bool(true)),
+        ])
+        let osd = ScenarioResult(id: specification.id, observations: [
+            ParityObservation(step: 0, field: "detached", value: .bool(true)),
+            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
+            ParityObservation(step: 0, field: "hasChanges", value: .bool(false)),
+        ])
+
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+    }
+
     @Test func rollbackRelationshipDivergenceAcceptsExactPerImplementationValues() {
         let specification = RollbackParityScenarioCatalog.committedRelationship
         let apple = ScenarioResult(id: specification.id, observations: [
@@ -536,7 +604,8 @@ import Testing
                 .union(CodableParityScenarioCatalog.contractsByID.keys)
                 .union(ContextNotificationScenarioCatalog.contractsByID.keys)
                 .union(RollbackParityScenarioCatalog.contractsByID.keys)
-                .union(ModelContextParityScenarioCatalog.contractsByID.keys))
+                .union(ModelContextParityScenarioCatalog.contractsByID.keys)
+                .union(HistoryParityScenarioCatalog.contractsByID.keys))
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

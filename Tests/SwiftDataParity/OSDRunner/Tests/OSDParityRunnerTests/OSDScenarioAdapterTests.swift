@@ -13,6 +13,7 @@ import Testing
         let contextNotificationResults = try OSDContextNotificationAdapter.runAll()
         let rollbackResults = try OSDRollbackAdapter.runAll()
         let modelContextResults = try OSDModelContextParityAdapter.runAll()
+        let historyResults = try OSDHistoryParityAdapter.runAll()
         let expectedIDs = (ParityScenarioCatalog.all.map(\.id) + SchemaIntrospectionScenarioCatalog.all.map(\.id)
             + SchemaModelTypesScenarioCatalog.all.map(\.id) + StoreIdentifierScenarioCatalog.all.map(\.id)
             + ModelIdentityScenarioCatalog.all.map(\.id) + ModelConfigurationScenarioCatalog.all.map(\.id)
@@ -24,6 +25,7 @@ import Testing
             + ContextNotificationScenarioCatalog.all.map(\.id)
             + RollbackParityScenarioCatalog.all.map(\.id)
             + ModelContextParityScenarioCatalog.all.map(\.id)
+            + HistoryParityScenarioCatalog.all.map(\.id)
             + ModelConfigurationScenarioCatalog.nonComparableSelectionIDs)
             .sorted { $0.description < $1.description }
         #expect(results.map(\.id) == expectedIDs)
@@ -102,7 +104,15 @@ import Testing
         })
         for specification in ModelContextParityScenarioCatalog.all {
             let result = try #require(modelContextResults.first { $0.id == specification.id })
-            #expect(ModelContextParityExpectationValidator.validate(result, against: specification))
+            #expect(ModelContextParityExpectationValidator.validate(
+                result, against: specification, implementation: "openswiftdata"))
+        }
+        #expect(historyResults.map(\.id) == HistoryParityScenarioCatalog.all.map(\.id).sorted {
+            $0.description < $1.description
+        })
+        for specification in HistoryParityScenarioCatalog.all {
+            let result = try #require(historyResults.first { $0.id == specification.id })
+            #expect(HistoryParityExpectationValidator.validate(result, against: specification))
         }
         for id in ModelConfigurationScenarioCatalog.nonComparableSelectionIDs {
             let result = try #require(results.first { $0.id == id })

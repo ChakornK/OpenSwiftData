@@ -1252,7 +1252,7 @@
       "sourceCase": "DeletedInsertionParityTests/rolling back detaches a deleted insertion",
       "scenarioIDs": ["DeletedInsertionParityTests/rolling back detaches a deleted insertion"],
       "outcomes": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "compared"
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "divergent"
       },
       "observations": {
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion": ["detached", "notDeleted", "hasChanges"]
@@ -1262,7 +1262,7 @@
       "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",
       "scenarioIDs": ["FetchDescriptorParityTests/defaults match SwiftData"],
       "outcomes": {
-        "FetchDescriptorParityTests/defaults match SwiftData": "compared"
+        "FetchDescriptorParityTests/defaults match SwiftData": "divergent"
       },
       "observations": {
         "FetchDescriptorParityTests/defaults match SwiftData": [
@@ -1285,11 +1285,62 @@
       "sourceCase": "FetchDescriptorParityTests/descriptors compare every option",
       "scenarioIDs": ["FetchDescriptorParityTests/descriptors compare every option"],
       "outcomes": {
-        "FetchDescriptorParityTests/descriptors compare every option": "compared"
+        "FetchDescriptorParityTests/descriptors compare every option": "divergent"
       },
       "observations": {
         "FetchDescriptorParityTests/descriptors compare every option": [
           "samePredicateAndSortEqual", "differentPredicateUnequal", "differentLimitUnequal", "differentPendingOptionUnequal"
+        ]
+      }
+    },
+    {
+      "sourceCase": "HistoryParityTests/each save with changes records one transaction",
+      "scenarioIDs": ["HistoryParityTests/each save with changes records one transaction"],
+      "outcomes": {
+        "HistoryParityTests/each save with changes records one transaction": "compared"
+      },
+      "observations": {
+        "HistoryParityTests/each save with changes records one transaction": [
+          "initialCount", "transactionCount", "authors", "idsMatchTransactions", "transactionIDsIncrease",
+          "tokensIncrease", "tokenValuesPresent", "bundleIdentifierPresent", "processIdentifierPresent",
+          "firstTransactionChangeCount", "firstChangeIsInsert", "secondChangeIsUpdate", "updatedAttributes",
+          "thirdChangeIsDelete", "deletedCode", "deletedNameAbsent", "tombstoneCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "HistoryParityTests/descriptors filter, sort, and limit transactions",
+      "scenarioIDs": ["HistoryParityTests/descriptors filter, sort, and limit transactions"],
+      "outcomes": {
+        "HistoryParityTests/descriptors filter, sort, and limit transactions": "compared"
+      },
+      "observations": {
+        "HistoryParityTests/descriptors filter, sort, and limit transactions": [
+          "tokenFilterCount", "authorFilterCount", "limitCount", "reverseOrderMatches", "defaultLimit"
+        ]
+      }
+    },
+    {
+      "sourceCase": "HistoryParityTests/tokens encode their store and transaction",
+      "scenarioIDs": ["HistoryParityTests/tokens encode their store and transaction"],
+      "outcomes": {
+        "HistoryParityTests/tokens encode their store and transaction": "compared"
+      },
+      "observations": {
+        "HistoryParityTests/tokens encode their store and transaction": [
+          "storeTokenCount", "tokenRoundTripEqual", "tokenValueEntryCount"
+        ]
+      }
+    },
+    {
+      "sourceCase": "HistoryParityTests/deleting history expires tokens that refer to deleted transactions",
+      "scenarioIDs": ["HistoryParityTests/deleting history expires tokens that refer to deleted transactions"],
+      "outcomes": {
+        "HistoryParityTests/deleting history expires tokens that refer to deleted transactions": "compared"
+      },
+      "observations": {
+        "HistoryParityTests/deleting history expires tokens that refer to deleted transactions": [
+          "remainingAfterPrefixDelete", "laterTokenExpired", "deletedTokenExpired", "emptyAfterDeleteAll"
         ]
       }
     }

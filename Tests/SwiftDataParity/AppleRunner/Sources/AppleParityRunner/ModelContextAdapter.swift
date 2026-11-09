@@ -10,7 +10,7 @@ final class ContextParityModel {
 }
 
 @MainActor
-@available(macOS 15, *)
+@available(macOS 26, *)
 enum AppleModelContextParityAdapter {
     static func runAll() throws -> [ScenarioResult] {
         try ModelContextParityScenarioCatalog.all.map(runAndValidate)

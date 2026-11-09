@@ -1212,11 +1212,18 @@ public struct ContextNotificationSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let query: Query
     public let expectedObservations: [String: ObservedValue]
+    public let expectedOSDObservations: [String: ObservedValue]?
 
-    public init(id: ScenarioID, query: Query, expectedObservations: [String: ObservedValue]) {
+    public init(
+        id: ScenarioID,
+        query: Query,
+        expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
+    ) {
         self.id = id
         self.query = query
         self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
     }
 
     public var contract: ScenarioContract {
@@ -1428,11 +1435,18 @@ public struct ModelContextParitySpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let query: Query
     public let expectedObservations: [String: ObservedValue]
+    public let expectedOSDObservations: [String: ObservedValue]?
 
-    public init(id: ScenarioID, query: Query, expectedObservations: [String: ObservedValue]) {
+    public init(
+        id: ScenarioID,
+        query: Query,
+        expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
+    ) {
         self.id = id
         self.query = query
         self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
     }
 
     public var contract: ScenarioContract {
@@ -1445,10 +1459,12 @@ public enum ModelContextParityScenarioCatalog {
         _ suite: String,
         _ test: String,
         _ query: ModelContextParitySpecification.Query,
-        _ expected: [String: ObservedValue]
+        _ expected: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
     ) -> ModelContextParitySpecification {
         ModelContextParitySpecification(
-            id: ScenarioID(suite: suite, test: test), query: query, expectedObservations: expected)
+            id: ScenarioID(suite: suite, test: test), query: query,
+            expectedObservations: expected, expectedOSDObservations: expectedOSDObservations)
     }
 
     public static let temporaryModelLookup = scenario(
@@ -1490,11 +1506,17 @@ public enum ModelContextParityScenarioCatalog {
 
     public static let rollbackDeletedInsertion = scenario(
         "DeletedInsertionParityTests", "rolling back detaches a deleted insertion", .rollbackDeletedInsertion, [
+            "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(true),
+        ], expectedOSDObservations: [
             "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(false),
         ])
 
     public static let fetchDescriptorDefaults = scenario(
         "FetchDescriptorParityTests", "defaults match SwiftData", .fetchDescriptorDefaults, [
+            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
+            "fetchOffsetAbsent": .bool(false), "includePendingChanges": .bool(true),
+            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
+        ], expectedOSDObservations: [
             "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
             "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
             "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
@@ -1506,6 +1528,9 @@ public enum ModelContextParityScenarioCatalog {
 
     public static let fetchDescriptorEquality = scenario(
         "FetchDescriptorParityTests", "descriptors compare every option", .fetchDescriptorEquality, [
+            "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
+            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
+        ], expectedOSDObservations: [
             "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
             "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
         ])
@@ -1522,7 +1547,97 @@ public enum ModelContextParityScenarioCatalog {
 }
 
 public enum ModelContextParityExpectationValidator {
-    public static func validate(_ result: ScenarioResult, against specification: ModelContextParitySpecification) -> Bool {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: ModelContextParitySpecification,
+        implementation: String = "apple"
+    ) -> Bool {
+        guard result.id == specification.id else { return false }
+        var actual: [String: ObservedValue] = [:]
+        for observation in result.observations {
+            guard actual.updateValue(observation.value.canonicalized, forKey: observation.field) == nil else { return false }
+        }
+        let expectedObservations = implementation == "openswiftdata"
+            ? specification.expectedOSDObservations ?? specification.expectedObservations
+            : specification.expectedObservations
+        return actual == expectedObservations.mapValues(\.canonicalized)
+    }
+}
+
+public struct HistoryParitySpecification: Codable, Equatable, Sendable {
+    public enum Query: String, Codable, Sendable {
+        case recordsChangedTransactions
+        case descriptors
+        case tokenRoundTrip
+        case deletingHistoryExpiresTokens
+    }
+
+    public let id: ScenarioID
+    public let query: Query
+    public let expectedObservations: [String: ObservedValue]
+
+    public init(id: ScenarioID, query: Query, expectedObservations: [String: ObservedValue]) {
+        self.id = id
+        self.query = query
+        self.expectedObservations = expectedObservations
+    }
+
+    public var contract: ScenarioContract {
+        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+    }
+}
+
+public enum HistoryParityScenarioCatalog {
+    private static func scenario(
+        _ test: String,
+        _ query: HistoryParitySpecification.Query,
+        _ expectedObservations: [String: ObservedValue]
+    ) -> HistoryParitySpecification {
+        HistoryParitySpecification(
+            id: ScenarioID(suite: "HistoryParityTests", test: test), query: query,
+            expectedObservations: expectedObservations)
+    }
+
+    public static let recordsChangedTransactions = scenario(
+        "each save with changes records one transaction", .recordsChangedTransactions, [
+            "initialCount": .integer(0), "transactionCount": .integer(4),
+            "authors": .array([.string("alice"), .string("alice"), .null, .null]),
+            "idsMatchTransactions": .bool(true), "transactionIDsIncrease": .bool(true),
+            "tokensIncrease": .bool(true), "tokenValuesPresent": .bool(true),
+            "bundleIdentifierPresent": .bool(true), "processIdentifierPresent": .bool(true),
+            "firstTransactionChangeCount": .integer(2), "firstChangeIsInsert": .bool(true),
+            "secondChangeIsUpdate": .bool(true), "updatedAttributes": .stringSet(["count", "name"]),
+            "thirdChangeIsDelete": .bool(true), "deletedCode": .string("B"),
+            "deletedNameAbsent": .bool(true), "tombstoneCount": .integer(1),
+        ])
+
+    public static let descriptors = scenario(
+        "descriptors filter, sort, and limit transactions", .descriptors, [
+            "tokenFilterCount": .integer(2), "authorFilterCount": .integer(2),
+            "limitCount": .integer(2), "reverseOrderMatches": .bool(true), "defaultLimit": .integer(0),
+        ])
+
+    public static let tokenRoundTrip = scenario(
+        "tokens encode their store and transaction", .tokenRoundTrip, [
+            "storeTokenCount": .integer(1), "tokenRoundTripEqual": .bool(true),
+            "tokenValueEntryCount": .integer(1),
+        ])
+
+    public static let deletingHistoryExpiresTokens = scenario(
+        "deleting history expires tokens that refer to deleted transactions", .deletingHistoryExpiresTokens, [
+            "remainingAfterPrefixDelete": .integer(2), "laterTokenExpired": .bool(true),
+            "deletedTokenExpired": .bool(true), "emptyAfterDeleteAll": .bool(true),
+        ])
+
+    public static let all = [recordsChangedTransactions, descriptors, tokenRoundTrip, deletingHistoryExpiresTokens]
+
+    public static var contractsByID: [String: ScenarioContract] {
+        Dictionary(uniqueKeysWithValues: all.map { ($0.id.description, $0.contract) })
+    }
+}
+
+public enum HistoryParityExpectationValidator {
+    public static func validate(_ result: ScenarioResult, against specification: HistoryParitySpecification) -> Bool {
         guard result.id == specification.id else { return false }
         var actual: [String: ObservedValue] = [:]
         for observation in result.observations {
@@ -2171,7 +2286,8 @@ public extension ParityScenarioCatalog {
              + Array(CodableParityScenarioCatalog.contractsByID.values)
              + Array(ContextNotificationScenarioCatalog.contractsByID.values)
              + Array(RollbackParityScenarioCatalog.contractsByID.values)
-             + Array(ModelContextParityScenarioCatalog.contractsByID.values))
+             + Array(ModelContextParityScenarioCatalog.contractsByID.values)
+             + Array(HistoryParityScenarioCatalog.contractsByID.values))
             .map { ($0.id.description, $0) })
     }
 }

@@ -66,15 +66,15 @@ enum AppleBatchFetchAdapter {
     ) throws -> ObservedValue {
         switch operation {
         case .expectModelBatchError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetch(FetchDescriptor<AppleBatchFetchScenarioRow>(), batchSize: 2)
             } == .includePendingChangesWithBatchSize)
         case .expectIdentifierBatchError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetchIdentifiers(FetchDescriptor<AppleBatchFetchScenarioRow>(), batchSize: 2)
             } == .includePendingChangesWithBatchSize)
         case .expectSortedIdentifierError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetchIdentifiers(
                     FetchDescriptor<AppleBatchFetchScenarioRow>(sortBy: [SortDescriptor(\.name)]))
             } == .sortingPendingChangesWithIdentifiers)

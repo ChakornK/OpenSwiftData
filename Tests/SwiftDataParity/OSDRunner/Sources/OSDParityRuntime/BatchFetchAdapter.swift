@@ -70,15 +70,15 @@ public enum OSDBatchFetchAdapter {
     ) throws -> ObservedValue {
         switch operation {
         case .expectModelBatchError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetch(FetchDescriptor<BatchFetchScenarioRow>(), batchSize: 2)
             } == .includePendingChangesWithBatchSize)
         case .expectIdentifierBatchError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetchIdentifiers(FetchDescriptor<BatchFetchScenarioRow>(), batchSize: 2)
             } == .includePendingChangesWithBatchSize)
         case .expectSortedIdentifierError:
-            return .bool(try catchesExpectedError {
+            return .bool(catchesExpectedError {
                 _ = try context.fetchIdentifiers(
                     FetchDescriptor<BatchFetchScenarioRow>(sortBy: [SortDescriptor(\.name)]))
             } == .sortingPendingChangesWithIdentifiers)

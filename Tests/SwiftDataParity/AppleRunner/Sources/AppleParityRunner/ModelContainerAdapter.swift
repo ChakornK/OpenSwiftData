@@ -129,9 +129,19 @@ enum AppleModelContainerParityAdapter {
         var values = defaultValues(for: query)
         values.merge(collected) { _, captured in captured }
         let didExit = controller.didExit
-        if timedOut || !didExit || (didExit && (process.terminationReason != .exit || process.terminationStatus != 0)) {
+        let aborted = timedOut || !didExit
+            || (didExit && (process.terminationReason != .exit || process.terminationStatus != 0))
+        if aborted {
             try? errorHandle.synchronize()
-            if let errorText = try? String(contentsOf: errorURL, encoding: .utf8), !errorText.isEmpty {
+            if checkpointValid {
+                // The probe deliberately exercises operations Apple cannot support after erase (such as
+                // saving the erased store), so an abnormal exit with a valid checkpoint is the expected
+                // observation, not a harness failure. Report where it stopped in one line and keep the
+                // raw SDK diagnostics out of the log.
+                let step: Int64
+                if case let .integer(value) = values["lastCompletedStep"] { step = value } else { step = 0 }
+                FileHandle.standardError.write(Data("Apple erase probe stopped after step \(step); using checkpoint.\n".utf8))
+            } else if let errorText = try? String(contentsOf: errorURL, encoding: .utf8), !errorText.isEmpty {
                 FileHandle.standardError.write(Data("Apple erase probe stderr: \(errorText.suffix(2_000))\n".utf8))
             }
         }
@@ -199,15 +209,8 @@ enum AppleModelContainerParityAdapter {
             return values
         }
         try checkpoint()
-        // Saving the stale mainContext after erase traps in Apple SwiftData (DefaultStore API contract
-        // violation), so prove the store stays usable by saving and fetching through a fresh context
-        // instead. The pending insertion left in the stale context is intentionally abandoned; the
-        // contextHasChangesAfterErase observation above already captured that the stale context still
-        // holds the pending change, matching OpenSwiftData.
-        let pendingContext = ModelContext(container)
-        pendingContext.insert(ContainerParityThing(name: "pending"))
         do {
-            try pendingContext.save()
+            try context.save()
         } catch {
             try checkpoint()
             return values

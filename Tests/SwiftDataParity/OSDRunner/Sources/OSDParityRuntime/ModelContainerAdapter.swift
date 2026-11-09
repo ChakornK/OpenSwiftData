@@ -86,14 +86,8 @@ public enum OSDModelContainerParityAdapter {
         }
         var pendingSaveReturned = false
         if fetchCountReturned {
-            // Mirror the Apple adapter: save and fetch the pending row through a fresh context. The
-            // pending insertion left in the stale mainContext is intentionally abandoned; the
-            // contextHasChangesAfterErase observation above already captured that the stale context
-            // still holds the pending change.
-            let pendingContext = ModelContext(container)
-            pendingContext.insert(ContainerParityThing(name: "pending"))
             do {
-                try pendingContext.save()
+                try context.save()
                 pendingSaveReturned = true
                 lastCompletedStep = 3
             } catch {

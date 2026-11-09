@@ -93,21 +93,20 @@ public struct OpenSwiftDataDataStoreSnapshot: Sendable, Equatable {
 
 /// A typed fetch request passed to a custom data store.
 public struct OpenSwiftDataDataStoreFetchRequest<Model: PersistentModel> {
-    /// The typed fetch descriptor, including predicate, ordering, and bounds.
     public let descriptor: FetchDescriptor<Model>
-    /// The schema entity selected by the model container.
     public let entity: SchemaDescriptor.Entity
-    /// The concrete entity names included by the requested entity's inheritance subtree.
     public let includedEntityNames: Set<String>
+    public let editingState: EditingState
 
-    /// Creates a fetch request. Omitting `includedEntityNames` requests only `entity.name`.
     public init(
         descriptor: FetchDescriptor<Model>, entity: SchemaDescriptor.Entity,
-        includedEntityNames: Set<String>? = nil
+        includedEntityNames: Set<String>? = nil,
+        editingState: EditingState? = nil
     ) {
         self.descriptor = descriptor
         self.entity = entity
         self.includedEntityNames = includedEntityNames ?? [entity.name]
+        self.editingState = editingState ?? EditingState(id: UUID(), author: nil)
     }
 }
 
@@ -128,19 +127,25 @@ public struct OpenSwiftDataDataStoreFetchResult: Sendable, Equatable {
 }
 
 /// A batch of model snapshots to persist atomically.
-public struct OpenSwiftDataDataStoreSaveRequest: Sendable, Equatable {
-    /// Newly inserted model snapshots.
+public struct OpenSwiftDataDataStoreSaveRequest: Sendable {
     public let inserted: [OpenSwiftDataDataStoreSnapshot]
-    /// Existing model snapshots whose values changed.
     public let updated: [OpenSwiftDataDataStoreSnapshot]
-    /// Persistent identifiers to delete.
     public let deleted: [PersistentIdentifier]
+    public let deletedSnapshots: [OpenSwiftDataDataStoreSnapshot]
+    public let editingState: EditingState
 
-    /// Creates a batch save request.
-    public init(inserted: [OpenSwiftDataDataStoreSnapshot], updated: [OpenSwiftDataDataStoreSnapshot], deleted: [PersistentIdentifier]) {
+    public init(
+        inserted: [OpenSwiftDataDataStoreSnapshot],
+        updated: [OpenSwiftDataDataStoreSnapshot],
+        deleted: [PersistentIdentifier],
+        editingState: EditingState? = nil,
+        deletedSnapshots: [OpenSwiftDataDataStoreSnapshot] = []
+    ) {
         self.inserted = inserted
         self.updated = updated
         self.deleted = deleted
+        self.deletedSnapshots = deletedSnapshots
+        self.editingState = editingState ?? EditingState(id: UUID(), author: nil)
     }
 }
 
@@ -168,8 +173,6 @@ public struct OpenSwiftDataDataStoreSaveResult: Sendable, Equatable {
 /// A snapshot exchanged with a custom data store.
 public protocol DataStoreSnapshot: Codable, Sendable {
     var persistentIdentifier: PersistentIdentifier { get }
-    var entityName: String { get }
-    var relationships: [String: [PersistentIdentifier]] { get }
     init(from backingData: any BackingData, relatedBackingDatas: inout [PersistentIdentifier: any BackingData])
     func copy(
         persistentIdentifier: PersistentIdentifier,
@@ -207,7 +210,9 @@ public enum DataStoreSnapshotCodingKey: CodingKey, Sendable {
 
 /// Exposes persisted property values without coupling a canonical snapshot to the legacy store snapshot type.
 public protocol DataStoreSnapshotValueProviding: DataStoreSnapshot {
+    var entityName: String { get }
     var persistedValues: [String: DataStoreAttributeValue] { get }
+    var relationships: [String: [PersistentIdentifier]] { get }
     init(
         persistentIdentifier: PersistentIdentifier,
         entityName: String,
@@ -262,13 +267,17 @@ package enum SnapshotMaterializationError: Error, Equatable, CustomStringConvert
 }
 
 /// A typed fetch request for a custom store.
-public struct DataStoreFetchRequest<Model: PersistentModel> {
+public struct DataStoreFetchRequest<Model: PersistentModel>: @unchecked Sendable {
     public let descriptor: FetchDescriptor<Model>
-    public init(_ descriptor: FetchDescriptor<Model>) { self.descriptor = descriptor }
+    public let editingState: EditingState
+    public init(_ descriptor: FetchDescriptor<Model>, editingState: EditingState? = nil) {
+        self.descriptor = descriptor
+        self.editingState = editingState ?? EditingState(id: UUID(), author: nil)
+    }
 }
 
 /// A custom-store fetch result.
-public struct DataStoreFetchResult<Model: PersistentModel, Snapshot: DataStoreSnapshot> {
+public struct DataStoreFetchResult<Model: PersistentModel, Snapshot: DataStoreSnapshot>: @unchecked Sendable {
     public let descriptor: FetchDescriptor<Model>
     public let fetchedSnapshots: [Snapshot]
     public let relatedSnapshots: [PersistentIdentifier: Snapshot]
@@ -284,36 +293,42 @@ public struct DataStoreFetchResult<Model: PersistentModel, Snapshot: DataStoreSn
 }
 
 /// A batch of snapshots to insert, update, or delete atomically.
-public struct DataStoreSaveChangesRequest<Snapshot: DataStoreSnapshot> {
+public struct DataStoreSaveChangesRequest<Snapshot: DataStoreSnapshot>: Sendable {
     public let inserted: [Snapshot]
     public let updated: [Snapshot]
-    public let deleted: [PersistentIdentifier]
-    public init(inserted: [Snapshot], updated: [Snapshot], deleted: [PersistentIdentifier]) {
+    public let deleted: [Snapshot]
+    public let editingState: EditingState
+    public init(inserted: [Snapshot], updated: [Snapshot], deleted: [Snapshot], editingState: EditingState? = nil) {
         self.inserted = inserted
         self.updated = updated
         self.deleted = deleted
+        self.editingState = editingState ?? EditingState(id: UUID(), author: nil)
     }
 }
 
 /// The permanent identifiers and snapshots produced by a custom-store save.
-public struct DataStoreSaveChangesResult: Sendable {
+public final class DataStoreSaveChangesResult<Snapshot: DataStoreSnapshot>: Sendable {
     public let storeIdentifier: String
     public let remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier]
-    public let snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier]
-    public init(
-        for storeIdentifier: String,
-        remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:],
-        snapshotsToReregister: [PersistentIdentifier: PersistentIdentifier] = [:]
-    ) {
+    public let snapshotsToReregister: [PersistentIdentifier: Snapshot]
+    public let historyToken: (any HistoryToken)?
+    public init(for storeIdentifier: String, remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:], snapshotsToReregister: [PersistentIdentifier: Snapshot] = [:]) {
         self.storeIdentifier = storeIdentifier
         self.remappedIdentifiers = remappedIdentifiers
         self.snapshotsToReregister = snapshotsToReregister
+        historyToken = nil
+    }
+    public init(for storeIdentifier: String, remappedIdentifiers: [PersistentIdentifier: PersistentIdentifier] = [:], snapshotsToReregister: [PersistentIdentifier: Snapshot] = [:], historyToken: (any HistoryToken)?) {
+        self.storeIdentifier = storeIdentifier
+        self.remappedIdentifiers = remappedIdentifiers
+        self.snapshotsToReregister = snapshotsToReregister
+        self.historyToken = historyToken
     }
 }
 
 /// Creates a custom store for a model container.
-public protocol DataStoreConfiguration: Sendable {
-    associatedtype StoreType: DataStore where StoreType.Configuration == Self
+public protocol DataStoreConfiguration: Hashable, Sendable {
+    associatedtype Store: DataStore where Store.Configuration == Self
     var name: String { get }
     var schema: Schema? { get set }
     func validate() throws
@@ -325,7 +340,7 @@ public extension DataStoreConfiguration {
 
 /// A custom model store using typed snapshots and atomic save changes.
 public protocol DataStore: AnyObject {
-    associatedtype Configuration: DataStoreConfiguration where Configuration.StoreType == Self
+    associatedtype Configuration: DataStoreConfiguration where Configuration.Store == Self
     associatedtype Snapshot: DataStoreSnapshot
     init(_ configuration: Configuration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws
     var configuration: Configuration { get }
@@ -334,13 +349,32 @@ public protocol DataStore: AnyObject {
     var schema: Schema { get }
     var supportsInheritance: Bool { get }
     func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot>
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot>
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot?
+    func erase() throws
+    func fetchCount<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> Int
+    func fetchIdentifiers<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> [PersistentIdentifier]
+    func cachedSnapshots(for persistentIdentifiers: [PersistentIdentifier], editingState: EditingState) throws -> [PersistentIdentifier: Snapshot]
 }
 
 public extension DataStore {
     var supportsInheritance: Bool { false }
     var name: String { configuration.name }
+    func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
+    func erase() throws {
+        throw SwiftDataError.unsupportedStore("This data store does not support erasure.")
+    }
+    func fetchCount<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> Int {
+        try fetch(request).fetchedSnapshots.count
+    }
+    func fetchIdentifiers<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> [PersistentIdentifier] {
+        try fetch(request).fetchedSnapshots.map(\.persistentIdentifier)
+    }
+    func cachedSnapshots(for persistentIdentifiers: [PersistentIdentifier], editingState: EditingState) throws -> [PersistentIdentifier: Snapshot] {
+        [:]
+    }
+    func initializeState(for editingState: EditingState) {}
+    func invalidateState(for editingState: EditingState) {}
 }
 
 package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
@@ -348,10 +382,12 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
     schema: Schema,
     migrationPlan: (any SchemaMigrationPlan.Type)?
 ) throws -> any OpenSwiftDataDataStore {
+    var configuration = configuration
+    configuration.schema = schema
     try configuration.validate()
-    let store = try Configuration.StoreType(configuration, migrationPlan: migrationPlan)
+    let store = try Configuration.Store(configuration, migrationPlan: migrationPlan)
     let makeSnapshot: (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot = { snapshot in
-        if let snapshotType = Configuration.StoreType.Snapshot.self as? any DataStoreSnapshotValueProviding.Type {
+        if let snapshotType = Configuration.Store.Snapshot.self as? any DataStoreSnapshotValueProviding.Type {
             return makeSnapshotValue(snapshot, as: snapshotType)
         }
         let encoded: Data
@@ -365,7 +401,7 @@ package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
             throw SwiftDataError.unsupportedStore("Snapshot refers to unknown entity '\(snapshot.entityName)'.")
         }
         let decoded = try decodeSnapshot(
-            Configuration.StoreType.Snapshot.self,
+            Configuration.Store.Snapshot.self,
             from: encoded,
             appleEncoding: try appleSnapshotJSON(snapshot, entity: entity),
             entity: entity,
@@ -411,8 +447,8 @@ private func decodeSnapshot<Snapshot: DataStoreSnapshot>(
         do {
             let decoded = try JSONDecoder().decode(type, from: candidate)
             let restored = decoded.copy(persistentIdentifier: expectedIdentifier, remappedIdentifiers: nil)
-            guard restored.entityName == entity.name,
-                restored.relationships == expectedRelationships
+            guard restored.persistentIdentifier.entityName == entity.name,
+                try snapshotRelationships(from: restored, entity: entity) == expectedRelationships
             else {
                 decodeErrors.append("Decoded snapshot identity or relationships do not match the source model.")
                 continue
@@ -622,6 +658,43 @@ package func materializeSnapshotValues(
     }
 }
 
+private func snapshotRelationships(
+    from snapshot: any DataStoreSnapshot, entity: SchemaDescriptor.Entity
+) throws -> [String: [PersistentIdentifier]] {
+    if let provider = snapshot as? any DataStoreSnapshotValueProviding {
+        return provider.relationships
+    }
+    let object = try jsonObject(snapshot)
+    guard let object = object as? [String: Any] else {
+        throw SnapshotMaterializationError.unsupportedLayout(
+            entity: entity.name, missingKeys: [], extraKeys: [])
+    }
+    if let raw = object["relationships"] as? [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: raw)
+        return try JSONDecoder().decode([String: [PersistentIdentifier]].self, from: data)
+    }
+    var result: [String: [PersistentIdentifier]] = [:]
+    for relationship in entity.relationships {
+        guard let value = object[relationship.name] else {
+            result[relationship.name] = []
+            continue
+        }
+        if value is NSNull {
+            result[relationship.name] = []
+            continue
+        }
+        let data = try JSONSerialization.data(withJSONObject: value)
+        if relationship.isToMany {
+            result[relationship.name] = try JSONDecoder().decode([PersistentIdentifier].self, from: data)
+        } else if let identifier = try? JSONDecoder().decode(PersistentIdentifier.self, from: data) {
+            result[relationship.name] = [identifier]
+        } else {
+            result[relationship.name] = try JSONDecoder().decode([PersistentIdentifier].self, from: data)
+        }
+    }
+    return result
+}
+
 private func projectAppleSnapshotValues(
     from object: [String: Any], entity: SchemaDescriptor.Entity
 ) throws -> [String: StoredValue] {
@@ -738,7 +811,7 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
             } else {
                 related[converted.persistentIdentifier] = converted
             }
-            for identifier in snapshot.relationships.values.flatMap({ $0 }) {
+            for identifier in converted.relationships.values.flatMap({ $0 }) {
                 let relatedSnapshot: (any DataStoreSnapshot)?
                 if let explicitSnapshot = result.relatedSnapshots[identifier] {
                     relatedSnapshot = explicitSnapshot
@@ -770,7 +843,12 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
             }
             return typed
         }
-        let deletions = request.deleted
+        let deletions = try request.deletedSnapshots.map { snapshot -> Store.Snapshot in
+            guard let typed = try makeCanonicalSnapshot(snapshot) as? Store.Snapshot else {
+                throw SwiftDataError.unsupportedStore("Canonical snapshot factory returned an incompatible type.")
+            }
+            return typed
+        }
         let result = try store.save(
             DataStoreSaveChangesRequest(inserted: inserts, updated: updates, deleted: deletions))
         return OpenSwiftDataDataStoreSaveResult(
@@ -792,8 +870,8 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         guard let identity = snapshot as? Store.Snapshot else {
             throw SwiftDataError.unsupportedStore("Canonical snapshot type mismatch.")
         }
-        guard let entity = descriptor.entity(forName: identity.entityName) else {
-            throw SwiftDataError.unsupportedStore("Canonical snapshot refers to unknown entity '\(identity.entityName)'.")
+        guard let entity = descriptor.entity(forName: identity.persistentIdentifier.entityName) else {
+            throw SwiftDataError.unsupportedStore("Canonical snapshot refers to unknown entity '\(identity.persistentIdentifier.entityName)'.")
         }
         let values: [String: StoredValue]
         do {
@@ -803,9 +881,9 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         }
         return OpenSwiftDataDataStoreSnapshot(
             persistentIdentifier: identity.persistentIdentifier,
-            entityName: identity.entityName,
+            entityName: identity.persistentIdentifier.entityName,
             values: values,
-            relationships: identity.relationships)
+            relationships: try snapshotRelationships(from: identity, entity: entity))
     }
 
 }

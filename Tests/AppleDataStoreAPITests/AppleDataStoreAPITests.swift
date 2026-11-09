@@ -116,7 +116,7 @@ private struct FixtureLegacyBackend: OpenSwiftDataDataStore {
 }
 
 private struct CanonicalFixtureConfiguration: DataStoreConfiguration {
-    typealias StoreType = CanonicalFixtureStore
+    typealias Store = CanonicalFixtureStore
     let name: String
     var schema: Schema?
     init(name: String = "canonical.fixture", schema: Schema?) {
@@ -268,7 +268,7 @@ private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
 }
 
 private struct UnbridgedCanonicalConfiguration: DataStoreConfiguration {
-    typealias StoreType = UnbridgedCanonicalStore
+    typealias Store = UnbridgedCanonicalStore
     let name: String
     var schema: Schema?
 }
@@ -285,14 +285,14 @@ private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
     func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot> {
         DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [])
     }
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         DataStoreSaveChangesResult(for: identifier)
     }
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
 }
 
 private struct CodableConventionConfiguration: DataStoreConfiguration {
-    typealias StoreType = CodableConventionStore
+    typealias Store = CodableConventionStore
     let name: String
     var schema: Schema?
 }
@@ -496,7 +496,7 @@ private struct AppleKeyLayoutSnapshot: DataStoreSnapshot {
 }
 
 private struct AppleKeyLayoutConfiguration: DataStoreConfiguration {
-    typealias StoreType = AppleKeyLayoutStore
+    typealias Store = AppleKeyLayoutStore
     let name: String
     var schema: Schema?
 }
@@ -521,7 +521,7 @@ private final class AppleKeyLayoutStore: DataStore, @unchecked Sendable {
         state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -556,14 +556,14 @@ private final class AppleKeyLayoutStoreState: @unchecked Sendable {
 
     func save(
         _ request: DataStoreSaveChangesRequest<AppleKeyLayoutSnapshot>, storeIdentifier: String
-    ) throws -> DataStoreSaveChangesResult {
+    ) throws -> DataStoreSaveChangesResult<AppleKeyLayoutSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected Apple coding-key snapshot save failure")
         }
         var candidate = snapshots
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
@@ -596,7 +596,7 @@ private final class AppleKeyLayoutStoreRegistry: @unchecked Sendable {
 }
 
 private struct RenamedSnapshotConfiguration: DataStoreConfiguration {
-    typealias StoreType = RenamedSnapshotStore
+    typealias Store = RenamedSnapshotStore
     let name: String
     var schema: Schema?
 }
@@ -626,7 +626,7 @@ private final class RenamedSnapshotStore: DataStore, @unchecked Sendable {
         DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [row])
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         DataStoreSaveChangesResult(for: identifier)
     }
 
@@ -653,7 +653,7 @@ private final class CodableConventionStore: DataStore, @unchecked Sendable {
         state.fetch(descriptor: request.descriptor, entityName: Schema.entityName(for: Model.self))
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -688,14 +688,14 @@ private final class CodableConventionStoreState: @unchecked Sendable {
 
     func save(
         _ request: DataStoreSaveChangesRequest<CodableConventionSnapshot>, storeIdentifier: String
-    ) throws -> DataStoreSaveChangesResult {
+    ) throws -> DataStoreSaveChangesResult<CodableConventionSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected Codable convention save failure")
         }
         var candidate = rows
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
@@ -747,14 +747,14 @@ private final class CanonicalStoreState: @unchecked Sendable {
         return values[identifier]
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult<CanonicalFixtureSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected canonical store save failure")
         }
         var candidate = values
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         var insertedMappings: [(CanonicalFixtureSnapshot, PersistentIdentifier)] = []
@@ -797,7 +797,7 @@ private final class CanonicalFixtureStore: DataStore, @unchecked Sendable {
         return DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: Array(rows))
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -823,7 +823,7 @@ private final class CanonicalStoreStates: @unchecked Sendable {
 }
 
 private struct DefaultSnapshotConfiguration: DataStoreConfiguration {
-    typealias StoreType = DefaultSnapshotStore
+    typealias Store = DefaultSnapshotStore
     let name: String
     var schema: Schema?
 }
@@ -848,7 +848,7 @@ private final class DefaultSnapshotStore: DataStore, @unchecked Sendable {
         state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -882,14 +882,14 @@ private final class CanonicalDefaultStoreState: @unchecked Sendable {
         return snapshots[identifier]
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult<AppleDefaultSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected canonical default snapshot save failure")
         }
         var candidate = snapshots
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted {
@@ -922,6 +922,37 @@ private final class CanonicalDefaultStoreStates: @unchecked Sendable {
         states[name] = state
         return state
     }
+}
+
+// Test fixtures compare by name because their schema property is a class reference.
+extension CanonicalFixtureConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension UnbridgedCanonicalConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension CodableConventionConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension AppleKeyLayoutConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension RenamedSnapshotConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension DefaultSnapshotConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
 }
 
 @Suite

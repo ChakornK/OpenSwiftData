@@ -119,6 +119,9 @@ public enum OSDMigrationPlanAdapter {
     private static func upgradedValues(versioned: Bool) throws -> [String: ObservedValue] {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "parity-migration-\(UUID().uuidString)", directoryHint: .isDirectory)
+        // Mirror the Apple adapter: pre-create the parent directory so the store path exists before
+        // ModelContainer(url:) is opened, even though OpenSwiftData does not emit CoreData noise.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "store.sqlite")
 

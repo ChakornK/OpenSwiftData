@@ -36,6 +36,9 @@ enum AppleStoreIdentifierAdapter {
             let directory = FileManager.default.temporaryDirectory
                 .appending(path: "apple-parity-store-identifier-\(UUID().uuidString)", directoryHint: .isDirectory)
             let url = directory.appending(path: "default.store")
+            // SwiftData's backing store does not create the parent directory; create it up front so the
+            // first ModelContainer(url:) does not log CoreData sandbox/stat errors.
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let identifier: PersistentIdentifier
             do {

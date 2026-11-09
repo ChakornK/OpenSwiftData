@@ -34,6 +34,9 @@ public enum OSDStoreIdentifierAdapter {
             let directory = FileManager.default.temporaryDirectory
                 .appending(path: "parity-store-identifier-\(UUID().uuidString)", directoryHint: .isDirectory)
             let url = directory.appending(path: "default.store")
+            // Mirror the Apple adapter: pre-create the parent directory so the store path exists before
+            // ModelContainer(url:) is opened, even though OpenSwiftData does not emit CoreData noise.
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let identifier: PersistentIdentifier
             do {

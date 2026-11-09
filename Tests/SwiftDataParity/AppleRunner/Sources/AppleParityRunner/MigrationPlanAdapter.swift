@@ -121,6 +121,9 @@ enum AppleMigrationPlanAdapter {
     private static func upgradedValues(versioned: Bool) throws -> [String: ObservedValue] {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "parity-migration-\(UUID().uuidString)", directoryHint: .isDirectory)
+        // SwiftData's backing store does not create the parent directory; create it up front so the
+        // old-store ModelContainer(url:) does not log CoreData sandbox/stat errors during migration.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "store.sqlite")
 

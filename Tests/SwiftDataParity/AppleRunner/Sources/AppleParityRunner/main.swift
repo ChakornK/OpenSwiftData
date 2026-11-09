@@ -39,13 +39,6 @@ struct AppleParityRunner {
             print("Wrote Apple batch-fetch probe observations")
             return
         }
-        if CommandLine.arguments.contains("--batch-delete-probe") {
-            let observations = try AppleBatchDeleteProbe.run()
-            let data = try CanonicalJSON.encode(observations)
-            try data.write(to: outputURL(from: CommandLine.arguments), options: .atomic)
-            print("Wrote Apple batch-delete probe observations")
-            return
-        }
 
         let outputURL = outputURL(from: CommandLine.arguments)
         let predicateResults = try ParityScenarioCatalog.all.map(run)

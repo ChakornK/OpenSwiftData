@@ -719,32 +719,38 @@ import Testing
             == specification.contract)
         #expect(Set(ParityScenarioCatalog.contractsByID.keys)
             .intersection(SchemaIntrospectionScenarioCatalog.contractsByID.keys).isEmpty)
-        #expect(Set(ParityScenarioCatalog.allContractsByID.keys)
-            == Set(ParityScenarioCatalog.contractsByID.keys)
-                .union(SchemaIntrospectionScenarioCatalog.contractsByID.keys)
-                .union(SchemaModelTypesScenarioCatalog.contractsByID.keys)
-                .union(StoreIdentifierScenarioCatalog.contractsByID.keys)
-                .union(ModelIdentityScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys)
-                .union(MacroArgumentsScenarioCatalog.contractsByID.keys)
-                .union(SortingParityScenarioCatalog.contractsByID.keys)
-                .union(ModelContextInitScenarioCatalog.contractsByID.keys)
-                .union(ModelActorParityScenarioCatalog.contractsByID.keys)
-                .union(BatchFetchScenarioCatalog.contractsByID.keys)
-                .union(BatchDeleteScenarioCatalog.contractsByID.keys)
-                .union(CodableParityScenarioCatalog.contractsByID.keys)
-                .union(ContextNotificationScenarioCatalog.contractsByID.keys)
-                .union(RollbackParityScenarioCatalog.contractsByID.keys)
-                .union(ModelContextParityScenarioCatalog.contractsByID.keys)
-                .union(HistoryParityScenarioCatalog.contractsByID.keys)
-                .union(UniqueConstraintScenarioCatalog.contractsByID.keys)
-                .union(MigrationPlanScenarioCatalog.contractsByID.keys)
-                .union(ModelContainerParityScenarioCatalog.contractsByID.keys)
-                .union(RelationshipDeleteRuleScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys))
+        var expectedKeys = Set(ParityScenarioCatalog.contractsByID.keys)
+        for catalog in [
+            SchemaIntrospectionScenarioCatalog.contractsByID,
+            SchemaModelTypesScenarioCatalog.contractsByID,
+            StoreIdentifierScenarioCatalog.contractsByID,
+            ModelIdentityScenarioCatalog.contractsByID,
+            ModelConfigurationScenarioCatalog.contractsByID,
+            ModelConfigurationContainerScenarioCatalog.contractsByID,
+            PendingFetchScenarioCatalog.contractsByID,
+            PendingFetchRelationshipScenarioCatalog.contractsByID,
+            MacroArgumentsScenarioCatalog.contractsByID,
+            SortingParityScenarioCatalog.contractsByID,
+            ModelContextInitScenarioCatalog.contractsByID,
+            ModelActorParityScenarioCatalog.contractsByID,
+            BatchFetchScenarioCatalog.contractsByID,
+            BatchDeleteScenarioCatalog.contractsByID,
+            CodableParityScenarioCatalog.contractsByID,
+            ContextNotificationScenarioCatalog.contractsByID,
+            RollbackParityScenarioCatalog.contractsByID,
+            ModelContextParityScenarioCatalog.contractsByID,
+            HistoryParityScenarioCatalog.contractsByID,
+            UniqueConstraintScenarioCatalog.contractsByID,
+            MigrationPlanScenarioCatalog.contractsByID,
+            ModelContainerParityScenarioCatalog.contractsByID,
+            RelationshipDeleteRuleScenarioCatalog.contractsByID,
+        ] {
+            expectedKeys.formUnion(catalog.keys)
+        }
+        expectedKeys.formUnion(CustomStoreHistoryScenarioCatalog.nonComparableIDs.map(\.description))
+        let actualKeys = ParityScenarioCatalog.allContractsByID.keys
+        #expect(actualKeys.count == expectedKeys.count)
+        #expect(actualKeys.allSatisfy { expectedKeys.contains($0) })
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

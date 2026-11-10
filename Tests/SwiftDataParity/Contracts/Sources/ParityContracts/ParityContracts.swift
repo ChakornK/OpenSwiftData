@@ -2990,31 +2990,39 @@ public extension ParityScenarioCatalog {
     }
 
     static var allContractsByID: [String: ScenarioContract] {
-        Dictionary(uniqueKeysWithValues: (Array(contractsByID.values)
-            + Array(SchemaIntrospectionScenarioCatalog.contractsByID.values)
-            + Array(SchemaModelTypesScenarioCatalog.contractsByID.values)
-            + Array(StoreIdentifierScenarioCatalog.contractsByID.values)
-            + Array(ModelIdentityScenarioCatalog.contractsByID.values)
-            + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
-            + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
-              + Array(PendingFetchScenarioCatalog.contractsByID.values)
-              + Array(PendingFetchRelationshipScenarioCatalog.contractsByID.values)
-              + Array(MacroArgumentsScenarioCatalog.contractsByID.values)
-              + Array(SortingParityScenarioCatalog.contractsByID.values)
-              + Array(ModelContextInitScenarioCatalog.contractsByID.values)
-              + Array(ModelActorParityScenarioCatalog.contractsByID.values)
-            + Array(BatchFetchScenarioCatalog.contractsByID.values)
-             + Array(BatchDeleteScenarioCatalog.contractsByID.values)
-             + Array(CodableParityScenarioCatalog.contractsByID.values)
-             + Array(ContextNotificationScenarioCatalog.contractsByID.values)
-             + Array(RollbackParityScenarioCatalog.contractsByID.values)
-              + Array(ModelContextParityScenarioCatalog.contractsByID.values)
-              + Array(HistoryParityScenarioCatalog.contractsByID.values)
-              + Array(UniqueConstraintScenarioCatalog.contractsByID.values)
-              + Array(MigrationPlanScenarioCatalog.contractsByID.values)
-              + Array(ModelContainerParityScenarioCatalog.contractsByID.values)
-              + Array(RelationshipDeleteRuleScenarioCatalog.contractsByID.values))
-            .map { ($0.id.description, $0) })
+        var contracts: [(String, ScenarioContract)] = []
+        for catalog in [
+            contractsByID,
+            SchemaIntrospectionScenarioCatalog.contractsByID,
+            SchemaModelTypesScenarioCatalog.contractsByID,
+            StoreIdentifierScenarioCatalog.contractsByID,
+            ModelIdentityScenarioCatalog.contractsByID,
+            ModelConfigurationScenarioCatalog.contractsByID,
+            ModelConfigurationContainerScenarioCatalog.contractsByID,
+            PendingFetchScenarioCatalog.contractsByID,
+            PendingFetchRelationshipScenarioCatalog.contractsByID,
+            MacroArgumentsScenarioCatalog.contractsByID,
+            SortingParityScenarioCatalog.contractsByID,
+            ModelContextInitScenarioCatalog.contractsByID,
+            ModelActorParityScenarioCatalog.contractsByID,
+            BatchFetchScenarioCatalog.contractsByID,
+            BatchDeleteScenarioCatalog.contractsByID,
+            CodableParityScenarioCatalog.contractsByID,
+            ContextNotificationScenarioCatalog.contractsByID,
+            RollbackParityScenarioCatalog.contractsByID,
+            ModelContextParityScenarioCatalog.contractsByID,
+            HistoryParityScenarioCatalog.contractsByID,
+            UniqueConstraintScenarioCatalog.contractsByID,
+            MigrationPlanScenarioCatalog.contractsByID,
+            ModelContainerParityScenarioCatalog.contractsByID,
+            RelationshipDeleteRuleScenarioCatalog.contractsByID,
+        ] {
+            contracts.append(contentsOf: catalog.values.map { ($0.id.description, $0) })
+        }
+        for id in CustomStoreHistoryScenarioCatalog.nonComparableIDs {
+            contracts.append((id.description, ScenarioContract(id: id, expectedObservationFields: [])))
+        }
+        return Dictionary(uniqueKeysWithValues: contracts)
     }
 }
 

@@ -125,6 +125,49 @@ The parity suite tracks behavior and API differences. Expand the list for detail
 
 </details>
 
+### Custom data stores
+
+The `DataStore` protocol family (iOS 18/macOS 15 custom store API) is implemented. Conform to `DataStore` and `DataStoreConfiguration`, then pass the configuration directly to `ModelContainer`:
+
+```swift
+struct JSONStoreConfiguration: DataStoreConfiguration {
+    typealias Store = JSONStore
+    let name: String
+    var schema: Schema?
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+
+    func makeStore(schema: Schema?, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> JSONStore {
+        JSONStore(self, migrationPlan: migrationPlan)
+    }
+}
+
+let container = try ModelContainer(for: [Trip.self], configurations: jsonStoreConfiguration)
+```
+
+A conforming store must implement `fetch` and `save`; `erase`, `fetchCount`, `fetchIdentifiers`,
+`cachedSnapshots(for:editingState:)`, `initializeState(for:)`, and `invalidateState(for:)` have
+defaults. Snapshots may be any `Codable & Sendable` type implementing `DataStoreSnapshot`, or
+`DefaultSnapshot`, which carries persisted values and relationships as dictionaries.
+
+The engine converts model changes into snapshots before calling `save`, converts returned snapshots
+into registered models after `fetch`, and derives entity names and relationship identities from
+`persistentIdentifier`. Delete batches carry both identifiers and full deleted snapshots, plus the
+context's `editingState` on every request. A store that records history returns a `HistoryToken`
+from `save`; OpenSwiftData records it so `fetchHistory` returns the transaction. Batch deletes route
+through `DataStoreBatching.delete(_:)` when the store conforms.
+
+### Known custom-store differences
+
+- Stores that do not conform to `DataStoreBatching` reject `delete(model:where:includeSubclasses:)`.
+- History reported by custom stores lives in an in-memory ledger and is not durable across launches.
+- `HistoryProviding` (fetching history from the store object itself) is not implemented; use
+  `ModelContext.fetchHistory(_:)`.
+- CloudKit-backed configurations reject custom stores.
+
+</details>
+
 ### Platform and storage limits
 
 - SQLite through GRDB is the default backend. CloudKit is unsupported.

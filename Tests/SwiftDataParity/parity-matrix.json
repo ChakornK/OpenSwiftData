@@ -1178,11 +1178,9 @@
         "RollbackParityTests/rollback restores committed relationship edits"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores committed relationship edits": "non-comparable"
+        "RollbackParityTests/rollback restores committed relationship edits": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse. Tracked under issue #8."
+      "observations": {}
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches related insertions and restores saved graph",
@@ -1190,11 +1188,9 @@
         "RollbackParityTests/rollback detaches related insertions and restores saved graph"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback detaches related insertions and restores saved graph": "non-comparable"
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse. Tracked under issue #8."
+      "observations": {}
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores first committed values after repeated edits",
@@ -1202,11 +1198,9 @@
         "RollbackParityTests/rollback restores first committed values after repeated edits"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores first committed values after repeated edits": "non-comparable"
+        "RollbackParityTests/rollback restores first committed values after repeated edits": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData rollback restores the saved baseline; Apple reports the pre-rollback in-memory value. Tracked under issue #8."
+      "observations": {}
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores values when an edited model is deleted",
@@ -1214,11 +1208,9 @@
         "RollbackParityTests/rollback restores values when an edited model is deleted"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores values when an edited model is deleted": "non-comparable"
+        "RollbackParityTests/rollback restores values when an edited model is deleted": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData rollback restores the saved baseline; Apple reports the edited value. Tracked under issue #8."
+      "observations": {}
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches insertions and restores deletions",
@@ -1367,11 +1359,9 @@
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion"
       ],
       "outcomes": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "non-comparable"
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData rollback reports hasChanges=false for a deleted saved model; Apple reports true. Tracked under issue #8."
+      "observations": {}
     },
     {
       "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",

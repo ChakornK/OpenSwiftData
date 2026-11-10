@@ -280,8 +280,11 @@ public final class ModelContext {
     /// Whether this context currently has unsaved changes.
     public var hasChanges: Bool {
         assertAffinity()
-        return state.hasChanges || !deletedInsertions.isEmpty
+        return state.hasChanges || !deletedInsertions.isEmpty || pendingChangesAfterRollback
     }
+
+    /// Set when rollback detaches a deleted unsaved insertion; cleared by the next mutation or save.
+    private var pendingChangesAfterRollback = false
 
     /// Inserted models deleted before saving.
     ///
@@ -1704,6 +1707,7 @@ public final class ModelContext {
         try state.withExclusiveOperation {
             try processPendingChangesLocked()
             guard !state.hasTransaction else { return }
+            pendingChangesAfterRollback = false
             try saveChanges()
         }
     }
@@ -1854,9 +1858,14 @@ public final class ModelContext {
 
     /// Discards pending changes and restores changed models to their most recently committed values.
     ///
-    /// Pending insertions detach and pending deletions are restored. Nothing reverts in the store.
+    /// Pending insertions detach and pending deletions are restored. Saved models keep their current
+    /// in-memory values and relationships, as in Apple's SwiftData: rollback discards lifecycle state
+    /// (deletion markers, pending registration) but does not revert edits already made after the save.
+    /// A deleted unsaved insertion detaches and leaves the context reporting changes, as in Apple.
+    /// Nothing reverts in the store.
     public func rollback() {
         assertAffinity()
+        let deletedUnsavedInsertions = deletedInsertions
         detachDeletedInsertions()
         state.withExclusiveOperation {
             let pendingState = state.pendingState()
@@ -1864,10 +1873,21 @@ public final class ModelContext {
             for (model, snapshot) in pendingState.snapshots.values {
                 if state.contains(model, in: pendingInsertions) {
                     model.restoreValuesAndDetachLifecycle(snapshot)
-                } else if state.contains(model, in: pendingState.deleted) {
-                    model.restoreLifecycle(snapshot)
                 } else {
-                    model.restoreLifecycle(snapshot)
+                    // Apple semantics: a saved model keeps its in-memory edits through rollback. The
+                    // snapshot's current values become the merged baseline; only lifecycle state
+                    // (deletion marker, pending flags, pending identifier bookkeeping) is restored.
+                    model.restoreLifecycle(
+                        BackingDataSnapshot(
+                            values: snapshot.values,
+                            context: snapshot.context,
+                            identifier: snapshot.identifier,
+                            isDeleted: false,
+                            hasChanges: false,
+                            savedValues: snapshot.values,
+                            primaryKey: snapshot.primaryKey,
+                            entityID: snapshot.entityID,
+                            optimisticLockVersion: snapshot.optimisticLockVersion))
                 }
             }
             for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
@@ -1883,6 +1903,8 @@ public final class ModelContext {
             for model in pendingState.deleted {
                 state.removeBaseline(for: model)
             }
+            // Apple reports a context with a rolled-back deleted insertion as still changed.
+            pendingChangesAfterRollback = pendingChangesAfterRollback || !deletedUnsavedInsertions.isEmpty
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
@@ -1929,6 +1951,7 @@ public final class ModelContext {
     package func willMutate<Model: PersistentModel>(_ model: Model) {
         assertAffinity()
         guard model.modelContext === self else { return }
+        pendingChangesAfterRollback = false
         state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 

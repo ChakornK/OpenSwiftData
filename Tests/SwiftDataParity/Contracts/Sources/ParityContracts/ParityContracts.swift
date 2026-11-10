@@ -1630,16 +1630,11 @@ public enum RollbackParityScenarioCatalog {
     public static let committedRelationship = scenario(
         "rollback restores committed relationship edits", .committedRelationship, [
             "ownerItemCount": .integer(1), "itemOwnerAbsent": .bool(false), "contextHasChanges": .bool(false),
-        ], expectedOSDObservations: [
-            "ownerItemCount": .integer(0), "itemOwnerAbsent": .bool(true), "contextHasChanges": .bool(false),
         ])
 
     public static let relatedInsertion = scenario(
         "rollback detaches related insertions and restores saved graph", .relatedInsertion, [
             "ownerItemCount": .integer(1), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(false),
-            "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
-        ], expectedOSDObservations: [
-            "ownerItemCount": .integer(0), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(true),
             "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
         ])
 
@@ -1648,18 +1643,11 @@ public enum RollbackParityScenarioCatalog {
             "ageAfterFirstRollback": .integer(3), "unchangedAfterFirstRollback": .bool(true),
             "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(4),
             "unchangedAfterSecondRollback": .bool(true),
-        ], expectedOSDObservations: [
-            "ageAfterFirstRollback": .integer(1), "unchangedAfterFirstRollback": .bool(true),
-            "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(1),
-            "unchangedAfterSecondRollback": .bool(true),
         ])
 
     public static let editedDeletion = scenario(
         "rollback restores values when an edited model is deleted", .editedDeletion, [
             "age": .integer(2), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
-            "contextHasChanges": .bool(false),
-        ], expectedOSDObservations: [
-            "age": .integer(1), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
             "contextHasChanges": .bool(false),
         ])
 
@@ -1793,8 +1781,6 @@ public enum ModelContextParityScenarioCatalog {
     public static let rollbackDeletedInsertion = scenario(
         "DeletedInsertionParityTests", "rolling back detaches a deleted insertion", .rollbackDeletedInsertion, [
             "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(true),
-        ], expectedOSDObservations: [
-            "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(false),
         ])
 
     public static let fetchDescriptorDefaults = scenario(
@@ -1807,7 +1793,6 @@ public enum ModelContextParityScenarioCatalog {
             "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
             "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
         ])
-
     public static let fetchDescriptorProperties = scenario(
         "FetchDescriptorParityTests", "properties to fetch is a mutable array", .fetchDescriptorProperties,
         ["propertyCount": .integer(1), "containsName": .bool(true)])

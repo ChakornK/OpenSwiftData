@@ -1404,11 +1404,6 @@ package func makePrefixedStore<Configuration: AppleDataStoreConfiguration>(
         supportsInheritance: store.supportsInheritance)
 }
 
-/// A store that can provide its own adapter for the current OpenSwiftData context engine.
-public protocol AppleDataStoreBackendProviding: AnyObject, Sendable {
-    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any OpenSwiftDataDataStore
-}
-
 /// A custom store using the Apple-shaped API under nonconflicting prefixed names.
 public protocol AppleDataStore: AnyObject, Sendable {
     associatedtype Configuration: AppleDataStoreConfiguration where Configuration.Store == Self

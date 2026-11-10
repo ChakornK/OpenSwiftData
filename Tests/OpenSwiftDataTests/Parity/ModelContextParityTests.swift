@@ -107,7 +107,8 @@ import Testing
         context.rollback()
         #expect(model.modelContext == nil)
         #expect(!model.isDeleted)
-        #expect(!context.hasChanges)
+        // Apple reports the context as changed after rolling back a deleted insertion.
+        #expect(context.hasChanges)
     }
 }
 

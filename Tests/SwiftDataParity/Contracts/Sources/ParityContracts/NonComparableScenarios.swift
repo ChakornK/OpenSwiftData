@@ -9,8 +9,6 @@ public enum NonComparableScenarios {
     /// One matrix rationale per declared scenario.
     public static let declared: [ScenarioID: (reasonCategory: String, rationale: String)] = [
         // Deferred behavior gaps tracked under issue #8.
-        ScenarioID(suite: "DeletedInsertionParityTests", test: "rolling back detaches a deleted insertion"): deferred(
-            "OpenSwiftData rollback reports hasChanges=false for a deleted saved model; Apple reports true."),
         ScenarioID(suite: "FetchDescriptorParityTests", test: "defaults match SwiftData"): deferred(
             "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."),
         ScenarioID(suite: "FetchDescriptorParityTests", test: "descriptors compare every option"): deferred(
@@ -19,14 +17,6 @@ public enum NonComparableScenarios {
             "OpenSwiftData's configuration set matches expectations; Apple's does not, and containers compare differently."),
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
             "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."),
-        ScenarioID(suite: "RollbackParityTests", test: "rollback detaches related insertions and restores saved graph"): deferred(
-            "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse."),
-        ScenarioID(suite: "RollbackParityTests", test: "rollback restores committed relationship edits"): deferred(
-            "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse."),
-        ScenarioID(suite: "RollbackParityTests", test: "rollback restores first committed values after repeated edits"): deferred(
-            "OpenSwiftData rollback restores the saved baseline; Apple reports the pre-rollback in-memory value."),
-        ScenarioID(suite: "RollbackParityTests", test: "rollback restores values when an edited model is deleted"): deferred(
-            "OpenSwiftData rollback restores the saved baseline; Apple reports the edited value."),
         ScenarioID(suite: "StoreIdentifierParityTests", test: "the store identifier survives reopening the store"): deferred(
             "Apple regenerates the store identifier and drops the registered model on reopen; OpenSwiftData preserves both."),
         ScenarioID(suite: "UniqueConstraintParityTests", test: "duplicates inserted in one save collapse into one row"): deferred(

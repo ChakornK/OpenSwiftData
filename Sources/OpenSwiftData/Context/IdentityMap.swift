@@ -59,13 +59,13 @@ final class IdentityMap: @unchecked Sendable {
         models.removeAll()
     }
 
-    /// Removes entries whose registered model is marked deleted, keeping live registrations.
-    func clearDeleted() {
+    /// Removes entries whose registered model satisfies the predicate.
+    func clearDeleted(where isRemoved: (any PersistentModel) -> Bool) {
         lock.lock()
         defer { lock.unlock() }
         models = models.filter { _, box in
             guard let model = box.value as? any PersistentModel else { return false }
-            return !model.isDeleted
+            return !model.isDeleted && !isRemoved(model)
         }
     }
 

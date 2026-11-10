@@ -285,6 +285,9 @@ public final class ModelContext {
 
     /// Set when rollback detaches a deleted unsaved insertion; cleared by the next mutation or save.
     private var pendingChangesAfterRollback = false
+    /// Set when rollback keeps in-memory edits on registered models; the next fetch must not
+    /// overwrite them with stored values. Cleared by the next mutation or save.
+    private var pendingInMemoryEditsAfterRollback = false
 
     /// Inserted models deleted before saving.
     ///
@@ -640,13 +643,19 @@ public final class ModelContext {
             $0.storeIdentifier == storeHubStoreIdentifier && $0.sourceSubscription != storeHubSubscription
         }
         let hasWildcardChange = relevantChanges.contains(where: \.allEntitiesChanged)
-        let changedKeys = relevantChanges.reduce(into: Set<StoreEntityKey>()) { keys, change in
+        var changedKeys = relevantChanges.reduce(into: Set<StoreEntityKey>()) { keys, change in
             keys.formUnion(change.inserted)
             keys.formUnion(change.updated)
             keys.formUnion(change.deleted)
         }
+        // Apple semantics: rows removed by this context's own batch delete do not refresh registered
+        // models; they keep their last known values instead of being marked deleted.
+        changedKeys.subtract(scratchContextDeletedKeys)
         if hasWildcardChange {
             for (key, model) in identityMap.liveModels() where !model.hasChanges {
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: key.entityName, primaryKey: key.primaryKey))
+                guard !batchDeleted else { continue }
                 guard let entity = optionalContainer?.schemaDescriptor.entity(forName: key.entityName) else { continue }
                 try refreshRegisteredModel(type(of: model), entity: entity, primaryKey: key.primaryKey, store: store)
             }
@@ -723,6 +732,11 @@ public final class ModelContext {
                         arguments: [.int(primaryKey)])
                 }).first
             else {
+                // Apple semantics: a model removed by this context's own batch delete stays
+                // registered with its last known values instead of being marked deleted.
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: entity.name, primaryKey: primaryKey))
+                guard !batchDeleted else { return }
                 identityMap.remove(key)
                 state.removeBaseline(for: model)
                 model.persistentBackingData.markDeleted()
@@ -800,7 +814,11 @@ public final class ModelContext {
                     editingState: editingState))
             // Apple semantics: registered saved models stay attached and keep their last known
             // values after a batch delete; only the store rows are removed.
-            identityMap.clearDeleted()
+            identityMap.clearDeleted { registered in
+                guard let primaryKey = registered.persistentModelID.primaryKey else { return false }
+                return scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: registered.persistentModelID.entityName, primaryKey: primaryKey))
+            }
             storeHub?.publish(
                 storeIdentifier: storeHubStoreIdentifier ?? ObjectIdentifier(container as AnyObject),
                 sourceSubscription: storeHubSubscription ?? UUID(),
@@ -811,12 +829,26 @@ public final class ModelContext {
         scratch.postsSaveNotifications = false
         var descriptor = FetchDescriptor<Model>(predicate: predicate)
         descriptor.includePendingChanges = false
-        for match in try scratch.fetch(descriptor)
-        where includeSubclasses || ObjectIdentifier(type(of: match)) == ObjectIdentifier(model) {
-            scratch.delete(match)
-        }
+        let matches = try scratch.fetch(descriptor)
+            .filter { includeSubclasses || ObjectIdentifier(type(of: $0)) == ObjectIdentifier(model) }
+        for match in matches { scratch.delete(match) }
         try scratch.save()
+        // Apple semantics: registered saved models stay attached and keep their last known values
+        // after a batch delete; only the store rows are removed. Record the removed keys so this
+        // context's merge pass does not mark their registrations deleted.
+        scratchContextDeletedKeys = Set(
+            matches.compactMap { $0.persistentModelID.primaryKey }.map {
+                StoreEntityKey(entityName: Schema.entityName(for: model), primaryKey: $0)
+            })
+        identityMap.clearDeleted { registered in
+            guard let primaryKey = registered.persistentModelID.primaryKey else { return false }
+            return scratchContextDeletedKeys.contains(
+                StoreEntityKey(entityName: registered.persistentModelID.entityName, primaryKey: primaryKey))
+        }
     }
+
+    /// Primary keys the most recent scratch-context batch delete removed from the store.
+    private var scratchContextDeletedKeys: Set<StoreEntityKey> = []
 
     /// Whether saving posts `willSave` and `didSave`; batch deletes save through a silent scratch context.
     private var postsSaveNotifications = true
@@ -922,7 +954,11 @@ public final class ModelContext {
             let model: Model
             if let existing = identityMap.model(for: key, as: Model.self) {
                 model = existing
-                if !existing.hasChanges {
+                // Apple semantics: in-memory edits kept by a rollback, and values of models removed
+                // by this context's own batch delete, are not overwritten by a refreshing fetch.
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: entity.name, primaryKey: pk))
+                if !existing.hasChanges, !batchDeleted, !pendingInMemoryEditsAfterRollback {
                     try refreshAttributes(
                         existing, entity: entity, attributes: selectedAttributesForMaterialization, row: refreshRow)
                 }
@@ -1710,6 +1746,7 @@ public final class ModelContext {
             try processPendingChangesLocked()
             guard !state.hasTransaction else { return }
             pendingChangesAfterRollback = false
+            pendingInMemoryEditsAfterRollback = false
             try saveChanges()
         }
     }
@@ -1874,39 +1911,69 @@ public final class ModelContext {
             let pendingInsertions = pendingState.inserted
             for (model, snapshot) in pendingState.snapshots.values {
                 if state.contains(model, in: pendingInsertions) {
-                    model.restoreValuesAndDetachLifecycle(snapshot)
+                    // Apple semantics: a canceled insertion detaches but keeps its current in-memory
+                    // values, including relationship inverses assigned before the rollback.
+                    let current = model.snapshotLifecycle()
+                    model.restoreValuesAndDetachLifecycle(
+                        BackingDataSnapshot(
+                            values: current.values,
+                            context: nil,
+                            identifier: current.identifier,
+                            isDeleted: false,
+                            hasChanges: false,
+                            savedValues: nil,
+                            primaryKey: nil,
+                            entityID: nil,
+                            optimisticLockVersion: current.optimisticLockVersion))
                 } else {
-                    // Apple semantics: a saved model keeps its in-memory edits through rollback. The
-                    // snapshot's current values become the merged baseline; only lifecycle state
-                    // (deletion marker, pending flags, pending identifier bookkeeping) is restored.
+                    // Apple semantics: a saved model keeps its in-memory edits and relationships
+                    // through rollback. The model's CURRENT values (not the pre-mutation capture)
+                    // become the merged baseline; only lifecycle state (deletion marker, pending
+                    // flags) is discarded.
+                    let current = model.snapshotLifecycle()
                     model.restoreLifecycle(
                         BackingDataSnapshot(
-                            values: snapshot.values,
+                            values: current.values,
                             context: snapshot.context,
                             identifier: snapshot.identifier,
                             isDeleted: false,
                             hasChanges: false,
-                            savedValues: snapshot.values,
+                            savedValues: current.values,
                             primaryKey: snapshot.primaryKey,
                             entityID: snapshot.entityID,
                             optimisticLockVersion: snapshot.optimisticLockVersion))
                 }
             }
             for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
-                cancelInsertion(model)
+                // Apple semantics: a canceled insertion detaches but keeps its current in-memory
+                // values, including relationship inverses assigned before the rollback.
+                let current = model.snapshotLifecycle()
+                model.restoreValuesAndDetachLifecycle(
+                    BackingDataSnapshot(
+                        values: current.values,
+                        context: nil,
+                        identifier: current.identifier,
+                        isDeleted: false,
+                        hasChanges: false,
+                        savedValues: nil,
+                        primaryKey: nil,
+                        entityID: nil,
+                        optimisticLockVersion: current.optimisticLockVersion))
             }
             for model in pendingInsertions { clearDataStoreTemporaryIdentifiers(for: model) }
             state.clearPending()
             state.clearRelationshipMutationEvents()
             autosaveTrigger.cancel()
-            for (model, snapshot) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
-                state.setBaseline(model, snapshot: snapshot)
+            for (model, _) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
+                state.setBaseline(model, snapshot: model.snapshotLifecycle())
             }
             for model in pendingState.deleted {
                 state.removeBaseline(for: model)
             }
-            // Apple reports a context with a rolled-back deleted insertion as still changed.
+            // Apple reports a context with a rolled-back deleted insertion as still changed, and a
+            // fetch after rollback must not overwrite the kept in-memory edits with stored values.
             pendingChangesAfterRollback = pendingChangesAfterRollback || !deletedUnsavedInsertions.isEmpty
+            pendingInMemoryEditsAfterRollback = pendingInMemoryEditsAfterRollback || !pendingState.snapshots.isEmpty
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
@@ -1954,6 +2021,7 @@ public final class ModelContext {
         assertAffinity()
         guard model.modelContext === self else { return }
         pendingChangesAfterRollback = false
+        pendingInMemoryEditsAfterRollback = false
         state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 

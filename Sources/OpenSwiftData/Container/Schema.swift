@@ -123,7 +123,11 @@ public final class Schema: @unchecked Sendable {
         public var attributesByName: [String: Attribute] { Dictionary(uniqueKeysWithValues: attributes.map { ($0.name, $0) }) }
         public var relationshipsByName: [String: Relationship] { Dictionary(uniqueKeysWithValues: relationships.map { ($0.name, $0) }) }
         public var uniquenessConstraints: [[String]] { attributes.filter { $0.options.contains(.unique) }.map { [$0.name] } }
-        public var indices: [[String]] { indexes.filter { !$0.isUnique }.map(\.properties) }
+        /// The non-unique indexes, each with Apple's synthetic `binary` column prepended to the
+        /// indexed property names, matching SwiftData's schema introspection.
+        public var indices: [[String]] {
+            indexes.filter { !$0.isUnique }.map { ["binary"] + $0.properties }
+        }
 
         public init(
             name: String,

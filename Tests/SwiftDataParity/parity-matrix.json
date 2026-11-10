@@ -172,11 +172,15 @@
         "SchemaIntrospectionParityTests/constraints and indices are listed by property name"
       ],
       "outcomes": {
-        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": "non-comparable"
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple emits a synthetic binary column into #Index expansion; OpenSwiftData lists declared properties only. Tracked under issue #8."
+      "observations": {
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": [
+          "author.uniquenessConstraints",
+          "book.indices",
+          "entities.names"
+        ]
+      }
     },
     {
       "sourceCase": "SchemaIntrospectionParityTests/schemas round-trip through Codable and files",
@@ -184,11 +188,18 @@
         "SchemaIntrospectionParityTests/schemas round-trip through Codable and files"
       ],
       "outcomes": {
-        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": "non-comparable"
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple drops indices through schema Codable round-trip; OpenSwiftData preserves them. Tracked under issue #8."
+      "observations": {
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": [
+          "roundTrip.version",
+          "roundTrip.entities",
+          "roundTrip.author.properties",
+          "roundTrip.author.uniquenessConstraints",
+          "roundTrip.book.indices",
+          "roundTrip.entities.names"
+        ]
+      }
     },
     {
       "sourceCase": "SchemaModelTypesParityTests/a schema built from types lists entities in name order",
@@ -288,11 +299,16 @@
         "StoreIdentifierParityTests/the store identifier survives reopening the store"
       ],
       "outcomes": {
-        "StoreIdentifierParityTests/the store identifier survives reopening the store": "non-comparable"
+        "StoreIdentifierParityTests/the store identifier survives reopening the store": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple regenerates the store identifier and drops the registered model on reopen; OpenSwiftData preserves both. Tracked under issue #8."
+      "observations": {
+        "StoreIdentifierParityTests/the store identifier survives reopening the store": [
+          "reopened.identifierEqual",
+          "reopened.storeIdentifierEqual",
+          "reopened.fetchName",
+          "reopened.registeredName"
+        ]
+      }
     },
     {
       "sourceCase": "StoreIdentifierParityTests/separate stores have different identifiers",

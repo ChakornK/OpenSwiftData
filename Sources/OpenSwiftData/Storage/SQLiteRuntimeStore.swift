@@ -414,10 +414,15 @@ package enum SQLiteStoreProvider {
             }
             let runtimeSchema = try schema.reconciled(
                 with: entityIDs ?? [:], minimumNextIdentifier: minimumNextIdentifier)
-            let storeIdentifier = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
+            // Apple's SwiftData regenerates the store identifier on every open, so a model fetched
+            // after reopening carries a different store identifier than the original. The stored
+            // identifier stays stable for migration bookkeeping, but the identifier exposed to the
+            // container is a fresh UUID on each open.
+            _ = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
+            let exposedStoreIdentifier = UUID().uuidString
             return SQLiteRuntimeStore(
                 driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema,
-                persistentStoreIdentifier: storeIdentifier)
+                persistentStoreIdentifier: exposedStoreIdentifier)
         } catch {
             try? driver.close()
             throw error

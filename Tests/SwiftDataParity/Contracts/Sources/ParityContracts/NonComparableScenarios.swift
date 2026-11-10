@@ -13,14 +13,8 @@ public enum NonComparableScenarios {
             "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."),
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
             "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."),
-        ScenarioID(suite: "StoreIdentifierParityTests", test: "the store identifier survives reopening the store"): deferred(
-            "Apple regenerates the store identifier and drops the registered model on reopen; OpenSwiftData preserves both."),
         ScenarioID(suite: "UniqueConstraintParityTests", test: "duplicates inserted in one save collapse into one row"): deferred(
             "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them."),
-        ScenarioID(suite: "SchemaIntrospectionParityTests", test: "constraints and indices are listed by property name"): deferred(
-            "Apple emits a synthetic binary column into #Index expansion; OpenSwiftData lists declared properties only."),
-        ScenarioID(suite: "SchemaIntrospectionParityTests", test: "schemas round-trip through Codable and files"): deferred(
-            "Apple drops indices through schema Codable round-trip; OpenSwiftData preserves them."),
         // Variants inside otherwise-compared entries.
         ScenarioID(suite: "StringPredicateParityTests", test: "string count counts characters/saved"): deferred(
             "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters."),

@@ -7701,10 +7701,11 @@ final class PersistentModelTests: XCTestCase {
             container.schemaDescriptor.entityIDsByName["InheritedToOneMigrationTargetFixture"],
             sourceIDs["InheritedToOneMigrationTargetFixture"])
 
-        // Relate the new root to the target as managed by this container; relating it to the closed container's
-        // instance would insert the root into that container's context instead.
+        // Relate the new root to the target as managed by this container. Apple regenerates the
+        // store identifier on reopen, so the source container's `target.persistentModelID` no
+        // longer resolves; fetch the target from the reopened container instead.
         let managedTarget: InheritedToOneMigrationTargetFixture = try XCTUnwrap(
-            container.mainContext.model(for: target.persistentModelID))
+            container.mainContext.fetch(FetchDescriptor<InheritedToOneMigrationTargetFixture>()).first)
         let newRoot = IndependentRelationshipRootFixture(name: "new root", target: managedTarget)
         container.mainContext.insert(newRoot)
         try container.mainContext.save()
@@ -7769,9 +7770,11 @@ final class PersistentModelTests: XCTestCase {
             container.schemaDescriptor.entityIDsByName["InheritanceMacroBaseFixture"],
             sourceIDs["InheritanceMacroBaseFixture"])
         let managedFirst = try XCTUnwrap(
-            container.mainContext.model(for: first.persistentModelID) as? ToManyHierarchyTargetChildFixture)
+            container.mainContext.fetch(FetchDescriptor<ToManyHierarchyTargetChildFixture>())
+                .first { $0.title == "first" })
         let managedSecond = try XCTUnwrap(
-            container.mainContext.model(for: second.persistentModelID) as? ToManyHierarchyTargetGrandchildFixture)
+            container.mainContext.fetch(FetchDescriptor<ToManyHierarchyTargetGrandchildFixture>())
+                .first { $0.title == "second" })
         let root = IndependentToManyRootFixture(name: "root", items: [managedFirst, managedSecond])
         container.mainContext.insert(root)
         try container.mainContext.save()

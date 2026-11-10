@@ -1972,11 +1972,6 @@ public enum SchemaIntrospectionScenarioCatalog {
             "author.uniquenessConstraints": .array([.array([.string("handle")])]),
             "book.indices": .array([.array([.string("binary"), .string("title")])]),
             "entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
-        ],
-        expectedOSDObservations: [
-            "author.uniquenessConstraints": .array([.array([.string("handle")])]),
-            "book.indices": .array([.array([.string("title")])]),
-            "entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
         ])
 
     public static let schemaRoundTrip = SchemaIntrospectionSpecification(
@@ -1987,14 +1982,6 @@ public enum SchemaIntrospectionScenarioCatalog {
             "roundTrip.author.properties": .stringSet(["bio", "books", "handle"]),
             "roundTrip.author.uniquenessConstraints": .array([.array([.string("handle")])]),
             "roundTrip.book.indices": .array([]),
-            "roundTrip.entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
-        ],
-        expectedOSDObservations: [
-            "roundTrip.version": .array([.integer(2), .integer(1), .integer(0)]),
-            "roundTrip.entities": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
-            "roundTrip.author.properties": .stringSet(["bio", "books", "handle"]),
-            "roundTrip.author.uniquenessConstraints": .array([.array([.string("handle")])]),
-            "roundTrip.book.indices": .array([.array([.string("title")])]),
             "roundTrip.entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
         ])
 

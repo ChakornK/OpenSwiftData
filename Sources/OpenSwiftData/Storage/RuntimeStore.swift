@@ -19,6 +19,10 @@ public protocol RuntimeStore: Sendable {
     ///
     /// Return `nil` to use the configuration name instead.
     var persistentStoreIdentifier: String? { get }
+    /// The stable identifier persisted in the store's metadata; survives reopen. Used to tag
+    /// materialized model identifiers so `PersistentIdentifier.storeIdentifier` stays stable even
+    /// when `persistentStoreIdentifier` regenerates on reopen. Defaults to `persistentStoreIdentifier`.
+    var storedModelIdentifier: String? { get }
 }
 
 package protocol RuntimeSchemaProvidingStore: RuntimeStore {
@@ -27,6 +31,7 @@ package protocol RuntimeSchemaProvidingStore: RuntimeStore {
 
 public extension RuntimeStore {
     var persistentStoreIdentifier: String? { nil }
+    var storedModelIdentifier: String? { persistentStoreIdentifier }
     func dataVersion() throws -> Int64? { nil }
     func writeWithExternalData<T>(
         _ body: (RuntimeConnection, ExternalDataWriteSession) throws -> T

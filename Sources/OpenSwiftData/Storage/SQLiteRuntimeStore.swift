@@ -7,6 +7,11 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
     let externalDataColumns: Set<String>
     let runtimeSchema: SchemaDescriptor
     let persistentStoreIdentifier: String?
+    var storedModelIdentifier: String? { storedIdentifier }
+    /// The stable identifier persisted in the store's metadata; survives reopen. Used to tag
+    /// materialized model identifiers so `PersistentIdentifier.storeIdentifier` stays stable even
+    /// when the container's exposed `persistentStoreIdentifier` regenerates on reopen.
+    let storedIdentifier: String?
 
     func read<T>(_ body: (any RuntimeConnection) throws -> T) throws -> T {
         try driver.read { connection in
@@ -416,13 +421,13 @@ package enum SQLiteStoreProvider {
                 with: entityIDs ?? [:], minimumNextIdentifier: minimumNextIdentifier)
             // Apple's SwiftData regenerates the store identifier on every open, so a model fetched
             // after reopening carries a different store identifier than the original. The stored
-            // identifier stays stable for migration bookkeeping, but the identifier exposed to the
-            // container is a fresh UUID on each open.
-            _ = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
+            // identifier stays stable for migration bookkeeping and model identity; the identifier
+            // exposed to the container is a fresh UUID on each open.
+            let storedIdentifier = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
             let exposedStoreIdentifier = UUID().uuidString
             return SQLiteRuntimeStore(
                 driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema,
-                persistentStoreIdentifier: exposedStoreIdentifier)
+                persistentStoreIdentifier: exposedStoreIdentifier, storedIdentifier: storedIdentifier)
         } catch {
             try? driver.close()
             throw error

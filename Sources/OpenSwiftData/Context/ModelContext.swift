@@ -2183,6 +2183,11 @@ public final class ModelContext {
     private var storeIdentifier: String {
         optionalContainer?.storeIdentifier ?? "default"
     }
+    /// The stable identifier used to tag materialized model identifiers, matching Apple's
+    /// `PersistentIdentifier.storeIdentifier` which stays stable across reopen.
+    package var modelStoreIdentifier: String {
+        optionalContainer?.modelStoreIdentifier ?? "default"
+    }
 
     private func canonicalAttributes(for entity: SchemaDescriptor.Entity) -> [SchemaDescriptor.Attribute] {
         entity.attributes.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }

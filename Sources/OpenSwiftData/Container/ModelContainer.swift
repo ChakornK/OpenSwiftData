@@ -27,6 +27,12 @@ public final class ModelContainer: Sendable {
     package var storeIdentifier: String {
         dataStore?.identifier ?? store?.persistentStoreIdentifier ?? configurationList.first?.name ?? "default"
     }
+    /// The stable identifier used to tag materialized model identifiers, matching Apple's
+    /// `PersistentIdentifier.storeIdentifier` which stays stable across reopen even when the
+    /// container's `storeIdentifier` regenerates.
+    package var modelStoreIdentifier: String {
+        dataStore?.identifier ?? store?.storedModelIdentifier ?? configurationList.first?.name ?? "default"
+    }
     package let dataStore: (any OpenSwiftDataDataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]

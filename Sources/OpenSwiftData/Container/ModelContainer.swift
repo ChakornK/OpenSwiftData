@@ -1060,17 +1060,9 @@ public final class ModelContainer: Sendable {
                 throw SwiftDataError.unsupportedStore(
                     "AppleDataStore configurations cannot be combined with another backend.")
             }
-            try appleConfiguration.validate()
-            let store = try appleConfiguration.makeStore(
-                schema: configuration.schemaDescriptor ?? schema, migrationPlan: migrationPlan)
-            guard store.schema == configuration.schemaDescriptor ?? schema else {
-                throw SwiftDataError.unsupportedStore("AppleDataStore schema does not match the configured schema.")
-            }
-            guard let bridge = store as? any AppleDataStoreBackendProviding else {
-                throw SwiftDataError.unsupportedStore(
-                    "The configured AppleDataStore does not provide the OpenSwiftData backend bridge.")
-            }
-            return try bridge.makeBackend(schema: schema, migrationPlan: migrationPlan)
+            let publicSchema = configuration.schema ?? Schema(descriptor: schema)
+            return try makePrefixedStore(
+                appleConfiguration, schema: publicSchema, migrationPlan: migrationPlan)
         }
         if let canonicalStoreFactory = configuration.canonicalStoreFactory {
             guard configuration.dataStoreConfiguration == nil,

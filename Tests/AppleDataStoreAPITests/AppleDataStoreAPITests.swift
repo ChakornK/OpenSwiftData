@@ -64,27 +64,29 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
     typealias Store = FixtureAppleStore
     let name: String
-    var schema: SchemaDescriptor?
+    var schema: Schema?
 
-    func makeStore(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+
+    func makeStore(schema: Schema?, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> FixtureAppleStore {
         FixtureAppleStore(self, schema: schema)
     }
 }
 
-private final class FixtureAppleStore: AppleDataStore, AppleDataStoreBackendProviding, @unchecked Sendable {
+private final class FixtureAppleStore: AppleDataStore, @unchecked Sendable {
     let configuration: FixtureAppleConfiguration
     let identifier = "apple.fixture"
-    let schema: SchemaDescriptor
+    let schema: Schema
 
     required init(_ configuration: FixtureAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
-        guard let schema = configuration.schema else { throw SwiftDataError.unsupportedStore("Missing schema") }
         self.configuration = configuration
-        self.schema = schema
+        self.schema = configuration.schema ?? Schema()
     }
 
-    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: SchemaDescriptor) {
+    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: Schema?) {
         self.configuration = configuration
-        self.schema = schema
+        self.schema = schema ?? Schema()
     }
 
     func fetch<Model: PersistentModel>(
@@ -96,12 +98,6 @@ private final class FixtureAppleStore: AppleDataStore, AppleDataStoreBackendProv
     func save(_ request: AppleDataStoreSaveChangesRequest<FixtureSnapshot>) throws -> AppleDataStoreSaveChangesResult {
         AppleDataStoreSaveChangesResult(for: identifier)
     }
-
-    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any OpenSwiftDataDataStore {
-        _ = (schema, migrationPlan)
-        return FixtureLegacyBackend()
-    }
-
 }
 
 private struct FixtureLegacyBackend: OpenSwiftDataDataStore {
@@ -1026,6 +1022,77 @@ private final class EraseReportingDataStore: OpenSwiftDataDataStore, @unchecked 
     }
 }
 
+/// An Apple-shaped store whose own fetch/save methods persist snapshots, proving the automatic
+/// engine bridge works without a hand-written backend.
+private final class RoundTripAppleStore: AppleDataStore, @unchecked Sendable {
+    let configuration: RoundTripAppleConfiguration
+    let identifier: String
+    let schema: Schema
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: FixtureSnapshot] = [:]
+    private var nextKey: Int64 = 1
+
+    var observedRows: [FixtureSnapshot] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(rows.values)
+    }
+
+    required init(_ configuration: RoundTripAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        schema = configuration.schema ?? Schema()
+        configuration.store.store = self
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: AppleDataStoreFetchRequest<Model>
+    ) throws -> AppleDataStoreFetchResult<Model, FixtureSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        let entityName = Schema.entityName(for: Model.self)
+        let fetched = rows.values.filter { $0.persistentIdentifier.entityName == entityName }
+        return AppleDataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: fetched)
+    }
+
+    func save(_ request: AppleDataStoreSaveChangesRequest<FixtureSnapshot>) throws -> AppleDataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: identifier, entityName: snapshot.persistentIdentifier.entityName,
+                primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = snapshot.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
+        }
+        for snapshot in request.deleted { rows.removeValue(forKey: snapshot.persistentIdentifier) }
+        return AppleDataStoreSaveChangesResult(for: identifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class RoundTripAppleStoreHolder: @unchecked Sendable {
+    fileprivate weak var store: RoundTripAppleStore?
+    fileprivate var observedRows: [FixtureSnapshot]? {
+        store?.observedRows
+    }
+}
+
+private struct RoundTripAppleConfiguration: AppleDataStoreConfiguration {
+    typealias Store = RoundTripAppleStore
+    let name: String
+    var schema: Schema?
+    let store = RoundTripAppleStoreHolder()
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+
+    func makeStore(schema: Schema?, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> RoundTripAppleStore {
+        try RoundTripAppleStore(self, migrationPlan: migrationPlan)
+    }
+}
+
 private final class BatchingStoreState: @unchecked Sendable {
     private let lock = NSLock()
     private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
@@ -1380,6 +1447,35 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
+    func appleStoreFetchAndSaveDrivePersistenceWithoutHandWrittenBackend() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = RoundTripAppleConfiguration(name: "round-trip", schema: schema)
+        let container = try ModelContainer(
+            for: [AppleStoreFixture.self],
+            configurations: [ModelConfiguration(
+                appleStore: "round-trip-store", schema: schema,
+                appleDataStoreConfiguration: configuration)])
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "prefixed")
+        context.insert(model)
+        try context.save()
+
+        let fresh = try ModelContext(container).fetch(
+            FetchDescriptor<AppleStoreFixture>(sortBy: [SortDescriptor(\.title)]))
+        #expect(fresh.map(\.title) == ["prefixed"])
+        #expect(fresh.first?.persistentModelID == model.persistentModelID)
+
+        let fetchedModel = try #require(fresh.first)
+        fetchedModel.title = "edited"
+        #expect(fetchedModel.hasChanges)
+        do { try fetchedModel.modelContext?.save() } catch { Issue.record("save failed: \(error)") }
+        let edited = try ModelContext(container).fetch(FetchDescriptor<AppleStoreFixture>())
+        let storeRows = configuration.store.observedRows ?? []
+        #expect(edited.map(\.title) == ["edited"], "observed \(edited.map(\.title)) rows \(storeRows.map { $0.title })")
+    }
+
+    @MainActor
+    @Test
     func batchDeleteRoutesThroughBatchingDataStore() throws {
         let state = BatchingStoreState()
         let configuration = ModelConfiguration(
@@ -1547,10 +1643,10 @@ struct AppleDataStoreAPITests {
 
     @Test
     func testAppleStoreConformanceCompiles() throws {
-        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
+        let schema = Schema([AppleStoreFixture.self])
         let config = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let store = try FixtureAppleStore(config, migrationPlan: nil)
-        #expect(store.schema == schema)
+        #expect(store.schema.entities.map(\.name) == schema.entities.map(\.name))
         #expect(store.identifier == "apple.fixture")
     }
 
@@ -1578,12 +1674,12 @@ struct AppleDataStoreAPITests {
 
     @Test @MainActor
     func testContainerRoutesAppleStoreConfigurationToBackend() throws {
-        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
+        let schema = Schema([AppleStoreFixture.self])
         let configuration = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let container = try ModelContainer(
             for: [AppleStoreFixture.self],
             configurations: [ModelConfiguration(
-                appleStore: "apple-fixture", schema: Schema(descriptor: schema),
+                appleStore: "apple-fixture", schema: schema,
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
     }

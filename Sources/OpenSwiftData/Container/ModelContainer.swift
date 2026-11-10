@@ -27,6 +27,12 @@ public final class ModelContainer: Sendable {
     package var storeIdentifier: String {
         dataStore?.identifier ?? store?.persistentStoreIdentifier ?? configurationList.first?.name ?? "default"
     }
+    /// The stable identifier used to tag materialized model identifiers, matching Apple's
+    /// `PersistentIdentifier.storeIdentifier` which stays stable across reopen even when the
+    /// container's `storeIdentifier` regenerates.
+    package var modelStoreIdentifier: String {
+        dataStore?.identifier ?? store?.storedModelIdentifier ?? configurationList.first?.name ?? "default"
+    }
     package let dataStore: (any OpenSwiftDataDataStore)?
     let storeIdentityHandle = StoreIdentityHandle()
     let relationshipAdapterTable: [ObjectIdentifier: [any AnyRelationshipAdapterBox]]
@@ -472,7 +478,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -541,7 +554,40 @@ public final class ModelContainer: Sendable {
         try self.init(
             for: schema,
             migrationPlan: migrationPlan,
-            configurations: Self.configurationsOrDefault(configurations))
+            configurations: Self.configurationsOrDefault(configurations))    }
+
+    /// Creates a container whose store comes from an Apple-style custom data store configuration.
+    ///
+    /// The configuration's `schema` is assigned before its store is created; the store must expose the
+    /// container's schema. This entry point matches Apple's `ModelContainer(for:configurations:)` usage
+    /// with a custom `DataStoreConfiguration`.
+    public convenience init(
+        for types: any PersistentModel.Type...,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: any DataStoreConfiguration
+    ) throws {
+        let configuration = try Self.canonicalConfiguration(from: configurations)
+        try self.init(
+            for: types, schema: Schema(types), configurations: [configuration])
+    }
+
+    /// Creates a container for a schema backed by an Apple-style custom data store configuration.
+    public convenience init(
+        for schema: Schema,
+        migrationPlan: (any SchemaMigrationPlan.Type)? = nil,
+        configurations: any DataStoreConfiguration
+    ) throws {
+        try self.init(
+            for: schema, migrationPlan: migrationPlan,
+            configurations: [try Self.canonicalConfiguration(from: configurations)])
+    }
+
+    /// Wraps a custom data store configuration in a model configuration for the canonical store path.
+    private static func canonicalConfiguration(
+        from configuration: any DataStoreConfiguration
+    ) throws -> ModelConfiguration {
+        ModelConfiguration(
+            canonicalStore: configuration.name, canonicalDataStoreConfiguration: configuration)
     }
 
     private convenience init(schemaOnly schema: SchemaDescriptor, configurations: [ModelConfiguration]) throws {
@@ -569,7 +615,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = [:]
@@ -624,7 +677,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -944,6 +1004,10 @@ public final class ModelContainer: Sendable {
     /// The store file remains and stays open, and contexts keep their pending changes. Primary keys continue
     /// from where they were, so identifiers held from before the erase never match new models.
     public func erase() throws {
+        if let dataStore {
+            try dataStore.erase()
+            return
+        }
         guard let store else {
             throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
         }
@@ -1023,17 +1087,9 @@ public final class ModelContainer: Sendable {
                 throw SwiftDataError.unsupportedStore(
                     "AppleDataStore configurations cannot be combined with another backend.")
             }
-            try appleConfiguration.validate()
-            let store = try appleConfiguration.makeStore(
-                schema: configuration.schemaDescriptor ?? schema, migrationPlan: migrationPlan)
-            guard store.schema == configuration.schemaDescriptor ?? schema else {
-                throw SwiftDataError.unsupportedStore("AppleDataStore schema does not match the configured schema.")
-            }
-            guard let bridge = store as? any AppleDataStoreBackendProviding else {
-                throw SwiftDataError.unsupportedStore(
-                    "The configured AppleDataStore does not provide the OpenSwiftData backend bridge.")
-            }
-            return try bridge.makeBackend(schema: schema, migrationPlan: migrationPlan)
+            let publicSchema = configuration.schema ?? Schema(descriptor: schema)
+            return try makePrefixedStore(
+                appleConfiguration, schema: publicSchema, migrationPlan: migrationPlan)
         }
         if let canonicalStoreFactory = configuration.canonicalStoreFactory {
             guard configuration.dataStoreConfiguration == nil,

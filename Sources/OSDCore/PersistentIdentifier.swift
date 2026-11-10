@@ -35,10 +35,16 @@ public struct PersistentIdentifier: Hashable, Identifiable, Comparable, Codable,
     }
 
     /// The store that holds the model, or `nil` while the identifier is temporary.
-    public var storeIdentifier: String? { isTemporary ? nil : resolvedStoreIdentifier }
+    ///
+    /// Returns the stable stored identifier for materialized models, which survives reopen even
+    /// when the container's runtime store identifier regenerates, matching Apple's SwiftData.
+    public var storeIdentifier: String? { isTemporary ? nil : displayedStoreIdentifier }
 
     /// The store an identifier belongs to, including temporary identifiers of inserted models.
     package let resolvedStoreIdentifier: String
+    /// The stable identifier returned by `storeIdentifier`; defaults to `resolvedStoreIdentifier`
+    /// but is set to the stored identifier for materialized models so it survives reopen.
+    private let displayedStoreIdentifier: String
     /// The model entity name.
     public let entityName: String
     private let key: Key
@@ -58,6 +64,7 @@ public struct PersistentIdentifier: Hashable, Identifiable, Comparable, Codable,
     /// Creates a temporary identifier for a model in a store.
     public init(storeIdentifier: String, entityName: String, temporaryIdentifier: UUID) {
         self.resolvedStoreIdentifier = storeIdentifier
+        self.displayedStoreIdentifier = storeIdentifier
         self.entityName = entityName
         self.key = .temporary(temporaryIdentifier)
     }
@@ -65,12 +72,27 @@ public struct PersistentIdentifier: Hashable, Identifiable, Comparable, Codable,
     /// Creates a permanent identifier for a model in a store.
     public init(storeIdentifier: String, entityName: String, primaryKey: Int64) {
         self.resolvedStoreIdentifier = storeIdentifier
+        self.displayedStoreIdentifier = storeIdentifier
+        self.entityName = entityName
+        self.key = .row(primaryKey)
+    }
+
+    /// Creates a permanent identifier with a display store identifier that may differ from the
+    /// resolved store identifier, matching Apple's behavior where `storeIdentifier` stays stable
+    /// across reopen even when the runtime store identifier regenerates.
+    package init(
+        resolvedStoreIdentifier: String, displayedStoreIdentifier: String,
+        entityName: String, primaryKey: Int64
+    ) {
+        self.resolvedStoreIdentifier = resolvedStoreIdentifier
+        self.displayedStoreIdentifier = displayedStoreIdentifier
         self.entityName = entityName
         self.key = .row(primaryKey)
     }
 
     private init(storeIdentifier: String, entityName: String, key: Key) {
         self.resolvedStoreIdentifier = storeIdentifier
+        self.displayedStoreIdentifier = storeIdentifier
         self.entityName = entityName
         self.key = key
     }

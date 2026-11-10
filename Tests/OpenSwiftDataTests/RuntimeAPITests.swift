@@ -656,7 +656,7 @@ final class RuntimeAPITests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresAndDetachesMutatedPendingInsertion() async {
+    func testRollbackKeepsAndDetachesMutatedPendingInsertion() async {
         let context = ModelContext()
         let model = TransactionFixture()
         model.title = "insert-time baseline"
@@ -666,7 +666,8 @@ final class RuntimeAPITests: XCTestCase {
 
         context.rollback()
 
-        XCTAssertEqual(model.title, "insert-time baseline")
+        // Apple semantics: a canceled insertion detaches but keeps its in-memory values.
+        XCTAssertEqual(model.title, "later mutation")
         XCTAssertNil(model.modelContext)
         XCTAssertEqual(model.persistentModelID, identifier)
         XCTAssertFalse(model.hasChanges)

@@ -180,13 +180,14 @@ final class ManagedBackingDataTests: XCTestCase {
         model.value = 2
         XCTAssertTrue(undoManager.canUndo)
         context.rollback()
-        XCTAssertEqual(model.value, 1)
+        // Apple semantics: rollback clears pending state but keeps the in-memory edit.
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
         XCTAssertFalse(undoManager.canUndo)
         XCTAssertFalse(undoManager.canRedo)
 
         undoManager.undo()
-        XCTAssertEqual(model.value, 1)
+        XCTAssertEqual(model.value, 2)
         XCTAssertFalse(context.hasChanges)
     }
 
@@ -213,7 +214,8 @@ final class ManagedBackingDataTests: XCTestCase {
 
         firstContext.rollback()
 
-        XCTAssertEqual(first.value, 1)
+        // Apple semantics: rollback clears pending state but keeps the in-memory edit.
+        XCTAssertEqual(first.value, 10)
         XCTAssertEqual(second.value, 20)
         XCTAssertFalse(first.hasChanges)
         XCTAssertTrue(second.hasChanges)
@@ -403,7 +405,8 @@ final class ManagedBackingDataTests: XCTestCase {
         XCTAssertTrue(result.1)
         XCTAssertTrue(result.2)
 
-        XCTAssertEqual(model.value, 1)
+        // Apple semantics: rollback clears pending state but keeps the in-memory edit.
+        XCTAssertEqual(model.value, 12)
         XCTAssertFalse(model.hasChanges)
     }
 }

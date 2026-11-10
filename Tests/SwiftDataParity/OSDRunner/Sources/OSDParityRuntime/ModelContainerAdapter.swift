@@ -11,7 +11,7 @@ final class ContainerParityThing {
 @MainActor
 public enum OSDModelContainerParityAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try ModelContainerParityScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(ModelContainerParityScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

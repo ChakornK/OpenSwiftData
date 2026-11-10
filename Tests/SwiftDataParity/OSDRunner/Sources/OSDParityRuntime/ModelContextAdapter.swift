@@ -11,7 +11,7 @@ final class ContextParityModel {
 @MainActor
 public enum OSDModelContextParityAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try ModelContextParityScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(ModelContextParityScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

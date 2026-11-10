@@ -64,27 +64,29 @@ private struct FixtureSnapshot: AppleDataStoreSnapshot {
 private struct FixtureAppleConfiguration: AppleDataStoreConfiguration {
     typealias Store = FixtureAppleStore
     let name: String
-    var schema: SchemaDescriptor?
+    var schema: Schema?
 
-    func makeStore(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any AppleDataStore {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+
+    func makeStore(schema: Schema?, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> FixtureAppleStore {
         FixtureAppleStore(self, schema: schema)
     }
 }
 
-private final class FixtureAppleStore: AppleDataStore, AppleDataStoreBackendProviding, @unchecked Sendable {
+private final class FixtureAppleStore: AppleDataStore, @unchecked Sendable {
     let configuration: FixtureAppleConfiguration
     let identifier = "apple.fixture"
-    let schema: SchemaDescriptor
+    let schema: Schema
 
     required init(_ configuration: FixtureAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
-        guard let schema = configuration.schema else { throw SwiftDataError.unsupportedStore("Missing schema") }
         self.configuration = configuration
-        self.schema = schema
+        self.schema = configuration.schema ?? Schema()
     }
 
-    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: SchemaDescriptor) {
+    fileprivate init(_ configuration: FixtureAppleConfiguration, schema: Schema?) {
         self.configuration = configuration
-        self.schema = schema
+        self.schema = schema ?? Schema()
     }
 
     func fetch<Model: PersistentModel>(
@@ -96,12 +98,6 @@ private final class FixtureAppleStore: AppleDataStore, AppleDataStoreBackendProv
     func save(_ request: AppleDataStoreSaveChangesRequest<FixtureSnapshot>) throws -> AppleDataStoreSaveChangesResult {
         AppleDataStoreSaveChangesResult(for: identifier)
     }
-
-    func makeBackend(schema: SchemaDescriptor, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> any OpenSwiftDataDataStore {
-        _ = (schema, migrationPlan)
-        return FixtureLegacyBackend()
-    }
-
 }
 
 private struct FixtureLegacyBackend: OpenSwiftDataDataStore {
@@ -116,7 +112,7 @@ private struct FixtureLegacyBackend: OpenSwiftDataDataStore {
 }
 
 private struct CanonicalFixtureConfiguration: DataStoreConfiguration {
-    typealias StoreType = CanonicalFixtureStore
+    typealias Store = CanonicalFixtureStore
     let name: String
     var schema: Schema?
     init(name: String = "canonical.fixture", schema: Schema?) {
@@ -268,7 +264,7 @@ private struct ProviderPrecedenceSnapshot: DataStoreSnapshotValueProviding {
 }
 
 private struct UnbridgedCanonicalConfiguration: DataStoreConfiguration {
-    typealias StoreType = UnbridgedCanonicalStore
+    typealias Store = UnbridgedCanonicalStore
     let name: String
     var schema: Schema?
 }
@@ -285,14 +281,14 @@ private final class UnbridgedCanonicalStore: DataStore, @unchecked Sendable {
     func fetch<Model: PersistentModel>(_ request: DataStoreFetchRequest<Model>) throws -> DataStoreFetchResult<Model, Snapshot> {
         DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [])
     }
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         DataStoreSaveChangesResult(for: identifier)
     }
     func snapshot(for identifier: PersistentIdentifier) throws -> Snapshot? { nil }
 }
 
 private struct CodableConventionConfiguration: DataStoreConfiguration {
-    typealias StoreType = CodableConventionStore
+    typealias Store = CodableConventionStore
     let name: String
     var schema: Schema?
 }
@@ -496,7 +492,7 @@ private struct AppleKeyLayoutSnapshot: DataStoreSnapshot {
 }
 
 private struct AppleKeyLayoutConfiguration: DataStoreConfiguration {
-    typealias StoreType = AppleKeyLayoutStore
+    typealias Store = AppleKeyLayoutStore
     let name: String
     var schema: Schema?
 }
@@ -521,7 +517,7 @@ private final class AppleKeyLayoutStore: DataStore, @unchecked Sendable {
         state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -556,14 +552,14 @@ private final class AppleKeyLayoutStoreState: @unchecked Sendable {
 
     func save(
         _ request: DataStoreSaveChangesRequest<AppleKeyLayoutSnapshot>, storeIdentifier: String
-    ) throws -> DataStoreSaveChangesResult {
+    ) throws -> DataStoreSaveChangesResult<AppleKeyLayoutSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected Apple coding-key snapshot save failure")
         }
         var candidate = snapshots
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
@@ -596,7 +592,7 @@ private final class AppleKeyLayoutStoreRegistry: @unchecked Sendable {
 }
 
 private struct RenamedSnapshotConfiguration: DataStoreConfiguration {
-    typealias StoreType = RenamedSnapshotStore
+    typealias Store = RenamedSnapshotStore
     let name: String
     var schema: Schema?
 }
@@ -626,7 +622,7 @@ private final class RenamedSnapshotStore: DataStore, @unchecked Sendable {
         DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: [row])
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         DataStoreSaveChangesResult(for: identifier)
     }
 
@@ -653,7 +649,7 @@ private final class CodableConventionStore: DataStore, @unchecked Sendable {
         state.fetch(descriptor: request.descriptor, entityName: Schema.entityName(for: Model.self))
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -688,14 +684,14 @@ private final class CodableConventionStoreState: @unchecked Sendable {
 
     func save(
         _ request: DataStoreSaveChangesRequest<CodableConventionSnapshot>, storeIdentifier: String
-    ) throws -> DataStoreSaveChangesResult {
+    ) throws -> DataStoreSaveChangesResult<CodableConventionSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected Codable convention save failure")
         }
         var candidate = rows
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextPrimaryKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
@@ -747,14 +743,14 @@ private final class CanonicalStoreState: @unchecked Sendable {
         return values[identifier]
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult<CanonicalFixtureSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected canonical store save failure")
         }
         var candidate = values
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         var insertedMappings: [(CanonicalFixtureSnapshot, PersistentIdentifier)] = []
@@ -797,7 +793,7 @@ private final class CanonicalFixtureStore: DataStore, @unchecked Sendable {
         return DataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: Array(rows))
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<CanonicalFixtureSnapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -823,7 +819,7 @@ private final class CanonicalStoreStates: @unchecked Sendable {
 }
 
 private struct DefaultSnapshotConfiguration: DataStoreConfiguration {
-    typealias StoreType = DefaultSnapshotStore
+    typealias Store = DefaultSnapshotStore
     let name: String
     var schema: Schema?
 }
@@ -848,7 +844,7 @@ private final class DefaultSnapshotStore: DataStore, @unchecked Sendable {
         state.fetch(entityName: Schema.entityName(for: Model.self), descriptor: request.descriptor)
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<Snapshot>) throws -> DataStoreSaveChangesResult<Snapshot> {
         try state.save(request, storeIdentifier: identifier)
     }
 
@@ -882,14 +878,14 @@ private final class CanonicalDefaultStoreState: @unchecked Sendable {
         return snapshots[identifier]
     }
 
-    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult {
+    func save(_ request: DataStoreSaveChangesRequest<AppleDefaultSnapshot>, storeIdentifier: String) throws -> DataStoreSaveChangesResult<AppleDefaultSnapshot> {
         lock.lock(); defer { lock.unlock() }
         if failsNextSave {
             failsNextSave = false
             throw SwiftDataError.unsupportedStore("injected canonical default snapshot save failure")
         }
         var candidate = snapshots
-        for identifier in request.deleted { candidate.removeValue(forKey: identifier) }
+        for snapshot in request.deleted { candidate.removeValue(forKey: snapshot.persistentIdentifier) }
         var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
         var nextKey = (candidate.values.compactMap(\.persistentIdentifier.primaryKey).max() ?? 0) + 1
         for snapshot in request.inserted {
@@ -922,6 +918,257 @@ private final class CanonicalDefaultStoreStates: @unchecked Sendable {
         states[name] = state
         return state
     }
+}
+
+// Test fixtures compare by name because their schema property is a class reference.
+extension CanonicalFixtureConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension UnbridgedCanonicalConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension CodableConventionConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension AppleKeyLayoutConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension RenamedSnapshotConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+extension DefaultSnapshotConfiguration: Equatable, Hashable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+}
+
+private final class DeleteProbeDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
+    let identifier = "delete.probe"
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+    private var nextKey: Int64 = 1
+    private var observedRequest: OpenSwiftDataDataStoreSaveRequest?
+
+    var lastSaveRequest: OpenSwiftDataDataStoreSaveRequest? {
+        lock.lock(); defer { lock.unlock() }
+        return observedRequest
+    }
+
+    init() {}
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        lock.lock()
+        observedRequest = request
+        lock.unlock()
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+        var nextKey: Int64 = 1
+        lock.lock()
+        defer { lock.unlock() }
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: identifier, entityName: snapshot.entityName, primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: permanent, entityName: snapshot.entityName,
+                values: snapshot.values, relationships: snapshot.relationships)
+        }
+        for identifier in request.deleted { rows.removeValue(forKey: identifier) }
+        return OpenSwiftDataDataStoreSaveResult(
+            identifierRemappings: remappings,
+            updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
+            deletedIdentifiers: Set(request.deleted))
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+}
+
+private final class EraseReportingDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
+    let identifier = "erase.probe"
+    private let lock = NSLock()
+    private(set) var didErase = false
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        OpenSwiftDataDataStoreSaveResult()
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+
+    func erase() throws {
+        lock.lock()
+        didErase = true
+        lock.unlock()
+    }
+}
+
+/// An Apple-shaped store whose own fetch/save methods persist snapshots, proving the automatic
+/// engine bridge works without a hand-written backend.
+private final class RoundTripAppleStore: AppleDataStore, @unchecked Sendable {
+    let configuration: RoundTripAppleConfiguration
+    let identifier: String
+    let schema: Schema
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: FixtureSnapshot] = [:]
+    private var nextKey: Int64 = 1
+
+    var observedRows: [FixtureSnapshot] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(rows.values)
+    }
+
+    required init(_ configuration: RoundTripAppleConfiguration, migrationPlan: (any SchemaMigrationPlan.Type)?) throws {
+        self.configuration = configuration
+        identifier = configuration.name
+        schema = configuration.schema ?? Schema()
+        configuration.store.store = self
+    }
+
+    func fetch<Model: PersistentModel>(
+        _ request: AppleDataStoreFetchRequest<Model>
+    ) throws -> AppleDataStoreFetchResult<Model, FixtureSnapshot> {
+        lock.lock(); defer { lock.unlock() }
+        let entityName = Schema.entityName(for: Model.self)
+        let fetched = rows.values.filter { $0.persistentIdentifier.entityName == entityName }
+        return AppleDataStoreFetchResult(descriptor: request.descriptor, fetchedSnapshots: fetched)
+    }
+
+    func save(_ request: AppleDataStoreSaveChangesRequest<FixtureSnapshot>) throws -> AppleDataStoreSaveChangesResult {
+        lock.lock(); defer { lock.unlock() }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: identifier, entityName: snapshot.persistentIdentifier.entityName,
+                primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = snapshot.copy(persistentIdentifier: permanent, remappedIdentifiers: remappings)
+        }
+        for snapshot in request.deleted { rows.removeValue(forKey: snapshot.persistentIdentifier) }
+        return AppleDataStoreSaveChangesResult(for: identifier, remappedIdentifiers: remappings)
+    }
+}
+
+private final class RoundTripAppleStoreHolder: @unchecked Sendable {
+    fileprivate weak var store: RoundTripAppleStore?
+    fileprivate var observedRows: [FixtureSnapshot]? {
+        store?.observedRows
+    }
+}
+
+private struct RoundTripAppleConfiguration: AppleDataStoreConfiguration {
+    typealias Store = RoundTripAppleStore
+    let name: String
+    var schema: Schema?
+    let store = RoundTripAppleStoreHolder()
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+    func hash(into hasher: inout Hasher) { hasher.combine(name) }
+
+    func makeStore(schema: Schema?, migrationPlan: (any SchemaMigrationPlan.Type)?) throws -> RoundTripAppleStore {
+        try RoundTripAppleStore(self, migrationPlan: migrationPlan)
+    }
+}
+
+private final class BatchingStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+    private var nextKey: Int64 = 1
+    private(set) var lastDeleteSubclasses: Bool?
+
+    func snapshots() -> [OpenSwiftDataDataStoreSnapshot] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(rows.values)
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        lock.lock(); defer { lock.unlock() }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: "batching.fixture", entityName: snapshot.entityName, primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: permanent, entityName: snapshot.entityName,
+                values: snapshot.values, relationships: snapshot.relationships)
+        }
+        for identifier in request.deleted { rows.removeValue(forKey: identifier) }
+        return OpenSwiftDataDataStoreSaveResult(
+            identifierRemappings: remappings,
+            updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
+            deletedIdentifiers: Set(request.deleted))
+    }
+
+    func delete<Model: PersistentModel>(
+        _ request: DataStoreBatchDeleteRequest<Model>, matching: (OpenSwiftDataDataStoreSnapshot) -> Bool
+    ) throws {
+        lock.lock(); defer { lock.unlock() }
+        lastDeleteSubclasses = request.includeSubclasses
+        for (identifier, snapshot) in rows where matching(snapshot) {
+            rows.removeValue(forKey: identifier)
+        }
+    }
+}
+
+private final class BatchingDataStore: OpenSwiftDataDataStore, OpenSwiftDataDataStoreBatching, @unchecked Sendable {
+    let identifier = "batching.fixture"
+    let state: BatchingStoreState
+
+    init(state: BatchingStoreState) { self.state = state }
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        try state.save(request)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+
+    func delete<Model: PersistentModel>(_ request: DataStoreBatchDeleteRequest<Model>) throws {
+        let modelName = String(describing: Model.self).split(separator: ".").last.map(String.init) ?? ""
+        try state.delete(request) { snapshot in
+            snapshot.entityName == modelName
+                || (request.includeSubclasses && snapshot.entityName.hasPrefix(modelName))
+        }
+    }
+}
+
+private struct HistoryTokenStore: HistoryToken, Codable {
+    let value: Int64
+
+    public typealias TokenType = Int64
+    var id: Int { Int(value) }
+    var tokenValue: Int64? { value }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.value < rhs.value }
 }
 
 @Suite
@@ -1117,6 +1364,149 @@ struct AppleDataStoreAPITests {
 
     @MainActor
     @Test
+    func containerAcceptsDataStoreConfigurationDirectly() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "direct-configuration-\(UUID().uuidString)"
+        let configuration = CanonicalFixtureConfiguration(name: name, schema: schema)
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "direct")
+        context.insert(model)
+        try context.save()
+
+        let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
+        #expect(fetched.map(\.title) == ["direct"])
+        #expect(container.dataStore?.identifier == "canonical.fixture")
+    }
+
+    @MainActor
+    @Test
+    func containerVariadicAcceptsDataStoreConfigurationDirectly() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let name = "direct-variadic-\(UUID().uuidString)"
+        let configuration = CanonicalFixtureConfiguration(name: name, schema: schema)
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        context.insert(AppleStoreFixture(title: "variadic"))
+        try context.save()
+
+        let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
+        #expect(fetched.map(\.title) == ["variadic"])
+    }
+
+    @MainActor
+    @Test
+    func defaultSnapshotIsExposedUnderAppleName() throws {
+        let snapshot = DefaultSnapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "default.snapshot", entityName: "AppleStoreFixture", primaryKey: 1),
+            entityName: "AppleStoreFixture",
+            persistedValues: ["title": .text("named")],
+            relationships: [:])
+        #expect(snapshot.entityName == "AppleStoreFixture")
+        #expect(snapshot.persistedValues["title"] == .text("named"))
+        let remapped = snapshot.copy(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "default.snapshot", entityName: "AppleStoreFixture", primaryKey: 2))
+        #expect(remapped.persistentIdentifier.primaryKey == 2)
+    }
+
+    @MainActor
+    @Test
+    func savePassesDeletedSnapshotsAndEditingStateToStore() throws {
+        let probe = DeleteProbeDataStore()
+        let configuration = ModelConfiguration(
+            "deleted-snapshots-probe", dataStoreConfiguration: ExistingDataStoreConfiguration(store: probe))
+        let container = try ModelContainer(
+            for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "deleted")
+        context.insert(model)
+        try context.save()
+        context.delete(model)
+        try context.save()
+
+        let request = try #require(probe.lastSaveRequest)
+        #expect(request.deletedSnapshots.count == 1)
+        #expect(request.deletedSnapshots.first?.persistentIdentifier == model.persistentModelID)
+        #expect(request.editingState.id == context.editingState.id)
+        #expect(request.deleted == [model.persistentModelID])
+    }
+
+    @MainActor
+    @Test
+    func eraseRoutesThroughCustomDataStore() throws {
+        let store = EraseReportingDataStore()
+        let configuration = ModelConfiguration(
+            "erase-routing", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        #expect(store.didErase == false)
+        try container.erase()
+        #expect(store.didErase)
+    }
+
+    @MainActor
+    @Test
+    func appleStoreFetchAndSaveDrivePersistenceWithoutHandWrittenBackend() throws {
+        let schema = Schema([AppleStoreFixture.self])
+        let configuration = RoundTripAppleConfiguration(name: "round-trip", schema: schema)
+        let container = try ModelContainer(
+            for: [AppleStoreFixture.self],
+            configurations: [ModelConfiguration(
+                appleStore: "round-trip-store", schema: schema,
+                appleDataStoreConfiguration: configuration)])
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "prefixed")
+        context.insert(model)
+        try context.save()
+
+        let fresh = try ModelContext(container).fetch(
+            FetchDescriptor<AppleStoreFixture>(sortBy: [SortDescriptor(\.title)]))
+        #expect(fresh.map(\.title) == ["prefixed"])
+        #expect(fresh.first?.persistentModelID == model.persistentModelID)
+
+        let fetchedModel = try #require(fresh.first)
+        fetchedModel.title = "edited"
+        #expect(fetchedModel.hasChanges)
+        do { try fetchedModel.modelContext?.save() } catch { Issue.record("save failed: \(error)") }
+        let edited = try ModelContext(container).fetch(FetchDescriptor<AppleStoreFixture>())
+        let storeRows = configuration.store.observedRows ?? []
+        #expect(edited.map(\.title) == ["edited"], "observed \(edited.map(\.title)) rows \(storeRows.map { $0.title })")
+    }
+
+    @MainActor
+    @Test
+    func batchDeleteRoutesThroughBatchingDataStore() throws {
+        let state = BatchingStoreState()
+        let configuration = ModelConfiguration(
+            "batching-store", dataStoreConfiguration: ExistingDataStoreConfiguration(store: BatchingDataStore(state: state)))
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        context.insert(AppleStoreFixture(title: "one"))
+        context.insert(AppleStoreFixture(title: "two"))
+        try context.save()
+        #expect(state.snapshots().count == 2)
+
+        try context.delete(model: AppleStoreFixture.self)
+        #expect(state.snapshots().isEmpty)
+        #expect(state.lastDeleteSubclasses == true)
+        #expect(try context.fetch(FetchDescriptor<AppleStoreFixture>()).isEmpty)
+    }
+
+    @MainActor
+    @Test
+    func saveRecordsHistoryTokenFromCustomStore() throws {
+        let token = HistoryTokenStore(value: 7)
+        let result = DataStoreSaveChangesResult<CanonicalFixtureSnapshot>(
+            for: "token.store", historyToken: token)
+        #expect(result.historyToken?.tokenValue as? Int64 == 7)
+
+        let legacy = OpenSwiftDataDataStoreSaveResult(historyToken: token)
+        #expect(legacy.historyToken?.tokenValue as? Int64 == 7)
+    }
+
+    @MainActor
+    @Test
     func renamedBaseOnlySnapshotFailsDeterministicallyDuringContainerFetch() throws {
         let schema = Schema([AppleStoreFixture.self])
         let name = "renamed-snapshot-\(UUID().uuidString)"
@@ -1253,10 +1643,10 @@ struct AppleDataStoreAPITests {
 
     @Test
     func testAppleStoreConformanceCompiles() throws {
-        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
+        let schema = Schema([AppleStoreFixture.self])
         let config = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let store = try FixtureAppleStore(config, migrationPlan: nil)
-        #expect(store.schema == schema)
+        #expect(store.schema.entities.map(\.name) == schema.entities.map(\.name))
         #expect(store.identifier == "apple.fixture")
     }
 
@@ -1284,12 +1674,12 @@ struct AppleDataStoreAPITests {
 
     @Test @MainActor
     func testContainerRoutesAppleStoreConfigurationToBackend() throws {
-        let schema = try ModelContainer.inferredSchema(for: [AppleStoreFixture.self])
+        let schema = Schema([AppleStoreFixture.self])
         let configuration = FixtureAppleConfiguration(name: "fixture", schema: schema)
         let container = try ModelContainer(
             for: [AppleStoreFixture.self],
             configurations: [ModelConfiguration(
-                appleStore: "apple-fixture", schema: Schema(descriptor: schema),
+                appleStore: "apple-fixture", schema: schema,
                 appleDataStoreConfiguration: configuration)])
         #expect(container.dataStore?.identifier == "apple.fixture")
     }

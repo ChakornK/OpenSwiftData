@@ -11,7 +11,7 @@ final class StoreIdentifierItem {
 @MainActor
 public enum OSDStoreIdentifierAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try StoreIdentifierScenarioCatalog.all.map(run)
+        try NonComparableScenarios.apply(StoreIdentifierScenarioCatalog.all.map(run))
             .sorted { $0.id.description < $1.id.description }
     }
 

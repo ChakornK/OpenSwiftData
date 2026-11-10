@@ -430,13 +430,8 @@ import Testing
             "reason": .string("Delete rule is not supported for batch deletes"),
             "remainingKeepers": .integer(1), "toyStillLinked": .bool(true),
         ]))
-        let divergent = try #require(BatchDeleteScenarioCatalog.pendingAndRegisteredState.expectedOSDObservations?.first)
-        #expect(divergent.value == .object([
-            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
-            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
-            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
-            "afterSaveNames": .array([.string("b"), .string("c")]),
-        ]))
+        // Batch deletes now match Apple's registered-instance semantics, so there is no OSD divergence.
+        #expect(BatchDeleteScenarioCatalog.pendingAndRegisteredState.expectedOSDObservations == nil)
     }
 
     @Test func batchDeleteExpectationValidatorRejectsMissingAndWrongObservations() throws {
@@ -559,14 +554,9 @@ import Testing
             ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
             ParityObservation(step: 0, field: "hasChanges", value: .bool(true)),
         ])
-        let osd = ScenarioResult(id: specification.id, observations: [
-            ParityObservation(step: 0, field: "detached", value: .bool(true)),
-            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
-            ParityObservation(step: 0, field: "hasChanges", value: .bool(false)),
-        ])
 
         #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
-        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification, implementation: "openswiftdata"))
     }
 
     @Test func fetchDescriptorDefaultsDivergenceUsesExactPerImplementationValues() {
@@ -592,25 +582,19 @@ import Testing
         #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
     }
 
-    @Test func fetchDescriptorEqualityDivergenceUsesExactPerImplementationValues() {
+    @Test func fetchDescriptorEqualityUsesExactPerImplementationValues() {
         let specification = ModelContextParityScenarioCatalog.fetchDescriptorEquality
-        let appleValues: [String: ObservedValue] = [
+        let values: [String: ObservedValue] = [
             "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
             "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
         ]
-        let osdValues: [String: ObservedValue] = [
-            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
-            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
-        ]
-        let apple = ScenarioResult(id: specification.id, observations: appleValues.map { field, value in
-            ParityObservation(step: 0, field: field, value: value)
-        })
-        let osd = ScenarioResult(id: specification.id, observations: osdValues.map { field, value in
+        let result = ScenarioResult(id: specification.id, observations: values.map { field, value in
             ParityObservation(step: 0, field: field, value: value)
         })
 
-        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
-        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+        #expect(ModelContextParityExpectationValidator.validate(result, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(
+            result, against: specification, implementation: "openswiftdata"))
     }
 
     @Test func deletedInsertionRollbackDivergenceUsesExactPerImplementationValues() {
@@ -620,14 +604,9 @@ import Testing
             ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
             ParityObservation(step: 0, field: "hasChanges", value: .bool(true)),
         ])
-        let osd = ScenarioResult(id: specification.id, observations: [
-            ParityObservation(step: 0, field: "detached", value: .bool(true)),
-            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
-            ParityObservation(step: 0, field: "hasChanges", value: .bool(false)),
-        ])
 
         #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
-        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification, implementation: "openswiftdata"))
     }
 
     @Test func rollbackRelationshipDivergenceAcceptsExactPerImplementationValues() {
@@ -637,16 +616,10 @@ import Testing
             ParityObservation(step: 0, field: "itemOwnerAbsent", value: .bool(false)),
             ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
         ])
-        let osd = ScenarioResult(id: specification.id, observations: [
-            ParityObservation(step: 0, field: "ownerItemCount", value: .integer(0)),
-            ParityObservation(step: 0, field: "itemOwnerAbsent", value: .bool(true)),
-            ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
-        ])
 
         #expect(RollbackParityExpectationValidator.validate(apple, against: specification))
         #expect(RollbackParityExpectationValidator.validate(
-            osd, against: specification, implementation: "openswiftdata"))
-        #expect(!RollbackParityExpectationValidator.validate(osd, against: specification))
+            apple, against: specification, implementation: "openswiftdata"))
 
         let relatedInsertion = RollbackParityScenarioCatalog.relatedInsertion
         let appleInsertion = ScenarioResult(id: relatedInsertion.id, observations: [
@@ -657,17 +630,9 @@ import Testing
             ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
             ParityObservation(step: 0, field: "storedItemCount", value: .integer(0)),
         ])
-        let osdInsertion = ScenarioResult(id: relatedInsertion.id, observations: [
-            ParityObservation(step: 0, field: "ownerItemCount", value: .integer(0)),
-            ParityObservation(step: 0, field: "itemDetached", value: .bool(true)),
-            ParityObservation(step: 0, field: "itemOwnerAbsent", value: .bool(true)),
-            ParityObservation(step: 0, field: "ownerHasChanges", value: .bool(false)),
-            ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
-            ParityObservation(step: 0, field: "storedItemCount", value: .integer(0)),
-        ])
         #expect(RollbackParityExpectationValidator.validate(appleInsertion, against: relatedInsertion))
         #expect(RollbackParityExpectationValidator.validate(
-            osdInsertion, against: relatedInsertion, implementation: "openswiftdata"))
+            appleInsertion, against: relatedInsertion, implementation: "openswiftdata"))
 
         let repeatedEdits = RollbackParityScenarioCatalog.repeatedEdits
         let appleRepeatedEdits = ScenarioResult(id: repeatedEdits.id, observations: [
@@ -677,16 +642,9 @@ import Testing
             ParityObservation(step: 0, field: "ageAfterSecondRollback", value: .integer(4)),
             ParityObservation(step: 0, field: "unchangedAfterSecondRollback", value: .bool(true)),
         ])
-        let osdRepeatedEdits = ScenarioResult(id: repeatedEdits.id, observations: [
-            ParityObservation(step: 0, field: "ageAfterFirstRollback", value: .integer(1)),
-            ParityObservation(step: 0, field: "unchangedAfterFirstRollback", value: .bool(true)),
-            ParityObservation(step: 0, field: "hasChangesAfterSecondEdit", value: .bool(true)),
-            ParityObservation(step: 0, field: "ageAfterSecondRollback", value: .integer(1)),
-            ParityObservation(step: 0, field: "unchangedAfterSecondRollback", value: .bool(true)),
-        ])
         #expect(RollbackParityExpectationValidator.validate(appleRepeatedEdits, against: repeatedEdits))
         #expect(RollbackParityExpectationValidator.validate(
-            osdRepeatedEdits, against: repeatedEdits, implementation: "openswiftdata"))
+            appleRepeatedEdits, against: repeatedEdits, implementation: "openswiftdata"))
 
         let editedDeletion = RollbackParityScenarioCatalog.editedDeletion
         let appleEditedDeletion = ScenarioResult(id: editedDeletion.id, observations: [
@@ -695,15 +653,9 @@ import Testing
             ParityObservation(step: 0, field: "modelRemainsAttached", value: .bool(true)),
             ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
         ])
-        let osdEditedDeletion = ScenarioResult(id: editedDeletion.id, observations: [
-            ParityObservation(step: 0, field: "age", value: .integer(1)),
-            ParityObservation(step: 0, field: "notDeleted", value: .bool(true)),
-            ParityObservation(step: 0, field: "modelRemainsAttached", value: .bool(true)),
-            ParityObservation(step: 0, field: "contextHasChanges", value: .bool(false)),
-        ])
         #expect(RollbackParityExpectationValidator.validate(appleEditedDeletion, against: editedDeletion))
         #expect(RollbackParityExpectationValidator.validate(
-            osdEditedDeletion, against: editedDeletion, implementation: "openswiftdata"))
+            appleEditedDeletion, against: editedDeletion, implementation: "openswiftdata"))
     }
 
     @Test func schemaIntrospectionContractsExposeExpectedFieldsAndValidateObservations() throws {
@@ -719,32 +671,38 @@ import Testing
             == specification.contract)
         #expect(Set(ParityScenarioCatalog.contractsByID.keys)
             .intersection(SchemaIntrospectionScenarioCatalog.contractsByID.keys).isEmpty)
-        #expect(Set(ParityScenarioCatalog.allContractsByID.keys)
-            == Set(ParityScenarioCatalog.contractsByID.keys)
-                .union(SchemaIntrospectionScenarioCatalog.contractsByID.keys)
-                .union(SchemaModelTypesScenarioCatalog.contractsByID.keys)
-                .union(StoreIdentifierScenarioCatalog.contractsByID.keys)
-                .union(ModelIdentityScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationScenarioCatalog.contractsByID.keys)
-                .union(ModelConfigurationContainerScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys)
-                .union(MacroArgumentsScenarioCatalog.contractsByID.keys)
-                .union(SortingParityScenarioCatalog.contractsByID.keys)
-                .union(ModelContextInitScenarioCatalog.contractsByID.keys)
-                .union(ModelActorParityScenarioCatalog.contractsByID.keys)
-                .union(BatchFetchScenarioCatalog.contractsByID.keys)
-                .union(BatchDeleteScenarioCatalog.contractsByID.keys)
-                .union(CodableParityScenarioCatalog.contractsByID.keys)
-                .union(ContextNotificationScenarioCatalog.contractsByID.keys)
-                .union(RollbackParityScenarioCatalog.contractsByID.keys)
-                .union(ModelContextParityScenarioCatalog.contractsByID.keys)
-                .union(HistoryParityScenarioCatalog.contractsByID.keys)
-                .union(UniqueConstraintScenarioCatalog.contractsByID.keys)
-                .union(MigrationPlanScenarioCatalog.contractsByID.keys)
-                .union(ModelContainerParityScenarioCatalog.contractsByID.keys)
-                .union(RelationshipDeleteRuleScenarioCatalog.contractsByID.keys)
-                .union(PendingFetchRelationshipScenarioCatalog.contractsByID.keys))
+        var expectedKeys = Set(ParityScenarioCatalog.contractsByID.keys)
+        for catalog in [
+            SchemaIntrospectionScenarioCatalog.contractsByID,
+            SchemaModelTypesScenarioCatalog.contractsByID,
+            StoreIdentifierScenarioCatalog.contractsByID,
+            ModelIdentityScenarioCatalog.contractsByID,
+            ModelConfigurationScenarioCatalog.contractsByID,
+            ModelConfigurationContainerScenarioCatalog.contractsByID,
+            PendingFetchScenarioCatalog.contractsByID,
+            PendingFetchRelationshipScenarioCatalog.contractsByID,
+            MacroArgumentsScenarioCatalog.contractsByID,
+            SortingParityScenarioCatalog.contractsByID,
+            ModelContextInitScenarioCatalog.contractsByID,
+            ModelActorParityScenarioCatalog.contractsByID,
+            BatchFetchScenarioCatalog.contractsByID,
+            BatchDeleteScenarioCatalog.contractsByID,
+            CodableParityScenarioCatalog.contractsByID,
+            ContextNotificationScenarioCatalog.contractsByID,
+            RollbackParityScenarioCatalog.contractsByID,
+            ModelContextParityScenarioCatalog.contractsByID,
+            HistoryParityScenarioCatalog.contractsByID,
+            UniqueConstraintScenarioCatalog.contractsByID,
+            MigrationPlanScenarioCatalog.contractsByID,
+            ModelContainerParityScenarioCatalog.contractsByID,
+            RelationshipDeleteRuleScenarioCatalog.contractsByID,
+        ] {
+            expectedKeys.formUnion(catalog.keys)
+        }
+        expectedKeys.formUnion(CustomStoreHistoryScenarioCatalog.nonComparableIDs.map(\.description))
+        let actualKeys = ParityScenarioCatalog.allContractsByID.keys
+        #expect(actualKeys.count == expectedKeys.count)
+        #expect(actualKeys.allSatisfy { expectedKeys.contains($0) })
     }
 
     @Test func schemaIntrospectionExpectationValidatorRejectsMissingAndDuplicateFields() throws {

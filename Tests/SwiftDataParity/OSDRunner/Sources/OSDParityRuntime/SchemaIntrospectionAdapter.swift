@@ -23,7 +23,7 @@ final class IntrospectionBook {
 @MainActor
 public enum OSDSchemaIntrospectionAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try SchemaIntrospectionScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(SchemaIntrospectionScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 
@@ -43,37 +43,18 @@ public enum OSDSchemaIntrospectionAdapter {
         default:
             throw ScenarioExpectationError(id: specification.id, observations: [])
         }
+        // The runner validates against the contract's OpenSwiftData expectations; the Apple-vs-OSD
+        // comparison and allowlist handling happen in `parity-compare`.
         let result = ScenarioResult(
             id: specification.id,
             observations: observations.sorted { $0.key < $1.key }.enumerated().map { step, pair in
                 ParityObservation(step: step, field: pair.key, value: pair.value)
             })
-        guard validateOSDObservations(result, against: specification) else {
+        guard SchemaIntrospectionExpectationValidator.validate(result, against: specification, implementation: "openswiftdata")
+        else {
             throw ScenarioExpectationError(id: specification.id, observations: result.observations)
         }
         return result
-    }
-
-    private static func validateOSDObservations(
-        _ result: ScenarioResult,
-        against specification: SchemaIntrospectionSpecification
-    ) -> Bool {
-        var expected = specification.expectedObservations
-        switch specification.id {
-        case SchemaIntrospectionScenarioCatalog.propertyFlags.id:
-            if case var .object(flags)? = expected["author.books.flags"] {
-                flags["relationship"] = .bool(true)
-                expected["author.books.flags"] = .object(flags)
-            }
-        case SchemaIntrospectionScenarioCatalog.constraintsAndIndices.id:
-            expected["book.indices"] = .array([.array([.string("title")])])
-        case SchemaIntrospectionScenarioCatalog.schemaRoundTrip.id:
-            expected["roundTrip.book.indices"] = .array([.array([.string("title")])])
-        default:
-            break
-        }
-        let osdSpecification = SchemaIntrospectionSpecification(id: specification.id, expectedObservations: expected)
-        return SchemaIntrospectionExpectationValidator.validate(result, against: osdSpecification)
     }
 
     private static func entityObservations(in schema: Schema) throws -> [String: ObservedValue] {

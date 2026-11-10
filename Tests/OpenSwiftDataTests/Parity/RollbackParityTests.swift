@@ -46,20 +46,25 @@ import Testing
         owner.tag = "t"
         owner.tags = ["x"]
         context.rollback()
-        #expect(owner.age == 1)
-        #expect(owner.name == "a")
-        #expect(owner.tag == nil)
-        #expect(owner.tags.isEmpty)
+        // Apple semantics: rollback clears pending state but keeps the in-memory edits until a
+        // fetch refreshes the registered instance from the stored row.
+        #expect(owner.age == 2)
+        #expect(owner.name == "a2")
+        #expect(owner.tag == "t")
+        #expect(owner.tags == ["x"])
         #expect(!owner.hasChanges)
         #expect(!context.hasChanges)
         #expect(owner.modelContext === context)
+        // The store keeps the saved values.
         #expect(try ModelContext(container).fetch(saved).map(\.age) == [1])
 
+        // A fetch after rollback reverts in-memory edits to the stored row, as in Apple's SwiftData.
         let fetched = try context.fetch(saved)
         #expect(fetched.first === owner)
         #expect(owner.age == 1)
         #expect(owner.name == "a")
         #expect(owner.tag == nil)
+        #expect(owner.tags.isEmpty)
     }
 
     @Test func `rollback restores committed relationship edits`() throws {
@@ -71,9 +76,12 @@ import Testing
 
         owner.items.append(item)
         context.rollback()
-        #expect(owner.items.isEmpty)
-        #expect(item.owner == nil)
+        // Apple semantics: the in-memory relationship stays as mutated until the next fetch.
+        #expect(owner.items.count == 1)
+        #expect(item.owner === owner)
         #expect(!context.hasChanges)
+        // The store keeps the saved graph.
+        #expect(try ModelContext(container).fetch(saved).first?.items.isEmpty == true)
     }
 
     @Test func `rollback detaches related insertions and restores saved graph`() throws {
@@ -88,9 +96,11 @@ import Testing
 
         context.rollback()
 
-        #expect(owner.items.isEmpty)
+        // The saved owner keeps the in-memory relationship; the unsaved item detaches from the
+        // store but keeps its in-memory inverse, as in Apple's SwiftData.
+        #expect(owner.items.count == 1)
         #expect(item.modelContext == nil)
-        #expect(item.owner == nil)
+        #expect(item.owner === owner)
         #expect(!owner.hasChanges)
         #expect(!context.hasChanges)
         #expect(try context.fetchCount(FetchDescriptor<RollbackParityItem>()) == 0)
@@ -105,13 +115,13 @@ import Testing
         owner.age = 3
         context.rollback()
 
-        #expect(owner.age == 1)
+        #expect(owner.age == 3)
         #expect(!owner.hasChanges)
 
         owner.age = 4
         #expect(owner.hasChanges)
         context.rollback()
-        #expect(owner.age == 1)
+        #expect(owner.age == 4)
         #expect(!owner.hasChanges)
     }
 
@@ -124,7 +134,7 @@ import Testing
         context.delete(owner)
         context.rollback()
 
-        #expect(owner.age == 1)
+        #expect(owner.age == 2)
         #expect(!owner.isDeleted)
         #expect(owner.modelContext === context)
         #expect(!context.hasChanges)

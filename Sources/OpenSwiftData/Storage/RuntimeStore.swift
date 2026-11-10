@@ -19,6 +19,10 @@ public protocol RuntimeStore: Sendable {
     ///
     /// Return `nil` to use the configuration name instead.
     var persistentStoreIdentifier: String? { get }
+    /// The stable identifier persisted in the store's metadata; survives reopen. Used to tag
+    /// materialized model identifiers so `PersistentIdentifier.storeIdentifier` stays stable even
+    /// when `persistentStoreIdentifier` regenerates on reopen. Defaults to `persistentStoreIdentifier`.
+    var storedModelIdentifier: String? { get }
 }
 
 package protocol RuntimeSchemaProvidingStore: RuntimeStore {
@@ -27,6 +31,7 @@ package protocol RuntimeSchemaProvidingStore: RuntimeStore {
 
 public extension RuntimeStore {
     var persistentStoreIdentifier: String? { nil }
+    var storedModelIdentifier: String? { persistentStoreIdentifier }
     func dataVersion() throws -> Int64? { nil }
     func writeWithExternalData<T>(
         _ body: (RuntimeConnection, ExternalDataWriteSession) throws -> T
@@ -243,6 +248,13 @@ package protocol RuntimeHistoryStore: RuntimeStore {
     func deleteHistory(transactionIDs: [Int64]) throws
     /// The largest transaction identifier the store has ever issued, or zero when none.
     func latestIssuedHistoryTransactionID() throws -> Int64
+    /// Records a completed transaction from outside the store's own write path, such as one reported by a
+    /// custom data store. The default implementation records nothing.
+    func record(_ transaction: StoredHistoryTransaction) throws
+}
+
+extension RuntimeHistoryStore {
+    func record(_ transaction: StoredHistoryTransaction) throws {}
 }
 
 /// SQL values exchanged across the runtime-store boundary.

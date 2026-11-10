@@ -53,6 +53,22 @@ final class IdentityMap: @unchecked Sendable {
         models.removeValue(forKey: key)
     }
 
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        models.removeAll()
+    }
+
+    /// Removes entries whose registered model satisfies the predicate.
+    func clearDeleted(where isRemoved: (any PersistentModel) -> Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        models = models.filter { _, box in
+            guard let model = box.value as? any PersistentModel else { return false }
+            return !model.isDeleted && !isRemoved(model)
+        }
+    }
+
     func liveModels() -> [(EntityPrimaryKey, any PersistentModel)] {
         lock.lock()
         defer { lock.unlock() }

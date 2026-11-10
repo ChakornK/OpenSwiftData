@@ -3,7 +3,7 @@
 /// Mirrors the inspection surface of SwiftData's `SchemaProperty`. Unlike SwiftData, the original
 /// name stays optional and value types are described by name, because OpenSwiftData's schema values
 /// also describe stored layouts.
-public protocol SchemaProperty: Hashable, Sendable {
+public protocol SchemaProperty: Hashable {
     /// The property name.
     var name: String { get }
     /// Whether the property is an attribute.

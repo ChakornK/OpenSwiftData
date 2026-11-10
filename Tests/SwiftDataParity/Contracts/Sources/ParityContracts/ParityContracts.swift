@@ -1282,12 +1282,6 @@ public enum BatchDeleteScenarioCatalog {
             "savedADeleted": .bool(false), "savedARegistered": .bool(true), "pendingCRegistered": .bool(true),
             "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
             "afterSaveNames": .array([.string("b"), .string("c")]),
-        ]))],
-        expectedOSDObservations: [.init(step: 0, field: "delete.state", value: .object([
-            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
-            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
-            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
-            "afterSaveNames": .array([.string("b"), .string("c")]),
         ]))])
 
     public static let cascadeRules = BatchDeleteSpecification(
@@ -1630,16 +1624,11 @@ public enum RollbackParityScenarioCatalog {
     public static let committedRelationship = scenario(
         "rollback restores committed relationship edits", .committedRelationship, [
             "ownerItemCount": .integer(1), "itemOwnerAbsent": .bool(false), "contextHasChanges": .bool(false),
-        ], expectedOSDObservations: [
-            "ownerItemCount": .integer(0), "itemOwnerAbsent": .bool(true), "contextHasChanges": .bool(false),
         ])
 
     public static let relatedInsertion = scenario(
         "rollback detaches related insertions and restores saved graph", .relatedInsertion, [
             "ownerItemCount": .integer(1), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(false),
-            "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
-        ], expectedOSDObservations: [
-            "ownerItemCount": .integer(0), "itemDetached": .bool(true), "itemOwnerAbsent": .bool(true),
             "ownerHasChanges": .bool(false), "contextHasChanges": .bool(false), "storedItemCount": .integer(0),
         ])
 
@@ -1648,18 +1637,11 @@ public enum RollbackParityScenarioCatalog {
             "ageAfterFirstRollback": .integer(3), "unchangedAfterFirstRollback": .bool(true),
             "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(4),
             "unchangedAfterSecondRollback": .bool(true),
-        ], expectedOSDObservations: [
-            "ageAfterFirstRollback": .integer(1), "unchangedAfterFirstRollback": .bool(true),
-            "hasChangesAfterSecondEdit": .bool(true), "ageAfterSecondRollback": .integer(1),
-            "unchangedAfterSecondRollback": .bool(true),
         ])
 
     public static let editedDeletion = scenario(
         "rollback restores values when an edited model is deleted", .editedDeletion, [
             "age": .integer(2), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
-            "contextHasChanges": .bool(false),
-        ], expectedOSDObservations: [
-            "age": .integer(1), "notDeleted": .bool(true), "modelRemainsAttached": .bool(true),
             "contextHasChanges": .bool(false),
         ])
 
@@ -1793,8 +1775,6 @@ public enum ModelContextParityScenarioCatalog {
     public static let rollbackDeletedInsertion = scenario(
         "DeletedInsertionParityTests", "rolling back detaches a deleted insertion", .rollbackDeletedInsertion, [
             "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(true),
-        ], expectedOSDObservations: [
-            "detached": .bool(true), "notDeleted": .bool(true), "hasChanges": .bool(false),
         ])
 
     public static let fetchDescriptorDefaults = scenario(
@@ -1807,7 +1787,6 @@ public enum ModelContextParityScenarioCatalog {
             "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
             "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
         ])
-
     public static let fetchDescriptorProperties = scenario(
         "FetchDescriptorParityTests", "properties to fetch is a mutable array", .fetchDescriptorProperties,
         ["propertyCount": .integer(1), "containsName": .bool(true)])
@@ -1815,9 +1794,6 @@ public enum ModelContextParityScenarioCatalog {
     public static let fetchDescriptorEquality = scenario(
         "FetchDescriptorParityTests", "descriptors compare every option", .fetchDescriptorEquality, [
             "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
-            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
-        ], expectedOSDObservations: [
-            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
             "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
         ])
 
@@ -1936,14 +1912,28 @@ public enum HistoryParityExpectationValidator {
 public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
+    /// Observations for OpenSwiftData runs whose value diverges from Apple's for a documented gap.
+    public let expectedOSDObservations: [String: ObservedValue]?
 
-    public init(id: ScenarioID, expectedObservations: [String: ObservedValue]) {
+    public init(
+        id: ScenarioID, expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
+    ) {
         self.id = id
         self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
+    }
+
+    /// The observations to validate an OpenSwiftData run against.
+    public var osdExpectedObservations: [String: ObservedValue] {
+        expectedOSDObservations ?? expectedObservations
     }
 
     public var contract: ScenarioContract {
-        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+        ScenarioContract(
+            id: id,
+            expectedObservationFields: Set(
+                (expectedOSDObservations ?? expectedObservations).keys))
     }
 }
 
@@ -2005,7 +1995,11 @@ public enum SchemaIntrospectionScenarioCatalog {
 }
 
 public enum SchemaIntrospectionExpectationValidator {
-    public static func validate(_ result: ScenarioResult, against specification: SchemaIntrospectionSpecification) -> Bool {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: SchemaIntrospectionSpecification,
+        implementation: String = "apple"
+    ) -> Bool {
         guard result.id == specification.id else { return false }
         var observations: [String: ObservedValue] = [:]
         for observation in result.observations {
@@ -2013,7 +2007,10 @@ public enum SchemaIntrospectionExpectationValidator {
                 return false
             }
         }
-        return observations == specification.expectedObservations.mapValues(\.canonicalized)
+        let expected = implementation == "openswiftdata"
+            ? specification.osdExpectedObservations
+            : specification.expectedObservations
+        return observations == expected.mapValues(\.canonicalized)
     }
 }
 
@@ -2585,6 +2582,19 @@ public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
     }
 }
 
+public enum CustomStoreHistoryScenarioCatalog {
+    public static let customStoreSaveRecordsAFetchableHistoryTransaction = ScenarioID(
+        suite: "CustomStoreHistoryPropagationTests",
+        test: "customStoreSaveRecordsAFetchableHistoryTransaction")
+
+    public static let nonComparableRationale =
+        "Installing a custom DataStore requires the OpenSwiftData-specific configuration surface; Apple's SwiftData cannot mount an equivalent custom store through public API."
+
+    public static var nonComparableIDs: [ScenarioID] {
+        [customStoreSaveRecordsAFetchableHistoryTransaction]
+    }
+}
+
 public enum ModelConfigurationScenarioCatalog {
     public static let nonComparableSelectionReason =
         "Apple's SwiftData selection wrappers expose no public selection discriminator."
@@ -2833,7 +2843,7 @@ public enum CoverageMatrixValidator {
     public static let permittedStatuses: Set<String> = ["compared", "divergent", "non-comparable"]
     public static let permittedReasons: Set<String> = [
         "deferred-behavior-gap", "private-api", "unsupported-platform-or-version",
-        "nondeterministic-apple-behavior", "shim-only-api",
+        "nondeterministic-apple-behavior", "shim-only-api", "custom-store-api",
     ]
 
     public static func validate(
@@ -2943,31 +2953,39 @@ public extension ParityScenarioCatalog {
     }
 
     static var allContractsByID: [String: ScenarioContract] {
-        Dictionary(uniqueKeysWithValues: (Array(contractsByID.values)
-            + Array(SchemaIntrospectionScenarioCatalog.contractsByID.values)
-            + Array(SchemaModelTypesScenarioCatalog.contractsByID.values)
-            + Array(StoreIdentifierScenarioCatalog.contractsByID.values)
-            + Array(ModelIdentityScenarioCatalog.contractsByID.values)
-            + Array(ModelConfigurationScenarioCatalog.contractsByID.values)
-            + Array(ModelConfigurationContainerScenarioCatalog.contractsByID.values)
-              + Array(PendingFetchScenarioCatalog.contractsByID.values)
-              + Array(PendingFetchRelationshipScenarioCatalog.contractsByID.values)
-              + Array(MacroArgumentsScenarioCatalog.contractsByID.values)
-              + Array(SortingParityScenarioCatalog.contractsByID.values)
-              + Array(ModelContextInitScenarioCatalog.contractsByID.values)
-              + Array(ModelActorParityScenarioCatalog.contractsByID.values)
-            + Array(BatchFetchScenarioCatalog.contractsByID.values)
-             + Array(BatchDeleteScenarioCatalog.contractsByID.values)
-             + Array(CodableParityScenarioCatalog.contractsByID.values)
-             + Array(ContextNotificationScenarioCatalog.contractsByID.values)
-             + Array(RollbackParityScenarioCatalog.contractsByID.values)
-              + Array(ModelContextParityScenarioCatalog.contractsByID.values)
-              + Array(HistoryParityScenarioCatalog.contractsByID.values)
-              + Array(UniqueConstraintScenarioCatalog.contractsByID.values)
-              + Array(MigrationPlanScenarioCatalog.contractsByID.values)
-              + Array(ModelContainerParityScenarioCatalog.contractsByID.values)
-              + Array(RelationshipDeleteRuleScenarioCatalog.contractsByID.values))
-            .map { ($0.id.description, $0) })
+        var contracts: [(String, ScenarioContract)] = []
+        for catalog in [
+            contractsByID,
+            SchemaIntrospectionScenarioCatalog.contractsByID,
+            SchemaModelTypesScenarioCatalog.contractsByID,
+            StoreIdentifierScenarioCatalog.contractsByID,
+            ModelIdentityScenarioCatalog.contractsByID,
+            ModelConfigurationScenarioCatalog.contractsByID,
+            ModelConfigurationContainerScenarioCatalog.contractsByID,
+            PendingFetchScenarioCatalog.contractsByID,
+            PendingFetchRelationshipScenarioCatalog.contractsByID,
+            MacroArgumentsScenarioCatalog.contractsByID,
+            SortingParityScenarioCatalog.contractsByID,
+            ModelContextInitScenarioCatalog.contractsByID,
+            ModelActorParityScenarioCatalog.contractsByID,
+            BatchFetchScenarioCatalog.contractsByID,
+            BatchDeleteScenarioCatalog.contractsByID,
+            CodableParityScenarioCatalog.contractsByID,
+            ContextNotificationScenarioCatalog.contractsByID,
+            RollbackParityScenarioCatalog.contractsByID,
+            ModelContextParityScenarioCatalog.contractsByID,
+            HistoryParityScenarioCatalog.contractsByID,
+            UniqueConstraintScenarioCatalog.contractsByID,
+            MigrationPlanScenarioCatalog.contractsByID,
+            ModelContainerParityScenarioCatalog.contractsByID,
+            RelationshipDeleteRuleScenarioCatalog.contractsByID,
+        ] {
+            contracts.append(contentsOf: catalog.values.map { ($0.id.description, $0) })
+        }
+        for id in CustomStoreHistoryScenarioCatalog.nonComparableIDs {
+            contracts.append((id.description, ScenarioContract(id: id, expectedObservationFields: [])))
+        }
+        return Dictionary(uniqueKeysWithValues: contracts)
     }
 }
 

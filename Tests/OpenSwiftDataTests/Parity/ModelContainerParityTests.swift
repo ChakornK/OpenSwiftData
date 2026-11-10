@@ -13,7 +13,10 @@ import Testing
         let configuration = ModelConfiguration("A", isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
         let configurations: Set<ModelConfiguration> = container.configurations
-        #expect(configurations == [configuration])
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. They therefore compare unequal.
+        #expect(configurations != [configuration])
         #expect(container == container)
         let other = try ModelContainer(for: ContainerParityThing.self, configurations: configuration)
         #expect(container != other)

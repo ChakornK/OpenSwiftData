@@ -24,7 +24,9 @@ struct ModelTypeRegistration: @unchecked Sendable {
                 metadata: Model.schemaMetadata(), values: [:], context: context,
                 storeIdentifier: storeIdentifier, entityID: entityID, primaryKey: primaryKey, version: version,
                 identifier: PersistentIdentifier(
-                    storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
+                    resolvedStoreIdentifier: storeIdentifier,
+                    displayedStoreIdentifier: context.modelStoreIdentifier,
+                    entityName: entity.name, primaryKey: primaryKey))
             let model = Model(backingData: backing)
             let adapters = Model.erasedPersistenceAdapters()
             var selectedValues: [String: StoredValue] = [:]

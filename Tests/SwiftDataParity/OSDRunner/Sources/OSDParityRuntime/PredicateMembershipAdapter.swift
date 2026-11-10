@@ -134,7 +134,16 @@ public enum OSDScenarioAdapter {
     }
 
     public static func runAll() throws -> [ScenarioResult] {
-        let predicateResults = try ParityScenarioCatalog.all.map(runAndValidate)
+        let comparablePredicateResults = try ParityScenarioCatalog.all
+            .filter { NonComparableScenarios.disposition(for: $0.id) == nil }
+            .map(runAndValidate)
+        let nonComparablePredicateResults = ParityScenarioCatalog.all
+            .filter { NonComparableScenarios.disposition(for: $0.id) != nil }
+            .map { specification in
+                ScenarioResult(
+                    id: specification.id, observations: [],
+                    disposition: NonComparableScenarios.disposition(for: specification.id)!)
+            }
         let schemaResults = try OSDSchemaIntrospectionAdapter.runAll()
         let modelTypeResults = try OSDSchemaModelTypesAdapter.runAll()
         let storeIdentifierResults = try OSDStoreIdentifierAdapter.runAll()
@@ -158,7 +167,7 @@ public enum OSDScenarioAdapter {
         let migrationPlanResults = try OSDMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try OSDModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try OSDRelationshipDeleteRuleAdapter.runAll()
-        return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
+        return (comparablePredicateResults + nonComparablePredicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults
             + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults
             + modelActorResults + batchFetchResults

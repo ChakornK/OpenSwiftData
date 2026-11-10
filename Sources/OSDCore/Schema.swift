@@ -688,7 +688,34 @@ extension SchemaDescriptor.Index: Codable {}
 extension SchemaDescriptor.Attribute.Option: Codable {}
 extension SchemaDescriptor.Attribute: Codable {}
 extension SchemaDescriptor.Relationship: Codable {}
-extension SchemaDescriptor.Entity: Codable {}
+
+extension SchemaDescriptor.Entity: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case name, superentityName, attributes, relationships, indexes
+    }
+
+    /// Decodes an entity. Apple's Codable schema round-trip drops index metadata, so decoded
+    /// entities carry no indexes regardless of what the encoded payload contains.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            name: try container.decode(String.self, forKey: .name),
+            attributes: try container.decode([SchemaDescriptor.Attribute].self, forKey: .attributes),
+            relationships: try container.decode([SchemaDescriptor.Relationship].self, forKey: .relationships),
+            indexes: [],
+            superentityName: try container.decodeIfPresent(String.self, forKey: .superentityName))
+    }
+
+    /// Encodes the entity including its indexes; only the decode path drops them.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(superentityName, forKey: .superentityName)
+        try container.encode(attributes, forKey: .attributes)
+        try container.encode(relationships, forKey: .relationships)
+        try container.encode(indexes, forKey: .indexes)
+    }
+}
 
 extension SchemaDescriptor: Codable {
     private enum CodingKeys: String, CodingKey {

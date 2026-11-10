@@ -280,8 +280,11 @@ public final class ModelContext {
     /// Whether this context currently has unsaved changes.
     public var hasChanges: Bool {
         assertAffinity()
-        return state.hasChanges || !deletedInsertions.isEmpty
+        return state.hasChanges || !deletedInsertions.isEmpty || pendingChangesAfterRollback
     }
+
+    /// Set when rollback detaches a deleted unsaved insertion; cleared by the next mutation or save.
+    private var pendingChangesAfterRollback = false
 
     /// Inserted models deleted before saving.
     ///
@@ -637,13 +640,19 @@ public final class ModelContext {
             $0.storeIdentifier == storeHubStoreIdentifier && $0.sourceSubscription != storeHubSubscription
         }
         let hasWildcardChange = relevantChanges.contains(where: \.allEntitiesChanged)
-        let changedKeys = relevantChanges.reduce(into: Set<StoreEntityKey>()) { keys, change in
+        var changedKeys = relevantChanges.reduce(into: Set<StoreEntityKey>()) { keys, change in
             keys.formUnion(change.inserted)
             keys.formUnion(change.updated)
             keys.formUnion(change.deleted)
         }
+        // Apple semantics: rows removed by this context's own batch delete do not refresh registered
+        // models; they keep their last known values instead of being marked deleted.
+        changedKeys.subtract(scratchContextDeletedKeys)
         if hasWildcardChange {
             for (key, model) in identityMap.liveModels() where !model.hasChanges {
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: key.entityName, primaryKey: key.primaryKey))
+                guard !batchDeleted else { continue }
                 guard let entity = optionalContainer?.schemaDescriptor.entity(forName: key.entityName) else { continue }
                 try refreshRegisteredModel(type(of: model), entity: entity, primaryKey: key.primaryKey, store: store)
             }
@@ -720,6 +729,11 @@ public final class ModelContext {
                         arguments: [.int(primaryKey)])
                 }).first
             else {
+                // Apple semantics: a model removed by this context's own batch delete stays
+                // registered with its last known values instead of being marked deleted.
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: entity.name, primaryKey: primaryKey))
+                guard !batchDeleted else { return }
                 identityMap.remove(key)
                 state.removeBaseline(for: model)
                 model.persistentBackingData.markDeleted()
@@ -789,16 +803,49 @@ public final class ModelContext {
                     "Relationship": "\(entity.name).\(denied.name)",
                 ])
         }
+        if let dataStore = container.dataStore as? any OpenSwiftDataDataStoreBatching {
+            try processPendingChangesThrowing()
+            try dataStore.delete(
+                DataStoreBatchDeleteRequest(
+                    predicate: predicate, includeSubclasses: includeSubclasses,
+                    editingState: editingState))
+            // Apple semantics: registered saved models stay attached and keep their last known
+            // values after a batch delete; only the store rows are removed.
+            identityMap.clearDeleted { registered in
+                guard let primaryKey = registered.persistentModelID.primaryKey else { return false }
+                return scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: registered.persistentModelID.entityName, primaryKey: primaryKey))
+            }
+            storeHub?.publish(
+                storeIdentifier: storeHubStoreIdentifier ?? ObjectIdentifier(container as AnyObject),
+                sourceSubscription: storeHubSubscription ?? UUID(),
+                allEntitiesChanged: true, inserted: [], updated: [], deleted: [])
+            return
+        }
         let scratch = ModelContext(container: container, autosaveEnabled: false)
         scratch.postsSaveNotifications = false
         var descriptor = FetchDescriptor<Model>(predicate: predicate)
         descriptor.includePendingChanges = false
-        for match in try scratch.fetch(descriptor)
-        where includeSubclasses || ObjectIdentifier(type(of: match)) == ObjectIdentifier(model) {
-            scratch.delete(match)
-        }
+        let matches = try scratch.fetch(descriptor)
+            .filter { includeSubclasses || ObjectIdentifier(type(of: $0)) == ObjectIdentifier(model) }
+        for match in matches { scratch.delete(match) }
         try scratch.save()
+        // Apple semantics: registered saved models stay attached and keep their last known values
+        // after a batch delete; only the store rows are removed. Record the removed keys so this
+        // context's merge pass does not mark their registrations deleted.
+        scratchContextDeletedKeys = Set(
+            matches.compactMap { $0.persistentModelID.primaryKey }.map {
+                StoreEntityKey(entityName: Schema.entityName(for: model), primaryKey: $0)
+            })
+        identityMap.clearDeleted { registered in
+            guard let primaryKey = registered.persistentModelID.primaryKey else { return false }
+            return scratchContextDeletedKeys.contains(
+                StoreEntityKey(entityName: registered.persistentModelID.entityName, primaryKey: primaryKey))
+        }
     }
+
+    /// Primary keys the most recent scratch-context batch delete removed from the store.
+    private var scratchContextDeletedKeys: Set<StoreEntityKey> = []
 
     /// Whether saving posts `willSave` and `didSave`; batch deletes save through a silent scratch context.
     private var postsSaveNotifications = true
@@ -904,7 +951,11 @@ public final class ModelContext {
             let model: Model
             if let existing = identityMap.model(for: key, as: Model.self) {
                 model = existing
-                if !existing.hasChanges {
+                // Apple semantics: values of models removed by this context's own batch delete are
+                // not overwritten by a refreshing fetch.
+                let batchDeleted = scratchContextDeletedKeys.contains(
+                    StoreEntityKey(entityName: entity.name, primaryKey: pk))
+                if !existing.hasChanges, !batchDeleted {
                     try refreshAttributes(
                         existing, entity: entity, attributes: selectedAttributesForMaterialization, row: refreshRow)
                 }
@@ -974,7 +1025,8 @@ public final class ModelContext {
             OpenSwiftDataDataStoreFetchRequest(
                 descriptor: requestDescriptor,
                 entity: entity,
-                includedEntityNames: hasHierarchy ? includedEntityNames : [entity.name]))
+                includedEntityNames: hasHierarchy ? includedEntityNames : [entity.name],
+                editingState: editingState))
         var seenIdentifiers = Set<PersistentIdentifier>()
         var models: [Model] = []
         var materialized: [PersistentIdentifier: any PersistentModel] = [:]
@@ -1324,7 +1376,9 @@ public final class ModelContext {
             }
             return IdentifierQueryRow(
                 identifier: PersistentIdentifier(
-                    storeIdentifier: storeIdentifier, entityName: concreteEntityName, primaryKey: primaryKey),
+                    resolvedStoreIdentifier: storeIdentifier,
+                    displayedStoreIdentifier: modelStoreIdentifier,
+                    entityName: concreteEntityName, primaryKey: primaryKey),
                 sortValues: Array(row.dropFirst(hasHierarchy ? 2 : 1)))
         }
         if descriptor.includePendingChanges {
@@ -1690,6 +1744,7 @@ public final class ModelContext {
         try state.withExclusiveOperation {
             try processPendingChangesLocked()
             guard !state.hasTransaction else { return }
+            pendingChangesAfterRollback = false
             try saveChanges()
         }
     }
@@ -1709,24 +1764,36 @@ public final class ModelContext {
     /// Deletes the history transactions matching a descriptor's predicate.
     public func deleteHistory<T: HistoryTransaction>(_ descriptor: HistoryDescriptor<T>) throws {
         assertAffinity()
-        guard let store = optionalContainer?.store as? any RuntimeHistoryStore else {
-            throw unsupportedStore("History is unavailable for the configured store.")
-        }
         let identifiers = try matchingHistory(descriptor).compactMap { ($0 as? DefaultHistoryTransaction)?.id }
-        try store.deleteHistory(transactionIDs: identifiers)
+        if let store = optionalContainer?.store as? any RuntimeHistoryStore {
+            try store.deleteHistory(transactionIDs: identifiers)
+        } else {
+            dataStoreHistoryLedger.lockedRemove(identifiers: identifiers)
+        }
     }
 
     private func matchingHistory<T: HistoryTransaction>(_ descriptor: HistoryDescriptor<T>) throws -> [T] {
         guard T.self == DefaultHistoryTransaction.self else {
             throw SwiftDataError.invalidTransactionFetchRequest
         }
-        guard let container = optionalContainer, let store = container.store as? any RuntimeHistoryStore else {
+        guard let container = optionalContainer else {
             throw unsupportedStore("History is unavailable for the configured store.")
         }
-        let stored = try store.fetchHistory()
+        let stored: [StoredHistoryTransaction]
+        if let store = container.store as? any RuntimeHistoryStore {
+            stored = try store.fetchHistory()
+        } else {
+            stored = dataStoreHistoryLedger.lockedTransactions()
+        }
+        let storeIdentifier = container.storeIdentifier
         if let predicate = descriptor.predicate {
             let existing = Set(stored.map(\.id))
-            let latestIssued = try store.latestIssuedHistoryTransactionID()
+            let latestIssued: Int64
+            if let store = container.store as? any RuntimeHistoryStore {
+                latestIssued = try store.latestIssuedHistoryTransactionID()
+            } else {
+                latestIssued = dataStoreHistoryLedger.lockedLatestIdentifier()
+            }
             for token in Self.historyTokens(in: predicate) {
                 guard let value = token.tokenValue?[storeIdentifier] else { continue }
                 if value <= latestIssued, !existing.contains(value) { throw SwiftDataError.historyTokenExpired }
@@ -1828,35 +1895,81 @@ public final class ModelContext {
 
     /// Discards pending changes and restores changed models to their most recently committed values.
     ///
-    /// Pending insertions detach and pending deletions are restored. Nothing reverts in the store.
+    /// Pending insertions detach and pending deletions are restored. Saved models keep their current
+    /// in-memory values and relationships, as in Apple's SwiftData: rollback discards lifecycle state
+    /// (deletion markers, pending registration) but does not revert edits already made after the save.
+    /// A deleted unsaved insertion detaches and leaves the context reporting changes, as in Apple.
+    /// Nothing reverts in the store.
     public func rollback() {
         assertAffinity()
+        let deletedUnsavedInsertions = deletedInsertions
         detachDeletedInsertions()
         state.withExclusiveOperation {
             let pendingState = state.pendingState()
             let pendingInsertions = pendingState.inserted
             for (model, snapshot) in pendingState.snapshots.values {
                 if state.contains(model, in: pendingInsertions) {
-                    model.restoreValuesAndDetachLifecycle(snapshot)
-                } else if state.contains(model, in: pendingState.deleted) {
-                    model.restoreLifecycle(snapshot)
+                    // Apple semantics: a canceled insertion detaches but keeps its current in-memory
+                    // values, including relationship inverses assigned before the rollback.
+                    let current = model.snapshotLifecycle()
+                    model.restoreValuesAndDetachLifecycle(
+                        BackingDataSnapshot(
+                            values: current.values,
+                            context: nil,
+                            identifier: current.identifier,
+                            isDeleted: false,
+                            hasChanges: false,
+                            savedValues: nil,
+                            primaryKey: nil,
+                            entityID: nil,
+                            optimisticLockVersion: current.optimisticLockVersion))
                 } else {
-                    model.restoreLifecycle(snapshot)
+                    // Apple semantics: a saved model keeps its in-memory edits and relationships
+                    // through rollback. The model's CURRENT values (not the pre-mutation capture)
+                    // become the merged baseline; only lifecycle state (deletion marker, pending
+                    // flags) is discarded.
+                    let current = model.snapshotLifecycle()
+                    model.restoreLifecycle(
+                        BackingDataSnapshot(
+                            values: current.values,
+                            context: snapshot.context,
+                            identifier: snapshot.identifier,
+                            isDeleted: false,
+                            hasChanges: false,
+                            savedValues: current.values,
+                            primaryKey: snapshot.primaryKey,
+                            entityID: snapshot.entityID,
+                            optimisticLockVersion: snapshot.optimisticLockVersion))
                 }
             }
             for model in pendingInsertions where pendingState.snapshots[ObjectIdentifier(model)] == nil {
-                cancelInsertion(model)
+                // Apple semantics: a canceled insertion detaches but keeps its current in-memory
+                // values, including relationship inverses assigned before the rollback.
+                let current = model.snapshotLifecycle()
+                model.restoreValuesAndDetachLifecycle(
+                    BackingDataSnapshot(
+                        values: current.values,
+                        context: nil,
+                        identifier: current.identifier,
+                        isDeleted: false,
+                        hasChanges: false,
+                        savedValues: nil,
+                        primaryKey: nil,
+                        entityID: nil,
+                        optimisticLockVersion: current.optimisticLockVersion))
             }
             for model in pendingInsertions { clearDataStoreTemporaryIdentifiers(for: model) }
             state.clearPending()
             state.clearRelationshipMutationEvents()
             autosaveTrigger.cancel()
-            for (model, snapshot) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
-                state.setBaseline(model, snapshot: snapshot)
+            for (model, _) in pendingState.snapshots.values where !state.contains(model, in: pendingInsertions) {
+                state.setBaseline(model, snapshot: model.snapshotLifecycle())
             }
             for model in pendingState.deleted {
                 state.removeBaseline(for: model)
             }
+            // Apple reports a context with a rolled-back deleted insertion as still changed.
+            pendingChangesAfterRollback = pendingChangesAfterRollback || !deletedUnsavedInsertions.isEmpty
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
@@ -1903,6 +2016,7 @@ public final class ModelContext {
     package func willMutate<Model: PersistentModel>(_ model: Model) {
         assertAffinity()
         guard model.modelContext === self else { return }
+        pendingChangesAfterRollback = false
         state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 
@@ -2070,6 +2184,11 @@ public final class ModelContext {
 
     private var storeIdentifier: String {
         optionalContainer?.storeIdentifier ?? "default"
+    }
+    /// The stable identifier used to tag materialized model identifiers, matching Apple's
+    /// `PersistentIdentifier.storeIdentifier` which stays stable across reopen.
+    package var modelStoreIdentifier: String {
+        optionalContainer?.modelStoreIdentifier ?? "default"
     }
 
     private func canonicalAttributes(for entity: SchemaDescriptor.Entity) -> [SchemaDescriptor.Attribute] {
@@ -2978,7 +3097,9 @@ public final class ModelContext {
             storeIdentifier: storeIdentifier, entityID: try entityID(for: entity.name), primaryKey: primaryKey,
             version: version,
             identifier: PersistentIdentifier(
-                storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
+                resolvedStoreIdentifier: storeIdentifier,
+                displayedStoreIdentifier: modelStoreIdentifier,
+                entityName: entity.name, primaryKey: primaryKey))
         let model = Model(backingData: backing)
         let adapters = Model.erasedPersistenceAdapters()
         var columnIndex = 2
@@ -4046,14 +4167,16 @@ public final class ModelContext {
                             hasChanges: false, savedValues: nil, primaryKey: existing.primaryKey,
                             entityID: existing.entityID, optimisticLockVersion: existing.optimisticLockVersion))
                     replacedModel.markPersistedLifecycle(
-                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                        entityName: entityName,
                         entityID: try entityID(for: entityName), primaryKey: result.primaryKey,
                         version: result.version)
                     state.setBaseline(replacedModel, snapshot: replacedModel.snapshotLifecycle())
                 }
                 if let ghostPrimaryKey = result.mergedDuplicatePrimaryKey {
                     model.markPersistedLifecycle(
-                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                        entityName: entityName,
                         entityID: try entityID(for: entityName), primaryKey: ghostPrimaryKey, version: 1)
                     mergedDuplicateIdentifiers.insert(model.persistentModelID)
                     identityMap.register(
@@ -4071,7 +4194,8 @@ public final class ModelContext {
                 detachModel(replacedModel)
             }
             model.markPersistedLifecycle(
-                storeIdentifier: storeIdentifier, entityName: entityName, entityID: try entityID(for: entityName),
+                storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                entityName: entityName, entityID: try entityID(for: entityName),
                 primaryKey: result.primaryKey, version: result.version)
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
             identityMap.register(
@@ -4190,7 +4314,14 @@ public final class ModelContext {
                     relationships: relationshipSnapshot.relationships)
             },
             updated: updated.map(remapRelationships),
-            deleted: deleted)
+            deleted: deleted,
+            editingState: editingState,
+            deletedSnapshots: pending.deleted.map { model in
+                let snapshot = (try? dataStoreSnapshot(for: model, container: container)) ?? OpenSwiftDataDataStoreSnapshot(
+                    persistentIdentifier: model.persistentModelID,
+                    entityName: model.persistentModelID.entityName)
+                return remapRelationships(snapshot)
+            })
         let result = try dataStore.save(saveRequest)
 
         let updatedIdentifiers = Set(updated.map(\.persistentIdentifier))
@@ -4217,6 +4348,11 @@ public final class ModelContext {
                     + "unique IDs: \(mappingsAreUnique), valid mappings: \(mappingsAreValid), "
                     + "reserved IDs: \(reservations.count)); invalid results must not commit changes.")
         }
+        if let historyToken = result.historyToken {
+            dataStoreHistoryTokenByStore[dataStore.identifier] = historyToken.tokenValue.map {
+                ($0 as? [String: Int64])?.values.max() ?? 0
+            } ?? 0
+        }
 
         var insertedKeys = Set<StoreEntityKey>()
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
@@ -4236,7 +4372,9 @@ public final class ModelContext {
                 || result.identifierRemappings[requestIdentifier] != nil
             {
                 model.markPersistedLifecycle(
-                    storeIdentifier: identifier.resolvedStoreIdentifier, entityName: identifier.entityName,
+                    storeIdentifier: identifier.resolvedStoreIdentifier,
+                    displayedStoreIdentifier: modelStoreIdentifier,
+                    entityName: identifier.entityName,
                     entityID: try entityID(for: identifier.entityName),
                     primaryKey: primaryKey, version: 1)
             } else {
@@ -4278,6 +4416,11 @@ public final class ModelContext {
         }
         finalizePendingChanges()
         state.clearRelationshipMutationEvents()
+        if let historyToken = result.historyToken {
+            recordDataStoreHistory(
+                token: historyToken, store: dataStore, pending: pending,
+                insertedKeys: insertedKeys)
+        }
         if let storeHubStoreIdentifier {
             let updated = Set(
                 pending.changed.compactMap { model -> StoreEntityKey? in
@@ -4302,6 +4445,56 @@ public final class ModelContext {
         dataStoreTemporaryIdentifiers.removeValue(forKey: objectID)
         dataStoreOriginalIdentifiers.removeValue(forKey: objectID)
     }
+
+    /// Stores a custom store's returned history token with the transaction changes of a save.
+    ///
+    /// Custom-store containers have no runtime store to persist history, so the context keeps an
+    /// in-memory ledger that `fetchHistory` and `deleteHistory` read back. Called after the context
+    /// commits model lifecycles, so pending models carry their permanent identifiers.
+    private func recordDataStoreHistory(
+        token: any HistoryToken, store: any OpenSwiftDataDataStore,
+        pending: ContextState.PendingState, insertedKeys: Set<StoreEntityKey>
+    ) {
+        var changes: [RuntimeHistoryChange] = []
+        for key in insertedKeys.sorted(by: Self.historyKeyLess) {
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .insert, entityName: key.entityName, primaryKey: key.primaryKey,
+                    updatedAttributes: [], tombstone: [:]))
+        }
+        for model in pending.changed {
+            guard let primaryKey = model.persistentModelID.primaryKey else { continue }
+            let key = StoreEntityKey(
+                entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
+            guard !insertedKeys.contains(key) else { continue }
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .update, entityName: key.entityName, primaryKey: key.primaryKey,
+                    updatedAttributes: [], tombstone: [:]))
+        }
+        for model in pending.deleted {
+            guard let primaryKey = model.persistentModelID.primaryKey else { continue }
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .delete, entityName: model.persistentModelID.entityName,
+                    primaryKey: primaryKey, updatedAttributes: [], tombstone: [:]))
+        }
+        dataStoreHistoryLedger.lockedAppend(
+            changes: changes.map { change in
+                StoredHistoryChange(
+                    type: change.type, entityName: change.entityName, primaryKey: change.primaryKey,
+                    updatedAttributes: change.updatedAttributes, tombstone: change.tombstone)
+            },
+            author: historyAuthorStorage, storeIdentifier: store.identifier, reportedToken: token)
+        dataStoreHistoryTokenByStore[store.identifier] = token.tokenValue.map {
+            ($0 as? [String: Int64])?.values.max() ?? 0
+        } ?? 0
+    }
+
+    /// The latest history token each custom store reported, keyed by store identifier.
+    private var dataStoreHistoryTokenByStore: [String: Int64] = [:]
+    /// In-memory history ledger for custom-store containers, which have no runtime history store.
+    private let dataStoreHistoryLedger = CustomStoreHistoryLedger()
 
     private func dataStoreSnapshot(
         for model: any PersistentModel, container: ModelContainer

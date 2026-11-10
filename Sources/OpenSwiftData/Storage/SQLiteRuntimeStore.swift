@@ -7,6 +7,11 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
     let externalDataColumns: Set<String>
     let runtimeSchema: SchemaDescriptor
     let persistentStoreIdentifier: String?
+    var storedModelIdentifier: String? { storedIdentifier }
+    /// The stable identifier persisted in the store's metadata; survives reopen. Used to tag
+    /// materialized model identifiers so `PersistentIdentifier.storeIdentifier` stays stable even
+    /// when the container's exposed `persistentStoreIdentifier` regenerates on reopen.
+    let storedIdentifier: String?
 
     func read<T>(_ body: (any RuntimeConnection) throws -> T) throws -> T {
         try driver.read { connection in
@@ -100,6 +105,35 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
                 "SELECT seq FROM sqlite_sequence WHERE name = '_osd_history_transactions'", [])
             if case let .int(value)? = rows.first?.first { return value }
             return 0
+        }
+    }
+
+    func record(_ transaction: StoredHistoryTransaction) throws {
+        let details = try JSONEncoder().encode(
+            StoredHistoryChangeDetails(
+                updatedAttributes: transaction.changes.flatMap(\.updatedAttributes),
+                tombstone: transaction.changes.reduce(into: [:]) { result, change in
+                    result.merge(change.tombstone) { _, new in new }
+                }))
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO _osd_history_transactions "
+                    + "(timestamp, author, bundle_identifier, process_identifier) VALUES (?, ?, ?, ?)",
+                [
+                    .double(transaction.timestamp.timeIntervalSince1970),
+                    transaction.author.map(StoredValue.text) ?? .null,
+                    .text(transaction.bundleIdentifier), .text(transaction.processIdentifier),
+                ])
+            let transactionID = connection.lastInsertRowID()
+            for (ordinal, change) in transaction.changes.enumerated() {
+                try connection.execute(
+                    "INSERT INTO _osd_history_changes "
+                        + "(transaction_id, ordinal, type, entity, primary_key, details) VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        .int(transactionID), .int(Int64(ordinal)), .text(change.type.rawValue),
+                        .text(change.entityName), .int(change.primaryKey), .blob(Array(details)),
+                    ])
+            }
         }
     }
 
@@ -385,10 +419,15 @@ package enum SQLiteStoreProvider {
             }
             let runtimeSchema = try schema.reconciled(
                 with: entityIDs ?? [:], minimumNextIdentifier: minimumNextIdentifier)
-            let storeIdentifier = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
+            // Apple's SwiftData regenerates the store identifier on every open, so a model fetched
+            // after reopening carries a different store identifier than the original. The stored
+            // identifier stays stable for migration bookkeeping and model identity; the identifier
+            // exposed to the container is a fresh UUID on each open.
+            let storedIdentifier = try driver.write { try LightweightMigration.storeIdentifier(connection: $0) }
+            let exposedStoreIdentifier = UUID().uuidString
             return SQLiteRuntimeStore(
                 driver: driver, externalDataColumns: externalDataColumns, runtimeSchema: runtimeSchema,
-                persistentStoreIdentifier: storeIdentifier)
+                persistentStoreIdentifier: exposedStoreIdentifier, storedIdentifier: storedIdentifier)
         } catch {
             try? driver.close()
             throw error

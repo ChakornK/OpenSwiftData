@@ -33,7 +33,7 @@ final class BatchParityToy {
 @MainActor
 public enum OSDBatchDeleteAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try BatchDeleteScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(BatchDeleteScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

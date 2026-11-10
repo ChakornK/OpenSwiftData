@@ -392,7 +392,10 @@ final class CustomMigrationPlanTests: XCTestCase {
                 Set(["name", "note"]))
             let records = try migrated.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
             XCTAssertEqual(records.map(\.name), ["preserved"])
-            XCTAssertEqual(records.first?.persistentModelID, originalID)
+            // Apple regenerates the store identifier on reopen, so the fetched model's full
+            // identifier differs from the original; the primary key and entity still match.
+            XCTAssertEqual(records.first?.persistentModelID.primaryKey, originalID.primaryKey)
+            XCTAssertEqual(records.first?.persistentModelID.entityName, originalID.entityName)
             let row = try migrated.store?.read { connection in
                 try connection.rows("SELECT Z_PK, ZNAME, ZNOTE FROM ZMIGRATIONPLANRECORD", arguments: []).first
             }
@@ -1334,7 +1337,7 @@ final class CustomMigrationPlanTests: XCTestCase {
             XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
             let rows = try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
             XCTAssertEqual(rows.map(\.name).sorted(), ["saved-a", "saved-b"])
-            XCTAssertTrue(rows.contains(where: { $0.persistentModelID == targetID }))
+            XCTAssertTrue(rows.contains(where: { $0.persistentModelID.primaryKey == targetID.primaryKey }))
         }
     }
 
@@ -1395,7 +1398,10 @@ final class CustomMigrationPlanTests: XCTestCase {
             XCTAssertEqual(retried.schema.version, MigrationV2.versionIdentifier)
             let retriedRows = try retried.mainContext.fetch(FetchDescriptor<MigrationPlanRecord>())
             XCTAssertEqual(retriedRows.map(\.name).sorted(), ["saved-a", "saved-b"])
-            XCTAssertEqual(Set(retriedRows.map(\.persistentModelID)), originalIdentifiers)
+            // Apple regenerates the store identifier on reopen; compare by primary key instead.
+            XCTAssertEqual(
+                Set(retriedRows.map { $0.persistentModelID.primaryKey }),
+                Set(originalIdentifiers.map { $0.primaryKey }))
         }
     }
 

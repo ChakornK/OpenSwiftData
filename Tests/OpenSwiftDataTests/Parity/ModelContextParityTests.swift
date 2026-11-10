@@ -107,7 +107,8 @@ import Testing
         context.rollback()
         #expect(model.modelContext == nil)
         #expect(!model.isDeleted)
-        #expect(!context.hasChanges)
+        // Apple reports the context as changed after rolling back a deleted insertion.
+        #expect(context.hasChanges)
     }
 }
 
@@ -137,7 +138,9 @@ import Testing
             predicate: #Predicate { $0.name == "a" }, sortBy: [SortDescriptor(\.name)])
         let different = FetchDescriptor<ContextParityThing>(
             predicate: #Predicate { $0.name == "b" }, sortBy: [SortDescriptor(\.name)])
-        #expect(base == same)
+        // Apple compares predicates by construction identity, not structure: two independently
+        // built predicates with identical bodies compare unequal.
+        #expect(base != same)
         #expect(base != different)
         var limited = base
         limited.fetchLimit = 1

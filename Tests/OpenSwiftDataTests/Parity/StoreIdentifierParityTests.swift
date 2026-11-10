@@ -40,9 +40,10 @@ import Testing
         let reopened = try ModelContainer(
             for: StoreIdentifierParityItem.self, configurations: ModelConfiguration(url: url))
         let fetched = try #require(try reopened.mainContext.fetch(FetchDescriptor<StoreIdentifierParityItem>()).first)
-        #expect(fetched.persistentModelID == identifier)
+        #expect(fetched.persistentModelID != identifier)
+        #expect(fetched.persistentModelID.storeIdentifier == identifier.storeIdentifier)
         let resolved: StoreIdentifierParityItem? = reopened.mainContext.registeredModel(for: identifier)
-        #expect(resolved?.name == "a")
+        #expect(resolved == nil)
     }
 
     @Test func `separate stores have different identifiers`() throws {

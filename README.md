@@ -121,7 +121,7 @@ The parity suite tracks behavior and API differences. Expand the list for detail
 26. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
 27. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData fetches only `z/2/nil`; Apple fetches `z/1/nil` and `z/2/nil`.
 
-28. Custom `DataStore` parity is implemented for the core protocol: `DataStoreConfiguration` with `Store`, typed `DataStoreSaveChangesRequest` deletions with editing state, generic `DataStoreSaveChangesResult` with `snapshotsToReregister`, `DataStoreSnapshot` requiring only Apple's members, `DefaultSnapshot` values, direct `ModelContainer` configuration, and `Schema.CompositeAttribute` as a `Schema.Attribute` subclass with `properties`. Batch deletes route through `DataStoreBatching.delete(_:)` when the store conforms, and custom stores that return a history token from `save(_:)` record it for `fetchHistory`.
+28. Custom `DataStore` parity is implemented for the core protocol: `DataStoreConfiguration` with `Store`, typed `DataStoreSaveChangesRequest` deletions with editing state, generic `DataStoreSaveChangesResult` with `snapshotsToReregister`, `DataStoreSnapshot` requiring only Apple's members, `DefaultSnapshot` values, direct `ModelContainer` configuration, and `Schema.CompositeAttribute` as a `Schema.Attribute` subclass with `properties`. Batch deletes route through `DataStoreBatching.delete(_:)` when the store conforms, and custom stores that return a history token from `save(_:)` have it recorded so `fetchHistory` returns the transaction.
 
 </details>
 

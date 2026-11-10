@@ -4,7 +4,6 @@ import XCTest
 import OpenSwiftDataSQLite
 import OSDCore
 @testable import OSDTestSupport
-import OSDConformance
 
 @ModelActor
 actor PersistenceTestActor {

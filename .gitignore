@@ -1,1 +1,4 @@
 .build/
+# Stale top-level probe/validation directory shells (sources removed; prevent reappearing as clutter)
+/AppleSDKProbe/
+/AppleSwiftDataBehaviorValidation/

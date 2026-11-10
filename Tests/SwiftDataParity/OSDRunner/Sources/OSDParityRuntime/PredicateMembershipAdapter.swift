@@ -139,10 +139,10 @@ public enum OSDScenarioAdapter {
             .map(runAndValidate)
         let nonComparablePredicateResults = ParityScenarioCatalog.all
             .filter { NonComparableScenarios.disposition(for: $0.id) != nil }
-            .map { id in
+            .map { specification in
                 ScenarioResult(
-                    id: id, observations: [],
-                    disposition: NonComparableScenarios.disposition(for: id)!)
+                    id: specification.id, observations: [],
+                    disposition: NonComparableScenarios.disposition(for: specification.id)!)
             }
         let schemaResults = try OSDSchemaIntrospectionAdapter.runAll()
         let modelTypeResults = try OSDSchemaModelTypesAdapter.runAll()

@@ -2181,9 +2181,7 @@
       "scenarioIDs": [
         "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction"
       ],
-      "observations": {
-        "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction": []
-      },
+      "observations": {},
       "outcomes": {
         "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction": "non-comparable"
       },

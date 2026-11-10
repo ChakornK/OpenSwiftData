@@ -1954,7 +1954,10 @@ public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     }
 
     public var contract: ScenarioContract {
-        ScenarioContract(id: id, expectedObservationFields: Set(expectedObservations.keys))
+        ScenarioContract(
+            id: id,
+            expectedObservationFields: Set(
+                (expectedOSDObservations ?? expectedObservations).keys))
     }
 }
 

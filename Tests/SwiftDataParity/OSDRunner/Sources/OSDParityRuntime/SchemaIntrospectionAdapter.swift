@@ -23,7 +23,7 @@ final class IntrospectionBook {
 @MainActor
 public enum OSDSchemaIntrospectionAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try SchemaIntrospectionScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(SchemaIntrospectionScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

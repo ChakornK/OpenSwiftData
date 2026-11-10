@@ -26,7 +26,7 @@ final class RollbackParityItemModel {
 @MainActor
 public enum OSDRollbackAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try RollbackParityScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(RollbackParityScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

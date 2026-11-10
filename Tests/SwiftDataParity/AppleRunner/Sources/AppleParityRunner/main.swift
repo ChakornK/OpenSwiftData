@@ -71,7 +71,8 @@ struct AppleParityRunner {
         let migrationPlanResults = try AppleMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try AppleModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try AppleRelationshipDeleteRuleAdapter.runAll()
-        let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
+        let results = NonComparableScenarios.apply(
+            predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults
             + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults
             + modelActorResults + batchFetchResults

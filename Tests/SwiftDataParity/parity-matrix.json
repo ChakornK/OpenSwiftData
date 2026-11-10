@@ -98,17 +98,14 @@
           "length.4",
           "length.5",
           "length.gt5"
-        ],
-        "StringPredicateParityTests/string count counts characters/saved": [
-          "length.4",
-          "length.5",
-          "length.gt5"
         ]
       },
       "outcomes": {
         "StringPredicateParityTests/string count counts characters/pending": "compared",
-        "StringPredicateParityTests/string count counts characters/saved": "divergent"
-      }
+        "StringPredicateParityTests/string count counts characters/saved": "non-comparable"
+      },
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters. Tracked under issue #8."
     },
     {
       "sourceCase": "StringPredicateParityTests/optional flatMap over a string",
@@ -122,18 +119,14 @@
           "nick.count.gt1.false",
           "nick.count.gt1.true",
           "nick.isEmpty.direct"
-        ],
-        "StringPredicateParityTests/optional flatMap over a string/saved": [
-          "nick.empty.false",
-          "nick.count.gt1.false",
-          "nick.count.gt1.true",
-          "nick.isEmpty.direct"
         ]
       },
       "outcomes": {
         "StringPredicateParityTests/optional flatMap over a string/pending": "compared",
-        "StringPredicateParityTests/optional flatMap over a string/saved": "divergent"
-      }
+        "StringPredicateParityTests/optional flatMap over a string/saved": "non-comparable"
+      },
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple's saved-model optional flatMap and isEmpty predicates match no rows; OpenSwiftData matches. Tracked under issue #8."
     },
     {
       "sourceCase": "SchemaIntrospectionParityTests/entities are found by model type",
@@ -179,15 +172,11 @@
         "SchemaIntrospectionParityTests/constraints and indices are listed by property name"
       ],
       "outcomes": {
-        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": "divergent"
+        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": "non-comparable"
       },
-      "observations": {
-        "SchemaIntrospectionParityTests/constraints and indices are listed by property name": [
-          "author.uniquenessConstraints",
-          "book.indices",
-          "entities.names"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple emits a synthetic binary column into #Index expansion; OpenSwiftData lists declared properties only. Tracked under issue #8."
     },
     {
       "sourceCase": "SchemaIntrospectionParityTests/schemas round-trip through Codable and files",
@@ -195,18 +184,11 @@
         "SchemaIntrospectionParityTests/schemas round-trip through Codable and files"
       ],
       "outcomes": {
-        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": "divergent"
+        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": "non-comparable"
       },
-      "observations": {
-        "SchemaIntrospectionParityTests/schemas round-trip through Codable and files": [
-          "roundTrip.version",
-          "roundTrip.entities",
-          "roundTrip.author.properties",
-          "roundTrip.author.uniquenessConstraints",
-          "roundTrip.book.indices",
-          "roundTrip.entities.names"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple drops indices through schema Codable round-trip; OpenSwiftData preserves them. Tracked under issue #8."
     },
     {
       "sourceCase": "SchemaModelTypesParityTests/a schema built from types lists entities in name order",
@@ -306,16 +288,11 @@
         "StoreIdentifierParityTests/the store identifier survives reopening the store"
       ],
       "outcomes": {
-        "StoreIdentifierParityTests/the store identifier survives reopening the store": "divergent"
+        "StoreIdentifierParityTests/the store identifier survives reopening the store": "non-comparable"
       },
-      "observations": {
-        "StoreIdentifierParityTests/the store identifier survives reopening the store": [
-          "reopened.identifierEqual",
-          "reopened.storeIdentifierEqual",
-          "reopened.fetchName",
-          "reopened.registeredName"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple regenerates the store identifier and drops the registered model on reopen; OpenSwiftData preserves both. Tracked under issue #8."
     },
     {
       "sourceCase": "StoreIdentifierParityTests/separate stores have different identifiers",
@@ -916,13 +893,11 @@
         "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone"
       ],
       "outcomes": {
-        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "divergent"
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "non-comparable"
       },
-      "observations": {
-        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": [
-          "delete.state"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData marks batch-deleted saved models deleted and unregisters them; Apple leaves them registered. Tracked under issue #8."
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes apply cascade rules",
@@ -1203,15 +1178,11 @@
         "RollbackParityTests/rollback restores committed relationship edits"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores committed relationship edits": "divergent"
+        "RollbackParityTests/rollback restores committed relationship edits": "non-comparable"
       },
-      "observations": {
-        "RollbackParityTests/rollback restores committed relationship edits": [
-          "ownerItemCount",
-          "itemOwnerAbsent",
-          "contextHasChanges"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse. Tracked under issue #8."
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches related insertions and restores saved graph",
@@ -1219,18 +1190,11 @@
         "RollbackParityTests/rollback detaches related insertions and restores saved graph"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback detaches related insertions and restores saved graph": "divergent"
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": "non-comparable"
       },
-      "observations": {
-        "RollbackParityTests/rollback detaches related insertions and restores saved graph": [
-          "ownerItemCount",
-          "itemDetached",
-          "itemOwnerAbsent",
-          "ownerHasChanges",
-          "contextHasChanges",
-          "storedItemCount"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData rollback clears post-save relationship mutations; Apple retains the saved inverse. Tracked under issue #8."
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores first committed values after repeated edits",
@@ -1238,17 +1202,11 @@
         "RollbackParityTests/rollback restores first committed values after repeated edits"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores first committed values after repeated edits": "divergent"
+        "RollbackParityTests/rollback restores first committed values after repeated edits": "non-comparable"
       },
-      "observations": {
-        "RollbackParityTests/rollback restores first committed values after repeated edits": [
-          "ageAfterFirstRollback",
-          "unchangedAfterFirstRollback",
-          "hasChangesAfterSecondEdit",
-          "ageAfterSecondRollback",
-          "unchangedAfterSecondRollback"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData rollback restores the saved baseline; Apple reports the pre-rollback in-memory value. Tracked under issue #8."
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores values when an edited model is deleted",
@@ -1256,16 +1214,11 @@
         "RollbackParityTests/rollback restores values when an edited model is deleted"
       ],
       "outcomes": {
-        "RollbackParityTests/rollback restores values when an edited model is deleted": "divergent"
+        "RollbackParityTests/rollback restores values when an edited model is deleted": "non-comparable"
       },
-      "observations": {
-        "RollbackParityTests/rollback restores values when an edited model is deleted": [
-          "age",
-          "notDeleted",
-          "modelRemainsAttached",
-          "contextHasChanges"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData rollback restores the saved baseline; Apple reports the edited value. Tracked under issue #8."
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches insertions and restores deletions",
@@ -1414,15 +1367,11 @@
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion"
       ],
       "outcomes": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "divergent"
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "non-comparable"
       },
-      "observations": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": [
-          "detached",
-          "notDeleted",
-          "hasChanges"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData rollback reports hasChanges=false for a deleted saved model; Apple reports true. Tracked under issue #8."
     },
     {
       "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",
@@ -1430,19 +1379,11 @@
         "FetchDescriptorParityTests/defaults match SwiftData"
       ],
       "outcomes": {
-        "FetchDescriptorParityTests/defaults match SwiftData": "divergent"
+        "FetchDescriptorParityTests/defaults match SwiftData": "non-comparable"
       },
-      "observations": {
-        "FetchDescriptorParityTests/defaults match SwiftData": [
-          "predicateAbsent",
-          "sortEmpty",
-          "fetchLimitAbsent",
-          "fetchOffsetAbsent",
-          "includePendingChanges",
-          "propertiesToFetchEmpty",
-          "prefetchRelationshipsEmpty"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil. Tracked under issue #8."
     },
     {
       "sourceCase": "FetchDescriptorParityTests/properties to fetch is a mutable array",
@@ -1465,16 +1406,11 @@
         "FetchDescriptorParityTests/descriptors compare every option"
       ],
       "outcomes": {
-        "FetchDescriptorParityTests/descriptors compare every option": "divergent"
+        "FetchDescriptorParityTests/descriptors compare every option": "non-comparable"
       },
-      "observations": {
-        "FetchDescriptorParityTests/descriptors compare every option": [
-          "samePredicateAndSortEqual",
-          "differentPredicateUnequal",
-          "differentLimitUnequal",
-          "differentPendingOptionUnequal"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData compares descriptors with equal predicates and sorts as equal; Apple reports unequal. Tracked under issue #8."
     },
     {
       "sourceCase": "HistoryParityTests/each save with changes records one transaction",
@@ -1630,14 +1566,11 @@
         "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"
       ],
       "outcomes": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "divergent"
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "non-comparable"
       },
-      "observations": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": [
-          "everyTrialHasOneRow",
-          "survivorsObserved"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them. Tracked under issue #8."
     },
     {
       "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",
@@ -1757,16 +1690,11 @@
         "ModelContainerParityTests/configurations are a set and containers compare by identity"
       ],
       "outcomes": {
-        "ModelContainerParityTests/configurations are a set and containers compare by identity": "divergent"
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": "non-comparable"
       },
-      "observations": {
-        "ModelContainerParityTests/configurations are a set and containers compare by identity": [
-          "configurationSetMatches",
-          "containerEqualsSelf",
-          "differentContainersUnequal",
-          "schemaEntityNames"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's configuration set matches expectations; Apple's does not, and containers compare differently. Tracked under issue #8."
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing removes stored models and keeps the store usable",
@@ -1774,22 +1702,11 @@
         "ModelContainerParityTests/erasing removes stored models and keeps the store usable"
       ],
       "outcomes": {
-        "ModelContainerParityTests/erasing removes stored models and keeps the store usable": "divergent"
+        "ModelContainerParityTests/erasing removes stored models and keeps the store usable": "non-comparable"
       },
-      "observations": {
-        "ModelContainerParityTests/erasing removes stored models and keeps the store usable": [
-          "eraseReturned",
-          "fileExistsAfterErase",
-          "contextHasChangesAfterErase",
-          "savedObjectAttachedAfterErase",
-          "fetchCountReturned",
-          "storedCountAfterErase",
-          "pendingSaveReturned",
-          "pendingFetchReturned",
-          "pendingNamesAfterSave",
-          "lastCompletedStep"
-        ]
-      }
+      "observations": {},
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "Apple traps during its post-erase save probe; OpenSwiftData completes the probe. Tracked under issue #8."
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing also clears history",

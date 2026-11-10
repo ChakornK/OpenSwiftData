@@ -34,7 +34,7 @@ final class UniqueParityCompositeModel {
 @MainActor
 public enum OSDUniqueConstraintAdapter {
     public static func runAll() throws -> [ScenarioResult] {
-        try UniqueConstraintScenarioCatalog.all.map(runAndValidate)
+        try NonComparableScenarios.apply(UniqueConstraintScenarioCatalog.all.map(runAndValidate))
             .sorted { $0.id.description < $1.id.description }
     }
 

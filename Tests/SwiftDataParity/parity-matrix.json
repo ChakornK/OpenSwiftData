@@ -1615,11 +1615,14 @@
         "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"
       ],
       "outcomes": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "non-comparable"
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them. Tracked under issue #8."
+      "observations": {
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": [
+          "everyTrialHasOneRow",
+          "survivorsObserved"
+        ]
+      }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",

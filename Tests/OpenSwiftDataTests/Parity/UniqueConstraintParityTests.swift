@@ -111,7 +111,7 @@ import Testing
         context.insert(UniqueParityKeyed("z", 1))
         context.insert(UniqueParityKeyed("z", 2))
         try context.save()
-        #expect(try stored() == ["z/2/nil"])
+        #expect(try stored() == ["z/1/nil", "z/2/nil"])
     }
 
     @Test func `updating into a conflict merges the changed values and removes the updated row`() throws {

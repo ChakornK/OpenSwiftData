@@ -97,7 +97,7 @@ public protocol BackingData<Model>: AnyObject {
     ///   - entityID: The store's entity identifier.
     ///   - primaryKey: The permanent row key.
     ///   - version: The committed row version.
-    func markPersisted(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int)
+    func markPersisted(storeIdentifier: String, displayedStoreIdentifier: String, entityID: Int, primaryKey: Int64, version: Int)
     /// Clears deletion and marks the model as changed after restoring an insertion.
     func restoreInsertionState()
     /// Associates the model with a context and assigns a context-scoped identifier.
@@ -383,10 +383,12 @@ public final class DetachedBackingData<Model: PersistentModel>: BackingData, Any
     /// Restores snapshot values, then detaches and clears insertion lifecycle flags.
     public func cancelInsertion(restoring snapshot: BackingDataSnapshot) { restoreValuesAndDetach(snapshot) }
     /// Assigns committed row identity and version, folding changes into the baseline.
-    public func markPersisted(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
+    public func markPersisted(storeIdentifier: String, displayedStoreIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
         lock.lock();
         identifier = PersistentIdentifier(
-            storeIdentifier: storeIdentifier, entityName: String(describing: Model.self), primaryKey: primaryKey);
+            resolvedStoreIdentifier: storeIdentifier,
+            displayedStoreIdentifier: displayedStoreIdentifier,
+            entityName: String(describing: Model.self), primaryKey: primaryKey);
         changed = false; deleted = false; lock.unlock()
     }
     /// Associates the model with a context and assigns its context-scoped identifier.

@@ -428,10 +428,12 @@ public extension PersistentModel {
     func snapshotLifecycle() -> BackingDataSnapshot { persistentBackingData.snapshot() }
     func setInsertionChanged() { persistentBackingData.restoreInsertionState() }
     func markPersistedLifecycle(
-        storeIdentifier: String, entityName: String? = nil, entityID: Int, primaryKey: Int64, version: Int
+        storeIdentifier: String, displayedStoreIdentifier: String, entityName: String? = nil,
+        entityID: Int, primaryKey: Int64, version: Int
     ) {
         persistentBackingData.markPersisted(
-            storeIdentifier: storeIdentifier, entityID: entityID, primaryKey: primaryKey, version: version)
+            storeIdentifier: storeIdentifier, displayedStoreIdentifier: displayedStoreIdentifier,
+            entityID: entityID, primaryKey: primaryKey, version: version)
         if let entityName { anyBackingData.setConcreteEntityName(entityName) }
     }
     func markSavedLifecycle() { persistentBackingData.markSaved() }

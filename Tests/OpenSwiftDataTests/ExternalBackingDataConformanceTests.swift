@@ -29,7 +29,7 @@ private final class LegacyBackingData: BackingData {
     func restoreValuesAndDetach() {}
     func restoreLifecycleAndDetach(_ snapshot: BackingDataSnapshot) {}
     func cancelInsertion(restoring snapshot: BackingDataSnapshot) {}
-    func markPersisted(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {}
+    func markPersisted(storeIdentifier: String, displayedStoreIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {}
     func restoreInsertionState() {}
     func attach(to context: ModelContext, model: LegacyModel) {}
     func markDeleted() {}

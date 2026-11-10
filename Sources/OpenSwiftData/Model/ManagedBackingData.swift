@@ -379,7 +379,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
     /// Restores values and detaches a canceled insertion.
     public func cancelInsertion(restoring snapshot: BackingDataSnapshot) { restoreLifecycleAndDetach(snapshot) }
     /// Replaces the temporary identity with the committed row identity.
-    public func markPersisted(storeIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
+    public func markPersisted(storeIdentifier: String, displayedStoreIdentifier: String, entityID: Int, primaryKey: Int64, version: Int) {
         locked {
             if self.primaryKey != primaryKey || self.storeIdentifier != storeIdentifier {
                 faultLoader = nil
@@ -395,7 +395,9 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
             self.primaryKey = primaryKey
             self.version = version
             identifier = PersistentIdentifier(
-                storeIdentifier: storeIdentifier, entityName: String(describing: Model.self), primaryKey: primaryKey)
+                resolvedStoreIdentifier: storeIdentifier,
+                displayedStoreIdentifier: displayedStoreIdentifier,
+                entityName: String(describing: Model.self), primaryKey: primaryKey)
             changed = false
             deleted = false
         }

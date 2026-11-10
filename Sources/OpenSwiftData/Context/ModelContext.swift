@@ -4163,14 +4163,16 @@ public final class ModelContext {
                             hasChanges: false, savedValues: nil, primaryKey: existing.primaryKey,
                             entityID: existing.entityID, optimisticLockVersion: existing.optimisticLockVersion))
                     replacedModel.markPersistedLifecycle(
-                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                        entityName: entityName,
                         entityID: try entityID(for: entityName), primaryKey: result.primaryKey,
                         version: result.version)
                     state.setBaseline(replacedModel, snapshot: replacedModel.snapshotLifecycle())
                 }
                 if let ghostPrimaryKey = result.mergedDuplicatePrimaryKey {
                     model.markPersistedLifecycle(
-                        storeIdentifier: storeIdentifier, entityName: entityName,
+                        storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                        entityName: entityName,
                         entityID: try entityID(for: entityName), primaryKey: ghostPrimaryKey, version: 1)
                     mergedDuplicateIdentifiers.insert(model.persistentModelID)
                     identityMap.register(
@@ -4188,7 +4190,8 @@ public final class ModelContext {
                 detachModel(replacedModel)
             }
             model.markPersistedLifecycle(
-                storeIdentifier: storeIdentifier, entityName: entityName, entityID: try entityID(for: entityName),
+                storeIdentifier: storeIdentifier, displayedStoreIdentifier: modelStoreIdentifier,
+                entityName: entityName, entityID: try entityID(for: entityName),
                 primaryKey: result.primaryKey, version: result.version)
             state.setBaseline(model, snapshot: model.snapshotLifecycle())
             identityMap.register(
@@ -4365,7 +4368,9 @@ public final class ModelContext {
                 || result.identifierRemappings[requestIdentifier] != nil
             {
                 model.markPersistedLifecycle(
-                    storeIdentifier: identifier.resolvedStoreIdentifier, entityName: identifier.entityName,
+                    storeIdentifier: identifier.resolvedStoreIdentifier,
+                    displayedStoreIdentifier: modelStoreIdentifier,
+                    entityName: identifier.entityName,
                     entityID: try entityID(for: identifier.entityName),
                     primaryKey: primaryKey, version: 1)
             } else {

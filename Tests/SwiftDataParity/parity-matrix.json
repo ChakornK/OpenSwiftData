@@ -896,7 +896,9 @@
         "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": []
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": [
+          "delete.state"
+        ]
       }
     },
     {
@@ -1159,7 +1161,17 @@
         "RollbackParityTests/rollback restores committed values immediately and clears change tracking": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": []
+        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": [
+          "age",
+          "name",
+          "tag",
+          "tags",
+          "modelHasChanges",
+          "contextHasChanges",
+          "modelRemainsAttached",
+          "storedAges",
+          "sameRegisteredInstance"
+        ]
       }
     },
     {
@@ -1171,7 +1183,11 @@
         "RollbackParityTests/rollback restores committed relationship edits": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback restores committed relationship edits": []
+        "RollbackParityTests/rollback restores committed relationship edits": [
+          "ownerItemCount",
+          "itemOwnerAbsent",
+          "contextHasChanges"
+        ]
       }
     },
     {
@@ -1183,7 +1199,14 @@
         "RollbackParityTests/rollback detaches related insertions and restores saved graph": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback detaches related insertions and restores saved graph": []
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": [
+          "ownerItemCount",
+          "itemDetached",
+          "itemOwnerAbsent",
+          "ownerHasChanges",
+          "contextHasChanges",
+          "storedItemCount"
+        ]
       }
     },
     {
@@ -1195,7 +1218,13 @@
         "RollbackParityTests/rollback restores first committed values after repeated edits": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback restores first committed values after repeated edits": []
+        "RollbackParityTests/rollback restores first committed values after repeated edits": [
+          "ageAfterFirstRollback",
+          "unchangedAfterFirstRollback",
+          "hasChangesAfterSecondEdit",
+          "ageAfterSecondRollback",
+          "unchangedAfterSecondRollback"
+        ]
       }
     },
     {
@@ -1207,7 +1236,12 @@
         "RollbackParityTests/rollback restores values when an edited model is deleted": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback restores values when an edited model is deleted": []
+        "RollbackParityTests/rollback restores values when an edited model is deleted": [
+          "age",
+          "notDeleted",
+          "modelRemainsAttached",
+          "contextHasChanges"
+        ]
       }
     },
     {
@@ -1360,7 +1394,11 @@
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "compared"
       },
       "observations": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": []
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": [
+          "detached",
+          "notDeleted",
+          "hasChanges"
+        ]
       }
     },
     {

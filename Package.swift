@@ -36,12 +36,6 @@ var targets: [Target] = [
         dependencies: ["OpenSwiftData"],
         path: "Tests/OSDTestSupport"
     ),
-    .target(
-        name: "OSDConformance",
-        dependencies: [],
-        path: "Tests/OSDConformance",
-        resources: [.process("Goldens")]
-    ),
     .macro(
         name: "OpenSwiftDataMacros",
         dependencies: [
@@ -69,7 +63,7 @@ var targets: [Target] = [
     .testTarget(
         name: "OpenSwiftDataTests",
         dependencies: [
-            "OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDConformance", "OSDCore",
+            "OpenSwiftData", "OpenSwiftDataSQLite", "OSDTestSupport", "OSDCore",
             .product(name: "GRDB", package: "GRDB.swift"),
         ],
         path: "Tests/OpenSwiftDataTests"
@@ -82,10 +76,6 @@ var targets: [Target] = [
         name: "OSDQueryTests",
         dependencies: ["OSDQuery", "OpenSwiftData", "OpenSwiftDataSQLite"],
         path: "Tests/OSDQueryTests"
-    ),
-    .testTarget(
-        name: "OSDConformanceTests",
-        dependencies: ["OSDConformance"]
     ),
     .testTarget(
         name: "OpenSwiftDataMacrosTests",

@@ -987,7 +987,8 @@ public final class ModelContext {
             OpenSwiftDataDataStoreFetchRequest(
                 descriptor: requestDescriptor,
                 entity: entity,
-                includedEntityNames: hasHierarchy ? includedEntityNames : [entity.name]))
+                includedEntityNames: hasHierarchy ? includedEntityNames : [entity.name],
+                editingState: editingState))
         var seenIdentifiers = Set<PersistentIdentifier>()
         var models: [Model] = []
         var materialized: [PersistentIdentifier: any PersistentModel] = [:]
@@ -4215,7 +4216,14 @@ public final class ModelContext {
                     relationships: relationshipSnapshot.relationships)
             },
             updated: updated.map(remapRelationships),
-            deleted: deleted)
+            deleted: deleted,
+            editingState: editingState,
+            deletedSnapshots: pending.deleted.map { model in
+                let snapshot = (try? dataStoreSnapshot(for: model, container: container)) ?? OpenSwiftDataDataStoreSnapshot(
+                    persistentIdentifier: model.persistentModelID,
+                    entityName: model.persistentModelID.entityName)
+                return remapRelationships(snapshot)
+            })
         let result = try dataStore.save(saveRequest)
 
         let updatedIdentifiers = Set(updated.map(\.persistentIdentifier))

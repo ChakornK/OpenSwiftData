@@ -977,6 +977,10 @@ public final class ModelContainer: Sendable {
     /// The store file remains and stays open, and contexts keep their pending changes. Primary keys continue
     /// from where they were, so identifiers held from before the erase never match new models.
     public func erase() throws {
+        if let dataStore {
+            try dataStore.erase()
+            return
+        }
         guard let store else {
             throw SwiftDataError.unsupportedStore("Erasing the store is unavailable without a persistent store.")
         }

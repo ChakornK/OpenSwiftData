@@ -26,6 +26,8 @@ public protocol OpenSwiftDataDataStore: Sendable {
     func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult
     /// Returns one snapshot by its persistent identifier.
     func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot?
+    /// Removes all persisted models from this store.
+    func erase() throws
 }
 
 public extension OpenSwiftDataDataStore {
@@ -33,6 +35,10 @@ public extension OpenSwiftDataDataStore {
 
     func reserveIdentifiers(for snapshots: [OpenSwiftDataDataStoreSnapshot]) throws -> [PersistentIdentifier: PersistentIdentifier] {
         [:]
+    }
+
+    func erase() throws {
+        throw SwiftDataError.unsupportedStore("This data store does not support erasure.")
     }
 }
 
@@ -831,7 +837,8 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
     func fetch<Model: PersistentModel>(
         _ request: OpenSwiftDataDataStoreFetchRequest<Model>
     ) throws -> OpenSwiftDataDataStoreFetchResult {
-        let result = try store.fetch(DataStoreFetchRequest(request.descriptor))
+        let result = try store.fetch(
+            DataStoreFetchRequest(request.descriptor, editingState: request.editingState))
         var roots: [OpenSwiftDataDataStoreSnapshot] = []
         var related: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
         var pending: [any DataStoreSnapshot] = result.fetchedSnapshots
@@ -885,7 +892,9 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
             return typed
         }
         let result = try store.save(
-            DataStoreSaveChangesRequest(inserted: inserts, updated: updates, deleted: deletions))
+            DataStoreSaveChangesRequest(
+                inserted: inserts, updated: updates, deleted: deletions,
+                editingState: request.editingState))
         return OpenSwiftDataDataStoreSaveResult(
             identifierRemappings: result.remappedIdentifiers,
             updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
@@ -1051,6 +1060,9 @@ public struct AppleDefaultSnapshot: DataStoreSnapshotValueProviding, Equatable {
     }
 
 }
+
+/// Apple's default snapshot type: a value-oriented snapshot holding persisted values and relationships.
+public typealias DefaultSnapshot = AppleDefaultSnapshot
 
 public extension AppleDefaultSnapshot {
     /// Creates snapshots for a model and every reachable related model.

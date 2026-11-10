@@ -955,6 +955,77 @@ extension DefaultSnapshotConfiguration: Equatable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(name) }
 }
 
+private final class DeleteProbeDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
+    let identifier = "delete.probe"
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+    private var nextKey: Int64 = 1
+    private var observedRequest: OpenSwiftDataDataStoreSaveRequest?
+
+    var lastSaveRequest: OpenSwiftDataDataStoreSaveRequest? {
+        lock.lock(); defer { lock.unlock() }
+        return observedRequest
+    }
+
+    init() {}
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        lock.lock()
+        observedRequest = request
+        lock.unlock()
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+        var nextKey: Int64 = 1
+        lock.lock()
+        defer { lock.unlock() }
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: identifier, entityName: snapshot.entityName, primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: permanent, entityName: snapshot.entityName,
+                values: snapshot.values, relationships: snapshot.relationships)
+        }
+        for identifier in request.deleted { rows.removeValue(forKey: identifier) }
+        return OpenSwiftDataDataStoreSaveResult(
+            identifierRemappings: remappings,
+            updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
+            deletedIdentifiers: Set(request.deleted))
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+}
+
+private final class EraseReportingDataStore: OpenSwiftDataDataStore, @unchecked Sendable {
+    let identifier = "erase.probe"
+    private let lock = NSLock()
+    private(set) var didErase = false
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        OpenSwiftDataDataStoreSaveResult()
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+
+    func erase() throws {
+        lock.lock()
+        didErase = true
+        lock.unlock()
+    }
+}
+
 private final class BatchingStoreState: @unchecked Sendable {
     private let lock = NSLock()
     private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
@@ -1254,6 +1325,57 @@ struct AppleDataStoreAPITests {
 
         let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         #expect(fetched.map(\.title) == ["variadic"])
+    }
+
+    @MainActor
+    @Test
+    func defaultSnapshotIsExposedUnderAppleName() throws {
+        let snapshot = DefaultSnapshot(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "default.snapshot", entityName: "AppleStoreFixture", primaryKey: 1),
+            entityName: "AppleStoreFixture",
+            persistedValues: ["title": .text("named")],
+            relationships: [:])
+        #expect(snapshot.entityName == "AppleStoreFixture")
+        #expect(snapshot.persistedValues["title"] == .text("named"))
+        let remapped = snapshot.copy(
+            persistentIdentifier: PersistentIdentifier(
+                storeIdentifier: "default.snapshot", entityName: "AppleStoreFixture", primaryKey: 2))
+        #expect(remapped.persistentIdentifier.primaryKey == 2)
+    }
+
+    @MainActor
+    @Test
+    func savePassesDeletedSnapshotsAndEditingStateToStore() throws {
+        let probe = DeleteProbeDataStore()
+        let configuration = ModelConfiguration(
+            "deleted-snapshots-probe", dataStoreConfiguration: ExistingDataStoreConfiguration(store: probe))
+        let container = try ModelContainer(
+            for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        let model = AppleStoreFixture(title: "deleted")
+        context.insert(model)
+        try context.save()
+        context.delete(model)
+        try context.save()
+
+        let request = try #require(probe.lastSaveRequest)
+        #expect(request.deletedSnapshots.count == 1)
+        #expect(request.deletedSnapshots.first?.persistentIdentifier == model.persistentModelID)
+        #expect(request.editingState.id == context.editingState.id)
+        #expect(request.deleted == [model.persistentModelID])
+    }
+
+    @MainActor
+    @Test
+    func eraseRoutesThroughCustomDataStore() throws {
+        let store = EraseReportingDataStore()
+        let configuration = ModelConfiguration(
+            "erase-routing", dataStoreConfiguration: ExistingDataStoreConfiguration(store: store))
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        #expect(store.didErase == false)
+        try container.erase()
+        #expect(store.didErase)
     }
 
     @MainActor

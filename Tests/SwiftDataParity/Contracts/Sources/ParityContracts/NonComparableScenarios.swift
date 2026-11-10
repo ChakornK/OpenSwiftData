@@ -11,10 +11,6 @@ public enum NonComparableScenarios {
         // Deferred behavior gaps tracked under issue #8.
         ScenarioID(suite: "FetchDescriptorParityTests", test: "defaults match SwiftData"): deferred(
             "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."),
-        ScenarioID(suite: "FetchDescriptorParityTests", test: "descriptors compare every option"): deferred(
-            "OpenSwiftData compares descriptors with equal predicates and sorts as equal; Apple reports unequal."),
-        ScenarioID(suite: "ModelContainerParityTests", test: "configurations are a set and containers compare by identity"): deferred(
-            "OpenSwiftData's configuration set matches expectations; Apple's does not, and containers compare differently."),
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
             "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."),
         ScenarioID(suite: "StoreIdentifierParityTests", test: "the store identifier survives reopening the store"): deferred(

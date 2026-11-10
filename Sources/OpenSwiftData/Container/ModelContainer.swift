@@ -472,7 +472,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations
@@ -602,7 +609,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = [:]
@@ -657,7 +671,14 @@ public final class ModelContainer: Sendable {
         }
         self.schemaDescriptor = runtimeSchema
         self.schema = Schema(descriptor: runtimeSchema)
-        configurationList = configurations
+        // Apple's SwiftData attaches the container's schema to the configurations it exposes, so a
+        // configuration returned by `container.configurations` carries a schema while the caller's
+        // original configuration does not. Match that by storing copies with the schema attached.
+        var attachedConfigurations = configurations
+        for index in attachedConfigurations.indices where attachedConfigurations[index].schema == nil {
+            attachedConfigurations[index].schema = Schema(descriptor: runtimeSchema)
+        }
+        configurationList = attachedConfigurations
         dataStore = openedDataStore
         store = openedStore
         modelTypesByEntityName = registrations

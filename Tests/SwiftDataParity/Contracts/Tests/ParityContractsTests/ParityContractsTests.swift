@@ -582,25 +582,19 @@ import Testing
         #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
     }
 
-    @Test func fetchDescriptorEqualityDivergenceUsesExactPerImplementationValues() {
+    @Test func fetchDescriptorEqualityUsesExactPerImplementationValues() {
         let specification = ModelContextParityScenarioCatalog.fetchDescriptorEquality
-        let appleValues: [String: ObservedValue] = [
+        let values: [String: ObservedValue] = [
             "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
             "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
         ]
-        let osdValues: [String: ObservedValue] = [
-            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
-            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
-        ]
-        let apple = ScenarioResult(id: specification.id, observations: appleValues.map { field, value in
-            ParityObservation(step: 0, field: field, value: value)
-        })
-        let osd = ScenarioResult(id: specification.id, observations: osdValues.map { field, value in
+        let result = ScenarioResult(id: specification.id, observations: values.map { field, value in
             ParityObservation(step: 0, field: field, value: value)
         })
 
-        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
-        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+        #expect(ModelContextParityExpectationValidator.validate(result, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(
+            result, against: specification, implementation: "openswiftdata"))
     }
 
     @Test func deletedInsertionRollbackDivergenceUsesExactPerImplementationValues() {

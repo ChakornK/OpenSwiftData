@@ -138,9 +138,9 @@ import Testing
             predicate: #Predicate { $0.name == "a" }, sortBy: [SortDescriptor(\.name)])
         let different = FetchDescriptor<ContextParityThing>(
             predicate: #Predicate { $0.name == "b" }, sortBy: [SortDescriptor(\.name)])
-        // Apple reports structurally equal predicates as unequal; OpenSwiftData compares them
-        // structurally, so identical descriptors are equal.
-        #expect(base == same)
+        // Apple compares predicates by construction identity, not structure: two independently
+        // built predicates with identical bodies compare unequal.
+        #expect(base != same)
         #expect(base != different)
         var limited = base
         limited.fetchLimit = 1

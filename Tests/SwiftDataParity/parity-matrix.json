@@ -1434,11 +1434,16 @@
         "FetchDescriptorParityTests/descriptors compare every option"
       ],
       "outcomes": {
-        "FetchDescriptorParityTests/descriptors compare every option": "non-comparable"
+        "FetchDescriptorParityTests/descriptors compare every option": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData compares descriptors with equal predicates and sorts as equal; Apple reports unequal. Tracked under issue #8."
+      "observations": {
+        "FetchDescriptorParityTests/descriptors compare every option": [
+          "samePredicateAndSortEqual",
+          "differentPredicateUnequal",
+          "differentLimitUnequal",
+          "differentPendingOptionUnequal"
+        ]
+      }
     },
     {
       "sourceCase": "HistoryParityTests/each save with changes records one transaction",
@@ -1718,11 +1723,16 @@
         "ModelContainerParityTests/configurations are a set and containers compare by identity"
       ],
       "outcomes": {
-        "ModelContainerParityTests/configurations are a set and containers compare by identity": "non-comparable"
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData's configuration set matches expectations; Apple's does not, and containers compare differently. Tracked under issue #8."
+      "observations": {
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": [
+          "configurationSetMatches",
+          "containerEqualsSelf",
+          "differentContainersUnequal",
+          "schemaEntityNames"
+        ]
+      }
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing removes stored models and keeps the store usable",

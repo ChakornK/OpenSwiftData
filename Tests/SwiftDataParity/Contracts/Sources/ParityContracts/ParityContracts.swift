@@ -1795,9 +1795,6 @@ public enum ModelContextParityScenarioCatalog {
         "FetchDescriptorParityTests", "descriptors compare every option", .fetchDescriptorEquality, [
             "samePredicateAndSortEqual": .bool(false), "differentPredicateUnequal": .bool(true),
             "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
-        ], expectedOSDObservations: [
-            "samePredicateAndSortEqual": .bool(true), "differentPredicateUnequal": .bool(true),
-            "differentLimitUnequal": .bool(true), "differentPendingOptionUnequal": .bool(true),
         ])
 
     public static let all = [

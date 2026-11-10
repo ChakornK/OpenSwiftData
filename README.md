@@ -94,23 +94,21 @@ The parity suite tracks behavior and API differences. Expand the list for detail
 <summary>Show all</summary>
 
 1. Fetch descriptor defaults, `fetchOffsetAbsent`: Apple's offset is present; OpenSwiftData's is absent.
-2. Fetch descriptor equality, `samePredicateAndSortEqual`: Apple reports structurally identical predicates as unequal; OpenSwiftData compares them structurally and reports equal.
-3. Container configurations, `configurationSetMatches`: OpenSwiftData's configurations form the expected set; Apple's do not.
-4. Erase, `lastCompletedStep`: Apple's probe checkpoints step 2 before its post-erase save traps; OpenSwiftData completes step 4.
-5. Erase, `pendingFetchReturned`: the Apple probe does not complete the fetch after its save trap; OpenSwiftData completes it.
-6. Erase, `pendingNamesAfterSave`: the Apple probe has no fetched names after its save trap; OpenSwiftData fetches `[\"pending\"]`.
-7. Erase, `pendingSaveReturned`: the Apple probe does not complete the save after `erase()`; OpenSwiftData completes it.
-8. Schema indices, `book.indices`: OpenSwiftData reports `title`; Apple reports `binary` and `title` for the index.
-9. Schema relationship flags, `author.books.flags`: OpenSwiftData marks `books` as a relationship; Apple's flag is false.
-10. Schema Codable round-trip, `roundTrip.book.indices`: OpenSwiftData preserves the `title` index; Apple returns no indices.
-11. Store reopen, `reopened.identifierEqual`: OpenSwiftData's fetched model has the original identifier; Apple's fetched model does not.
-12. Store reopen, `reopened.registeredName`: OpenSwiftData resolves the registered model as `a`; Apple returns `missing`.
-13. Saved optional `flatMap`, `nick.empty.false`: OpenSwiftData matches `délta`; Apple returns no matches.
-14. Saved optional `flatMap`, `nick.isEmpty.direct`: OpenSwiftData matches `délta`; Apple returns no matches.
-15. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
-16. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
-17. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
-18. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData collapses duplicate unique keys at save and fetches only `z/2/nil`; Apple defers the merge and fetches both `z/1/nil` and `z/2/nil`.
+2. Erase, `lastCompletedStep`: Apple's probe checkpoints step 2 before its post-erase save traps; OpenSwiftData completes step 4.
+3. Erase, `pendingFetchReturned`: the Apple probe does not complete the fetch after its save trap; OpenSwiftData completes it.
+4. Erase, `pendingNamesAfterSave`: the Apple probe has no fetched names after its save trap; OpenSwiftData fetches `[\"pending\"]`.
+5. Erase, `pendingSaveReturned`: the Apple probe does not complete the save after `erase()`; OpenSwiftData completes it.
+6. Schema indices, `book.indices`: OpenSwiftData reports `title`; Apple reports `binary` and `title` for the index.
+7. Schema relationship flags, `author.books.flags`: OpenSwiftData marks `books` as a relationship; Apple's flag is false.
+8. Schema Codable round-trip, `roundTrip.book.indices`: OpenSwiftData preserves the `title` index; Apple returns no indices.
+9. Store reopen, `reopened.identifierEqual`: OpenSwiftData's fetched model has the original identifier; Apple's fetched model does not.
+10. Store reopen, `reopened.registeredName`: OpenSwiftData resolves the registered model as `a`; Apple returns `missing`.
+11. Saved optional `flatMap`, `nick.empty.false`: OpenSwiftData matches `délta`; Apple returns no matches.
+12. Saved optional `flatMap`, `nick.isEmpty.direct`: OpenSwiftData matches `délta`; Apple returns no matches.
+13. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
+14. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
+15. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
+16. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData collapses duplicate unique keys at save and fetches only `z/2/nil`; Apple defers the merge and fetches both `z/1/nil` and `z/2/nil`.
 
 </details>
 

@@ -4041,7 +4041,6 @@ public final class ModelContext {
         }
         let orderedModels = relationshipOrderedEntities(models)
         let externalDataColumns = Self.externalDataColumns(in: container.schemaDescriptor)
-        var batchInsertedKeys: Set<StoreEntityKey> = []
         let persisted: [PersistedModel] = try store.writeWithExternalData { connection, externalDataSession in
             var results: [PersistedModel] = []
             for model in orderedModels {
@@ -4051,8 +4050,7 @@ public final class ModelContext {
                     connection: connection, snapshot: snapshot, container: container,
                     entityIDs: entityIDs, append: &results,
                     externalDataColumns: externalDataColumns,
-                    externalDataSession: externalDataSession,
-                    batchInsertedKeys: &batchInsertedKeys)
+                    externalDataSession: externalDataSession)
             }
             let assignedIDs = Dictionary(
                 uniqueKeysWithValues: results.map { (ObjectIdentifier($0.model), $0.primaryKey) })
@@ -4556,8 +4554,7 @@ public final class ModelContext {
         _ model: any PersistentModel, inserted: Bool, connection: any RuntimeConnection,
         snapshot: BackingDataSnapshot, container: ModelContainer, entityIDs: [String: Int],
         append: inout [PersistedModel], externalDataColumns: Set<String>,
-        externalDataSession: ExternalDataWriteSession,
-        batchInsertedKeys: inout Set<StoreEntityKey>
+        externalDataSession: ExternalDataWriteSession
     ) throws {
         func typed<Model: PersistentModel>(_ model: Model) throws {
             guard let entity = container.schemaDescriptor.entity(forName: String(describing: Model.self)) else { return }
@@ -4629,12 +4626,10 @@ public final class ModelContext {
             let table = "Z\(rootEntity(for: entity).name.uppercased())"
             if inserted {
                 let preservedPrimaryKey = snapshot.primaryKey
-                if preservedPrimaryKey == nil {
+                if preservedPrimaryKey == nil,
                     let match = try uniqueMatch(
                         entity: entity, columns: columns, values: values, connection: connection)
-                    if let match, !batchInsertedKeys.contains(
-                        StoreEntityKey(entityName: entity.name, primaryKey: match.primaryKey))
-                    {
+                {
                     let assignments = columns.map { "\($0) = ?" }.joined(separator: ", ")
                     let version = match.version + 1
                     let hasDiscriminator = entityIDs[entity.name] != nil
@@ -4664,7 +4659,6 @@ public final class ModelContext {
                             mergedIntoExistingRow: mergedIntoExistingRow,
                             mergedDuplicatePrimaryKey: mergedDuplicatePrimaryKey))
                     return
-                    }
                 }
                 let primaryKey =
                     try preservedPrimaryKey ?? Self.allocatePrimaryKey(table: table, connection: connection)
@@ -4676,7 +4670,6 @@ public final class ModelContext {
                 try connection.execute(
                     "INSERT INTO \(table) (\(names)) VALUES (\(placeholders))",
                     arguments: identityValues + values)
-                batchInsertedKeys.insert(StoreEntityKey(entityName: entity.name, primaryKey: primaryKey))
                 append.append(
                     PersistedModel(
                         model: model, entityName: entity.name, primaryKey: primaryKey, version: 1,

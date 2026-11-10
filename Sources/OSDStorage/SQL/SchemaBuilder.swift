@@ -366,7 +366,7 @@ package enum SchemaBuilder {
             }
             for attribute in attributes where attribute.options.contains(.unique) {
                 statements.append(
-                    "CREATE INDEX Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX ON Z\(entity.name.uppercased()) (Z\(attribute.name.uppercased()));"
+                    "CREATE UNIQUE INDEX Z\(entity.name.uppercased())_Z\(attribute.name.uppercased())_UNIQUE_INDEX ON Z\(entity.name.uppercased()) (Z\(attribute.name.uppercased()));"
                 )
             }
             for index in entity.indexes {
@@ -647,7 +647,7 @@ package enum SchemaBuilder {
                     ownerEntityName: declaringEntity, rootEntityName: root.name,
                     entities: entities, entityIDs: entityIDs)
                 statements.append(
-                    "CREATE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(attribute.name.uppercased()))\(predicate);"
+                    "CREATE UNIQUE INDEX \(indexName) ON Z\(root.name.uppercased()) (Z\(attribute.name.uppercased()))\(predicate);"
                 )
             }
             for member in members {

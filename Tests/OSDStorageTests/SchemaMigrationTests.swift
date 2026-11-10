@@ -1069,7 +1069,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT ZVALUE FROM ZRECORD WHERE Z_PK = 4") },
             [[.int(Int64(Int32.max) + 1)]])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try migrated.write { connection in
                 try connection.execute(
                     "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (?, ?, ?)",
@@ -1127,7 +1127,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT ZCODE, ZRANK FROM ZRECORD WHERE Z_PK = 2") },
             [[.int(128), .int(32768)]])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try migrated.write {
                 try $0.execute(
                     "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCODE, ZRANK, ZUNTOUCHED) VALUES (1, 3, 128, 32769, 'duplicate')"
@@ -1136,7 +1136,7 @@ final class SchemaMigrationTests: XCTestCase {
         try migrated.close()
 
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
-        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        XCTAssertEqual(try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
         try reopened.close()
     }
 
@@ -2647,7 +2647,7 @@ final class SchemaMigrationTests: XCTestCase {
                     try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
                 },
                 [[.text("ZRECORD_ZVALUE_UNIQUE_INDEX")]])
-            XCTAssertNoThrow(
+            XCTAssertThrowsError(
                 try migrated.write {
                     try $0.execute(
                         "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 20, ?)",
@@ -2664,7 +2664,7 @@ final class SchemaMigrationTests: XCTestCase {
 
             let reopened = try LightweightMigration.openStore(location: location, schema: destination)
             XCTAssertEqual(
-                try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(Int64(values.count + 1))]])
+                try reopened.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(Int64(values.count))]])
             XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
             try reopened.close()
         }
@@ -2756,7 +2756,7 @@ final class SchemaMigrationTests: XCTestCase {
                 ).first?.first
             },
             .blob(Array(SchemaHash.hexDigest(version3).utf8)))
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try widened.write {
                 try $0.execute(
                     "INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZCOUNT, ZTITLE) VALUES (1, 9, 64, 'one')")
@@ -2767,7 +2767,7 @@ final class SchemaMigrationTests: XCTestCase {
         let reopened = try LightweightMigration.openStore(location: location, schema: version3)
         XCTAssertEqual(
             try reopened.read { try $0.rows("SELECT Z_PK, Z_OPT, ZCOUNT, ZTITLE FROM ZRECORD ORDER BY Z_PK") },
-            [[.int(7), .int(3), .double(16), .text("one")], [.int(12), .int(8), .double(32), .text("two")], [.int(13), .int(9), .double(64), .text("one")]])
+            [[.int(7), .int(3), .double(16), .text("one")], [.int(12), .int(8), .double(32), .text("two")]])
         XCTAssertEqual(try reopened.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         try reopened.close()
     }
@@ -2920,14 +2920,14 @@ final class SchemaMigrationTests: XCTestCase {
             [
                 [
                     .text("ZRECORD_ZVALUE_UNIQUE_INDEX"),
-                    .text("CREATE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
                 ]
             ])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 17.0)")
             })
-        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(2)]])
         try driver.close()
     }
 
@@ -3742,7 +3742,7 @@ final class SchemaMigrationTests: XCTestCase {
             try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD' ORDER BY name")
         }
         XCTAssertEqual(indexes, [[.text("ZRECORD_ZLABEL_UNIQUE_INDEX")], [.text("ZRECORD_ZVALUE_INDEX")]])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE, ZLABEL) VALUES (1, 10, 1, 'zero')")
             })
@@ -3915,10 +3915,10 @@ final class SchemaMigrationTests: XCTestCase {
             [
                 [
                     .text("ZRECORD_ZVALUE_UNIQUE_INDEX"),
-                    .text("CREATE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
+                    .text("CREATE UNIQUE INDEX ZRECORD_ZVALUE_UNIQUE_INDEX ON ZRECORD (ZVALUE)"),
                 ]
             ])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 3, 8)")
             })
@@ -4325,7 +4325,7 @@ final class SchemaMigrationTests: XCTestCase {
                 try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZRECORD'")
             },
             [[.text("ZRECORD_ZVALUE_UNIQUE_INDEX")]])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZVALUE) VALUES (1, 5, 5)")
             })
@@ -6630,7 +6630,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.close()
     }
 
-    func testMultipleScalarRemovalAcceptsNonUniqueGeneratedIndex() throws {
+    func testMultipleScalarRemovalRejectsTamperedGeneratedUniqueIndex() throws {
         let source = SchemaDescriptor([
             SchemaDescriptor.Entity(
                 name: "Record",
@@ -6644,12 +6644,20 @@ final class SchemaMigrationTests: XCTestCase {
         ])
         let driver = try GRDBSQLiteDriver(location: .memory(name: "multiple-removals-tampered-unique"))
         try bootstrap(source, driver: driver)
-        XCTAssertNoThrow(
+        try driver.write { connection in
+            try connection.execute("DROP INDEX ZRECORD_ZREMOVED_UNIQUE_INDEX")
+            try connection.execute("CREATE INDEX ZRECORD_ZREMOVED_UNIQUE_INDEX ON ZRECORD (ZREMOVED)")
+        }
+        XCTAssertThrowsError(
             try driver.write {
                 try LightweightMigration.migrate(source: source, destination: destination, connection: $0)
             }
-        )
-        XCTAssertFalse(
+        ) { error in
+            guard case SwiftDataError.migrationUnsupported = error else {
+                return XCTFail("Expected tampered generated unique index to fail closed, got \(error)")
+            }
+        }
+        XCTAssertTrue(
             try driver.read {
                 try $0.rows("PRAGMA table_info(ZRECORD)").contains(where: { $0.count > 1 && $0[1] == .text("ZREMOVED") }
                 )
@@ -11871,7 +11879,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(try migrated.read { try $0.rows("PRAGMA integrity_check") }, [[.text("ok")]])
         XCTAssertEqual(
             try migrated.read { try $0.rows("SELECT ZCODE, ZLABEL, ZTARGET FROM ZAARDVARK") }, [])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try migrated.write {
                 try $0.execute(
                     "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZCODE, ZLABEL) VALUES (?, 1, 'duplicate', 'a')",
@@ -11880,7 +11888,7 @@ final class SchemaMigrationTests: XCTestCase {
                     "INSERT INTO ZAARDVARK (Z_ENT, Z_OPT, ZCODE, ZLABEL) VALUES (?, 1, 'duplicate', 'b')",
                     [.int(Int64(rootID))])
             })
-        XCTAssertEqual(try migrated.read { try $0.rows("SELECT COUNT(*) FROM ZAARDVARK") }, [[.int(2)]])
+        XCTAssertEqual(try migrated.read { try $0.rows("SELECT COUNT(*) FROM ZAARDVARK") }, [[.int(0)]])
         try migrated.close()
 
         let reopened = try LightweightMigration.openStore(location: location, schema: destination)
@@ -14037,7 +14045,7 @@ final class SchemaMigrationTests: XCTestCase {
             },
             [
                 "CREATE INDEX ZRECORD_ZA_INDEX ON ZRECORD (ZA)",
-                "CREATE INDEX ZRECORD_ZA_UNIQUE_INDEX ON ZRECORD (ZA)",
+                "CREATE UNIQUE INDEX ZRECORD_ZA_UNIQUE_INDEX ON ZRECORD (ZA)",
                 "CREATE UNIQUE INDEX ZRECORD_ZC_ZD_UNIQUE_INDEX ON ZRECORD (ZC, ZD)",
                 "CREATE INDEX ZRECORD_ZD_ZC_INDEX ON ZRECORD (ZD, ZC)",
             ])
@@ -14050,11 +14058,11 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.write { connection in
             try connection.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 4, 3, 5, 8, 8)")
         }
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZRECORD (Z_ENT, Z_OPT, ZA, ZB, ZC, ZD) VALUES (1, 5, 1, 5, 8, 9)")
             })
-        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(4)]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZRECORD") }, [[.int(3)]])
         try driver.close()
     }
 
@@ -14638,7 +14646,7 @@ final class SchemaMigrationTests: XCTestCase {
                 try $0.rows("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ZOWNER'")
             },
             [[.text("ZOWNER_ZIDENTITY_UNIQUE_INDEX")]])
-        XCTAssertNoThrow(
+        XCTAssertThrowsError(
             try driver.write {
                 try $0.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT, ZIDENTITY) VALUES (1, 9, 'id-1')")
             })
@@ -14647,7 +14655,7 @@ final class SchemaMigrationTests: XCTestCase {
         try driver.write { connection in
             try connection.execute("INSERT INTO ZOWNER (Z_ENT, Z_OPT) VALUES (1, 7)")
         }
-        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZOWNER") }, [[.int(3)]])
+        XCTAssertEqual(try driver.read { try $0.rows("SELECT COUNT(*) FROM ZOWNER") }, [[.int(2)]])
         try driver.close()
     }
 

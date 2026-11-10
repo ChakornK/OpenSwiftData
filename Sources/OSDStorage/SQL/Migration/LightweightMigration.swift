@@ -318,43 +318,12 @@ package enum LightweightMigration {
         try connection.execute("SAVEPOINT osd_lightweight_migration")
         do {
             try apply(source: source, destination: destination, connection: connection)
-            try validateUniqueAttributesHaveNoDuplicates(destination: destination, connection: connection)
             try connection.execute("RELEASE SAVEPOINT osd_lightweight_migration")
         } catch {
             try? connection.execute("ROLLBACK TO SAVEPOINT osd_lightweight_migration")
             try? connection.execute("RELEASE SAVEPOINT osd_lightweight_migration")
             throw error
         }
-    }
-
-    /// Checks that @Attribute(.unique) columns have no duplicate values, replacing the DB-level
-    /// unique index enforcement that Apple does not use.
-    private static func validateUniqueAttributesHaveNoDuplicates(
-        destination: SchemaDescriptor, connection: SQLConnection
-    ) throws {
-        for entity in destination.entities {
-            let table = "Z\(rootEntityName(for: entity, in: destination).uppercased())"
-            for attribute in entity.attributes where attribute.options.contains(.unique) {
-                let column = "Z\(attribute.name.uppercased())"
-                let rows = try connection.rows(
-                    "SELECT \(column), COUNT(*) FROM \(table) GROUP BY \(column) HAVING COUNT(*) > 1"
-                )
-                if !rows.isEmpty {
-                    throw SwiftDataError.migrationUnsupported(
-                        "Unique attribute '\(entity.name).\(attribute.name)' has duplicate values in the store.")
-                }
-            }
-        }
-    }
-
-    private static func rootEntityName(for entity: SchemaDescriptor.Entity, in schema: SchemaDescriptor) -> String {
-        var current = entity
-        while let superName = current.superentityName,
-              let parent = schema.entities.first(where: { $0.name == superName })
-        {
-            current = parent
-        }
-        return current.name
     }
 
     private static func ensureMetadataTable(_ connection: SQLConnection) throws {
@@ -5159,14 +5128,10 @@ package enum LightweightMigration {
             let rows = try connection.rows(
                 "SELECT sql, tbl_name FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE",
                 [.text(definition.name)])
-            let normalizedExpected = definition.statement.lowercased()
-                .replacingOccurrences(of: "createuniqueindex", with: "createindex")
-                .filter { !$0.isWhitespace && $0 != ";" }
+            let normalizedExpected = definition.statement.lowercased().filter { !$0.isWhitespace && $0 != ";" }
             let normalizedActual = rows.first?.first.flatMap { value -> String? in
                 guard case let .text(sql) = value else { return nil }
-                return sql.lowercased()
-                    .replacingOccurrences(of: "createuniqueindex", with: "createindex")
-                    .filter { !$0.isWhitespace && $0 != ";" && $0 != "`" && $0 != "\"" }
+                return sql.lowercased().filter { !$0.isWhitespace && $0 != ";" && $0 != "`" && $0 != "\"" }
             }
             guard rows.count == 1,
                 normalizedActual == normalizedExpected,
@@ -7030,7 +6995,7 @@ package enum LightweightMigration {
                 guard row.count > 4, case let .text(name) = row[1] else { return false }
                 return name.caseInsensitiveCompare(definition.name) == .orderedSame
             }),
-            case .int = index[2],
+            index[2] == .int(definition.statement.hasPrefix("CREATE UNIQUE INDEX") ? 1 : 0),
             index[4] == .int(expectedPartial ? 1 : 0)
         else {
             throw SwiftDataError.migrationUnsupported(
@@ -7085,8 +7050,7 @@ package enum LightweightMigration {
     }
 
     private static func normalizedIndexSQL(_ sql: String) -> String? {
-        let normalized = sql.replacingOccurrences(of: "CREATE UNIQUE INDEX", with: "CREATE INDEX")
-        let scalars = Array(normalized.unicodeScalars)
+        let scalars = Array(sql.unicodeScalars)
         var tokens: [String] = []
         var index = 0
         while index < scalars.count {
@@ -7258,7 +7222,7 @@ package enum LightweightMigration {
             definitions.append(
                 IndexDefinition(
                     name: name,
-                    statement: "CREATE INDEX \(name) ON Z\(entity.name.uppercased()) "
+                    statement: "CREATE UNIQUE INDEX \(name) ON Z\(entity.name.uppercased()) "
                         + "(Z\(attribute.name.uppercased()));",
                     table: "Z\(entity.name.uppercased())",
                     columns: ["Z\(attribute.name.uppercased())"]))

@@ -896,9 +896,7 @@
         "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": [
-          "delete.state"
-        ]
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": []
       }
     },
     {
@@ -1161,17 +1159,7 @@
         "RollbackParityTests/rollback restores committed values immediately and clears change tracking": "compared"
       },
       "observations": {
-        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": [
-          "age",
-          "name",
-          "tag",
-          "tags",
-          "modelHasChanges",
-          "contextHasChanges",
-          "modelRemainsAttached",
-          "storedAges",
-          "sameRegisteredInstance"
-        ]
+        "RollbackParityTests/rollback restores committed values immediately and clears change tracking": []
       }
     },
     {
@@ -1182,7 +1170,9 @@
       "outcomes": {
         "RollbackParityTests/rollback restores committed relationship edits": "compared"
       },
-      "observations": {}
+      "observations": {
+        "RollbackParityTests/rollback restores committed relationship edits": []
+      }
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches related insertions and restores saved graph",
@@ -1192,7 +1182,9 @@
       "outcomes": {
         "RollbackParityTests/rollback detaches related insertions and restores saved graph": "compared"
       },
-      "observations": {}
+      "observations": {
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph": []
+      }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores first committed values after repeated edits",
@@ -1202,7 +1194,9 @@
       "outcomes": {
         "RollbackParityTests/rollback restores first committed values after repeated edits": "compared"
       },
-      "observations": {}
+      "observations": {
+        "RollbackParityTests/rollback restores first committed values after repeated edits": []
+      }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores values when an edited model is deleted",
@@ -1212,7 +1206,9 @@
       "outcomes": {
         "RollbackParityTests/rollback restores values when an edited model is deleted": "compared"
       },
-      "observations": {}
+      "observations": {
+        "RollbackParityTests/rollback restores values when an edited model is deleted": []
+      }
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches insertions and restores deletions",
@@ -1363,7 +1359,9 @@
       "outcomes": {
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "compared"
       },
-      "observations": {}
+      "observations": {
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": []
+      }
     },
     {
       "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",

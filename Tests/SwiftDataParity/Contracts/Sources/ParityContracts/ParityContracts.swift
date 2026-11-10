@@ -2880,7 +2880,7 @@ public enum CoverageMatrixValidator {
     public static let permittedStatuses: Set<String> = ["compared", "divergent", "non-comparable"]
     public static let permittedReasons: Set<String> = [
         "deferred-behavior-gap", "private-api", "unsupported-platform-or-version",
-        "nondeterministic-apple-behavior", "shim-only-api",
+        "nondeterministic-apple-behavior", "shim-only-api", "custom-store-api",
     ]
 
     public static func validate(

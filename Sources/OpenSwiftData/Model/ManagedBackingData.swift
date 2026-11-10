@@ -68,6 +68,7 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
 
     /// The model's persistent identifier.
     public var persistentModelID: PersistentIdentifier { locked { identifier } }
+
     /// The context managing this model, if any.
     public var modelContext: ModelContext? { locked { context } }
     /// Whether the model has been deleted.
@@ -422,7 +423,9 @@ public final class ManagedBackingData<Model: PersistentModel>: BackingData, AnyB
         lock.lock()
         if let primaryKey = identifier.primaryKey {
             identifier = PersistentIdentifier(
-                storeIdentifier: identifier.resolvedStoreIdentifier, entityName: entityName, primaryKey: primaryKey)
+                resolvedStoreIdentifier: identifier.resolvedStoreIdentifier,
+                displayedStoreIdentifier: identifier.storeIdentifier ?? identifier.resolvedStoreIdentifier,
+                entityName: entityName, primaryKey: primaryKey)
         } else if let temporaryIdentifier = identifier.temporaryIdentifier {
             identifier = PersistentIdentifier(
                 storeIdentifier: identifier.resolvedStoreIdentifier,

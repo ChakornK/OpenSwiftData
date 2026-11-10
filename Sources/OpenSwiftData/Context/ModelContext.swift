@@ -1376,7 +1376,9 @@ public final class ModelContext {
             }
             return IdentifierQueryRow(
                 identifier: PersistentIdentifier(
-                    storeIdentifier: storeIdentifier, entityName: concreteEntityName, primaryKey: primaryKey),
+                    resolvedStoreIdentifier: storeIdentifier,
+                    displayedStoreIdentifier: modelStoreIdentifier,
+                    entityName: concreteEntityName, primaryKey: primaryKey),
                 sortValues: Array(row.dropFirst(hasHierarchy ? 2 : 1)))
         }
         if descriptor.includePendingChanges {
@@ -3095,7 +3097,9 @@ public final class ModelContext {
             storeIdentifier: storeIdentifier, entityID: try entityID(for: entity.name), primaryKey: primaryKey,
             version: version,
             identifier: PersistentIdentifier(
-                storeIdentifier: storeIdentifier, entityName: entity.name, primaryKey: primaryKey))
+                resolvedStoreIdentifier: storeIdentifier,
+                displayedStoreIdentifier: modelStoreIdentifier,
+                entityName: entity.name, primaryKey: primaryKey))
         let model = Model(backingData: backing)
         let adapters = Model.erasedPersistenceAdapters()
         var columnIndex = 2

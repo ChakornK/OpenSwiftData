@@ -40,11 +40,9 @@ import Testing
         let reopened = try ModelContainer(
             for: StoreIdentifierParityItem.self, configurations: ModelConfiguration(url: url))
         let fetched = try #require(try reopened.mainContext.fetch(FetchDescriptor<StoreIdentifierParityItem>()).first)
-        // Apple regenerates the store identifier on reopen, so the fetched model carries a different
-        // identifier than the original.
         #expect(fetched.persistentModelID != identifier)
+        #expect(fetched.persistentModelID.storeIdentifier == identifier.storeIdentifier)
         let resolved: StoreIdentifierParityItem? = reopened.mainContext.registeredModel(for: identifier)
-        // The original identifier no longer resolves to a registered model after the reopen.
         #expect(resolved == nil)
     }
 

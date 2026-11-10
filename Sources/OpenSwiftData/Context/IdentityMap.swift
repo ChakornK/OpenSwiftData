@@ -53,6 +53,12 @@ final class IdentityMap: @unchecked Sendable {
         models.removeValue(forKey: key)
     }
 
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        models.removeAll()
+    }
+
     func liveModels() -> [(EntityPrimaryKey, any PersistentModel)] {
         lock.lock()
         defer { lock.unlock() }

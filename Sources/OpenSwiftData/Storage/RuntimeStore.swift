@@ -243,6 +243,13 @@ package protocol RuntimeHistoryStore: RuntimeStore {
     func deleteHistory(transactionIDs: [Int64]) throws
     /// The largest transaction identifier the store has ever issued, or zero when none.
     func latestIssuedHistoryTransactionID() throws -> Int64
+    /// Records a completed transaction from outside the store's own write path, such as one reported by a
+    /// custom data store. The default implementation records nothing.
+    func record(_ transaction: StoredHistoryTransaction) throws
+}
+
+extension RuntimeHistoryStore {
+    func record(_ transaction: StoredHistoryTransaction) throws {}
 }
 
 /// SQL values exchanged across the runtime-store boundary.

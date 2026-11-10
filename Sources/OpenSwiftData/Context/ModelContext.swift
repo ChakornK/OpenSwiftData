@@ -789,6 +789,19 @@ public final class ModelContext {
                     "Relationship": "\(entity.name).\(denied.name)",
                 ])
         }
+        if let dataStore = container.dataStore as? any OpenSwiftDataDataStoreBatching {
+            try processPendingChangesThrowing()
+            try dataStore.delete(
+                DataStoreBatchDeleteRequest(
+                    predicate: predicate, includeSubclasses: includeSubclasses,
+                    editingState: editingState))
+            identityMap.removeAll()
+            storeHub?.publish(
+                storeIdentifier: storeHubStoreIdentifier ?? ObjectIdentifier(container as AnyObject),
+                sourceSubscription: storeHubSubscription ?? UUID(),
+                allEntitiesChanged: true, inserted: [], updated: [], deleted: [])
+            return
+        }
         let scratch = ModelContext(container: container, autosaveEnabled: false)
         scratch.postsSaveNotifications = false
         var descriptor = FetchDescriptor<Model>(predicate: predicate)
@@ -4217,6 +4230,19 @@ public final class ModelContext {
                     + "unique IDs: \(mappingsAreUnique), valid mappings: \(mappingsAreValid), "
                     + "reserved IDs: \(reservations.count)); invalid results must not commit changes.")
         }
+        if let historyToken = result.historyToken {
+            try recordDataStoreHistory(
+                token: historyToken, store: dataStore,
+                changes: historyChangesFor(
+                    pending: pending,
+                    insertedKeys: nil, updatedKeys: nil,
+                    deletedKeys: Set(
+                        pending.deleted.compactMap { model in
+                            guard let primaryKey = model.persistentModelID.primaryKey else { return nil }
+                            return StoreEntityKey(
+                                entityName: model.persistentModelID.entityName, primaryKey: primaryKey)
+                        })))
+        }
 
         var insertedKeys = Set<StoreEntityKey>()
         let insertedIDs = Set(pending.inserted.map(ObjectIdentifier.init))
@@ -4302,6 +4328,65 @@ public final class ModelContext {
         dataStoreTemporaryIdentifiers.removeValue(forKey: objectID)
         dataStoreOriginalIdentifiers.removeValue(forKey: objectID)
     }
+
+    /// Stores a custom store's returned history token with the transaction changes of a save.
+    ///
+    /// Tokens recorded here make `fetchHistory` work for custom stores that report their own history
+    /// position; the stored rows mirror the default store's transaction layout.
+    private func recordDataStoreHistory(
+        token: any HistoryToken, store: any OpenSwiftDataDataStore,
+        changes: [RuntimeHistoryChange]
+    ) throws {
+        guard let runtimeStore = optionalContainer?.store as? any RuntimeHistoryStore else { return }
+        let identifier = try runtimeStore.latestIssuedHistoryTransactionID() + 1
+        let changeList = changes.map { change in
+            StoredHistoryChange(
+                type: change.type, entityName: change.entityName, primaryKey: change.primaryKey,
+                updatedAttributes: change.updatedAttributes, tombstone: change.tombstone)
+        }
+        let transaction = StoredHistoryTransaction(
+            id: identifier, timestamp: Date(), author: historyAuthorStorage,
+            bundleIdentifier: HistoryWriter.bundleIdentifier,
+            processIdentifier: HistoryWriter.processIdentifier, changes: changeList)
+        try runtimeStore.record(transaction)
+        dataStoreHistoryTokenByStore[store.identifier] = token.tokenValue.map {
+            ($0 as? [String: Int64])?.values.max() ?? transaction.id
+        } ?? transaction.id
+    }
+
+    /// Builds the history change list for a custom-store save from the context's pending state.
+    private func historyChangesFor(
+        pending: ContextState.PendingState, insertedKeys: Set<StoreEntityKey>?,
+        updatedKeys: Set<StoreEntityKey>?, deletedKeys: Set<StoreEntityKey>
+    ) -> [RuntimeHistoryChange] {
+        var changes: [RuntimeHistoryChange] = []
+        for model in pending.inserted {
+            let identifier = model.persistentModelID
+            guard let primaryKey = identifier.primaryKey else { continue }
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .insert, entityName: identifier.entityName, primaryKey: primaryKey,
+                    updatedAttributes: [], tombstone: [:]))
+        }
+        for model in pending.changed {
+            let identifier = model.persistentModelID
+            guard let primaryKey = identifier.primaryKey else { continue }
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .update, entityName: identifier.entityName, primaryKey: primaryKey,
+                    updatedAttributes: [], tombstone: [:]))
+        }
+        for key in deletedKeys.sorted(by: Self.historyKeyLess) {
+            changes.append(
+                RuntimeHistoryChange(
+                    type: .delete, entityName: key.entityName, primaryKey: key.primaryKey,
+                    updatedAttributes: [], tombstone: [:]))
+        }
+        return changes
+    }
+
+    /// The latest history token each custom store reported, keyed by store identifier.
+    private var dataStoreHistoryTokenByStore: [String: Int64] = [:]
 
     private func dataStoreSnapshot(
         for model: any PersistentModel, container: ModelContainer

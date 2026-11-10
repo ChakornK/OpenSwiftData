@@ -955,6 +955,84 @@ extension DefaultSnapshotConfiguration: Equatable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(name) }
 }
 
+private final class BatchingStoreState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [PersistentIdentifier: OpenSwiftDataDataStoreSnapshot] = [:]
+    private var nextKey: Int64 = 1
+    private(set) var lastDeleteSubclasses: Bool?
+
+    func snapshots() -> [OpenSwiftDataDataStoreSnapshot] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(rows.values)
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        lock.lock(); defer { lock.unlock() }
+        var remappings: [PersistentIdentifier: PersistentIdentifier] = [:]
+        for snapshot in request.inserted where snapshot.persistentIdentifier.isTemporary {
+            let permanent = PersistentIdentifier(
+                storeIdentifier: "batching.fixture", entityName: snapshot.entityName, primaryKey: nextKey)
+            nextKey += 1
+            remappings[snapshot.persistentIdentifier] = permanent
+        }
+        for snapshot in request.inserted + request.updated {
+            let permanent = remappings[snapshot.persistentIdentifier] ?? snapshot.persistentIdentifier
+            rows[permanent] = OpenSwiftDataDataStoreSnapshot(
+                persistentIdentifier: permanent, entityName: snapshot.entityName,
+                values: snapshot.values, relationships: snapshot.relationships)
+        }
+        for identifier in request.deleted { rows.removeValue(forKey: identifier) }
+        return OpenSwiftDataDataStoreSaveResult(
+            identifierRemappings: remappings,
+            updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
+            deletedIdentifiers: Set(request.deleted))
+    }
+
+    func delete<Model: PersistentModel>(
+        _ request: DataStoreBatchDeleteRequest<Model>, matching: (OpenSwiftDataDataStoreSnapshot) -> Bool
+    ) throws {
+        lock.lock(); defer { lock.unlock() }
+        lastDeleteSubclasses = request.includeSubclasses
+        for (identifier, snapshot) in rows where matching(snapshot) {
+            rows.removeValue(forKey: identifier)
+        }
+    }
+}
+
+private final class BatchingDataStore: OpenSwiftDataDataStore, OpenSwiftDataDataStoreBatching, @unchecked Sendable {
+    let identifier = "batching.fixture"
+    let state: BatchingStoreState
+
+    init(state: BatchingStoreState) { self.state = state }
+
+    func fetch<Model: PersistentModel>(_ request: OpenSwiftDataDataStoreFetchRequest<Model>) throws -> OpenSwiftDataDataStoreFetchResult {
+        OpenSwiftDataDataStoreFetchResult(snapshots: [])
+    }
+
+    func save(_ request: OpenSwiftDataDataStoreSaveRequest) throws -> OpenSwiftDataDataStoreSaveResult {
+        try state.save(request)
+    }
+
+    func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? { nil }
+
+    func delete<Model: PersistentModel>(_ request: DataStoreBatchDeleteRequest<Model>) throws {
+        let modelName = String(describing: Model.self).split(separator: ".").last.map(String.init) ?? ""
+        try state.delete(request) { snapshot in
+            snapshot.entityName == modelName
+                || (request.includeSubclasses && snapshot.entityName.hasPrefix(modelName))
+        }
+    }
+}
+
+private struct HistoryTokenStore: HistoryToken, Codable {
+    let value: Int64
+
+    public typealias TokenType = Int64
+    var id: Int { Int(value) }
+    var tokenValue: Int64? { value }
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.value < rhs.value }
+}
+
 @Suite
 struct AppleDataStoreAPITests {
     @Test
@@ -1176,6 +1254,37 @@ struct AppleDataStoreAPITests {
 
         let fetched = try container.makeContext().fetch(FetchDescriptor<AppleStoreFixture>())
         #expect(fetched.map(\.title) == ["variadic"])
+    }
+
+    @MainActor
+    @Test
+    func batchDeleteRoutesThroughBatchingDataStore() throws {
+        let state = BatchingStoreState()
+        let configuration = ModelConfiguration(
+            "batching-store", dataStoreConfiguration: ExistingDataStoreConfiguration(store: BatchingDataStore(state: state)))
+        let container = try ModelContainer(for: AppleStoreFixture.self, configurations: configuration)
+        let context = container.mainContext
+        context.insert(AppleStoreFixture(title: "one"))
+        context.insert(AppleStoreFixture(title: "two"))
+        try context.save()
+        #expect(state.snapshots().count == 2)
+
+        try context.delete(model: AppleStoreFixture.self)
+        #expect(state.snapshots().isEmpty)
+        #expect(state.lastDeleteSubclasses == true)
+        #expect(try context.fetch(FetchDescriptor<AppleStoreFixture>()).isEmpty)
+    }
+
+    @MainActor
+    @Test
+    func saveRecordsHistoryTokenFromCustomStore() throws {
+        let token = HistoryTokenStore(value: 7)
+        let result = DataStoreSaveChangesResult<CanonicalFixtureSnapshot>(
+            for: "token.store", historyToken: token)
+        #expect(result.historyToken?.tokenValue as? Int64 == 7)
+
+        let legacy = OpenSwiftDataDataStoreSaveResult(historyToken: token)
+        #expect(legacy.historyToken?.tokenValue as? Int64 == 7)
     }
 
     @MainActor

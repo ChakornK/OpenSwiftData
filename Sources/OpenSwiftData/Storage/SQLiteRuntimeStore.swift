@@ -103,6 +103,35 @@ private struct SQLiteRuntimeStore: RuntimeQueryStore, RuntimeHistoryStore, Runti
         }
     }
 
+    func record(_ transaction: StoredHistoryTransaction) throws {
+        let details = try JSONEncoder().encode(
+            StoredHistoryChangeDetails(
+                updatedAttributes: transaction.changes.flatMap(\.updatedAttributes),
+                tombstone: transaction.changes.reduce(into: [:]) { result, change in
+                    result.merge(change.tombstone) { _, new in new }
+                }))
+        try driver.write { connection in
+            try connection.execute(
+                "INSERT INTO _osd_history_transactions "
+                    + "(timestamp, author, bundle_identifier, process_identifier) VALUES (?, ?, ?, ?)",
+                [
+                    .double(transaction.timestamp.timeIntervalSince1970),
+                    transaction.author.map(StoredValue.text) ?? .null,
+                    .text(transaction.bundleIdentifier), .text(transaction.processIdentifier),
+                ])
+            let transactionID = connection.lastInsertRowID()
+            for (ordinal, change) in transaction.changes.enumerated() {
+                try connection.execute(
+                    "INSERT INTO _osd_history_changes "
+                        + "(transaction_id, ordinal, type, entity, primary_key, details) VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        .int(transactionID), .int(Int64(ordinal)), .text(change.type.rawValue),
+                        .text(change.entityName), .int(change.primaryKey), .blob(Array(details)),
+                    ])
+            }
+        }
+    }
+
     func compile(_ request: RuntimePredicateRequest) throws -> RuntimeCompiledPredicate {
         switch request.captureEncoding {
         case .typed:

@@ -36,6 +36,11 @@ public extension OpenSwiftDataDataStore {
     }
 }
 
+package protocol OpenSwiftDataDataStoreBatching: OpenSwiftDataDataStore {
+    /// Deletes models matching the request directly from the store.
+    func delete<Model: PersistentModel>(_ request: DataStoreBatchDeleteRequest<Model>) throws
+}
+
 @available(*, deprecated, renamed: "OpenSwiftDataDataStore")
 public typealias LegacyDataStore = OpenSwiftDataDataStore
 
@@ -150,23 +155,27 @@ public struct OpenSwiftDataDataStoreSaveRequest: Sendable {
 }
 
 /// The permanent identifiers assigned to newly inserted snapshots.
-public struct OpenSwiftDataDataStoreSaveResult: Sendable, Equatable {
+public struct OpenSwiftDataDataStoreSaveResult: Sendable {
     /// Maps only unreserved inserted temporary identifiers to their permanent store identifiers.
     public let identifierRemappings: [PersistentIdentifier: PersistentIdentifier]
     /// The existing identifiers whose updates were committed.
     public let updatedIdentifiers: Set<PersistentIdentifier>
     /// The identifiers whose deletions were committed.
     public let deletedIdentifiers: Set<PersistentIdentifier>
+    /// The history position the save produced, when the store records history.
+    public let historyToken: (any HistoryToken)?
 
     /// Creates a result acknowledging the committed save operations.
     public init(
         identifierRemappings: [PersistentIdentifier: PersistentIdentifier] = [:],
         updatedIdentifiers: Set<PersistentIdentifier> = [],
-        deletedIdentifiers: Set<PersistentIdentifier> = []
+        deletedIdentifiers: Set<PersistentIdentifier> = [],
+        historyToken: (any HistoryToken)? = nil
     ) {
         self.identifierRemappings = identifierRemappings
         self.updatedIdentifiers = updatedIdentifiers
         self.deletedIdentifiers = deletedIdentifiers
+        self.historyToken = historyToken
     }
 }
 
@@ -375,6 +384,32 @@ public extension DataStore {
     }
     func initializeState(for editingState: EditingState) {}
     func invalidateState(for editingState: EditingState) {}
+}
+
+/// A request to delete a batch of models directly from a custom store.
+public struct DataStoreBatchDeleteRequest<Model: PersistentModel>: @unchecked Sendable {
+    /// The predicate selecting models to delete.
+    public let predicate: Predicate<Model>?
+    /// Whether to include subclass entities in the deletion.
+    public let includeSubclasses: Bool
+    /// The editing state associated with this deletion.
+    public let editingState: EditingState
+
+    public init(
+        predicate: Predicate<Model>? = nil,
+        includeSubclasses: Bool = true,
+        editingState: EditingState? = nil
+    ) {
+        self.predicate = predicate
+        self.includeSubclasses = includeSubclasses
+        self.editingState = editingState ?? EditingState(id: UUID(), author: nil)
+    }
+}
+
+/// A custom store that deletes batches of models directly.
+public protocol DataStoreBatching: DataStore {
+    /// Deletes every model matching the request.
+    func delete<Model: PersistentModel>(_ request: DataStoreBatchDeleteRequest<Model>) throws
 }
 
 package func makeCanonicalStore<Configuration: DataStoreConfiguration>(
@@ -774,7 +809,7 @@ private func jsonObject<T: Encodable>(_ value: T) throws -> Any {
     return try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
 }
 
-private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDataStore, @unchecked Sendable {
+private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDataStore, OpenSwiftDataDataStoreBatching, @unchecked Sendable {
     private let store: Store
     private let descriptor: SchemaDescriptor
     private let makeSnapshot: (OpenSwiftDataDataStoreSnapshot) throws -> any DataStoreSnapshot
@@ -854,7 +889,22 @@ private final class CanonicalDataStoreAdapter<Store: DataStore>: OpenSwiftDataDa
         return OpenSwiftDataDataStoreSaveResult(
             identifierRemappings: result.remappedIdentifiers,
             updatedIdentifiers: Set(request.updated.map(\.persistentIdentifier)),
-            deletedIdentifiers: Set(request.deleted))
+            deletedIdentifiers: Set(request.deleted),
+            historyToken: result.historyToken ?? DefaultHistoryToken(
+                storeTokens: [store.identifier: latestIssuedHistoryIdentifier(after: result)]))
+    }
+
+    /// Records the transaction identifier a custom store reported so history tokens stay monotonic.
+    private func latestIssuedHistoryIdentifier(after result: DataStoreSaveChangesResult<Store.Snapshot>) -> Int64 {
+        guard let value = result.historyToken?.tokenValue, let tokens = value as? [String: Int64] else { return 0 }
+        return tokens.values.max() ?? 0
+    }
+
+    func delete<Model: PersistentModel>(_ request: DataStoreBatchDeleteRequest<Model>) throws {
+        guard let batchingStore = store as? any DataStoreBatching else {
+            throw SwiftDataError.unsupportedStore("The configured data store does not support batch deletes.")
+        }
+        try batchingStore.delete(request)
     }
 
     func snapshot(for identifier: PersistentIdentifier) throws -> OpenSwiftDataDataStoreSnapshot? {

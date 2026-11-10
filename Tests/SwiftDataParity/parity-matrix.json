@@ -1619,7 +1619,7 @@
       },
       "observations": {},
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple's survivor of a duplicate-insert merge is non-deterministic; OpenSwiftData deterministically keeps the last insert."
+      "rationale": "Apple's survivor is non-deterministic (Set iteration order); OpenSwiftData deterministically keeps the last insert."
     },
     {
       "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",

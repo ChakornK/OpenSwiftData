@@ -58,27 +58,35 @@ public final class Schema: @unchecked Sendable {
 
     }
 
-    /// Describes a composite property and its recursively nested attributes.
-    public struct CompositeAttribute: Hashable {
-        public let name: String
-        public let valueType: Any.Type
-        public let attributes: [Attribute]
+    /// Describes an attribute that derives its value by composing other attributes.
+    public final class CompositeAttribute: Attribute {
+        public let nestedProperties: [Attribute]
 
-        public init(name: String, valueType: Any.Type, attributes: [Attribute]) {
-            self.name = name
-            self.valueType = valueType
-            self.attributes = attributes
+        public var properties: [Attribute] { nestedProperties }
+
+        public init(
+            name: String,
+            originalName: String? = nil,
+            options: [Option] = [],
+            valueType: Any.Type,
+            defaultValue: Any? = nil,
+            hashModifier: String? = nil
+        ) {
+            nestedProperties = []
+            super.init(
+                name, valueType: valueType, options: Set(options), isOptional: defaultValue == nil,
+                originalName: originalName, hashModifier: hashModifier)
         }
 
-        public static func == (lhs: CompositeAttribute, rhs: CompositeAttribute) -> Bool {
-            lhs.name == rhs.name && ObjectIdentifier(lhs.valueType) == ObjectIdentifier(rhs.valueType)
-                && lhs.attributes == rhs.attributes
-        }
-
-        public func hash(into hasher: inout Hasher) {
-            hasher.combine(name)
-            hasher.combine(ObjectIdentifier(valueType))
-            hasher.combine(attributes)
+        init(
+            _ name: String, valueType: Any.Type,
+            components: [Attribute],
+            originalName: String? = nil, hashModifier: String? = nil, defaultValue: String? = nil
+        ) {
+            nestedProperties = components
+            super.init(
+                name, valueType: valueType, options: [], isOptional: false,
+                originalName: originalName, hashModifier: hashModifier, defaultValue: defaultValue)
         }
     }
 
@@ -140,27 +148,29 @@ public final class Schema: @unchecked Sendable {
             compositeTypes: [String: [String: Any.Type]] = [:]
         ) {
             name = entity.name
-            let orderedAttributes = entity.attributes.map { attribute in
+            let orderedAttributes = entity.attributes.map { attribute -> Attribute in
                 let runtimeType = runtimeTypes[attribute.name]
-                let composite: CompositeAttribute?
                 if attribute.options.contains(.flattened), let runtimeType {
-                    let children = attribute.components.map { component in
+                    let children = attribute.components.map { component -> Attribute in
                         let childType = compositeTypes[attribute.name]?[component.name]
                             ?? Attribute.descriptorRuntimeType(component.type)
-                        let nestedComposite: CompositeAttribute? = childType is any FlattenedCompositeMetadataProviding.Type
-                            ? CompositeAttribute(
-                                name: component.name,
+                        if childType is any FlattenedCompositeMetadataProviding.Type {
+                            return CompositeAttribute(
+                                component.name,
                                 valueType: childType,
-                                attributes: ((childType as? any FlattenedCompositeMetadataProviding.Type)?
-                                    .flattenedComponentTypesForSchema ?? []).map { Attribute($0.0, valueType: $0.1) })
-                            : nil
-                        return Attribute(component.name, valueType: childType, compositeAttribute: nestedComposite)
+                                components: ((childType as? any FlattenedCompositeMetadataProviding.Type)?
+                                    .flattenedComponentTypesForSchema ?? []).map {
+                                        Attribute($0.0, valueType: $0.1)
+                                    })
+                        }
+                        return Attribute(component.name, valueType: childType)
                     }
-                    composite = CompositeAttribute(name: attribute.name, valueType: runtimeType, attributes: children)
-                } else {
-                    composite = nil
+                    return CompositeAttribute(
+                        attribute.name, valueType: runtimeType, components: children,
+                        originalName: attribute.originalName, hashModifier: attribute.hashModifier,
+                        defaultValue: attribute.defaultValue)
                 }
-                return Attribute(attribute, runtimeType: runtimeType, compositeAttribute: composite)
+                return Attribute(attribute, runtimeType: runtimeType)
             }
             let orderedRelationships = entity.relationships.map(Relationship.init)
             attributes = Set(orderedAttributes)
@@ -197,8 +207,7 @@ public final class Schema: @unchecked Sendable {
     }
 
     /// Describes a persisted attribute.
-    public final class Attribute: Hashable, SchemaProperty {
-        public let compositeAttribute: CompositeAttribute?
+    public class Attribute: Hashable, SchemaProperty {
         public typealias Component = SchemaDescriptor.Attribute.Component
 
         public enum Option: Hashable, Sendable {
@@ -243,7 +252,7 @@ public final class Schema: @unchecked Sendable {
         public var isTransient: Bool { false }
         public var isUnique: Bool { options.contains(.unique) }
         public var isTransformable: Bool { options.contains { if case .transformable = $0 { true } else { false } } }
-        public var composite: CompositeAttribute? { compositeAttribute }
+        public var isCodable: Bool { options.contains(.codable) || options.contains(.flattened) }
 
         public init(
             _ name: String,
@@ -253,7 +262,6 @@ public final class Schema: @unchecked Sendable {
             originalName: String? = nil,
             hashModifier: String? = nil,
             components: [SchemaDescriptor.Attribute.Component] = [],
-            compositeAttribute: CompositeAttribute? = nil,
             defaultValue: String? = nil
         ) {
             self.name = name
@@ -263,23 +271,34 @@ public final class Schema: @unchecked Sendable {
             self.originalName = originalName
             self.hashModifier = hashModifier
             self.components = components
-            self.compositeAttribute = compositeAttribute
             self.defaultValue = defaultValue
         }
 
+        public convenience init(
+            name: String,
+            originalName: String? = nil,
+            options: [Option] = [],
+            valueType: Any.Type,
+            defaultValue: Any? = nil,
+            hashModifier: String? = nil
+        ) {
+            self.init(
+                name, valueType: valueType, options: Set(options),
+                isOptional: defaultValue == nil, originalName: originalName, hashModifier: hashModifier)
+        }
+
         fileprivate convenience init(_ attribute: SchemaDescriptor.Attribute) {
-            self.init(attribute, runtimeType: nil, compositeAttribute: nil)
+            self.init(attribute, runtimeType: nil)
         }
 
         fileprivate convenience init(
             _ attribute: SchemaDescriptor.Attribute,
-            runtimeType: Any.Type?,
-            compositeAttribute: CompositeAttribute? = nil
+            runtimeType: Any.Type?
         ) {
             self.init(attribute.name, valueType: runtimeType ?? Self.resolveType(attribute.type),
                 options: Set(attribute.options.compactMap(\.schemaOption)), isOptional: attribute.isOptional,
                 originalName: attribute.originalName, hashModifier: attribute.hashModifier,
-                components: attribute.components, compositeAttribute: compositeAttribute,
+                components: attribute.components,
                 defaultValue: attribute.defaultValue)
         }
 

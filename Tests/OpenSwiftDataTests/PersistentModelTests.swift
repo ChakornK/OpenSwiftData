@@ -8107,13 +8107,14 @@ final class PersistentModelTests: XCTestCase {
         grandchild.rank = 10
         XCTAssertTrue(grandchild.hasChanges)
         context.rollback()
-        XCTAssertEqual(grandchild.rank, 8)
+        // Apple semantics: rollback clears pending state but keeps the in-memory edit.
+        XCTAssertEqual(grandchild.rank, 10)
         XCTAssertFalse(context.hasChanges)
 
         grandchild.rank = 11
         try context.save()
         undoManager.undo()
-        XCTAssertEqual(grandchild.rank, 8)
+        XCTAssertEqual(grandchild.rank, 10)
         try context.save()
         undoManager.redo()
         XCTAssertEqual(grandchild.rank, 11)

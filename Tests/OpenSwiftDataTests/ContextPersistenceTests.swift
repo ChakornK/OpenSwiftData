@@ -3959,7 +3959,7 @@ final class ContextPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testRollbackRestoresSavedValueBeforeRefetch() async throws {
+    func testRollbackKeepsInMemoryValueBeforeRefetch() async throws {
         let container = try ModelContainer(for: PersistenceTestModel.self, configurations: .sqliteMemory("update-test"))
         let first = container.mainContext
         let model = PersistenceTestModel(title: "before")
@@ -3972,14 +3972,16 @@ final class ContextPersistenceTests: XCTestCase {
         try second.save()
         fetched.title = "discarded"
         second.rollback()
-        XCTAssertEqual(fetched.title, "after")
+        // Apple semantics: rollback keeps the in-memory edit until a fetch refreshes the
+        // registered instance from the stored row.
+        XCTAssertEqual(fetched.title, "discarded")
         XCTAssertFalse(second.hasChanges)
         _ = try second.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertEqual(fetched.title, "after")
     }
 
     @MainActor
-    func testRollbackKeepsSavedBaselineAcrossMultipleMutations() async throws {
+    func testRollbackKeepsCurrentValuesAcrossMultipleMutations() async throws {
         let container = try ModelContainer(
             for: PersistenceTestModel.self, configurations: .sqliteMemory("rollback-saved-baseline"))
         let context = container.mainContext
@@ -3989,13 +3991,15 @@ final class ContextPersistenceTests: XCTestCase {
 
         model.title = "B"
         context.rollback()
-        XCTAssertEqual(model.title, "A")
+        // Apple semantics: rollback keeps the in-memory value until a fetch refreshes the
+        // registered instance from the stored row.
+        XCTAssertEqual(model.title, "B")
         _ = try context.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertEqual(model.title, "A")
 
         model.title = "C"
         context.rollback()
-        XCTAssertEqual(model.title, "A")
+        XCTAssertEqual(model.title, "C")
         XCTAssertFalse(context.hasChanges)
         _ = try context.fetch(FetchDescriptor<PersistenceTestModel>())
         XCTAssertEqual(model.title, "A")
@@ -4074,7 +4078,8 @@ final class ContextPersistenceTests: XCTestCase {
         XCTAssertNil(model.persistentModelID.storeIdentifier)
         XCTAssertEqual(model.persistentModelID.resolvedStoreIdentifier, "OSD.Detached")
         XCTAssertTrue(model.persistentModelID.isTemporary)
-        XCTAssertEqual(model.title, "pending")
+        // Apple semantics: a canceled insertion keeps its in-memory values.
+        XCTAssertEqual(model.title, "changed")
         XCTAssertFalse(model.hasChanges)
     }
 

@@ -285,9 +285,6 @@ public final class ModelContext {
 
     /// Set when rollback detaches a deleted unsaved insertion; cleared by the next mutation or save.
     private var pendingChangesAfterRollback = false
-    /// Set when rollback keeps in-memory edits on registered models; the next fetch must not
-    /// overwrite them with stored values. Cleared by the next mutation or save.
-    private var pendingInMemoryEditsAfterRollback = false
 
     /// Inserted models deleted before saving.
     ///
@@ -954,11 +951,11 @@ public final class ModelContext {
             let model: Model
             if let existing = identityMap.model(for: key, as: Model.self) {
                 model = existing
-                // Apple semantics: in-memory edits kept by a rollback, and values of models removed
-                // by this context's own batch delete, are not overwritten by a refreshing fetch.
+                // Apple semantics: values of models removed by this context's own batch delete are
+                // not overwritten by a refreshing fetch.
                 let batchDeleted = scratchContextDeletedKeys.contains(
                     StoreEntityKey(entityName: entity.name, primaryKey: pk))
-                if !existing.hasChanges, !batchDeleted, !pendingInMemoryEditsAfterRollback {
+                if !existing.hasChanges, !batchDeleted {
                     try refreshAttributes(
                         existing, entity: entity, attributes: selectedAttributesForMaterialization, row: refreshRow)
                 }
@@ -1746,7 +1743,6 @@ public final class ModelContext {
             try processPendingChangesLocked()
             guard !state.hasTransaction else { return }
             pendingChangesAfterRollback = false
-            pendingInMemoryEditsAfterRollback = false
             try saveChanges()
         }
     }
@@ -1970,10 +1966,8 @@ public final class ModelContext {
             for model in pendingState.deleted {
                 state.removeBaseline(for: model)
             }
-            // Apple reports a context with a rolled-back deleted insertion as still changed, and a
-            // fetch after rollback must not overwrite the kept in-memory edits with stored values.
+            // Apple reports a context with a rolled-back deleted insertion as still changed.
             pendingChangesAfterRollback = pendingChangesAfterRollback || !deletedUnsavedInsertions.isEmpty
-            pendingInMemoryEditsAfterRollback = pendingInMemoryEditsAfterRollback || !pendingState.snapshots.isEmpty
             undoRegisteredModels.removeAll()
             currentUndoGroup = nil
             undoManagerGeneration &+= 1
@@ -2021,7 +2015,6 @@ public final class ModelContext {
         assertAffinity()
         guard model.modelContext === self else { return }
         pendingChangesAfterRollback = false
-        pendingInMemoryEditsAfterRollback = false
         state.willMutate(model, snapshot: model.snapshotLifecycle())
     }
 

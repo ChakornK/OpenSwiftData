@@ -866,10 +866,18 @@
         "BatchFetchParityTests/any batch size returns every result/100": "compared"
       },
       "observations": {
-        "BatchFetchParityTests/any batch size returns every result/0": ["count"],
-        "BatchFetchParityTests/any batch size returns every result/-1": ["count"],
-        "BatchFetchParityTests/any batch size returns every result/1": ["count"],
-        "BatchFetchParityTests/any batch size returns every result/100": ["count"]
+        "BatchFetchParityTests/any batch size returns every result/0": [
+          "count"
+        ],
+        "BatchFetchParityTests/any batch size returns every result/-1": [
+          "count"
+        ],
+        "BatchFetchParityTests/any batch size returns every result/1": [
+          "count"
+        ],
+        "BatchFetchParityTests/any batch size returns every result/100": [
+          "count"
+        ]
       }
     },
     {
@@ -918,73 +926,102 @@
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes apply cascade rules",
-      "scenarioIDs": ["BatchDeleteParityTests/batch deletes apply cascade rules"],
+      "scenarioIDs": [
+        "BatchDeleteParityTests/batch deletes apply cascade rules"
+      ],
       "outcomes": {
         "BatchDeleteParityTests/batch deletes apply cascade rules": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes apply cascade rules": ["cascade.petCount"]
+        "BatchDeleteParityTests/batch deletes apply cascade rules": [
+          "cascade.petCount"
+        ]
       }
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes post no save notifications",
-      "scenarioIDs": ["BatchDeleteParityTests/batch deletes post no save notifications"],
+      "scenarioIDs": [
+        "BatchDeleteParityTests/batch deletes post no save notifications"
+      ],
       "outcomes": {
         "BatchDeleteParityTests/batch deletes post no save notifications": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes post no save notifications": ["notifications.count"]
+        "BatchDeleteParityTests/batch deletes post no save notifications": [
+          "notifications.count"
+        ]
       }
     },
     {
       "sourceCase": "BatchDeleteParityTests/deny rules make batch deletes throw without deleting",
-      "scenarioIDs": ["BatchDeleteParityTests/deny rules make batch deletes throw without deleting"],
+      "scenarioIDs": [
+        "BatchDeleteParityTests/deny rules make batch deletes throw without deleting"
+      ],
       "outcomes": {
         "BatchDeleteParityTests/deny rules make batch deletes throw without deleting": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/deny rules make batch deletes throw without deleting": ["deny.error"]
+        "BatchDeleteParityTests/deny rules make batch deletes throw without deleting": [
+          "deny.error"
+        ]
       }
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied",
-      "scenarioIDs": ["BatchDeleteParityTests/batch deletes inside a failed transaction stay applied"],
+      "scenarioIDs": [
+        "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied"
+      ],
       "outcomes": {
         "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied": ["transaction.remainingCount"]
+        "BatchDeleteParityTests/batch deletes inside a failed transaction stay applied": [
+          "transaction.remainingCount"
+        ]
       }
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes with no matches change nothing",
-      "scenarioIDs": ["BatchDeleteParityTests/batch deletes with no matches change nothing"],
+      "scenarioIDs": [
+        "BatchDeleteParityTests/batch deletes with no matches change nothing"
+      ],
       "outcomes": {
         "BatchDeleteParityTests/batch deletes with no matches change nothing": "compared"
       },
       "observations": {
-        "BatchDeleteParityTests/batch deletes with no matches change nothing": ["noMatch"]
+        "BatchDeleteParityTests/batch deletes with no matches change nothing": [
+          "noMatch"
+        ]
       }
     },
     {
       "sourceCase": "CodableAttributeParityTests/codable enum attributes load in another context",
-      "scenarioIDs": ["CodableAttributeParityTests/codable enum attributes load in another context"],
+      "scenarioIDs": [
+        "CodableAttributeParityTests/codable enum attributes load in another context"
+      ],
       "outcomes": {
         "CodableAttributeParityTests/codable enum attributes load in another context": "compared"
       },
       "observations": {
-        "CodableAttributeParityTests/codable enum attributes load in another context": ["enum.name", "enum.kind"]
+        "CodableAttributeParityTests/codable enum attributes load in another context": [
+          "enum.name",
+          "enum.kind"
+        ]
       }
     },
     {
       "sourceCase": "CodableCompositeParityTests/codable composite values load in another context",
-      "scenarioIDs": ["CodableCompositeParityTests/codable composite values load in another context"],
+      "scenarioIDs": [
+        "CodableCompositeParityTests/codable composite values load in another context"
+      ],
       "outcomes": {
         "CodableCompositeParityTests/codable composite values load in another context": "compared"
       },
       "observations": {
         "CodableCompositeParityTests/codable composite values load in another context": [
-          "composite.address", "composite.tags", "composite.nickname"
+          "composite.address",
+          "composite.tags",
+          "composite.nickname"
         ]
       }
     },
@@ -999,8 +1036,12 @@
         "CodableMemberPredicateParityTests/string member equality/save=true": "compared"
       },
       "observations": {
-        "CodableMemberPredicateParityTests/string member equality/save=false": ["names"],
-        "CodableMemberPredicateParityTests/string member equality/save=true": ["names"]
+        "CodableMemberPredicateParityTests/string member equality/save=false": [
+          "names"
+        ],
+        "CodableMemberPredicateParityTests/string member equality/save=true": [
+          "names"
+        ]
       }
     },
     {
@@ -1014,8 +1055,12 @@
         "CodableMemberPredicateParityTests/integer member ordering/save=true": "compared"
       },
       "observations": {
-        "CodableMemberPredicateParityTests/integer member ordering/save=false": ["names"],
-        "CodableMemberPredicateParityTests/integer member ordering/save=true": ["names"]
+        "CodableMemberPredicateParityTests/integer member ordering/save=false": [
+          "names"
+        ],
+        "CodableMemberPredicateParityTests/integer member ordering/save=true": [
+          "names"
+        ]
       }
     },
     {
@@ -1029,8 +1074,12 @@
         "CodableMemberPredicateParityTests/nested members/save=true": "compared"
       },
       "observations": {
-        "CodableMemberPredicateParityTests/nested members/save=false": ["nested"],
-        "CodableMemberPredicateParityTests/nested members/save=true": ["nested"]
+        "CodableMemberPredicateParityTests/nested members/save=false": [
+          "nested"
+        ],
+        "CodableMemberPredicateParityTests/nested members/save=true": [
+          "nested"
+        ]
       }
     },
     {
@@ -1044,8 +1093,12 @@
         "CodableMemberPredicateParityTests/optional member comparisons/save=true": "compared"
       },
       "observations": {
-        "CodableMemberPredicateParityTests/optional member comparisons/save=false": ["optionalUnit"],
-        "CodableMemberPredicateParityTests/optional member comparisons/save=true": ["optionalUnit"]
+        "CodableMemberPredicateParityTests/optional member comparisons/save=false": [
+          "optionalUnit"
+        ],
+        "CodableMemberPredicateParityTests/optional member comparisons/save=true": [
+          "optionalUnit"
+        ]
       }
     },
     {
@@ -1059,629 +1112,955 @@
         "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true": "compared"
       },
       "observations": {
-        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=false": ["names"],
-        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true": ["names"]
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=false": [
+          "names"
+        ],
+        "CodableMemberPredicateParityTests/members combine with scalar attributes/save=true": [
+          "names"
+        ]
       }
     },
     {
       "sourceCase": "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values",
-      "scenarioIDs": ["ContextNotificationsParityTests/notification names and keys use SwiftData's raw values"],
+      "scenarioIDs": [
+        "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values"
+      ],
       "outcomes": {
         "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values": "compared"
       },
       "observations": {
-        "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values": ["names", "keys", "insertedKeyRoundTrip"]
+        "ContextNotificationsParityTests/notification names and keys use SwiftData's raw values": [
+          "names",
+          "keys",
+          "insertedKeyRoundTrip"
+        ]
       }
     },
     {
       "sourceCase": "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit",
-      "scenarioIDs": ["ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit"],
+      "scenarioIDs": [
+        "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit"
+      ],
       "outcomes": {
         "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit": "compared"
       },
       "observations": {
         "ContextNotificationsParityTests/saves post willSave without info and didSave only when changes commit": [
-          "names", "willSaveInfoEmpty", "firstInsertedCount", "firstUpdatedCount", "firstDeletedCount",
-          "secondInsertedCount", "secondUpdatedCount", "secondDeletedCount"
+          "names",
+          "willSaveInfoEmpty",
+          "firstInsertedCount",
+          "firstUpdatedCount",
+          "firstDeletedCount",
+          "secondInsertedCount",
+          "secondUpdatedCount",
+          "secondDeletedCount"
         ]
       }
     },
     {
       "sourceCase": "ContextNotificationsParityTests/contexts expose author and a stable editing state",
-      "scenarioIDs": ["ContextNotificationsParityTests/contexts expose author and a stable editing state"],
+      "scenarioIDs": [
+        "ContextNotificationsParityTests/contexts expose author and a stable editing state"
+      ],
       "outcomes": {
         "ContextNotificationsParityTests/contexts expose author and a stable editing state": "compared"
       },
       "observations": {
         "ContextNotificationsParityTests/contexts expose author and a stable editing state": [
-          "initialAuthorsNil", "sameContextEditingIDStable", "differentContextsHaveDifferentEditingIDs",
-          "updatedAuthor", "contextsCompareByIdentity"
+          "initialAuthorsNil",
+          "sameContextEditingIDStable",
+          "differentContextsHaveDifferentEditingIDs",
+          "updatedAuthor",
+          "contextsCompareByIdentity"
         ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores committed values immediately and clears change tracking",
-      "scenarioIDs": ["RollbackParityTests/rollback restores committed values immediately and clears change tracking"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback restores committed values immediately and clears change tracking"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback restores committed values immediately and clears change tracking": "compared"
       },
       "observations": {
         "RollbackParityTests/rollback restores committed values immediately and clears change tracking": [
-          "age", "name", "tag", "tags", "modelHasChanges", "contextHasChanges",
-          "modelRemainsAttached", "storedAges", "sameRegisteredInstance"
+          "age",
+          "name",
+          "tag",
+          "tags",
+          "modelHasChanges",
+          "contextHasChanges",
+          "modelRemainsAttached",
+          "storedAges",
+          "sameRegisteredInstance"
         ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores committed relationship edits",
-      "scenarioIDs": ["RollbackParityTests/rollback restores committed relationship edits"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback restores committed relationship edits"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback restores committed relationship edits": "divergent"
       },
       "observations": {
-        "RollbackParityTests/rollback restores committed relationship edits": ["ownerItemCount", "itemOwnerAbsent", "contextHasChanges"]
+        "RollbackParityTests/rollback restores committed relationship edits": [
+          "ownerItemCount",
+          "itemOwnerAbsent",
+          "contextHasChanges"
+        ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches related insertions and restores saved graph",
-      "scenarioIDs": ["RollbackParityTests/rollback detaches related insertions and restores saved graph"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback detaches related insertions and restores saved graph"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback detaches related insertions and restores saved graph": "divergent"
       },
       "observations": {
         "RollbackParityTests/rollback detaches related insertions and restores saved graph": [
-          "ownerItemCount", "itemDetached", "itemOwnerAbsent", "ownerHasChanges", "contextHasChanges", "storedItemCount"
+          "ownerItemCount",
+          "itemDetached",
+          "itemOwnerAbsent",
+          "ownerHasChanges",
+          "contextHasChanges",
+          "storedItemCount"
         ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores first committed values after repeated edits",
-      "scenarioIDs": ["RollbackParityTests/rollback restores first committed values after repeated edits"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback restores first committed values after repeated edits"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback restores first committed values after repeated edits": "divergent"
       },
       "observations": {
         "RollbackParityTests/rollback restores first committed values after repeated edits": [
-          "ageAfterFirstRollback", "unchangedAfterFirstRollback", "hasChangesAfterSecondEdit",
-          "ageAfterSecondRollback", "unchangedAfterSecondRollback"
+          "ageAfterFirstRollback",
+          "unchangedAfterFirstRollback",
+          "hasChangesAfterSecondEdit",
+          "ageAfterSecondRollback",
+          "unchangedAfterSecondRollback"
         ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback restores values when an edited model is deleted",
-      "scenarioIDs": ["RollbackParityTests/rollback restores values when an edited model is deleted"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback restores values when an edited model is deleted"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback restores values when an edited model is deleted": "divergent"
       },
       "observations": {
         "RollbackParityTests/rollback restores values when an edited model is deleted": [
-          "age", "notDeleted", "modelRemainsAttached", "contextHasChanges"
+          "age",
+          "notDeleted",
+          "modelRemainsAttached",
+          "contextHasChanges"
         ]
       }
     },
     {
       "sourceCase": "RollbackParityTests/rollback detaches insertions and restores deletions",
-      "scenarioIDs": ["RollbackParityTests/rollback detaches insertions and restores deletions"],
+      "scenarioIDs": [
+        "RollbackParityTests/rollback detaches insertions and restores deletions"
+      ],
       "outcomes": {
         "RollbackParityTests/rollback detaches insertions and restores deletions": "compared"
       },
       "observations": {
         "RollbackParityTests/rollback detaches insertions and restores deletions": [
-          "rolledBackInsertionDetached", "rolledBackInsertionNotDeleted", "insertedModelsEmpty", "insertionValueRetained",
-          "deletionWasApplied", "restoredDeletionNotDeleted", "restoredDeletionAttached", "storedOwnerCount"
+          "rolledBackInsertionDetached",
+          "rolledBackInsertionNotDeleted",
+          "insertedModelsEmpty",
+          "insertionValueRetained",
+          "deletionWasApplied",
+          "restoredDeletionNotDeleted",
+          "restoredDeletionAttached",
+          "storedOwnerCount"
         ]
       }
     },
     {
       "sourceCase": "RollbackRelationshipParityTests/rolled back relationship edits are not saved",
-      "scenarioIDs": ["RollbackRelationshipParityTests/rolled back relationship edits are not saved"],
+      "scenarioIDs": [
+        "RollbackRelationshipParityTests/rolled back relationship edits are not saved"
+      ],
       "outcomes": {
         "RollbackRelationshipParityTests/rolled back relationship edits are not saved": "compared"
       },
       "observations": {
-        "RollbackRelationshipParityTests/rolled back relationship edits are not saved": ["changedModelsEmpty", "storedRelationshipCount"]
+        "RollbackRelationshipParityTests/rolled back relationship edits are not saved": [
+          "changedModelsEmpty",
+          "storedRelationshipCount"
+        ]
       }
     },
     {
       "sourceCase": "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers",
-      "scenarioIDs": ["ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers"],
+      "scenarioIDs": [
+        "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers"
+      ],
       "outcomes": {
         "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers": "compared"
       },
       "observations": {
-        "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers": ["sameInstanceBeforeSave", "sameInstanceAfterSave"]
+        "ModelContextParityTests/model(for:) returns the registered instance, including for temporary identifiers": [
+          "sameInstanceBeforeSave",
+          "sameInstanceAfterSave"
+        ]
       }
     },
     {
       "sourceCase": "ModelContextParityTests/model(for:) loads and registers saved models in another context",
-      "scenarioIDs": ["ModelContextParityTests/model(for:) loads and registers saved models in another context"],
+      "scenarioIDs": [
+        "ModelContextParityTests/model(for:) loads and registers saved models in another context"
+      ],
       "outcomes": {
         "ModelContextParityTests/model(for:) loads and registers saved models in another context": "compared"
       },
       "observations": {
         "ModelContextParityTests/model(for:) loads and registers saved models in another context": [
-          "name", "attachedToOtherContext", "unchanged", "notDeleted", "lookupStable", "registeredLookupStable"
+          "name",
+          "attachedToOtherContext",
+          "unchanged",
+          "notDeleted",
+          "lookupStable",
+          "registeredLookupStable"
         ]
       }
     },
     {
       "sourceCase": "ModelContextParityTests/processing pending changes keeps them pending",
-      "scenarioIDs": ["ModelContextParityTests/processing pending changes keeps them pending"],
+      "scenarioIDs": [
+        "ModelContextParityTests/processing pending changes keeps them pending"
+      ],
       "outcomes": {
         "ModelContextParityTests/processing pending changes keeps them pending": "compared"
       },
       "observations": {
-        "ModelContextParityTests/processing pending changes keeps them pending": ["hasChanges", "insertedCount"]
+        "ModelContextParityTests/processing pending changes keeps them pending": [
+          "hasChanges",
+          "insertedCount"
+        ]
       }
     },
     {
       "sourceCase": "ModelContextParityTests/a transaction saves changes made before and inside it",
-      "scenarioIDs": ["ModelContextParityTests/a transaction saves changes made before and inside it"],
+      "scenarioIDs": [
+        "ModelContextParityTests/a transaction saves changes made before and inside it"
+      ],
       "outcomes": {
         "ModelContextParityTests/a transaction saves changes made before and inside it": "compared"
       },
       "observations": {
-        "ModelContextParityTests/a transaction saves changes made before and inside it": ["hasChangesAfterTransaction", "savedCount"]
+        "ModelContextParityTests/a transaction saves changes made before and inside it": [
+          "hasChangesAfterTransaction",
+          "savedCount"
+        ]
       }
     },
     {
       "sourceCase": "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved",
-      "scenarioIDs": ["DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved"],
+      "scenarioIDs": [
+        "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved"
+      ],
       "outcomes": {
         "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved": "compared"
       },
       "observations": {
         "DeletedInsertionParityTests/a deleted insertion is reported as inserted and deleted until saved": [
-          "deletedBeforeSave", "attachedBeforeSave", "hasChangesBeforeSave", "insertedCountBeforeSave",
-          "deletedCountBeforeSave", "fetchCountBeforeSave", "detachedAfterSave", "notDeletedAfterSave",
-          "hasChangesAfterSave", "insertedCountAfterSave", "deletedCountAfterSave", "storedCountAfterSave"
+          "deletedBeforeSave",
+          "attachedBeforeSave",
+          "hasChangesBeforeSave",
+          "insertedCountBeforeSave",
+          "deletedCountBeforeSave",
+          "fetchCountBeforeSave",
+          "detachedAfterSave",
+          "notDeletedAfterSave",
+          "hasChangesAfterSave",
+          "insertedCountAfterSave",
+          "deletedCountAfterSave",
+          "storedCountAfterSave"
         ]
       }
     },
     {
       "sourceCase": "DeletedInsertionParityTests/inserting a deleted insertion again does nothing",
-      "scenarioIDs": ["DeletedInsertionParityTests/inserting a deleted insertion again does nothing"],
+      "scenarioIDs": [
+        "DeletedInsertionParityTests/inserting a deleted insertion again does nothing"
+      ],
       "outcomes": {
         "DeletedInsertionParityTests/inserting a deleted insertion again does nothing": "compared"
       },
       "observations": {
-        "DeletedInsertionParityTests/inserting a deleted insertion again does nothing": ["stillDeleted", "insertedCount", "deletedCount"]
+        "DeletedInsertionParityTests/inserting a deleted insertion again does nothing": [
+          "stillDeleted",
+          "insertedCount",
+          "deletedCount"
+        ]
       }
     },
     {
       "sourceCase": "DeletedInsertionParityTests/rolling back detaches a deleted insertion",
-      "scenarioIDs": ["DeletedInsertionParityTests/rolling back detaches a deleted insertion"],
+      "scenarioIDs": [
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion"
+      ],
       "outcomes": {
         "DeletedInsertionParityTests/rolling back detaches a deleted insertion": "divergent"
       },
       "observations": {
-        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": ["detached", "notDeleted", "hasChanges"]
+        "DeletedInsertionParityTests/rolling back detaches a deleted insertion": [
+          "detached",
+          "notDeleted",
+          "hasChanges"
+        ]
       }
     },
     {
       "sourceCase": "FetchDescriptorParityTests/defaults match SwiftData",
-      "scenarioIDs": ["FetchDescriptorParityTests/defaults match SwiftData"],
+      "scenarioIDs": [
+        "FetchDescriptorParityTests/defaults match SwiftData"
+      ],
       "outcomes": {
         "FetchDescriptorParityTests/defaults match SwiftData": "divergent"
       },
       "observations": {
         "FetchDescriptorParityTests/defaults match SwiftData": [
-          "predicateAbsent", "sortEmpty", "fetchLimitAbsent", "fetchOffsetAbsent", "includePendingChanges",
-          "propertiesToFetchEmpty", "prefetchRelationshipsEmpty"
+          "predicateAbsent",
+          "sortEmpty",
+          "fetchLimitAbsent",
+          "fetchOffsetAbsent",
+          "includePendingChanges",
+          "propertiesToFetchEmpty",
+          "prefetchRelationshipsEmpty"
         ]
       }
     },
     {
       "sourceCase": "FetchDescriptorParityTests/properties to fetch is a mutable array",
-      "scenarioIDs": ["FetchDescriptorParityTests/properties to fetch is a mutable array"],
+      "scenarioIDs": [
+        "FetchDescriptorParityTests/properties to fetch is a mutable array"
+      ],
       "outcomes": {
         "FetchDescriptorParityTests/properties to fetch is a mutable array": "compared"
       },
       "observations": {
-        "FetchDescriptorParityTests/properties to fetch is a mutable array": ["propertyCount", "containsName"]
+        "FetchDescriptorParityTests/properties to fetch is a mutable array": [
+          "propertyCount",
+          "containsName"
+        ]
       }
     },
     {
       "sourceCase": "FetchDescriptorParityTests/descriptors compare every option",
-      "scenarioIDs": ["FetchDescriptorParityTests/descriptors compare every option"],
+      "scenarioIDs": [
+        "FetchDescriptorParityTests/descriptors compare every option"
+      ],
       "outcomes": {
         "FetchDescriptorParityTests/descriptors compare every option": "divergent"
       },
       "observations": {
         "FetchDescriptorParityTests/descriptors compare every option": [
-          "samePredicateAndSortEqual", "differentPredicateUnequal", "differentLimitUnequal", "differentPendingOptionUnequal"
+          "samePredicateAndSortEqual",
+          "differentPredicateUnequal",
+          "differentLimitUnequal",
+          "differentPendingOptionUnequal"
         ]
       }
     },
     {
       "sourceCase": "HistoryParityTests/each save with changes records one transaction",
-      "scenarioIDs": ["HistoryParityTests/each save with changes records one transaction"],
+      "scenarioIDs": [
+        "HistoryParityTests/each save with changes records one transaction"
+      ],
       "outcomes": {
         "HistoryParityTests/each save with changes records one transaction": "compared"
       },
       "observations": {
         "HistoryParityTests/each save with changes records one transaction": [
-          "initialCount", "transactionCount", "authors", "idsMatchTransactions", "transactionIDsIncrease",
-          "tokensIncrease", "tokenValuesPresent", "bundleIdentifierPresent", "processIdentifierPresent",
-          "firstTransactionChangeCount", "firstChangeIsInsert", "secondChangeIsUpdate", "updatedAttributes",
-          "thirdChangeIsDelete", "deletedCode", "deletedNameAbsent", "tombstoneCount"
+          "initialCount",
+          "transactionCount",
+          "authors",
+          "idsMatchTransactions",
+          "transactionIDsIncrease",
+          "tokensIncrease",
+          "tokenValuesPresent",
+          "bundleIdentifierPresent",
+          "processIdentifierPresent",
+          "firstTransactionChangeCount",
+          "firstChangeIsInsert",
+          "secondChangeIsUpdate",
+          "updatedAttributes",
+          "thirdChangeIsDelete",
+          "deletedCode",
+          "deletedNameAbsent",
+          "tombstoneCount"
         ]
       }
     },
     {
       "sourceCase": "HistoryParityTests/descriptors filter, sort, and limit transactions",
-      "scenarioIDs": ["HistoryParityTests/descriptors filter, sort, and limit transactions"],
+      "scenarioIDs": [
+        "HistoryParityTests/descriptors filter, sort, and limit transactions"
+      ],
       "outcomes": {
         "HistoryParityTests/descriptors filter, sort, and limit transactions": "compared"
       },
       "observations": {
         "HistoryParityTests/descriptors filter, sort, and limit transactions": [
-          "tokenFilterCount", "authorFilterCount", "limitCount", "reverseOrderMatches", "defaultLimit"
+          "tokenFilterCount",
+          "authorFilterCount",
+          "limitCount",
+          "reverseOrderMatches",
+          "defaultLimit"
         ]
       }
     },
     {
       "sourceCase": "HistoryParityTests/tokens encode their store and transaction",
-      "scenarioIDs": ["HistoryParityTests/tokens encode their store and transaction"],
+      "scenarioIDs": [
+        "HistoryParityTests/tokens encode their store and transaction"
+      ],
       "outcomes": {
         "HistoryParityTests/tokens encode their store and transaction": "compared"
       },
       "observations": {
         "HistoryParityTests/tokens encode their store and transaction": [
-          "storeTokenCount", "tokenRoundTripEqual", "tokenValueEntryCount"
+          "storeTokenCount",
+          "tokenRoundTripEqual",
+          "tokenValueEntryCount"
         ]
       }
     },
     {
       "sourceCase": "HistoryParityTests/deleting history expires tokens that refer to deleted transactions",
-      "scenarioIDs": ["HistoryParityTests/deleting history expires tokens that refer to deleted transactions"],
+      "scenarioIDs": [
+        "HistoryParityTests/deleting history expires tokens that refer to deleted transactions"
+      ],
       "outcomes": {
         "HistoryParityTests/deleting history expires tokens that refer to deleted transactions": "compared"
       },
       "observations": {
         "HistoryParityTests/deleting history expires tokens that refer to deleted transactions": [
-          "remainingAfterPrefixDelete", "laterTokenExpired", "deletedTokenExpired", "emptyAfterDeleteAll"
+          "remainingAfterPrefixDelete",
+          "laterTokenExpired",
+          "deletedTokenExpired",
+          "emptyAfterDeleteAll"
         ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance",
-      "scenarioIDs": ["UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance": "compared"
       },
       "observations": {
         "UniqueConstraintParityTests/inserting a duplicate overwrites the stored row and refreshes the existing instance": [
-          "preSaveCount", "storedRows", "originalValue", "originalAttached", "originalDeleted", "duplicateAttached",
-          "duplicateIDChangedOnSave", "contextClean", "fetchedOriginalInstance"
+          "preSaveCount",
+          "storedRows",
+          "originalValue",
+          "originalAttached",
+          "originalDeleted",
+          "duplicateAttached",
+          "duplicateIDChangedOnSave",
+          "contextClean",
+          "fetchedOriginalInstance"
         ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store",
-      "scenarioIDs": ["UniqueConstraintParityTests/edits to a merged duplicate do not reach the store"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store": "compared"
       },
       "observations": {
-        "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store": ["hasChangesAfterEdit", "storedRowsAfterSecondSave"]
+        "UniqueConstraintParityTests/edits to a merged duplicate do not reach the store": [
+          "hasChangesAfterEdit",
+          "storedRowsAfterSecondSave"
+        ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier",
-      "scenarioIDs": ["UniqueConstraintParityTests/a merged duplicate gets a permanent identifier"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier": "compared"
       },
       "observations": {
         "UniqueConstraintParityTests/a merged duplicate gets a permanent identifier": [
-          "duplicateIDChangedOnSave", "duplicateRegistered", "duplicateIDDiffersFromSurvivor"
+          "duplicateIDChangedOnSave",
+          "duplicateRegistered",
+          "duplicateIDDiffersFromSurvivor"
         ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row",
-      "scenarioIDs": ["UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row": "compared"
       },
       "observations": {
-        "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row": ["storedRowsAfterDelete"]
+        "UniqueConstraintParityTests/deleting a merged duplicate leaves the merged row": [
+          "storedRowsAfterDelete"
+        ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row",
-      "scenarioIDs": ["UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": "divergent"
       },
       "observations": {
-        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": ["everyTrialHasOneRow", "survivorsObserved"]
+        "UniqueConstraintParityTests/duplicates inserted in one save collapse into one row": [
+          "everyTrialHasOneRow",
+          "survivorsObserved"
+        ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",
-      "scenarioIDs": ["UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row": "compared"
       },
       "observations": {
         "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row": [
-          "storedRows", "updatedIDUnchanged", "updatedAttached", "updatedDeleted", "updatedValue"
+          "storedRows",
+          "updatedIDUnchanged",
+          "updatedAttached",
+          "updatedDeleted",
+          "updatedValue"
         ]
       }
     },
     {
       "sourceCase": "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts",
-      "scenarioIDs": ["UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts"],
+      "scenarioIDs": [
+        "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts"
+      ],
       "outcomes": {
         "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": "compared"
       },
       "observations": {
-        "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": ["storedRows"]
+        "UniqueConstraintParityTests/composite and multiple constraints each merge conflicting inserts": [
+          "storedRows"
+        ]
       }
     },
     {
       "sourceCase": "MigrationPlanParityTests/versioned schemas need only models and a version",
-      "scenarioIDs": ["MigrationPlanParityTests/versioned schemas need only models and a version"],
+      "scenarioIDs": [
+        "MigrationPlanParityTests/versioned schemas need only models and a version"
+      ],
       "outcomes": {
         "MigrationPlanParityTests/versioned schemas need only models and a version": "compared"
       },
       "observations": {
-        "MigrationPlanParityTests/versioned schemas need only models and a version": ["versionMatchesV2", "entityNames", "v1VersionMatchesV1"]
+        "MigrationPlanParityTests/versioned schemas need only models and a version": [
+          "versionMatchesV2",
+          "entityNames",
+          "v1VersionMatchesV1"
+        ]
       }
     },
     {
       "sourceCase": "MigrationPlanParityTests/migration stages are enum cases",
-      "scenarioIDs": ["MigrationPlanParityTests/migration stages are enum cases"],
+      "scenarioIDs": [
+        "MigrationPlanParityTests/migration stages are enum cases"
+      ],
       "outcomes": {
         "MigrationPlanParityTests/migration stages are enum cases": "compared"
       },
       "observations": {
         "MigrationPlanParityTests/migration stages are enum cases": [
-          "lightweightStage", "lightweightFromMatchesV1", "lightweightToMatchesV2",
-          "customStage", "willMigrateAbsent", "didMigratePresent"
+          "lightweightStage",
+          "lightweightFromMatchesV1",
+          "lightweightToMatchesV2",
+          "customStage",
+          "willMigrateAbsent",
+          "didMigratePresent"
         ]
       }
     },
     {
       "sourceCase": "MigrationPlanParityTests/containers without a plan report none",
-      "scenarioIDs": ["MigrationPlanParityTests/containers without a plan report none"],
+      "scenarioIDs": [
+        "MigrationPlanParityTests/containers without a plan report none"
+      ],
       "outcomes": {
         "MigrationPlanParityTests/containers without a plan report none": "compared"
       },
       "observations": {
-        "MigrationPlanParityTests/containers without a plan report none": ["migrationPlanAbsent"]
+        "MigrationPlanParityTests/containers without a plan report none": [
+          "migrationPlanAbsent"
+        ]
       }
     },
     {
       "sourceCase": "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks",
-      "scenarioIDs": ["MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks"],
+      "scenarioIDs": [
+        "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks"
+      ],
       "outcomes": {
         "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks": "compared"
       },
       "observations": {
-        "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks": ["migrationPlanMatches", "tripNames", "tripNights"]
+        "MigrationPlanParityTests/a migration plan upgrades a store and runs its stage callbacks": [
+          "migrationPlanMatches",
+          "tripNames",
+          "tripNights"
+        ]
       }
     },
     {
       "sourceCase": "UnversionedStoreMigrationParityTests/a plan migrates a store created without one",
-      "scenarioIDs": ["UnversionedStoreMigrationParityTests/a plan migrates a store created without one"],
+      "scenarioIDs": [
+        "UnversionedStoreMigrationParityTests/a plan migrates a store created without one"
+      ],
       "outcomes": {
         "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": "compared"
       },
       "observations": {
-        "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": ["tripNames", "tripNights"]
+        "UnversionedStoreMigrationParityTests/a plan migrates a store created without one": [
+          "tripNames",
+          "tripNights"
+        ]
       }
     },
     {
       "sourceCase": "ModelContainerParityTests/configurations are a set and containers compare by identity",
-      "scenarioIDs": ["ModelContainerParityTests/configurations are a set and containers compare by identity"],
+      "scenarioIDs": [
+        "ModelContainerParityTests/configurations are a set and containers compare by identity"
+      ],
       "outcomes": {
         "ModelContainerParityTests/configurations are a set and containers compare by identity": "divergent"
       },
       "observations": {
-        "ModelContainerParityTests/configurations are a set and containers compare by identity": ["configurationSetMatches", "containerEqualsSelf", "differentContainersUnequal", "schemaEntityNames"]
+        "ModelContainerParityTests/configurations are a set and containers compare by identity": [
+          "configurationSetMatches",
+          "containerEqualsSelf",
+          "differentContainersUnequal",
+          "schemaEntityNames"
+        ]
       }
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing removes stored models and keeps the store usable",
-      "scenarioIDs": ["ModelContainerParityTests/erasing removes stored models and keeps the store usable"],
+      "scenarioIDs": [
+        "ModelContainerParityTests/erasing removes stored models and keeps the store usable"
+      ],
       "outcomes": {
         "ModelContainerParityTests/erasing removes stored models and keeps the store usable": "divergent"
       },
       "observations": {
         "ModelContainerParityTests/erasing removes stored models and keeps the store usable": [
-          "eraseReturned", "fileExistsAfterErase", "contextHasChangesAfterErase", "savedObjectAttachedAfterErase",
-          "fetchCountReturned", "storedCountAfterErase", "pendingSaveReturned", "pendingFetchReturned",
-          "pendingNamesAfterSave", "lastCompletedStep"
+          "eraseReturned",
+          "fileExistsAfterErase",
+          "contextHasChangesAfterErase",
+          "savedObjectAttachedAfterErase",
+          "fetchCountReturned",
+          "storedCountAfterErase",
+          "pendingSaveReturned",
+          "pendingFetchReturned",
+          "pendingNamesAfterSave",
+          "lastCompletedStep"
         ]
       }
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing also clears history",
-      "scenarioIDs": ["ModelContainerParityTests/erasing also clears history"],
+      "scenarioIDs": [
+        "ModelContainerParityTests/erasing also clears history"
+      ],
       "outcomes": {
         "ModelContainerParityTests/erasing also clears history": "compared"
       },
       "observations": {
         "ModelContainerParityTests/erasing also clears history": [
-          "eraseReturned", "historyFetchReturned", "historyEmpty", "lastCompletedStep"
+          "eraseReturned",
+          "historyFetchReturned",
+          "historyEmpty",
+          "lastCompletedStep"
         ]
       }
-    }
-,
+    },
     {
       "sourceCase": "DeleteRuleParityTests/cascade destinations are marked deleted immediately and recursively",
-      "scenarioIDs": ["DeleteRuleParityTests/cascade destinations are marked deleted immediately and recursively"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/cascade destinations are marked deleted immediately and recursively"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/cascade destinations are marked deleted immediately and recursively": "compared"
       },
       "observations": {
         "DeleteRuleParityTests/cascade destinations are marked deleted immediately and recursively": [
-          "thingDeletedBeforeSave", "partDeletedBeforeSave", "deletedCountBeforeSave", "storedThingCountAfterSave",
-          "storedPartCountAfterSave", "thingDetachedAfterSave", "thingNotDeletedAfterSave"
+          "thingDeletedBeforeSave",
+          "partDeletedBeforeSave",
+          "deletedCountBeforeSave",
+          "storedThingCountAfterSave",
+          "storedPartCountAfterSave",
+          "thingDetachedAfterSave",
+          "thingNotDeletedAfterSave"
         ]
       }
     },
     {
       "sourceCase": "DeleteRuleParityTests/deleted rows never reuse primary keys",
-      "scenarioIDs": ["DeleteRuleParityTests/deleted rows never reuse primary keys"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/deleted rows never reuse primary keys"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/deleted rows never reuse primary keys": "compared"
       },
       "observations": {
-        "DeleteRuleParityTests/deleted rows never reuse primary keys": ["identifiersDiffer"]
+        "DeleteRuleParityTests/deleted rows never reuse primary keys": [
+          "identifiersDiffer"
+        ]
       }
     },
     {
       "sourceCase": "DeleteRuleParityTests/deny rules are not enforced and related models are nullified on save",
-      "scenarioIDs": ["DeleteRuleParityTests/deny rules are not enforced and related models are nullified on save"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/deny rules are not enforced and related models are nullified on save"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/deny rules are not enforced and related models are nullified on save": "compared"
       },
       "observations": {
         "DeleteRuleParityTests/deny rules are not enforced and related models are nullified on save": [
-          "deleteApplied", "relatedModelAttachedBeforeSave", "relatedModelHasInverseBeforeSave", "saveReturned",
-          "storedOwnerCount", "storedRelatedCount", "inverseNilAfterSave", "contextCleanAfterSave"
+          "deleteApplied",
+          "relatedModelAttachedBeforeSave",
+          "relatedModelHasInverseBeforeSave",
+          "saveReturned",
+          "storedOwnerCount",
+          "storedRelatedCount",
+          "inverseNilAfterSave",
+          "contextCleanAfterSave"
         ]
       }
     },
     {
       "sourceCase": "DeleteRuleParityTests/nullify applies when saving",
-      "scenarioIDs": ["DeleteRuleParityTests/nullify applies when saving"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/nullify applies when saving"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/nullify applies when saving": "compared"
       },
       "observations": {
         "DeleteRuleParityTests/nullify applies when saving": [
-          "inversePresentImmediatelyAfterDelete", "inversePresentAfterSave", "storedRelatedCount"
+          "inversePresentImmediatelyAfterDelete",
+          "inversePresentAfterSave",
+          "storedRelatedCount"
         ]
       }
     },
     {
       "sourceCase": "DeleteRuleParityTests/removing a model from a collection clears its inverse immediately",
-      "scenarioIDs": ["DeleteRuleParityTests/removing a model from a collection clears its inverse immediately"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/removing a model from a collection clears its inverse immediately"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/removing a model from a collection clears its inverse immediately": "compared"
       },
       "observations": {
-        "DeleteRuleParityTests/removing a model from a collection clears its inverse immediately": ["inverseNilImmediately", "childNotDeleted"]
+        "DeleteRuleParityTests/removing a model from a collection clears its inverse immediately": [
+          "inverseNilImmediately",
+          "childNotDeleted"
+        ]
       }
     },
     {
       "sourceCase": "DeleteRuleParityTests/rolling back restores cascaded deletions",
-      "scenarioIDs": ["DeleteRuleParityTests/rolling back restores cascaded deletions"],
+      "scenarioIDs": [
+        "DeleteRuleParityTests/rolling back restores cascaded deletions"
+      ],
       "outcomes": {
         "DeleteRuleParityTests/rolling back restores cascaded deletions": "compared"
       },
       "observations": {
-        "DeleteRuleParityTests/rolling back restores cascaded deletions": ["destinationDeletedBeforeRollback", "destinationNotDeletedAfterRollback", "ownerNotDeletedAfterRollback", "relationshipRestored"]
+        "DeleteRuleParityTests/rolling back restores cascaded deletions": [
+          "destinationDeletedBeforeRollback",
+          "destinationNotDeletedAfterRollback",
+          "ownerNotDeletedAfterRollback",
+          "relationshipRestored"
+        ]
       }
     },
     {
       "sourceCase": "RelationshipGraphParityTests/appending a detached model to a managed collection inserts it",
-      "scenarioIDs": ["RelationshipGraphParityTests/appending a detached model to a managed collection inserts it"],
+      "scenarioIDs": [
+        "RelationshipGraphParityTests/appending a detached model to a managed collection inserts it"
+      ],
       "outcomes": {
         "RelationshipGraphParityTests/appending a detached model to a managed collection inserts it": "compared"
       },
       "observations": {
-        "RelationshipGraphParityTests/appending a detached model to a managed collection inserts it": ["childManagedImmediately", "inverseSetImmediately", "insertedCount"]
+        "RelationshipGraphParityTests/appending a detached model to a managed collection inserts it": [
+          "childManagedImmediately",
+          "inverseSetImmediately",
+          "insertedCount"
+        ]
       }
     },
     {
       "sourceCase": "RelationshipGraphParityTests/inserting a model inserts the detached models it relates to",
-      "scenarioIDs": ["RelationshipGraphParityTests/inserting a model inserts the detached models it relates to"],
+      "scenarioIDs": [
+        "RelationshipGraphParityTests/inserting a model inserts the detached models it relates to"
+      ],
       "outcomes": {
         "RelationshipGraphParityTests/inserting a model inserts the detached models it relates to": "compared"
       },
       "observations": {
         "RelationshipGraphParityTests/inserting a model inserts the detached models it relates to": [
-          "childInverseSetBeforeInsert", "insertedCountAfterInsert", "childManagedAfterInsert", "toyManagedAfterInsert",
-          "storedChildCount", "storedToyCount"
+          "childInverseSetBeforeInsert",
+          "insertedCountAfterInsert",
+          "childManagedAfterInsert",
+          "toyManagedAfterInsert",
+          "storedChildCount",
+          "storedToyCount"
         ]
       }
     },
     {
       "sourceCase": "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved",
-      "scenarioIDs": ["PendingFetchParityTests/edits to related models do not affect unchanged owners until saved"],
+      "scenarioIDs": [
+        "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved"
+      ],
       "outcomes": {
         "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved": "compared"
       },
       "observations": {
         "PendingFetchParityTests/edits to related models do not affect unchanged owners until saved": [
-          "ownerHasChangesAfterLeafEdit", "containsFlagAfterFirstLeafEdit", "partnerUnflaggedAfterPartnerEdit",
-          "containsFlagAfterSecondLeafEdit", "containsFlagAfterSave", "partnerUnflaggedAfterSave"
+          "ownerHasChangesAfterLeafEdit",
+          "containsFlagAfterFirstLeafEdit",
+          "partnerUnflaggedAfterPartnerEdit",
+          "containsFlagAfterSecondLeafEdit",
+          "containsFlagAfterSave",
+          "partnerUnflaggedAfterSave"
         ]
       }
     },
     {
       "sourceCase": "PendingFetchParityTests/relationship membership changes re-evaluate the owner",
-      "scenarioIDs": ["PendingFetchParityTests/relationship membership changes re-evaluate the owner"],
+      "scenarioIDs": [
+        "PendingFetchParityTests/relationship membership changes re-evaluate the owner"
+      ],
       "outcomes": {
         "PendingFetchParityTests/relationship membership changes re-evaluate the owner": "compared"
       },
       "observations": {
-        "PendingFetchParityTests/relationship membership changes re-evaluate the owner": ["ownerHasChanges", "matchingOwners"]
+        "PendingFetchParityTests/relationship membership changes re-evaluate the owner": [
+          "ownerHasChanges",
+          "matchingOwners"
+        ]
       }
     },
     {
       "sourceCase": "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse",
-      "scenarioIDs": ["PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse"],
+      "scenarioIDs": [
+        "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse"
+      ],
       "outcomes": {
         "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse": "compared"
       },
       "observations": {
         "PendingFetchParityTests/assigning a relationship on a detached model updates the managed inverse": [
-          "leafManagedImmediately", "ownerHasChanges", "ownerLeafCount"
+          "leafManagedImmediately",
+          "ownerHasChanges",
+          "ownerLeafCount"
         ]
       }
-    }
-,
+    },
     {
       "sourceCase": "MacroArgumentsParityTests/attribute and relationship arguments reach the schema",
-      "scenarioIDs": ["MacroArgumentsParityTests/attribute and relationship arguments reach the schema"],
+      "scenarioIDs": [
+        "MacroArgumentsParityTests/attribute and relationship arguments reach the schema"
+      ],
       "outcomes": {
         "MacroArgumentsParityTests/attribute and relationship arguments reach the schema": "compared"
       },
       "observations": {
         "MacroArgumentsParityTests/attribute and relationship arguments reach the schema": [
-          "key.originalName", "key.unique", "cacheAbsent", "children.deleteRuleCascade",
-          "children.maximumCount", "children.originalName", "children.inverseConnected"
+          "key.originalName",
+          "key.unique",
+          "cacheAbsent",
+          "children.deleteRuleCascade",
+          "children.maximumCount",
+          "children.originalName",
+          "children.inverseConnected"
         ]
       }
     },
     {
       "sourceCase": "MacroArgumentsParityTests/delete rules use SwiftData's raw values",
-      "scenarioIDs": ["MacroArgumentsParityTests/delete rules use SwiftData's raw values"],
+      "scenarioIDs": [
+        "MacroArgumentsParityTests/delete rules use SwiftData's raw values"
+      ],
       "outcomes": {
         "MacroArgumentsParityTests/delete rules use SwiftData's raw values": "compared"
       },
       "observations": {
-        "MacroArgumentsParityTests/delete rules use SwiftData's raw values": ["deleteRuleRawValues", "cascadeRawValueRoundTrip"]
+        "MacroArgumentsParityTests/delete rules use SwiftData's raw values": [
+          "deleteRuleRawValues",
+          "cascadeRawValueRoundTrip"
+        ]
       }
     },
     {
       "sourceCase": "MacroArgumentsParityTests/an original name migrates a renamed attribute",
-      "scenarioIDs": ["MacroArgumentsParityTests/an original name migrates a renamed attribute"],
+      "scenarioIDs": [
+        "MacroArgumentsParityTests/an original name migrates a renamed attribute"
+      ],
       "outcomes": {
         "MacroArgumentsParityTests/an original name migrates a renamed attribute": "compared"
       },
       "observations": {
-        "MacroArgumentsParityTests/an original name migrates a renamed attribute": ["renamedValues"]
+        "MacroArgumentsParityTests/an original name migrates a renamed attribute": [
+          "renamedValues"
+        ]
       }
     },
     {
       "sourceCase": "MacroNamingParityTests/a model named Root persists and relates",
-      "scenarioIDs": ["MacroNamingParityTests/a model named Root persists and relates"],
+      "scenarioIDs": [
+        "MacroNamingParityTests/a model named Root persists and relates"
+      ],
       "outcomes": {
         "MacroNamingParityTests/a model named Root persists and relates": "compared"
       },
       "observations": {
-        "MacroNamingParityTests/a model named Root persists and relates": ["inverseMatches", "rootEntityName", "storedRootNames"]
+        "MacroNamingParityTests/a model named Root persists and relates": [
+          "inverseMatches",
+          "rootEntityName",
+          "storedRootNames"
+        ]
       }
-    }
-,
+    },
     {
       "sourceCase": "SortingParityTests/string and numeric orderings match for pending and saved models",
       "scenarioIDs": [
@@ -1705,14 +2084,38 @@
         "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized": "compared"
       },
       "observations": {
-        "SortingParityTests/string and numeric orderings match for pending and saved models/name-ascending": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/name-reverse": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/name-lexical": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-ascending": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-reverse": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/rank-reverse": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized-standard": ["pending.names", "saved.names"],
-        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized": ["pending.names", "saved.names"]
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-ascending": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-reverse": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-lexical": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-ascending": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/optional-name-reverse": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/rank-reverse": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized-standard": [
+          "pending.names",
+          "saved.names"
+        ],
+        "SortingParityTests/string and numeric orderings match for pending and saved models/name-localized": [
+          "pending.names",
+          "saved.names"
+        ]
       }
     },
     {
@@ -1724,7 +2127,9 @@
         "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders": "compared"
       },
       "observations": {
-        "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders": ["sortOrderPreserved"]
+        "SortingParityTests/fetch descriptors accept Foundation sort descriptors and sort orders": [
+          "sortOrderPreserved"
+        ]
       }
     },
     {
@@ -1737,15 +2142,19 @@
       },
       "observations": {
         "ModelContextInitParityTests/a context made from a container enables autosave and references the container": [
-          "contextAutosaveEnabled", "containerIdentityMatches", "undoManagerAbsent",
-          "contextHasNoChanges", "mainContextAutosaveEnabled"
+          "contextAutosaveEnabled",
+          "containerIdentityMatches",
+          "undoManagerAbsent",
+          "contextHasNoChanges",
+          "mainContextAutosaveEnabled"
         ]
       }
-    }
-,
+    },
     {
       "sourceCase": "ModelActorParityTests/a model actor works with its own context",
-      "scenarioIDs": ["ModelActorParityTests/a model actor works with its own context"],
+      "scenarioIDs": [
+        "ModelActorParityTests/a model actor works with its own context"
+      ],
       "outcomes": {
         "ModelActorParityTests/a model actor works with its own context": "non-comparable"
       },
@@ -1755,13 +2164,31 @@
     },
     {
       "sourceCase": "ModelActorParityTests/executors can wrap an existing context",
-      "scenarioIDs": ["ModelActorParityTests/executors can wrap an existing context"],
+      "scenarioIDs": [
+        "ModelActorParityTests/executors can wrap an existing context"
+      ],
       "outcomes": {
         "ModelActorParityTests/executors can wrap an existing context": "compared"
       },
       "observations": {
-        "ModelActorParityTests/executors can wrap an existing context": ["executorContextIdentityMatches"]
+        "ModelActorParityTests/executors can wrap an existing context": [
+          "executorContextIdentityMatches"
+        ]
       }
+    },
+    {
+      "sourceCase": "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction",
+      "scenarioIDs": [
+        "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction"
+      ],
+      "observations": {
+        "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction": []
+      },
+      "outcomes": {
+        "CustomStoreHistoryPropagationTests/customStoreSaveRecordsAFetchableHistoryTransaction": "non-comparable"
+      },
+      "reasonCategory": "custom-store-api",
+      "rationale": "Installing a custom DataStore requires the OpenSwiftData-specific configuration surface; Apple's SwiftData cannot mount an equivalent custom store through public API."
     }
   ]
 }

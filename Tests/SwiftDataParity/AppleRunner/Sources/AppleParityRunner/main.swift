@@ -71,13 +71,20 @@ struct AppleParityRunner {
         let migrationPlanResults = try AppleMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try AppleModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try AppleRelationshipDeleteRuleAdapter.runAll()
+        let customStoreHistoryResults = CustomStoreHistoryScenarioCatalog.nonComparableIDs.map { id in
+            ScenarioResult(
+                id: id, observations: [],
+                disposition: .nonComparable(
+                    reasonCategory: "custom-store-api",
+                    rationale: CustomStoreHistoryScenarioCatalog.nonComparableRationale))
+        }
         let results = (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults
             + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults
             + modelActorResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
             + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
-            + relationshipDeleteRuleResults)
+            + relationshipDeleteRuleResults + customStoreHistoryResults)
             .sorted { $0.id.description < $1.id.description }
         let output = RunnerOutput(
             manifest: RunnerManifest(

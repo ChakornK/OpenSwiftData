@@ -2616,6 +2616,19 @@ public struct ModelConfigurationSpecification: Codable, Equatable, Sendable {
     }
 }
 
+public enum CustomStoreHistoryScenarioCatalog {
+    public static let customStoreSaveRecordsAFetchableHistoryTransaction = ScenarioID(
+        suite: "CustomStoreHistoryPropagationTests",
+        test: "customStoreSaveRecordsAFetchableHistoryTransaction")
+
+    public static let nonComparableRationale =
+        "Installing a custom DataStore requires the OpenSwiftData-specific configuration surface; Apple's SwiftData cannot mount an equivalent custom store through public API."
+
+    public static var nonComparableIDs: [ScenarioID] {
+        [customStoreSaveRecordsAFetchableHistoryTransaction]
+    }
+}
+
 public enum ModelConfigurationScenarioCatalog {
     public static let nonComparableSelectionReason =
         "Apple's SwiftData selection wrappers expose no public selection discriminator."

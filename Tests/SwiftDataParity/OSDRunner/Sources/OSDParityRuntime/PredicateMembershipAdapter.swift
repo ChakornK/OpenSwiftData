@@ -158,13 +158,20 @@ public enum OSDScenarioAdapter {
         let migrationPlanResults = try OSDMigrationPlanAdapter.runAll()
         let modelContainerParityResults = try OSDModelContainerParityAdapter.runAll()
         let relationshipDeleteRuleResults = try OSDRelationshipDeleteRuleAdapter.runAll()
+        let customStoreHistoryResults = CustomStoreHistoryScenarioCatalog.nonComparableIDs.map { id in
+            ScenarioResult(
+                id: id, observations: [],
+                disposition: .nonComparable(
+                    reasonCategory: "custom-store-api",
+                    rationale: CustomStoreHistoryScenarioCatalog.nonComparableRationale))
+        }
         return (predicateResults + schemaResults + modelTypeResults + storeIdentifierResults + identityResults
             + configurationResults + configurationContainerResults + pendingFetchResults
             + pendingFetchRelationshipResults + macroArgumentsResults + sortingResults + modelContextInitResults
             + modelActorResults + batchFetchResults
             + batchDeleteResults + codableResults + contextNotificationResults + rollbackResults + modelContextResults
             + historyResults + uniqueConstraintResults + migrationPlanResults + modelContainerParityResults
-            + relationshipDeleteRuleResults)
+            + relationshipDeleteRuleResults + customStoreHistoryResults)
             .sorted { $0.id.description < $1.id.description }
     }
 

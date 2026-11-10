@@ -174,7 +174,9 @@ import Testing
         #expect(results.map(\.id) == expectedIDs)
         for specification in SchemaIntrospectionScenarioCatalog.all {
             let result = try #require(results.first { $0.id == specification.id })
-            #expect(SchemaIntrospectionExpectationValidator.validate(result, against: specification))
+            #expect(
+                SchemaIntrospectionExpectationValidator.validate(
+                    result, against: specification, implementation: "openswiftdata"))
         }
         for specification in SchemaModelTypesScenarioCatalog.all {
             let result = try #require(results.first { $0.id == specification.id })

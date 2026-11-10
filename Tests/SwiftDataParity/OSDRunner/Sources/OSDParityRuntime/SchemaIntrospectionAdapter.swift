@@ -43,22 +43,18 @@ public enum OSDSchemaIntrospectionAdapter {
         default:
             throw ScenarioExpectationError(id: specification.id, observations: [])
         }
+        // The runner validates against the contract's OpenSwiftData expectations; the Apple-vs-OSD
+        // comparison and allowlist handling happen in `parity-compare`.
         let result = ScenarioResult(
             id: specification.id,
             observations: observations.sorted { $0.key < $1.key }.enumerated().map { step, pair in
                 ParityObservation(step: step, field: pair.key, value: pair.value)
             })
-        guard validateOSDObservations(result, against: specification) else {
+        guard SchemaIntrospectionExpectationValidator.validate(result, against: specification, implementation: "openswiftdata")
+        else {
             throw ScenarioExpectationError(id: specification.id, observations: result.observations)
         }
         return result
-    }
-
-    private static func validateOSDObservations(
-        _ result: ScenarioResult,
-        against specification: SchemaIntrospectionSpecification
-    ) -> Bool {
-        SchemaIntrospectionExpectationValidator.validate(result, against: specification)
     }
 
     private static func entityObservations(in schema: Schema) throws -> [String: ObservedValue] {

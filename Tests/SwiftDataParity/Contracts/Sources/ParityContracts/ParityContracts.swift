@@ -1936,10 +1936,21 @@ public enum HistoryParityExpectationValidator {
 public struct SchemaIntrospectionSpecification: Codable, Equatable, Sendable {
     public let id: ScenarioID
     public let expectedObservations: [String: ObservedValue]
+    /// Observations for OpenSwiftData runs whose value diverges from Apple's for a documented gap.
+    public let expectedOSDObservations: [String: ObservedValue]?
 
-    public init(id: ScenarioID, expectedObservations: [String: ObservedValue]) {
+    public init(
+        id: ScenarioID, expectedObservations: [String: ObservedValue],
+        expectedOSDObservations: [String: ObservedValue]? = nil
+    ) {
         self.id = id
         self.expectedObservations = expectedObservations
+        self.expectedOSDObservations = expectedOSDObservations
+    }
+
+    /// The observations to validate an OpenSwiftData run against.
+    public var osdExpectedObservations: [String: ObservedValue] {
+        expectedOSDObservations ?? expectedObservations
     }
 
     public var contract: ScenarioContract {
@@ -1982,6 +1993,11 @@ public enum SchemaIntrospectionScenarioCatalog {
             "author.uniquenessConstraints": .array([.array([.string("handle")])]),
             "book.indices": .array([.array([.string("binary"), .string("title")])]),
             "entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
+        ],
+        expectedOSDObservations: [
+            "author.uniquenessConstraints": .array([.array([.string("handle")])]),
+            "book.indices": .array([.array([.string("title")])]),
+            "entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
         ])
 
     public static let schemaRoundTrip = SchemaIntrospectionSpecification(
@@ -1992,6 +2008,14 @@ public enum SchemaIntrospectionScenarioCatalog {
             "roundTrip.author.properties": .stringSet(["bio", "books", "handle"]),
             "roundTrip.author.uniquenessConstraints": .array([.array([.string("handle")])]),
             "roundTrip.book.indices": .array([]),
+            "roundTrip.entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
+        ],
+        expectedOSDObservations: [
+            "roundTrip.version": .array([.integer(2), .integer(1), .integer(0)]),
+            "roundTrip.entities": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
+            "roundTrip.author.properties": .stringSet(["bio", "books", "handle"]),
+            "roundTrip.author.uniquenessConstraints": .array([.array([.string("handle")])]),
+            "roundTrip.book.indices": .array([.array([.string("title")])]),
             "roundTrip.entities.names": .stringSet(["IntrospectionAuthor", "IntrospectionBook"]),
         ])
 
@@ -2005,7 +2029,11 @@ public enum SchemaIntrospectionScenarioCatalog {
 }
 
 public enum SchemaIntrospectionExpectationValidator {
-    public static func validate(_ result: ScenarioResult, against specification: SchemaIntrospectionSpecification) -> Bool {
+    public static func validate(
+        _ result: ScenarioResult,
+        against specification: SchemaIntrospectionSpecification,
+        implementation: String = "apple"
+    ) -> Bool {
         guard result.id == specification.id else { return false }
         var observations: [String: ObservedValue] = [:]
         for observation in result.observations {
@@ -2013,7 +2041,10 @@ public enum SchemaIntrospectionExpectationValidator {
                 return false
             }
         }
-        return observations == specification.expectedObservations.mapValues(\.canonicalized)
+        let expected = implementation == "openswiftdata"
+            ? specification.osdExpectedObservations
+            : specification.expectedObservations
+        return observations == expected.mapValues(\.canonicalized)
     }
 }
 

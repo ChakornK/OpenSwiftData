@@ -14,7 +14,7 @@ public enum NonComparableScenarios {
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
             "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."),
         ScenarioID(suite: "UniqueConstraintParityTests", test: "duplicates inserted in one save collapse into one row"): deferred(
-            "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them."),
+            "Apple's survivor of a duplicate-insert merge is non-deterministic; OpenSwiftData deterministically keeps the last insert."),
         // Variants inside otherwise-compared entries.
         ScenarioID(suite: "StringPredicateParityTests", test: "string count counts characters/saved"): deferred(
             "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters."),

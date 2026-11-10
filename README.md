@@ -103,7 +103,7 @@ The parity suite tracks behavior and API differences. Expand the list for detail
 8. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
 9. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
 10. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
-11. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData collapses duplicate unique keys at save and fetches only `z/2/nil`; Apple defers the merge and fetches both `z/1/nil` and `z/2/nil`.
+11. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData deterministically keeps `z/2/nil` as the survivor; Apple's survivor is non-deterministic across saves (sometimes `z/1/nil`, sometimes `z/2/nil`).
 
 </details>
 

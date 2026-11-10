@@ -1619,7 +1619,7 @@
       },
       "observations": {},
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them. Tracked under issue #8."
+      "rationale": "Apple's survivor of a duplicate-insert merge is non-deterministic; OpenSwiftData deterministically keeps the last insert."
     },
     {
       "sourceCase": "UniqueConstraintParityTests/updating into a conflict merges the changed values and removes the updated row",

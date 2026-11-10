@@ -402,7 +402,10 @@ public final class Schema: @unchecked Sendable {
         public var inverseKeyPath: AnyKeyPath? { nil }
         public var inverse: String? { inverseName }
         public var isAttribute: Bool { false }
-        public var isRelationship: Bool { true }
+        /// Apple's `Relationship` reports `isRelationship` as `false` because the flag reflects the
+        /// macro's `PropertyMetadata` classification, not the schema object's kind; `isAttribute` and
+        /// `isToOneRelationship` carry the actual type information.
+        public var isRelationship: Bool { false }
         public var isTransient: Bool { false }
         public var isUnique: Bool { options.contains(.unique) }
         public var isToOneRelationship: Bool { !isToMany }

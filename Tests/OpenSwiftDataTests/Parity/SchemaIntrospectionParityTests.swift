@@ -36,7 +36,7 @@ import Testing
         #expect(!handle.isTransient && !handle.isTransformable)
         #expect(author.attributesByName["bio"]?.isOptional == true)
         let books = try #require(author.relationshipsByName["books"])
-        #expect(books.isRelationship && !books.isAttribute && !books.isToOneRelationship)
+        #expect(!books.isAttribute && !books.isRelationship && !books.isToOneRelationship)
         #expect(books.inverseName == "author")
         #expect(books.deleteRule == .cascade)
         let book = try #require(schema.entity(for: IntrospectionBook.self))

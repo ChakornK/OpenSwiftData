@@ -58,22 +58,7 @@ public enum OSDSchemaIntrospectionAdapter {
         _ result: ScenarioResult,
         against specification: SchemaIntrospectionSpecification
     ) -> Bool {
-        var expected = specification.expectedObservations
-        switch specification.id {
-        case SchemaIntrospectionScenarioCatalog.propertyFlags.id:
-            if case var .object(flags)? = expected["author.books.flags"] {
-                flags["relationship"] = .bool(true)
-                expected["author.books.flags"] = .object(flags)
-            }
-        case SchemaIntrospectionScenarioCatalog.constraintsAndIndices.id:
-            expected["book.indices"] = .array([.array([.string("title")])])
-        case SchemaIntrospectionScenarioCatalog.schemaRoundTrip.id:
-            expected["roundTrip.book.indices"] = .array([.array([.string("title")])])
-        default:
-            break
-        }
-        let osdSpecification = SchemaIntrospectionSpecification(id: specification.id, expectedObservations: expected)
-        return SchemaIntrospectionExpectationValidator.validate(result, against: osdSpecification)
+        SchemaIntrospectionExpectationValidator.validate(result, against: specification)
     }
 
     private static func entityObservations(in schema: Schema) throws -> [String: ObservedValue] {

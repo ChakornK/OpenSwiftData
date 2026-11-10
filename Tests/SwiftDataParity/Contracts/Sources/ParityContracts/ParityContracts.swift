@@ -1282,12 +1282,6 @@ public enum BatchDeleteScenarioCatalog {
             "savedADeleted": .bool(false), "savedARegistered": .bool(true), "pendingCRegistered": .bool(true),
             "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
             "afterSaveNames": .array([.string("b"), .string("c")]),
-        ]))],
-        expectedOSDObservations: [.init(step: 0, field: "delete.state", value: .object([
-            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
-            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
-            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
-            "afterSaveNames": .array([.string("b"), .string("c")]),
         ]))])
 
     public static let cascadeRules = BatchDeleteSpecification(

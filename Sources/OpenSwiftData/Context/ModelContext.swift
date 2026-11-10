@@ -798,7 +798,9 @@ public final class ModelContext {
                 DataStoreBatchDeleteRequest(
                     predicate: predicate, includeSubclasses: includeSubclasses,
                     editingState: editingState))
-            identityMap.removeAll()
+            // Apple semantics: registered saved models stay attached and keep their last known
+            // values after a batch delete; only the store rows are removed.
+            identityMap.clearDeleted()
             storeHub?.publish(
                 storeIdentifier: storeHubStoreIdentifier ?? ObjectIdentifier(container as AnyObject),
                 sourceSubscription: storeHubSubscription ?? UUID(),

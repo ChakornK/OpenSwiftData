@@ -430,13 +430,8 @@ import Testing
             "reason": .string("Delete rule is not supported for batch deletes"),
             "remainingKeepers": .integer(1), "toyStillLinked": .bool(true),
         ]))
-        let divergent = try #require(BatchDeleteScenarioCatalog.pendingAndRegisteredState.expectedOSDObservations?.first)
-        #expect(divergent.value == .object([
-            "hasChanges": .bool(true), "insertedCount": .integer(1), "deletedCount": .integer(0),
-            "savedADeleted": .bool(true), "savedARegistered": .bool(false), "pendingCRegistered": .bool(true),
-            "otherContextNames": .array([.string("b")]), "mainContextNames": .array([.string("b"), .string("c")]),
-            "afterSaveNames": .array([.string("b"), .string("c")]),
-        ]))
+        // Batch deletes now match Apple's registered-instance semantics, so there is no OSD divergence.
+        #expect(BatchDeleteScenarioCatalog.pendingAndRegisteredState.expectedOSDObservations == nil)
     }
 
     @Test func batchDeleteExpectationValidatorRejectsMissingAndWrongObservations() throws {

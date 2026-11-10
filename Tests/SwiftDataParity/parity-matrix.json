@@ -893,11 +893,13 @@
         "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone"
       ],
       "outcomes": {
-        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "non-comparable"
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": "compared"
       },
-      "observations": {},
-      "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData marks batch-deleted saved models deleted and unregisters them; Apple leaves them registered. Tracked under issue #8."
+      "observations": {
+        "BatchDeleteParityTests/batch deletes leave pending changes and registered instances alone": [
+          "delete.state"
+        ]
+      }
     },
     {
       "sourceCase": "BatchDeleteParityTests/batch deletes apply cascade rules",

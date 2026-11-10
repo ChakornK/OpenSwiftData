@@ -21,8 +21,6 @@ public enum NonComparableScenarios {
             "Apple regenerates the store identifier and drops the registered model on reopen; OpenSwiftData preserves both."),
         ScenarioID(suite: "UniqueConstraintParityTests", test: "duplicates inserted in one save collapse into one row"): deferred(
             "Apple keeps both duplicate rows after a single save; OpenSwiftData collapses them."),
-        ScenarioID(suite: "BatchDeleteParityTests", test: "batch deletes leave pending changes and registered instances alone"): deferred(
-            "OpenSwiftData marks batch-deleted saved models deleted and unregisters them; Apple leaves them registered."),
         ScenarioID(suite: "SchemaIntrospectionParityTests", test: "constraints and indices are listed by property name"): deferred(
             "Apple emits a synthetic binary column into #Index expansion; OpenSwiftData lists declared properties only."),
         ScenarioID(suite: "SchemaIntrospectionParityTests", test: "schemas round-trip through Codable and files"): deferred(

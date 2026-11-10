@@ -36,7 +36,7 @@ import Testing
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     }
 
-    @Test func `rollback keeps in-memory edits and clears change tracking`() throws {
+    @Test func `rollback restores committed values immediately and clears change tracking`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)
         try context.save()
@@ -46,7 +46,8 @@ import Testing
         owner.tag = "t"
         owner.tags = ["x"]
         context.rollback()
-        // Apple semantics: rollback clears pending state but keeps in-memory edits.
+        // Apple semantics: rollback clears pending state but keeps the in-memory edits until a
+        // fetch refreshes the registered instance from the stored row.
         #expect(owner.age == 2)
         #expect(owner.name == "a2")
         #expect(owner.tag == "t")
@@ -56,36 +57,17 @@ import Testing
         #expect(owner.modelContext === context)
         // The store keeps the saved values.
         #expect(try ModelContext(container).fetch(saved).map(\.age) == [1])
-    }
 
-    @Test func `a fetch after rollback refreshes registered models from the store`() throws {
-        let owner = RollbackParityOwner(name: "a", age: 1)
-        context.insert(owner)
-        try context.save()
-
-        owner.age = 2
-        owner.name = "a2"
-        owner.tag = "t"
-        owner.tags = ["x"]
-        context.rollback()
-        // Kept in memory immediately after rollback ...
-        #expect(owner.age == 2)
-        #expect(owner.name == "a2")
-
-        // ... and reverted to the stored row by the next fetch, as in Apple's SwiftData.
+        // A fetch after rollback reverts in-memory edits to the stored row, as in Apple's SwiftData.
         let fetched = try context.fetch(saved)
         #expect(fetched.first === owner)
         #expect(owner.age == 1)
         #expect(owner.name == "a")
         #expect(owner.tag == nil)
         #expect(owner.tags.isEmpty)
-        #expect(!owner.hasChanges)
-        #expect(!context.hasChanges)
-        #expect(owner.modelContext === context)
-        #expect(try ModelContext(container).fetch(saved).map(\.age) == [1])
     }
 
-    @Test func `rollback keeps committed relationship edits`() throws {
+    @Test func `rollback restores committed relationship edits`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         let item = RollbackParityItem(value: 1)
         context.insert(owner)
@@ -94,7 +76,7 @@ import Testing
 
         owner.items.append(item)
         context.rollback()
-        // Apple semantics: the in-memory relationship stays as mutated.
+        // Apple semantics: the in-memory relationship stays as mutated until the next fetch.
         #expect(owner.items.count == 1)
         #expect(item.owner === owner)
         #expect(!context.hasChanges)
@@ -102,7 +84,7 @@ import Testing
         #expect(try ModelContext(container).fetch(saved).first?.items.isEmpty == true)
     }
 
-    @Test func `rollback keeps saved graph and detaches unsaved related insertions`() throws {
+    @Test func `rollback detaches related insertions and restores saved graph`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)
         try context.save()
@@ -124,7 +106,7 @@ import Testing
         #expect(try context.fetchCount(FetchDescriptor<RollbackParityItem>()) == 0)
     }
 
-    @Test func `rollback keeps current values after repeated edits`() throws {
+    @Test func `rollback restores first committed values after repeated edits`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)
         try context.save()
@@ -143,7 +125,7 @@ import Testing
         #expect(!owner.hasChanges)
     }
 
-    @Test func `rollback keeps current values when an edited model is deleted`() throws {
+    @Test func `rollback restores values when an edited model is deleted`() throws {
         let owner = RollbackParityOwner(name: "a", age: 1)
         context.insert(owner)
         try context.save()

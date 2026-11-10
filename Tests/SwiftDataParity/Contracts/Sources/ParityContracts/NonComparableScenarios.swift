@@ -8,7 +8,7 @@ import Foundation
 public enum NonComparableScenarios {
     /// One matrix rationale per declared scenario.
     public static let declared: [ScenarioID: (reasonCategory: String, rationale: String)] = [
-        // Deferred behavior gaps tracked under issue #8.
+        // Deferred behavior gaps — Apple bugs not replicated.
         ScenarioID(suite: "FetchDescriptorParityTests", test: "defaults match SwiftData"): deferred(
             "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."),
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
@@ -65,6 +65,6 @@ public enum NonComparableScenarios {
     }
 
     private static func deferred(_ rationale: String) -> (String, String) {
-        ("deferred-behavior-gap", "\(rationale) Tracked under issue #8.")
+        ("deferred-behavior-gap", rationale)
     }
 }

@@ -105,7 +105,7 @@
         "StringPredicateParityTests/string count counts characters/saved": "non-comparable"
       },
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters. Tracked under issue #8."
+      "rationale": "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters."
     },
     {
       "sourceCase": "StringPredicateParityTests/optional flatMap over a string",
@@ -126,7 +126,7 @@
         "StringPredicateParityTests/optional flatMap over a string/saved": "non-comparable"
       },
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple's saved-model optional flatMap and isEmpty predicates match no rows; OpenSwiftData matches. Tracked under issue #8."
+      "rationale": "Apple's saved-model optional flatMap and isEmpty predicates match no rows; OpenSwiftData matches."
     },
     {
       "sourceCase": "SchemaIntrospectionParityTests/entities are found by model type",
@@ -1427,7 +1427,7 @@
       },
       "observations": {},
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil. Tracked under issue #8."
+      "rationale": "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."
     },
     {
       "sourceCase": "FetchDescriptorParityTests/properties to fetch is a mutable array",
@@ -1760,7 +1760,7 @@
       },
       "observations": {},
       "reasonCategory": "deferred-behavior-gap",
-      "rationale": "Apple traps during its post-erase save probe; OpenSwiftData completes the probe. Tracked under issue #8."
+      "rationale": "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."
     },
     {
       "sourceCase": "ModelContainerParityTests/erasing also clears history",

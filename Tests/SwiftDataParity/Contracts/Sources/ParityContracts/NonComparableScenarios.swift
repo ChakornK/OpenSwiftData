@@ -58,15 +58,26 @@ public enum NonComparableScenarios {
             guard let disposition = disposition(for: result.id) else { return result }
             // A non-comparable result inside an otherwise-compared entry keeps its place with no
             // observations; whole-entry non-comparables are dropped from runner output entirely.
-            return hasComparableSibling(result.id) ? ScenarioResult(id: result.id, observations: [], disposition: disposition) : nil
+            return isPartOfComparedEntry(result.id)
+                ? ScenarioResult(id: result.id, observations: [], disposition: disposition)
+                : nil
         }
     }
 
-    /// Whether any other declared scenario shares this scenario's matrix entry (same suite+test stem).
-    private static func hasComparableSibling(_ id: ScenarioID) -> Bool {
-        declared.keys.contains { other in
-            other != id && other.suite == id.suite && variantStem(other.test) == variantStem(id.test)
-        }
+    /// Whether the matrix entry containing this scenario also contains comparable variants.
+    ///
+    /// Mirrors `parity-matrix.json`: a parameterized source case (e.g. `string count counts
+    /// characters`) emits one scenario per test argument, and only some variants diverge.
+    /// Entries whose scenarios are all non-comparable produce no runner emission at all.
+    private static var comparedEntryStems: Set<String> {
+        [
+            "StringPredicateParityTests/string count counts characters",
+            "StringPredicateParityTests/optional flatMap over a string",
+        ]
+    }
+
+    private static func isPartOfComparedEntry(_ id: ScenarioID) -> Bool {
+        comparedEntryStems.contains("\(id.suite)/\(variantStem(id.test))")
     }
 
     /// The parameterized-test stem of a scenario test name (text before the final `/`).

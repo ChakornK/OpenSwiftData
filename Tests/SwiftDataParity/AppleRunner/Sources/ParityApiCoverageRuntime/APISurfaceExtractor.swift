@@ -223,6 +223,9 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
 
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
         if isPublic(node.modifiers), !isSpiAnnotated(node.attributes) {
+            if isSynthesizedHashInto(node) {
+                return .visitChildren
+            }
             emitMember(
                 displayName: node.name.text,
                 kind: .function,
@@ -232,6 +235,53 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
             )
         }
         return .visitChildren
+    }
+
+    /// Returns `true` when `node` is a compiler-synthesized `Hashable`
+    /// conformance `public func hash(into hasher: inout Hasher)` member
+    /// declaration. Such declarations are dropped from the API surface
+    /// because they are not real callable API. The predicate is purely
+    /// syntactic and time-independent (preserves the determinism guarantee).
+    private func isSynthesizedHashInto(_ node: FunctionDeclSyntax) -> Bool {
+        guard !typeStack.isEmpty, node.name.text == "hash",
+            node.signature.parameterClause.parameters.count == 1
+        else { return false }
+        let param = node.signature.parameterClause.parameters.first!
+        // The real .swiftinterface form is `hash(into hasher: inout Swift::Hasher)`.
+        // `firstName` is the external label ("into"); `secondName` is the
+        // internal name ("hasher"). When there is no internal name, this
+        // is not the synthesized Hashable conformance form.
+        guard param.firstName?.text == "into", param.secondName?.text == "hasher" else {
+            return false
+        }
+        // swift-syntax 604 serializes `inout Swift::Hasher` as an
+        // `AttributedTypeSyntax` whose `specifiers` contains a
+        // `SimpleTypeSpecifierSyntax` with `specifier.tokenKind == .keyword(.inout)`
+        // and whose `baseType` is a `MemberTypeSyntax` (`Swift::Hasher`
+        // parses as MemberTypeSyntax with name "Hasher", baseType
+        // IdentifierTypeSyntax "Swift"). `InOutAttributedTypeSyntax` does
+        // not exist in 604. The `.as(SimpleTypeSpecifierSyntax.self)` form
+        // is DEPRECATED in 604 (emits a warning that fails
+        // `-warnings-as-errors`); use `if case .simpleTypeSpecifier` instead.
+        guard let attributed = param.type.as(AttributedTypeSyntax.self) else { return false }
+        let hasInOut = attributed.specifiers.contains { specifier in
+            if case .simpleTypeSpecifier(let s) = specifier {
+                return s.specifier.tokenKind == .keyword(.inout)
+            }
+            return false
+        }
+        guard hasInOut else { return false }
+        // The baseType is `Hasher` (IdentifierTypeSyntax) or `Swift::Hasher`
+        // (MemberTypeSyntax); extract the leaf name in both cases.
+        let baseName: String
+        if let member = attributed.baseType.as(MemberTypeSyntax.self) {
+            baseName = member.name.text
+        } else if let ident = attributed.baseType.as(IdentifierTypeSyntax.self) {
+            baseName = ident.name.text
+        } else {
+            return false
+        }
+        return baseName == "Hasher"
     }
 
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {

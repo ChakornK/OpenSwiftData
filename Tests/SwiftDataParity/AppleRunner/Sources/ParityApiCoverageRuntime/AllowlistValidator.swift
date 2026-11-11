@@ -115,6 +115,9 @@ public enum AllowlistValidator {
                 mangledName: record.mangledName
             )
         }
+        for record in annotated where !record.covered && !record.allowlisted {
+            issues.append("\(record.fullyQualifiedName): uncovered symbol has no allowlist entry")
+        }
         return AllowlistValidation(
             annotatedSymbols: annotated,
             validationIssues: issues,

@@ -4,6 +4,22 @@ import SwiftSyntax
 import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
 
+/// A no-op transformable-property macro stub for API-surface coverage.
+/// Expands to no peers (the `AccessorMacro` role is deliberately omitted from
+/// the `_TransformablePersistedProperty` declaration so this macro does not
+/// need to produce accessors). It exists so the
+/// `_TransformablePersistedProperty` macro declaration in `OpenSwiftData`
+/// can be applied to a stored property in a parity test.
+struct TransformablePersistedPropertyMacro: PeerMacro {
+    static func expansion(
+        of node: AttributeSyntax,
+        providingPeersOf declaration: some DeclSyntaxProtocol,
+        in context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
+        []
+    }
+}
+
 @main
 struct OpenSwiftDataMacrosPlugin: CompilerPlugin {
     let providingMacros: [Macro.Type] = [
@@ -15,6 +31,7 @@ struct OpenSwiftDataMacrosPlugin: CompilerPlugin {
         IndexMacro.self,
         ModelActorMacro.self,
         PersistedPropertyMacro.self,
+        TransformablePersistedPropertyMacro.self,
     ]
 }
 
@@ -90,7 +107,9 @@ struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             !variable.modifiers.contains(where: { ["static", "class", "lazy"].contains($0.name.text) }),
             !variable.attributes.contains(where: { element in
                 guard case let .attribute(attribute) = element else { return false }
-                return CodeGen.propertyMacroName(attribute) == "Transient"
+                let name = attribute.attributeName.as(IdentifierTypeSyntax.self)?.name.text
+                    ?? CodeGen.propertyMacroName(attribute)
+                return name == "Transient" || name == "_PersistedProperty"
             })
         else { return [] }
         let rawPropertyName = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? ""

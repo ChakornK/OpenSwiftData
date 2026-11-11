@@ -202,6 +202,20 @@ public extension BackingData {
     }
 }
 
+public extension BackingData {
+    /// Apple's underscored SPI for generating the current class's backing data,
+    /// stubbed to return a fresh detached backing data for the requested type.
+    func _generateCurrentClassBackingData<CurrentClass: PersistentModel>() -> any BackingData<CurrentClass> {
+        DetachedBackingData<CurrentClass>(metadata: CurrentClass.schemaMetadata())
+    }
+
+    /// Apple's underscored SPI for accessing the superclass's backing data,
+    /// stubbed to return a fresh detached backing data for the requested type.
+    func _superClassBackingData<SuperClass: PersistentModel>(of givenType: any PersistentModel.Type) -> any BackingData<SuperClass> {
+        DetachedBackingData<SuperClass>(metadata: SuperClass.schemaMetadata())
+    }
+}
+
 /// Creates and owns the initial values for a model that is not in a context.
 public final class DetachedBackingData<Model: PersistentModel>: BackingData, AnyBackingData, @unchecked Sendable {
     private var values: [AnyKeyPath: Any] = [:]

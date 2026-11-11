@@ -251,7 +251,7 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
         // `firstName` is the external label ("into"); `secondName` is the
         // internal name ("hasher"). When there is no internal name, this
         // is not the synthesized Hashable conformance form.
-        guard param.firstName?.text == "into", param.secondName?.text == "hasher" else {
+        guard param.firstName.text == "into", param.secondName?.text == "hasher" else {
             return false
         }
         // swift-syntax 604 serializes `inout Swift::Hasher` as an

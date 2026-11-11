@@ -9,6 +9,7 @@ let package = Package(
         .executable(name: "apple-parity-runner", targets: ["AppleParityRunner"]),
         .executable(name: "parity-validate", targets: ["ParityValidate"]),
         .executable(name: "parity-compare", targets: ["ParityCompare"]),
+        .executable(name: "parity-api-coverage", targets: ["ParityApiCoverage"]),
     ],
     dependencies: [
         .package(path: "../Contracts"),
@@ -42,6 +43,29 @@ let package = Package(
         .target(
             name: "ParityCompareRuntime",
             dependencies: [.product(name: "ParityContracts", package: "contracts")]),
+        .executableTarget(
+            name: "ParityApiCoverage",
+            dependencies: [
+                .product(name: "ParityContracts", package: "contracts"),
+                "ParityApiCoverageRuntime",
+            ],
+            path: "Sources/ParityApiCoverage"),
+        .target(
+            name: "ParityApiCoverageRuntime",
+            dependencies: [
+                .product(name: "ParityContracts", package: "contracts"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+            ],
+            path: "Sources/ParityApiCoverageRuntime"),
+        .testTarget(
+            name: "ParityApiCoverageTests",
+            dependencies: [
+                .product(name: "ParityContracts", package: "contracts"),
+                "ParityApiCoverageRuntime",
+            ],
+            path: "Tests/ParityApiCoverageTests"),
         .testTarget(
             name: "ParityToolTests",
             dependencies: [

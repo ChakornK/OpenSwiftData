@@ -28,8 +28,10 @@ jobs:
       - name: Validate source coverage
         if: always()
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-validate
-      - name: Compare scenario observations
+      - name: Validate API surface coverage
         if: always()
+        run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-api-coverage --sdk "$(xcrun --show-sdk-path)"
+      - name: Compare scenario observations
         run: swift run --package-path Tests/SwiftDataParity/AppleRunner parity-compare --osd /tmp/osd-observations.json --apple /tmp/apple-observations.json --allowlist Tests/SwiftDataParity/parity-allowlist.json --matrix Tests/SwiftDataParity/parity-matrix.json --coverage-report parity-coverage-report.json --report /tmp/parity-diff.json
       - name: Upload parity artifacts
         if: always()
@@ -41,4 +43,5 @@ jobs:
             /tmp/apple-observations.json
             /tmp/parity-diff.json
             parity-coverage-report.json
+            parity-api-coverage-report.json
           if-no-files-found: warn

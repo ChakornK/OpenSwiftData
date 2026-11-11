@@ -36,14 +36,16 @@ import Testing
         let record = SymbolRecord(kind: "struct", displayName: "X", fullyQualifiedName: "SwiftData.X", sourceSignature: "s", platformAvailability: .init(), covered: true, referenceCount: 1, references: [reference], mangledName: "")
         let report = makeReport(symbols: [record])
         let data = try CanonicalJSON.encode(report)
-        let string = String(decoding: data, as: UTF8.self)
-        // The references array must not contain "displayName".
-        #expect(!string.contains("\"displayName\""))
-        // It must contain the four report fields.
-        #expect(string.contains("\"matchQuality\""))
-        #expect(string.contains("\"file\""))
-        #expect(string.contains("\"line\""))
-        #expect(string.contains("\"column\""))
+        // Decode and inspect the references array; it must not carry
+        // `displayName`. The symbol record's own `displayName` is expected.
+        let decoded = try JSONDecoder().decode(APICoverageReport.self, from: data)
+        let refData = try JSONEncoder().encode(decoded.symbols.first?.references.first)
+        let refString = String(decoding: refData, as: UTF8.self)
+        #expect(!refString.contains("\"displayName\""))
+        #expect(refString.contains("\"matchQuality\""))
+        #expect(refString.contains("\"file\""))
+        #expect(refString.contains("\"line\""))
+        #expect(refString.contains("\"column\""))
     }
 
     @Test func allowlistSHA256IsEitherEmptyOr64HexChars() throws {

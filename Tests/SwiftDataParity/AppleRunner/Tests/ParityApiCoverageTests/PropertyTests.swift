@@ -193,7 +193,7 @@ import Testing
 
     /// Helper: builds a temp tree.
     private func makeTree(files: [(String, String)]) throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appending(path: "parity-prop-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appending(path: "parity-prop-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for (name, content) in files {
             try content.write(to: root.appending(path: name), atomically: true, encoding: .utf8)

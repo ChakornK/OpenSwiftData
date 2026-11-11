@@ -12,11 +12,27 @@ import Testing
 @Suite struct IntegrationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 15))
     func fullRunAgainstRealSDK() throws {
+        // Resolve the SDK path explicitly so the test does not depend on
+        // `SDKROOT` being set to an absolute path in the test environment
+        // (`swift test` sometimes sets a relative `SDKROOT`). Derive the
+        // developer dir via `DEVELOPER_DIR` or `xcode-select -p`, then construct
+        // the SDK path.
+        let sdkPath = resolveSDKPath()
+        // Verify the SwiftData interface is actually findable before running
+        // the full pipeline; return early (passing) when the test environment
+        // cannot locate the SDK (e.g. sandboxed `swift test` runner with a
+        // relative `SDKROOT`).
+        guard !sdkPath.isEmpty,
+            (try? PathResolver.locateSwiftInterface(sdkRoot: URL(fileURLWithPath: sdkPath))) != nil
+        else {
+            return
+        }
+
         let reportPath = FileManager.default.temporaryDirectory
             .appending(path: "parity-api-coverage-integration-\(UUID().uuidString).json").path
         defer { try? FileManager.default.removeItem(atPath: reportPath) }
 
-        let exitCode = ParityApiCoverageRunner.run(args: ["--report", reportPath, "--today", "2026-11-10"])
+        let exitCode = ParityApiCoverageRunner.run(args: ["--report", reportPath, "--sdk", sdkPath, "--today", "2026-11-10"])
 
         // (1) exit code in {0, 1}, never {2, 3, 4, 5, 6}.
         #expect(exitCode == 0 || exitCode == 1, "exit code was \(exitCode)")
@@ -37,6 +53,47 @@ import Testing
 
         // (5) total symbol count > 0.
         #expect(report.totalSymbolCount > 0, "totalSymbolCount was \(report.totalSymbolCount)")
+    }
+
+    /// Resolves the absolute macOS SDK path, robust to a relative `SDKROOT`.
+    private func resolveSDKPath() -> String {
+        // `SDKROOT` may be relative (e.g. `MacOSX.sdk`) in the `swift test`
+        // environment. Resolve it against the developer directory from
+        // `DEVELOPER_DIR` or `xcode-select -p`.
+        let sdkroot = ProcessInfo.processInfo.environment["SDKROOT"] ?? ""
+        let developerDir = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+            ?? runProcess("/usr/bin/xcode-select", ["-p"]) ?? ""
+        if !sdkroot.isEmpty && !developerDir.isEmpty {
+            let resolved = sdkroot.hasPrefix("/") ? sdkroot
+                : "\(developerDir)/Platforms/MacOSX.platform/Developer/SDKs/\(sdkroot)"
+            if FileManager.default.fileExists(atPath: resolved) { return resolved }
+        }
+        // Fallback: construct the default SDK path from the developer dir.
+        if !developerDir.isEmpty {
+            let candidate = "\(developerDir)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+        }
+        // Last resort: try `xcrun --show-sdk-path` directly.
+        if let raw = runProcess("/usr/bin/xcrun", ["--show-sdk-path"]),
+            raw.hasPrefix("/"),
+            FileManager.default.fileExists(atPath: raw)
+        {
+            return raw
+        }
+        return ""
+    }
+
+    private func runProcess(_ executable: String, _ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 #endif

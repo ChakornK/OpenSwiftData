@@ -30,7 +30,7 @@ import Testing
         #expect(nameResult.coveredSymbolCount == 2)
 
         // Build a synthetic symbol graph matching the real output schema.
-        let graphDir = FileManager.default.temporaryDirectory.appending(path: "parity-sg-graph-\(UUID().uuidString)", isDirectory: true)
+        let graphDir = FileManager.default.temporaryDirectory.appending(path: "parity-sg-graph-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: graphDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: graphDir) }
         let graphJSON = """

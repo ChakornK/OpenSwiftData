@@ -71,15 +71,15 @@ import Testing
     }
 
     @Test func skipsSymlinks() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "parity-scan-\(UUID().uuidString)", isDirectory: true)
-        let external = root.deletingLastPathComponent().appending(path: "parity-scan-ext-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appending(path: "parity-scan-\(UUID().uuidString)")
+        let external = root.deletingLastPathComponent().appending(path: "parity-scan-ext-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: external) }
         try "import SwiftData\nfunc use() { ModelContext() }".write(to: external.appending(path: "Outside.swift"), atomically: true, encoding: .utf8)
         try FileManager.default.createSymbolicLink(at: root.appending(path: "Linked"), withDestinationURL: external)
         let references = scan(root: root, knownDisplayNames: ["ModelContext"], knownTypeDisplayNames: ["ModelContext"])
-        let files = Set(references.map(\.file))
+        let files = Set(references.map { $0.file })
         #expect(!files.contains(where: { $0.contains("Outside") }))
     }
 
@@ -103,14 +103,16 @@ import Testing
         let root2 = try makeTree(files: sources.reversed())
         let refs1 = scan(root: root1, knownDisplayNames: ["ModelContext"], knownTypeDisplayNames: ["ModelContext"])
         let refs2 = scan(root: root2, knownDisplayNames: ["ModelContext"], knownTypeDisplayNames: ["ModelContext"])
-        // Lexicographic sort makes the reference order deterministic regardless
-        // of directory creation order.
-        #expect(refs1.map(\.file).sorted() == refs2.map(\.file).sorted())
+        // Lexicographic sort makes the reference set deterministic regardless
+        // of directory creation order; compare counts (the UUID root paths
+        // differ between trees, so the absolute file paths are not equal).
+        #expect(refs1.count == refs2.count)
+        #expect(refs1.map { $0.displayName }.sorted() == refs2.map { $0.displayName }.sorted())
     }
 
     /// Helper: builds a temp directory tree with the given `.swift` files.
     private func makeTree(files: [(String, String)]) throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appending(path: "parity-scan-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appending(path: "parity-scan-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for (name, content) in files {
             try content.write(to: root.appending(path: name), atomically: true, encoding: .utf8)

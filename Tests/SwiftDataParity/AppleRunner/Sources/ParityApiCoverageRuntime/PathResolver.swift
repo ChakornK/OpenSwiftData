@@ -41,10 +41,19 @@ public enum PathResolver {
     /// file. When multiple architecture variants are found, prefers `arm64e`,
     /// then `arm64`, then any other, then by lexicographic order of the arch prefix.
     public static func locateSwiftInterface(sdkRoot: URL) throws -> URL {
+        // Resolve the SDK root symlink (e.g. `MacOSX26.5.sdk` → `MacOSX.sdk`)
+        // so `FileManager.enumerator` traverses the real directory tree.
+        let resolvedRoot: URL
+        if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: sdkRoot.path) {
+            let targetURL = URL(fileURLWithPath: target, isDirectory: true)
+            resolvedRoot = targetURL.path.hasPrefix("/") ? targetURL : sdkRoot.deletingLastPathComponent().appending(path: target)
+        } else {
+            resolvedRoot = sdkRoot
+        }
         let regex = try NSRegularExpression(pattern: #"/SwiftData\.swiftmodule/[^/]+-apple-macos\.swiftinterface$"#)
         var matches: [URL] = []
         if let enumerator = FileManager.default.enumerator(
-            at: sdkRoot,
+            at: resolvedRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) {
@@ -59,7 +68,7 @@ public enum PathResolver {
             }
         }
         guard !matches.isEmpty else {
-            throw PathResolverError.swiftInterfaceNotFound(searchedRoots: [sdkRoot.path])
+            throw PathResolverError.swiftInterfaceNotFound(searchedRoots: [resolvedRoot.path])
         }
         return matches.sorted { a, b in
             let archA = archPrefix(of: a)
@@ -85,6 +94,45 @@ public enum PathResolver {
         case "arm64": 1
         default: 2
         }
+    }
+
+    /// Resolves only the paths needed for `--check-only`: repository root,
+    /// allowlist, report, and evaluation date. Does NOT locate the
+    /// SwiftInterface or compute the SDK fingerprint. Used by `--check-only`
+    /// which re-evaluates an existing report without re-extracting the surface.
+    public static func resolveForCheckOnly(
+        reportPath: String?,
+        allowlistPath: String?,
+        today: String?
+    ) throws -> ResolvedPaths {
+        let repositoryRoot = try locateRepositoryRoot(from: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+        let paritySourceDirectory = repositoryRoot.appending(path: "Tests/OpenSwiftDataTests/Parity")
+        let evaluationDate: EvaluationDate
+        if let today {
+            evaluationDate = try EvaluationDate(gregorianDay: today)
+        } else {
+            evaluationDate = EvaluationDate(date: Date())
+        }
+        let implementationDirectories = try discoverImplementationDirectories(repositoryRoot: repositoryRoot)
+        let allowlistURL = allowlistPath.map { URL(fileURLWithPath: $0) }
+            ?? repositoryRoot.appending(path: "Tests/SwiftDataParity/parity-api-coverage-allowlist.json")
+        let reportURL = reportPath.map { URL(fileURLWithPath: $0) }
+            ?? repositoryRoot.appending(path: "parity-api-coverage-report.json")
+        // The interface and SDK fingerprint are not used by `--check-only`; fill
+        // with placeholders so `ResolvedPaths` is complete.
+        let placeholder = SDKFingerprint(sdkPath: "", swiftInterfaceSHA256: "", swiftInterfaceByteCount: 0)
+        return ResolvedPaths(
+            repositoryRoot: repositoryRoot,
+            paritySourceDirectory: paritySourceDirectory,
+            implementationDirectories: implementationDirectories,
+            allowlistURL: allowlistURL,
+            reportURL: reportURL,
+            swiftInterfaceURL: repositoryRoot,
+            sdkRoot: repositoryRoot,
+            sdkFingerprint: placeholder,
+            evaluationDate: evaluationDate,
+            strategy: .nameMatch
+        )
     }
 
     /// Resolves every input path for a validator run. The SDK root is derived
@@ -218,22 +266,59 @@ public enum PathResolver {
     }
 
     /// Invokes `/usr/bin/xcrun --show-sdk-path` and returns the trimmed stdout
-    /// as a URL. Returns `nil` on any failure.
+    /// as a URL. Returns `nil` on any failure. Also checks the `SDKROOT`
+    /// environment variable (resolved against `DEVELOPER_DIR` when relative)
+    /// and `xcode-select -p` derived paths as fallbacks.
     private static func runXcrunShowSdkPath() throws -> URL? {
+        // Fast path: `SDKROOT` is set by `xcrun` and the shell environment.
+        // Only use it directly when it points to an existing absolute path;
+        // resolve a relative SDKROOT against `DEVELOPER_DIR`.
+        if let sdkroot = ProcessInfo.processInfo.environment["SDKROOT"], !sdkroot.isEmpty {
+            if sdkroot.hasPrefix("/") && FileManager.default.fileExists(atPath: sdkroot) {
+                return URL(fileURLWithPath: sdkroot)
+            }
+            if let developerDir = ProcessInfo.processInfo.environment["DEVELOPER_DIR"], !developerDir.isEmpty {
+                let resolved = "\(developerDir)/Platforms/MacOSX.platform/Developer/SDKs/\(sdkroot)"
+                if FileManager.default.fileExists(atPath: resolved) {
+                    return URL(fileURLWithPath: resolved)
+                }
+            }
+        }
+        // Try `xcrun --show-sdk-path` via Process.
+        if let path = runProcess(executable: "/usr/bin/xcrun", arguments: ["--show-sdk-path"]),
+            path.hasPrefix("/"),
+            FileManager.default.fileExists(atPath: path)
+        {
+            return URL(fileURLWithPath: path)
+        }
+        // Fallback: derive the SDK path from `DEVELOPER_DIR` or `xcode-select -p`.
+        let developerDir = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+            ?? runProcess(executable: "/usr/bin/xcode-select", arguments: ["-p"]) ?? ""
+        if !developerDir.isEmpty {
+            let sdkPath = "\(developerDir)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+            if FileManager.default.fileExists(atPath: sdkPath) {
+                return URL(fileURLWithPath: sdkPath)
+            }
+        }
+        return nil
+    }
+
+    /// Runs a process and returns its trimmed stdout, or nil on failure.
+    private static func runProcess(executable: String, arguments: [String]) -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["--show-sdk-path"]
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return nil
         }
-        guard process.terminationStatus == 0 else { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
         let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return output.isEmpty ? nil : URL(fileURLWithPath: output)
+        return output.isEmpty ? nil : output
     }
 }

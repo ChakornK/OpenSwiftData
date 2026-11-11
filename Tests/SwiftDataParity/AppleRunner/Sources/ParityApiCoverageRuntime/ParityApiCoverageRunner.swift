@@ -21,7 +21,9 @@ public enum ParityApiCoverageRunner {
             "--strategy", "--report", "--allowlist", "--sdk", "--today", "--emit-allowlist-skeleton",
         ]
 
-        var index = 1
+        // `CommandLine.arguments` has the program name at index 0; tests pass
+        // flags directly. Start at index 1 only when args[0] is not a flag.
+        var index = args.first?.hasPrefix("--") == false ? 1 : 0
         while index < args.count {
             let arg = args[index]
             if arg == "--check-only" {
@@ -65,6 +67,16 @@ public enum ParityApiCoverageRunner {
         }
 
         do {
+            // `--check-only` does not re-extract the API surface, so it does not
+            // need to locate the SwiftInterface. Resolve paths without it.
+            if checkOnly {
+                let resolved = try PathResolver.resolveForCheckOnly(
+                    reportPath: reportPath,
+                    allowlistPath: allowlistPath,
+                    today: today
+                )
+                return runCheckOnly(resolved: resolved)
+            }
             let resolved = try PathResolver.resolve(
                 strategy: strategy,
                 reportPath: reportPath,
@@ -72,9 +84,6 @@ public enum ParityApiCoverageRunner {
                 sdkPath: sdkPath,
                 today: today
             )
-            if checkOnly {
-                return runCheckOnly(resolved: resolved)
-            }
             if let skeletonPath {
                 return runSkeleton(resolved: resolved, skeletonPath: skeletonPath)
             }

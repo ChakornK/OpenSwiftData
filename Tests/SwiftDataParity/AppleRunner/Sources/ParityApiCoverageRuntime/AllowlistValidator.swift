@@ -56,12 +56,7 @@ public enum AllowlistValidator {
                 continue
             }
             _ = url
-            let parsedExpiration: Date?
-            do {
-                parsedExpiration = formatter.date(from: entry.expiration)
-            } catch {
-                parsedExpiration = nil
-            }
+            let parsedExpiration = formatter.date(from: entry.expiration)
             guard let expirationDate = parsedExpiration, expirationDate >= evaluationDate.foundationDate else {
                 issues.append("\(fqn): invalid or expired expiration '\(entry.expiration)'")
                 continue

@@ -198,6 +198,12 @@ final class ReferenceVisitor: SyntaxVisitor {
     }
 
     override func visit(_ node: DeclReferenceExprSyntax) -> SyntaxVisitorContinueKind {
+        // Skip a `DeclReferenceExpr` that is the `declName` of a
+        // `MemberAccessExpr` — the member access visit handles it (and applies
+        // the stoplist gate). Visiting both would double-count.
+        if node.parent?.as(MemberAccessExprSyntax.self) != nil {
+            return .visitChildren
+        }
         record(name: node.baseName.text, matchQuality: .name, node: node)
         return .visitChildren
     }

@@ -155,6 +155,10 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
     private var symbols: [API_Symbol] = []
     private var excludedFlags: [Bool] = []
     private var typeStack: [TypeContext] = []
+    // Tracks whether the immediately enclosing type is public/open, so members
+    // of `internal`/`private` containers are not emitted even if individually
+    // marked `public` (Swift's access can't exceed the containing type).
+    private var containerIsPublicStack: [Bool] = []
 
     var records: [Record] {
         zip(symbols, excludedFlags).map { Record(symbol: $0, isExcluded: $1) }
@@ -163,55 +167,57 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
     // MARK: Type declarations (push/pop the type stack)
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
-        pushType(name: node.name.text, kind: .structKind, attributes: node.attributes)
+        pushAndEmitType(name: node.name.text, kind: .structKind, attributes: node.attributes, modifiers: node.modifiers, signature: node.trimmedDescription)
         return .visitChildren
     }
 
-    override func visitPost(_ node: StructDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: StructDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-        pushType(name: node.name.text, kind: .classKind, attributes: node.attributes)
+        pushAndEmitType(name: node.name.text, kind: .classKind, attributes: node.attributes, modifiers: node.modifiers, signature: node.trimmedDescription)
         return .visitChildren
     }
 
-    override func visitPost(_ node: ClassDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: ClassDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
-        pushType(name: node.name.text, kind: .enumKind, attributes: node.attributes)
+        pushAndEmitType(name: node.name.text, kind: .enumKind, attributes: node.attributes, modifiers: node.modifiers, signature: node.trimmedDescription)
         return .visitChildren
     }
 
-    override func visitPost(_ node: EnumDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: EnumDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
-        pushType(name: node.name.text, kind: .protocolKind, attributes: node.attributes)
+        pushAndEmitType(name: node.name.text, kind: .protocolKind, attributes: node.attributes, modifiers: node.modifiers, signature: node.trimmedDescription)
         return .visitChildren
     }
 
-    override func visitPost(_ node: ProtocolDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: ProtocolDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
-        pushType(name: node.name.text, kind: .actorKind, attributes: node.attributes)
+        pushAndEmitType(name: node.name.text, kind: .actorKind, attributes: node.attributes, modifiers: node.modifiers, signature: node.trimmedDescription)
         return .visitChildren
     }
 
-    override func visitPost(_ node: ActorDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: ActorDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
         // For an extension, the context is the EXTENDED type (left of any
         // conformance), not the protocol. Members declared inside an
         // unavailable conformance extension are excluded, but the extended type
-        // itself is not.
+        // itself is not. Extension members are public by default (extensions
+        // don't restrict member access beyond the type's own access).
         let extendedName = node.extendedType.trimmedDescription
         let contribution = parseAvailability(from: node.attributes)
         let availability = contributionToAvailability(contribution)
         let qualified = "SwiftData." + stripModuleQualifier(extendedName)
         let context = TypeContext(fullyQualifiedName: qualified, kind: .structKind, availability: availability)
         typeStack.append(context)
+        containerIsPublicStack.append(true)
         return .visitChildren
     }
 
-    override func visitPost(_ node: ExtensionDeclSyntax) { typeStack.removeLast() }
+    override func visitPost(_ node: ExtensionDeclSyntax) { typeStack.removeLast(); containerIsPublicStack.removeLast() }
 
     // MARK: Member declarations
 
@@ -335,6 +341,29 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
         typeStack.append(TypeContext(fullyQualifiedName: qualified, kind: kind, availability: availability))
     }
 
+    /// Emits a type declaration as a symbol (when public) and pushes its
+    /// context onto the type stack so members inherit its availability.
+    private func pushAndEmitType(
+        name: String,
+        kind: SymbolKind,
+        attributes: AttributeListSyntax,
+        modifiers: DeclModifierListSyntax,
+        signature: String
+    ) {
+        let containerIsPublic = isPublic(modifiers) && !isSpiAnnotated(attributes)
+        if containerIsPublic {
+            emitMember(
+                displayName: name,
+                kind: kind,
+                sourceSignature: signature,
+                arity: 0,
+                attributes: attributes
+            )
+        }
+        pushType(name: name, kind: kind, attributes: attributes)
+        containerIsPublicStack.append(containerIsPublic)
+    }
+
     private func emitMember(
         displayName: String,
         kind: SymbolKind,
@@ -342,6 +371,12 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
         arity: Int,
         attributes: AttributeListSyntax
     ) {
+        // Skip members of a non-public container. Top-level declarations have
+        // no container (empty stack) and are emitted unconditionally; their
+        // own access is checked at the call site.
+        if let containerIsPublic = containerIsPublicStack.last, !containerIsPublic {
+            return
+        }
         let own = parseAvailability(from: attributes)
         let merged = mergeAvailability(own: own)
         let fqn = qualifiedName(forMember: displayName)
@@ -442,6 +477,7 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
     /// Parses one `@available(...)` argument list into `contribution`.
     private func mergeArguments(_ arguments: AvailabilityArgumentListSyntax, into contribution: inout AvailabilityContribution) {
         var currentPlatform: String?
+        let knownPlatforms: Set<String> = ["macOS", "iOS", "tvOS", "watchOS", "visionOS", "swift"]
         for argument in arguments {
             switch argument.argument {
             case .availabilityVersionRestriction(let platformVersion):
@@ -450,14 +486,23 @@ final class SymbolExtractorVisitor: SyntaxVisitor {
                 if let version = platformVersion.version {
                     contribution.setPlatform(platform, normalize(version))
                 } else {
-                    // A platform with no version (rare in interfaces); treat as
-                    // present with no constraint.
                     contribution.markPlatform(platform)
                 }
             case .availabilityLabeledArgument(let labeled):
                 applyLabeled(labeled, currentPlatform: currentPlatform, into: &contribution)
             case .token(let token):
-                applyToken(token, currentPlatform: currentPlatform, into: &contribution)
+                // A bare identifier may be a platform name (longhand form like
+                // `@available(macOS, introduced: 14.0)` where `macOS` parses as
+                // a token rather than a `PlatformVersionSyntax`). Track it as
+                // the current platform so subsequent labeled args (`introduced:`,
+                // `deprecated:`, `unavailable:`) apply to it.
+                let text = token.text
+                if knownPlatforms.contains(text) {
+                    currentPlatform = text
+                    contribution.markPlatform(text)
+                } else {
+                    applyToken(token, currentPlatform: currentPlatform, into: &contribution)
+                }
             @unknown default:
                 continue
             }

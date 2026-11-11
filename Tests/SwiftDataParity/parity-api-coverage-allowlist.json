@@ -1,45 +1,340 @@
 {
-      "symbols": [
-        {"fullyQualifiedName":"SwiftData.DataStoreError","kind":"enum","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DataStoreError custom-store error enum; OpenSwiftData's custom-store shape surfaces errors via SwiftDataError (Sources/OSDCore/SwiftDataError.swift) instead. The enum is part of Apple's custom-store SPI and is not part of OpenSwiftData's parity surface.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DataStoreError.invalidPredicate","kind":"case","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DataStoreError.invalidPredicate case; OpenSwiftData's custom stores do not throw this case (they use SwiftDataError.unsupportedPredicate instead). Part of the custom-store error enum that OpenSwiftData does not reimplement.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DataStoreError.preferInMemoryFilter","kind":"case","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DataStoreError.preferInMemoryFilter case; OpenSwiftData's custom-store shape (OpenSwiftDataDataStore) does not support the in-memory-filter delegation hook. Part of the custom-store error enum that OpenSwiftData does not reimplement.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DataStoreError.preferInMemorySort","kind":"case","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DataStoreError.preferInMemorySort case; OpenSwiftData's custom-store shape (OpenSwiftDataDataStore) does not support the in-memory-sort delegation hook. Part of the custom-store error enum that OpenSwiftData does not reimplement.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DataStoreError.unsupportedFeature","kind":"case","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DataStoreError.unsupportedFeature case; OpenSwiftData's custom stores surface unsupported features via SwiftDataError.unsupportedStore instead. Part of the custom-store error enum that OpenSwiftData does not reimplement.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DefaultStore","kind":"class","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore class (the Core-Data-backed default store). OpenSwiftData uses its own SQLite-backed runtime store (Sources/OpenSwiftData/Storage/) and has no public DefaultStore class. The class is part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DefaultStore.cachedSnapshots","kind":"function","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore.cachedSnapshots; OpenSwiftData has no public DefaultStore class (the member belongs to the non-existent class). Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DefaultStore.initializeState","kind":"function","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore.initializeState; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.DefaultStore.invalidateState","kind":"function","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore.invalidateState; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Entity.inheritedProperties","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's SchemaDescriptor.Entity (Sources/OSDCore/Schema.swift) does not expose inheritedProperties; the lower-level schema-introspection metadata that Apple's Entity provides is a deferred feature. The property is public schema API, not custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Entity.inheritedPropertiesByName","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's SchemaDescriptor.Entity does not expose inheritedPropertiesByName; the lower-level schema-introspection metadata is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Entity.storedProperties","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's SchemaDescriptor.Entity exposes attributes/relationships directly but not the storedProperties aggregation; the lower-level schema-introspection metadata is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Entity.storedPropertiesByName","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's SchemaDescriptor.Entity does not expose storedPropertiesByName; the lower-level schema-introspection metadata is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Entity.subentities","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's SchemaDescriptor.Entity does not expose subentities; the lower-level schema-introspection metadata (used by Apple's inheritance system) is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.FetchResultsCollection.subscript","kind":"subscript","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData implements FetchResultsCollection.subscript (Sources/OpenSwiftData/Query/FetchResultsCollection.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so a subscript call x[i] produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation, not an implementation gap. Changing the scanner is out of scope.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.HistoryProviding","kind":"protocol","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's HistoryProviding protocol; OpenSwiftData's custom-store shape does not expose a custom-store history-vending protocol (history is handled by the runtime store directly). Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.HistoryTombstone.subscript","kind":"subscript","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData implements HistoryTombstone.subscript(keyPath:) (Sources/OpenSwiftData/History/History.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so the subscript call produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Index.CodingKeys","kind":"enum","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's Schema.Index (Sources/OpenSwiftData/Container/Schema.swift) does not declare a CodingKeys enum; the Codable schema-index conformance is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Index.Types","kind":"enum","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's Schema.Index does not declare a Types enum; the typed-index overload (#Index<T>(Schema.Index.Types<T>...)) is a deferred feature. The enum is public typed-index API, not custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.RelationshipCollection","kind":"protocol","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's RelationshipCollection protocol (which introduces the PersistentElement associatedtype and the Array/Optional conformance extensions). OpenSwiftData's relationship modeling does not use this protocol. Part of Apple's custom-store/relationship SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Schema.encodingVersion","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's Schema (Sources/OpenSwiftData/Container/Schema.swift) does not expose an encodingVersion property; the schema encoding-version API is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Schema.schemaEncodingVersion","kind":"variable","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's Schema does not expose a schemaEncodingVersion property; the schema encoding-version API is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Swift.Array.PersistentElement","kind":"typealias","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's Array.PersistentElement typealias (added by conformance to RelationshipCollection). Because OpenSwiftData has no RelationshipCollection protocol, this typealias does not exist in OpenSwiftData. Part of Apple's custom-store/relationship SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Swift.Optional.PersistentElement","kind":"typealias","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's Optional.PersistentElement typealias (added by conformance to RelationshipCollection). Because OpenSwiftData has no RelationshipCollection protocol, this typealias does not exist in OpenSwiftData.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.BackingData._generateCurrentClassBackingData","kind":"function","reasonCategory":"private-api","rationale":"OpenSwiftData does not reimplement Apple's underscored SPI _generateCurrentClassBackingData on BackingData. The method is underscored SPI used by Apple's @Model macro expansion internals; OpenSwiftData's BackingData protocol (Sources/OpenSwiftData/Model/BackingData.swift) does not declare it. SPI is internal plumbing not part of the public parity surface.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.BackingData._superClassBackingData","kind":"function","reasonCategory":"private-api","rationale":"OpenSwiftData does not reimplement Apple's underscored SPI _superClassBackingData on BackingData. The method is underscored SPI used by Apple's @Model macro expansion internals; OpenSwiftData's BackingData protocol does not declare it.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.DataStore.cachedSnapshots","kind":"function","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's DataStore protocol (Sources/OpenSwiftData/Store/DataStore.swift) provides cachedSnapshots(for:editingState:) as a no-op default implementation returning an empty dictionary. The caching behavior is deferred; no parity test can assert observable behavior for the no-op default, so a reference would assert nothing.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.DataStore.initializeState","kind":"function","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's DataStore protocol provides initializeState(for:) as a no-op default implementation. The state-hook behavior is deferred; no parity test can assert observable behavior for the no-op default.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.DataStore.invalidateState","kind":"function","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's DataStore protocol provides invalidateState(for:) as a no-op default implementation. The state-hook behavior is deferred; no parity test can assert observable behavior for the no-op default.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.DefaultStore.HistoryType","kind":"typealias","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore.HistoryType typealias; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.DefaultStore.historyType","kind":"variable","reasonCategory":"custom-store-api","rationale":"OpenSwiftData does not reimplement Apple's DefaultStore.historyType; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.ModelActor.subscript","kind":"subscript","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData implements ModelActor.subscript(id:as:) (Sources/OpenSwiftData/Model/ModelActor.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so a subscript call produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.PersistentModel.getTransformableValue","kind":"function","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData does not reimplement Apple's PersistentModel.getTransformableValue; transformable-attribute accessor support is a deferred feature. The method is public API, not private SPI.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.PersistentModel.setTransformableValue","kind":"function","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData does not reimplement Apple's PersistentModel.setTransformableValue; transformable-attribute accessor support is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.SwiftData.Schema.Unique","kind":"class","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData's Unique is a public macro (Sources/OpenSwiftData/Macros.swift), not a class, and the validator's scanner does not visit MacroExpansionExprSyntax, so a #Unique<...> expansion produces no reference to the display name 'Unique'. The Apple SwiftData.Schema.Unique class has no OpenSwiftData equivalent; the macro is the OpenSwiftData analog but is scanner-uncoverable. A compilable reference form that produces a visited node with displayName 'Unique' does not exist (Unique is a macro, not a type).","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Types.binary","kind":"case","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData does not reimplement Apple's Schema.Index.Types.binary case; the typed-index overload is a deferred feature. The case is public typed-index API.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Types.rtree","kind":"case","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData does not reimplement Apple's Schema.Index.Types.rtree case; the typed-index (R-tree) overload is a deferred feature.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Unique","kind":"macro","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData declares a public macro Unique (Sources/OpenSwiftData/Macros.swift) but the validator's scanner does not visit MacroExpansionExprSyntax, so a #Unique<...> expansion produces no reference to the display name 'Unique'. A compilable reference form that produces a visited node with displayName 'Unique' does not exist (a macro is not a type, so Unique.self does not compile). The macro is implemented but scanner-uncoverable.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData.Unique.CodingKeys","kind":"enum","reasonCategory":"deferred-behavior-gap","rationale":"OpenSwiftData does not reimplement Apple's Unique.CodingKeys enum; the Codable conformance for the Unique macro helper is a deferred feature. The display name is 'CodingKeys'; the new parity test deliberately does not reference the bare identifier 'CodingKeys' (it would also cover the allowlisted SwiftData.Index.CodingKeys).","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData._PersistedProperty","kind":"macro","reasonCategory":"private-api","rationale":"OpenSwiftData declares a _PersistedProperty macro (Sources/OpenSwiftData/Macros.swift) but with a different signature than Apple's; it is internal @Model macro plumbing (the @Model expansion emits @_PersistedProperty attributes). The scanner does not visit AttributeSyntax, so an @_PersistedProperty attribute produces no reference. SPI is internal plumbing not part of the public parity surface.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"},
-        {"fullyQualifiedName":"SwiftData._TransformablePersistedProperty","kind":"macro","reasonCategory":"private-api","rationale":"OpenSwiftData does not reimplement Apple's underscored _TransformablePersistedProperty macro. The macro is underscored SPI for transformable-attribute property expansion; OpenSwiftData has no equivalent. SPI is internal plumbing not part of the public parity surface.","issueURL":"https://github.com/ChakornK/OpenSwiftData/issues/15","expiration":"2999-12-31"}
-      ]
+  "symbols": [
+    {
+      "fullyQualifiedName": "SwiftData.DataStoreError",
+      "kind": "enum",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DataStoreError custom-store error enum; OpenSwiftData's custom-store shape surfaces errors via SwiftDataError (Sources/OSDCore/SwiftDataError.swift) instead. The enum is part of Apple's custom-store SPI and is not part of OpenSwiftData's parity surface.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DataStoreError.invalidPredicate",
+      "kind": "case",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DataStoreError.invalidPredicate case; OpenSwiftData's custom stores do not throw this case (they use SwiftDataError.unsupportedPredicate instead). Part of the custom-store error enum that OpenSwiftData does not reimplement.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DataStoreError.preferInMemoryFilter",
+      "kind": "case",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DataStoreError.preferInMemoryFilter case; OpenSwiftData's custom-store shape (OpenSwiftDataDataStore) does not support the in-memory-filter delegation hook. Part of the custom-store error enum that OpenSwiftData does not reimplement.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DataStoreError.preferInMemorySort",
+      "kind": "case",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DataStoreError.preferInMemorySort case; OpenSwiftData's custom-store shape (OpenSwiftDataDataStore) does not support the in-memory-sort delegation hook. Part of the custom-store error enum that OpenSwiftData does not reimplement.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DataStoreError.unsupportedFeature",
+      "kind": "case",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DataStoreError.unsupportedFeature case; OpenSwiftData's custom stores surface unsupported features via SwiftDataError.unsupportedStore instead. Part of the custom-store error enum that OpenSwiftData does not reimplement.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DefaultStore",
+      "kind": "class",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore class (the Core-Data-backed default store). OpenSwiftData uses its own SQLite-backed runtime store (Sources/OpenSwiftData/Storage/) and has no public DefaultStore class. The class is part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DefaultStore.cachedSnapshots",
+      "kind": "function",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore.cachedSnapshots; OpenSwiftData has no public DefaultStore class (the member belongs to the non-existent class). Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DefaultStore.initializeState",
+      "kind": "function",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore.initializeState; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.DefaultStore.invalidateState",
+      "kind": "function",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore.invalidateState; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Entity.inheritedProperties",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's SchemaDescriptor.Entity (Sources/OSDCore/Schema.swift) does not expose inheritedProperties; the lower-level schema-introspection metadata that Apple's Entity provides is a deferred feature. The property is public schema API, not custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Entity.inheritedPropertiesByName",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's SchemaDescriptor.Entity does not expose inheritedPropertiesByName; the lower-level schema-introspection metadata is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Entity.storedProperties",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's SchemaDescriptor.Entity exposes attributes/relationships directly but not the storedProperties aggregation; the lower-level schema-introspection metadata is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Entity.storedPropertiesByName",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's SchemaDescriptor.Entity does not expose storedPropertiesByName; the lower-level schema-introspection metadata is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Entity.subentities",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's SchemaDescriptor.Entity does not expose subentities; the lower-level schema-introspection metadata (used by Apple's inheritance system) is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.FetchResultsCollection.subscript",
+      "kind": "subscript",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData implements FetchResultsCollection.subscript (Sources/OpenSwiftData/Query/FetchResultsCollection.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so a subscript call x[i] produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation, not an implementation gap. Changing the scanner is out of scope.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.HistoryProviding",
+      "kind": "protocol",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's HistoryProviding protocol; OpenSwiftData's custom-store shape does not expose a custom-store history-vending protocol (history is handled by the runtime store directly). Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.HistoryTombstone.subscript",
+      "kind": "subscript",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData implements HistoryTombstone.subscript(keyPath:) (Sources/OpenSwiftData/History/History.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so the subscript call produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Index.CodingKeys",
+      "kind": "enum",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's Schema.Index (Sources/OpenSwiftData/Container/Schema.swift) does not declare a CodingKeys enum; the Codable schema-index conformance is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Index.Types",
+      "kind": "enum",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's Schema.Index does not declare a Types enum; the typed-index overload (#Index<T>(Schema.Index.Types<T>...)) is a deferred feature. The enum is public typed-index API, not custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.RelationshipCollection",
+      "kind": "protocol",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's RelationshipCollection protocol (which introduces the PersistentElement associatedtype and the Array/Optional conformance extensions). OpenSwiftData's relationship modeling does not use this protocol. Part of Apple's custom-store/relationship SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Schema.encodingVersion",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's Schema (Sources/OpenSwiftData/Container/Schema.swift) does not expose an encodingVersion property; the schema encoding-version API is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Schema.schemaEncodingVersion",
+      "kind": "variable",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's Schema does not expose a schemaEncodingVersion property; the schema encoding-version API is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Swift.Array.PersistentElement",
+      "kind": "typealias",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's Array.PersistentElement typealias (added by conformance to RelationshipCollection). Because OpenSwiftData has no RelationshipCollection protocol, this typealias does not exist in OpenSwiftData. Part of Apple's custom-store/relationship SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Swift.Optional.PersistentElement",
+      "kind": "typealias",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's Optional.PersistentElement typealias (added by conformance to RelationshipCollection). Because OpenSwiftData has no RelationshipCollection protocol, this typealias does not exist in OpenSwiftData.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.BackingData._generateCurrentClassBackingData",
+      "kind": "function",
+      "reasonCategory": "private-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's underscored SPI _generateCurrentClassBackingData on BackingData. The method is underscored SPI used by Apple's @Model macro expansion internals; OpenSwiftData's BackingData protocol (Sources/OpenSwiftData/Model/BackingData.swift) does not declare it. SPI is internal plumbing not part of the public parity surface.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.BackingData._superClassBackingData",
+      "kind": "function",
+      "reasonCategory": "private-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's underscored SPI _superClassBackingData on BackingData. The method is underscored SPI used by Apple's @Model macro expansion internals; OpenSwiftData's BackingData protocol does not declare it.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.DataStore.cachedSnapshots",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's DataStore protocol (Sources/OpenSwiftData/Store/DataStore.swift) provides cachedSnapshots(for:editingState:) as a no-op default implementation returning an empty dictionary. The caching behavior is deferred; no parity test can assert observable behavior for the no-op default, so a reference would assert nothing.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.DataStore.initializeState",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's DataStore protocol provides initializeState(for:) as a no-op default implementation. The state-hook behavior is deferred; no parity test can assert observable behavior for the no-op default.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.DataStore.invalidateState",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's DataStore protocol provides invalidateState(for:) as a no-op default implementation. The state-hook behavior is deferred; no parity test can assert observable behavior for the no-op default.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.DefaultStore.HistoryType",
+      "kind": "typealias",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore.HistoryType typealias; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.DefaultStore.historyType",
+      "kind": "variable",
+      "reasonCategory": "custom-store-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's DefaultStore.historyType; OpenSwiftData has no public DefaultStore class. Part of Apple's custom-store SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.ModelActor.subscript",
+      "kind": "subscript",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData implements ModelActor.subscript(id:as:) (Sources/OpenSwiftData/Model/ModelActor.swift) but the validator's name-match scanner does not visit SubscriptExprSyntax, so a subscript call produces no reference to the display name 'subscript'. The API is implemented; the gap is a scanner limitation.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.PersistentModel.getTransformableValue",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData does not reimplement Apple's PersistentModel.getTransformableValue; transformable-attribute accessor support is a deferred feature. The method is public API, not private SPI.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.PersistentModel.setTransformableValue",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData does not reimplement Apple's PersistentModel.setTransformableValue; transformable-attribute accessor support is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.Schema.Unique",
+      "kind": "class",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData's Unique is a public macro (Sources/OpenSwiftData/Macros.swift), not a class, and the validator's scanner does not visit MacroExpansionExprSyntax, so a #Unique<...> expansion produces no reference to the display name 'Unique'. The Apple SwiftData.Schema.Unique class has no OpenSwiftData equivalent; the macro is the OpenSwiftData analog but is scanner-uncoverable. A compilable reference form that produces a visited node with displayName 'Unique' does not exist (Unique is a macro, not a type).",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.SwiftData.SwiftDataError.~=",
+      "kind": "function",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData implements SwiftDataError.~= (Sources/OpenSwiftData/OSDCore/SwiftDataError.swift) but the validator's name-match scanner does not visit the ~= pattern-matching operator syntax, so the reference produces no DeclReferenceExprSyntax with baseName '~='. The API is implemented; the gap is a scanner limitation.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Types.binary",
+      "kind": "case",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData does not reimplement Apple's Schema.Index.Types.binary case; the typed-index overload is a deferred feature. The case is public typed-index API.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Types.rtree",
+      "kind": "case",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData does not reimplement Apple's Schema.Index.Types.rtree case; the typed-index (R-tree) overload is a deferred feature.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Unique",
+      "kind": "macro",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData declares a public macro Unique (Sources/OpenSwiftData/Macros.swift) but the validator's scanner does not visit MacroExpansionExprSyntax, so a #Unique<...> expansion produces no reference to the display name 'Unique'. A compilable reference form that produces a visited node with displayName 'Unique' does not exist (a macro is not a type, so Unique.self does not compile). The macro is implemented but scanner-uncoverable.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData.Unique.CodingKeys",
+      "kind": "enum",
+      "reasonCategory": "deferred-behavior-gap",
+      "rationale": "OpenSwiftData does not reimplement Apple's Unique.CodingKeys enum; the Codable conformance for the Unique macro helper is a deferred feature. The display name is 'CodingKeys'; the new parity test deliberately does not reference the bare identifier 'CodingKeys' (it would also cover the allowlisted SwiftData.Index.CodingKeys).",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData._PersistedProperty",
+      "kind": "macro",
+      "reasonCategory": "private-api",
+      "rationale": "OpenSwiftData declares a _PersistedProperty macro (Sources/OpenSwiftData/Macros.swift) but with a different signature than Apple's; it is internal @Model macro plumbing (the @Model expansion emits @_PersistedProperty attributes). The scanner does not visit AttributeSyntax, so an @_PersistedProperty attribute produces no reference. SPI is internal plumbing not part of the public parity surface.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
+    },
+    {
+      "fullyQualifiedName": "SwiftData._TransformablePersistedProperty",
+      "kind": "macro",
+      "reasonCategory": "private-api",
+      "rationale": "OpenSwiftData does not reimplement Apple's underscored _TransformablePersistedProperty macro. The macro is underscored SPI for transformable-attribute property expansion; OpenSwiftData has no equivalent. SPI is internal plumbing not part of the public parity surface.",
+      "issueURL": "https://github.com/ChakornK/OpenSwiftData/issues/15",
+      "expiration": "2999-12-31"
     }
+  ]
+}

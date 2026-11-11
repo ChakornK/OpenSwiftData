@@ -81,8 +81,9 @@ import Testing
 
     @Test func `DataStoreSnapshotValue is a usable Codable & Sendable alias`() throws {
         // `DataStoreSnapshotValue` is an IdentifierTypeSyntax covering the typealias.
-        let value: any DataStoreSnapshotValue = Data()
-        #expect(value.count == 0)
+        let data = Data()
+        let value: any DataStoreSnapshotValue = data
+        #expect((value as? Data)?.count == 0)
     }
 
     @Test func `DefaultSnapshot round-trips a value`() throws {

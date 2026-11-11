@@ -87,6 +87,10 @@ import Testing
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        // Remove `SDKROOT` so `xcrun` resolves the real SDK.
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "SDKROOT")
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
         do { try process.run() } catch { return nil }

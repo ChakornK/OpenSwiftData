@@ -284,7 +284,8 @@ public enum PathResolver {
                 }
             }
         }
-        // Try `xcrun --show-sdk-path` via Process.
+        // Try `xcrun --show-sdk-path` via Process. `SDKROOT` is cleared in the
+        // subprocess environment so xcrun resolves the real SDK.
         if let path = runProcess(executable: "/usr/bin/xcrun", arguments: ["--show-sdk-path"]),
             path.hasPrefix("/"),
             FileManager.default.fileExists(atPath: path)
@@ -304,10 +305,16 @@ public enum PathResolver {
     }
 
     /// Runs a process and returns its trimmed stdout, or nil on failure.
+    /// Clears `SDKROOT` from the environment so `xcrun` resolves the default
+    /// SDK rather than echoing back a relative `SDKROOT` set by SwiftPM.
     private static func runProcess(executable: String, arguments: [String]) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        // Remove `SDKROOT` so `xcrun --show-sdk-path` resolves the real SDK.
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "SDKROOT")
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
         do {

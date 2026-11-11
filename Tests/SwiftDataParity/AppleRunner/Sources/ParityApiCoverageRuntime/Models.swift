@@ -316,9 +316,12 @@ public struct ExtractedSurface: Sendable {
         self.excludedCount = excludedCount
         self.displayNames = Set(symbols.map(\.displayName))
         self.symbolsByDisplayName = Dictionary(grouping: symbols, by: \.displayName)
-        self.symbolsByIdentity = Dictionary(uniqueKeysWithValues: symbols.map {
+        // The real `.swiftinterface` may declare the same symbol identity more
+        // than once (e.g. across extensions); keep the last on duplicate keys
+        // rather than trapping.
+        self.symbolsByIdentity = Dictionary(symbols.map {
             (API_SymbolIdentity(fullyQualifiedName: $0.fullyQualifiedName, kind: $0.kind, sourceSignature: $0.sourceSignature), $0)
-        })
+        }, uniquingKeysWith: { _, last in last })
         self.symbolsByMangledName = [:]
     }
 }

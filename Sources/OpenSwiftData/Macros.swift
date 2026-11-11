@@ -8,6 +8,14 @@ public macro _PersistedProperty(
 ) =
     #externalMacro(module: "OpenSwiftDataMacros", type: "PersistedPropertyMacro")
 
+/// Apple's transformable-property macro, stubbed for API-surface coverage.
+/// The `#externalMacro` reference resolves at expansion time; the macro
+/// implementation `TransformablePersistedPropertyMacro` is a no-op declared
+/// in `Sources/OpenSwiftDataMacros/Plugin.swift`.
+@attached(peer, names: prefixed(_))
+public macro _TransformablePersistedProperty() =
+    #externalMacro(module: "OpenSwiftDataMacros", type: "TransformablePersistedPropertyMacro")
+
 /// Marks a class as a persistent model.
 /// Set `protocolConformancesOnly` to true when inherited types are protocols; leave it false for model subclasses.
 /// The macro cannot distinguish protocols from a model superclass from syntax alone.

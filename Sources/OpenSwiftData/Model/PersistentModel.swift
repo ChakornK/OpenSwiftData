@@ -629,3 +629,15 @@ private enum DetachedRelationshipGraph {
         }
     }
 }
+
+public extension PersistentModel {
+    /// Apple's transformable-value accessor, stubbed to delegate to ``getValue(forKey:)``.
+    func getTransformableValue<Value>(forKey keyPath: KeyPath<Model, Value>) -> Value {
+        getValue(forKey: keyPath)
+    }
+
+    /// Apple's transformable-value mutator, stubbed to delegate to ``setValue(forKey:to:)``.
+    func setTransformableValue<Value>(forKey keyPath: KeyPath<Model, Value>, to newValue: Value) {
+        setValue(forKey: keyPath, to: newValue)
+    }
+}

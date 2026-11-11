@@ -107,6 +107,20 @@ public final class Schema: @unchecked Sendable {
             properties = descriptor.properties
             isUnique = descriptor.isUnique
         }
+
+        /// Apple's coding keys for the index's serialized form, stubbed for API-surface coverage.
+        public enum CodingKeys: CodingKey {
+            case indices
+        }
+
+        /// Apple's index type kinds, stubbed for API-surface coverage.
+        /// `binary` is the default B-tree index; `rtree` is the R-tree spatial index.
+        public enum Types<P: PersistentModel> {
+            /// A B-tree index over the supplied property key paths.
+            case binary([PartialKeyPath<P>])
+            /// An R-tree spatial index over the supplied property key paths.
+            case rtree([PartialKeyPath<P>])
+        }
     }
 
     /// Describes an entity in the schema.
@@ -128,6 +142,19 @@ public final class Schema: @unchecked Sendable {
         public var indices: [[String]] {
             indexes.filter { !$0.isUnique }.map { ["binary"] + $0.properties }
         }
+
+        /// The entity's inherited properties, stubbed as empty for API-surface coverage.
+        public var inheritedProperties: [any SchemaProperty] { [] }
+        /// The entity's inherited properties keyed by name, stubbed as empty for API-surface coverage.
+        public var inheritedPropertiesByName: [String: any SchemaProperty] { [:] }
+        /// The entity's own stored properties (attributes and relationships), matching Apple's surface.
+        public var storedProperties: [any SchemaProperty] { properties }
+        /// The entity's own stored properties keyed by name.
+        public var storedPropertiesByName: [String: any SchemaProperty] {
+            Dictionary(uniqueKeysWithValues: properties.map { ($0.name, $0) })
+        }
+        /// The entity's direct subentities, stubbed as empty for API-surface coverage.
+        public var subentities: Set<Entity> { [] }
 
         public init(
             name: String,
@@ -530,6 +557,10 @@ public final class Schema: @unchecked Sendable {
         models.flatMap { $0.schemaMetadata().map(PropertyMetadata.init) }
     }
 
+    /// The schema's encoding version, matching Apple's surface; returns the existing `version`.
+    public var encodingVersion: Version { version }
+    /// The schema-encoding version Apple uses for schema serialization, stubbed at 1.0.0.
+    public static let schemaEncodingVersion: Version = Version(1, 0, 0)
 
     public init(_ entities: Set<Entity>, version: Version = Version(1, 0, 0)) {
         self.entities = entities.sorted { $0.name < $1.name }

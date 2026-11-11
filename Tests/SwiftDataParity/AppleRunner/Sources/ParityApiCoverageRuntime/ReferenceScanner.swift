@@ -224,6 +224,60 @@ final class ReferenceVisitor: SyntaxVisitor {
         return .visitChildren
     }
 
+    override func visit(_ node: SubscriptCallExprSyntax) -> SyntaxVisitorContinueKind {
+        // Subscript calls (e.g. `results[0]`, `tombstone[\.code]`,
+        // `self[id, as: T.self]`) do not contain a `subscript` keyword token;
+        // only subscript declarations do (in `SubscriptDeclSyntax`, which
+        // the scanner does not visit). The literal display name `"subscript"`
+        // matches every `subscript`-kind `API_Symbol` via `name-match`.
+        record(name: "subscript", matchQuality: .name, node: node)
+        return .visitChildren
+    }
+
+    override func visit(_ node: MacroExpansionDeclSyntax) -> SyntaxVisitorContinueKind {
+        // `#Unique<...>(...)` at class-member declaration position parses as
+        // `MacroExpansionDeclSyntax`; `macroName.text` is the macro name
+        // without `#` (e.g. `"Unique"`). Only names in `knownDisplayNames` are
+        // recorded (the `record` helper gates).
+        record(name: node.macroName.text, matchQuality: .name, node: node)
+        return .visitChildren
+    }
+
+    override func visit(_ node: MacroExpansionExprSyntax) -> SyntaxVisitorContinueKind {
+        // `#expect(...)`, `#Predicate { ... }`, `#require(...)` parse as
+        // `MacroExpansionExprSyntax`. Only names in `knownDisplayNames` are
+        // recorded (the `record` helper gates), so `#expect`/`#require` are
+        // filtered out.
+        record(name: node.macroName.text, matchQuality: .name, node: node)
+        return .visitChildren
+    }
+
+    override func visit(_ node: BinaryOperatorExprSyntax) -> SyntaxVisitorContinueKind {
+        // `~=` is the pattern-match operator. It is always a
+        // `BinaryOperatorExprSyntax` whose `operator.text == "~="`. Filter on
+        // the operator text so other binary operators are not passed to
+        // `record`.
+        if node.operator.text == "~=" {
+            record(name: "~=", matchQuality: .name, node: node)
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
+        // `@_PersistedProperty(...)`, `@_TransformablePersistedProperty`,
+        // `@Model`, `@Attribute(.unique)`, etc. The attribute name is the
+        // `attributeName` TypeSyntax without `@`. Extract from
+        // `IdentifierTypeSyntax` (the common form) or `MemberTypeSyntax`
+        // (for `@Foo.Bar`, not present in scanned sources but handled for
+        // completeness). Only names in `knownDisplayNames` are recorded.
+        if let identifierType = node.attributeName.as(IdentifierTypeSyntax.self) {
+            record(name: identifierType.name.text, matchQuality: .name, node: node)
+        } else if let memberType = node.attributeName.as(MemberTypeSyntax.self) {
+            record(name: memberType.name.text, matchQuality: .name, node: node)
+        }
+        return .visitChildren
+    }
+
     /// Records a reference for `name` when it matches a known `displayName`.
     /// `node` provides the source location via the converter.
     private func record(name: String, matchQuality: Reference.MatchQuality, node: some SyntaxProtocol) {

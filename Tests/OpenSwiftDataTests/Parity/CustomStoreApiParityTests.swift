@@ -36,13 +36,13 @@ private struct ConcreteRelationshipCollection: RelationshipCollection {
     }
 
     @Test func `HistoryProviding protocol and HistoryType associatedtype are referable`() throws {
-        let _: any HistoryProviding.Type? = nil
+        let _: (any HistoryProviding.Type)? = nil
         let _: DefaultStore.HistoryType.Type? = nil
         #expect(true)
     }
 
     @Test func `RelationshipCollection protocol and PersistentElement associatedtype are referable`() throws {
-        let _: any RelationshipCollection.Type? = nil
+        let _: (any RelationshipCollection.Type)? = nil
         let _: ConcreteRelationshipCollection.PersistentElement.Type? = nil
         #expect(true)
     }

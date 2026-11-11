@@ -5,8 +5,12 @@ import ParityContracts
 // fields, rejects stale/duplicate entries and entries that allowlist already-
 // covered symbols, and annotates uncovered symbols with the allowlist fields.
 
-struct AllowlistFile: Codable {
-    let symbols: [AllowlistEntry]
+public struct AllowlistFile: Codable {
+    public let symbols: [AllowlistEntry]
+
+    public init(symbols: [AllowlistEntry]) {
+        self.symbols = symbols
+    }
 }
 
 public enum AllowlistValidator {

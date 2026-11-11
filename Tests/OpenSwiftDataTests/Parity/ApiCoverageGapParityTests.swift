@@ -20,7 +20,7 @@ import Testing
 /// Parity tests that close API-surface coverage gaps by referencing real public
 /// SwiftData API that OpenSwiftData implements but no existing parity test
 /// exercises by the symbol's display name. Each test asserts real behavior.
-@MainActor @Suite struct ApiCoverageGapParityTests {
+@MainActor struct ApiCoverageGapParityTests {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 

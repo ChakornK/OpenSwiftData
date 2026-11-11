@@ -22,7 +22,7 @@ final class UnderscoredTransformableThing {
 
 /// Underscored SwiftData macros (`@_PersistedProperty`, `@_TransformablePersistedProperty`),
 /// referenced for parity API coverage.
-@MainActor @Suite struct UnderscoredMacroParityTests {
+@MainActor struct UnderscoredMacroParityTests {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 

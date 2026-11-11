@@ -41,7 +41,7 @@ extension NoOpDefaultsConfiguration: Equatable, Hashable {
 /// The no-op default `DataStore` methods (`cachedSnapshots`, `initializeState`,
 /// `invalidateState`) are callable and return their default empty values, matching
 /// Apple's SwiftData surface.
-@MainActor @Suite struct DataStoreNoOpDefaultsParityTests {
+@MainActor struct DataStoreNoOpDefaultsParityTests {
     @Test func `cachedSnapshots returns an empty dictionary`() throws {
         let store = try NoOpDefaultsDataStore(NoOpDefaultsConfiguration(name: "no-op"), migrationPlan: nil)
         let editingState = EditingState(id: UUID(), author: nil)

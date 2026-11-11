@@ -10,7 +10,7 @@ import Testing
 
 /// Schema-introspection API surface that OpenSwiftData does not fully
 /// reimplement, referenced for parity API coverage.
-@Suite struct SchemaApiParityTests {
+struct SchemaApiParityTests {
     private let schema = Schema([Schema.Entity(name: "SchemaApiThing")], version: Schema.Version(1, 0, 0))
 
     @Test func `Entity computed properties are referable`() throws {

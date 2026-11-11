@@ -10,7 +10,7 @@ import Testing
 /// `PersistentModel` transformable-value accessors, referenced for parity API
 /// coverage. The accessors delegate to `getValue`/`setValue` in OpenSwiftData's
 /// stub.
-@MainActor @Suite struct PersistentModelApiParityTests {
+@MainActor struct PersistentModelApiParityTests {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 

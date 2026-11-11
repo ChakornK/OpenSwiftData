@@ -9,7 +9,7 @@ import Testing
 
 /// `BackingData` underscored SPI, referenced for parity API coverage. The
 /// methods return fresh detached backing data in OpenSwiftData's stub.
-@MainActor @Suite struct BackingDataApiParityTests {
+@MainActor struct BackingDataApiParityTests {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 

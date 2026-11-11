@@ -18,7 +18,7 @@ private struct ConcreteRelationshipCollection: RelationshipCollection {
 /// Custom-store API surface that OpenSwiftData does not reimplement, referenced
 /// for parity API coverage. Each reference exercises a display name that
 /// OpenSwiftData stubs for coverage but does not wire into its runtime.
-@MainActor @Suite struct CustomStoreApiParityTests {
+@MainActor struct CustomStoreApiParityTests {
     @Test func `DataStoreError cases are referable`() throws {
         let errors: [DataStoreError] = [
             .invalidPredicate,

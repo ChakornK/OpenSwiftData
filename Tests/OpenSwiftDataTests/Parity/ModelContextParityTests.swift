@@ -119,7 +119,7 @@ import Testing
         #expect(descriptor.predicate == nil)
         #expect(descriptor.sortBy.isEmpty)
         #expect(descriptor.fetchLimit == nil)
-        #expect(descriptor.fetchOffset == nil)
+        #expect(descriptor.fetchOffset == 0)
         #expect(descriptor.includePendingChanges)
         #expect(descriptor.propertiesToFetch.isEmpty)
         #expect(descriptor.relationshipKeyPathsForPrefetching.isEmpty)

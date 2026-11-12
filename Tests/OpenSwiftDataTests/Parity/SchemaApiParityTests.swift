@@ -15,30 +15,31 @@ struct SchemaApiParityTests {
 
     @Test func `Entity computed properties are referable`() throws {
         let entity = try #require(schema.entity(forName: "SchemaApiThing"))
-        let _: [any SchemaProperty] = entity.inheritedProperties
-        let _: [String: any SchemaProperty] = entity.inheritedPropertiesByName
-        let _: [any SchemaProperty] = entity.storedProperties
-        let _: [String: any SchemaProperty] = entity.storedPropertiesByName
-        let _: Set<Schema.Entity> = entity.subentities
-        #expect(true)
+        #expect(entity.inheritedProperties.isEmpty)
+        #expect(entity.inheritedPropertiesByName.isEmpty)
+        #expect(entity.storedProperties.isEmpty)
+        #expect(entity.storedPropertiesByName.isEmpty)
+        #expect(entity.subentities.isEmpty)
     }
 
     @Test func `Index CodingKeys and Types enums are referable`() throws {
-        let _: Schema.Index.CodingKeys? = nil
-        let _: Schema.Index.Types<SchemaApiThing>? = nil
-        #expect(true)
+        let codingKeys: Schema.Index.CodingKeys? = nil
+        let types: Schema.Index.Types<SchemaApiThing>? = nil
+        #expect(codingKeys == nil)
+        #expect(types == nil)
     }
 
     @Test func `Index Types binary and rtree cases are referable`() throws {
         let binary: Schema.Index.Types<SchemaApiThing> = .binary([\.name])
         let rtree: Schema.Index.Types<SchemaApiThing> = .rtree([\.name])
-        _ = (binary, rtree)
-        #expect(true)
+        if case .binary = binary {} else { Issue.record("expected .binary") }
+        if case .rtree = rtree {} else { Issue.record("expected .rtree") }
     }
 
     @Test func `Schema encodingVersion and schemaEncodingVersion are referable`() throws {
-        let _: Schema.Version = schema.encodingVersion
-        let _: Schema.Version = Schema.schemaEncodingVersion
-        #expect(true)
+        let version: Schema.Version = schema.encodingVersion
+        let staticVersion: Schema.Version = Schema.schemaEncodingVersion
+        #expect(version == Schema.Version(1, 0, 0))
+        #expect(staticVersion == Schema.Version(1, 0, 0))
     }
 }

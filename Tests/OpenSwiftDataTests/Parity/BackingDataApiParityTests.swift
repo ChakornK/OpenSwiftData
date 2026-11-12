@@ -24,8 +24,8 @@ import Testing
         context.insert(thing)
         try context.save()
         let backing = thing.persistentBackingData
-        let _: any BackingData<BackingDataApiThing> = backing._generateCurrentClassBackingData()
-        #expect(true)
+        let generated: any BackingData<BackingDataApiThing> = backing._generateCurrentClassBackingData()
+        #expect(String(describing: generated).contains("BackingData"))
     }
 
     @Test func `_superClassBackingData returns a backing data`() throws {
@@ -33,7 +33,7 @@ import Testing
         context.insert(thing)
         try context.save()
         let backing = thing.persistentBackingData
-        let _: any BackingData<BackingDataApiThing> = backing._superClassBackingData(of: BackingDataApiThing.self)
-        #expect(true)
+        let super_: any BackingData<BackingDataApiThing> = backing._superClassBackingData(of: BackingDataApiThing.self)
+        #expect(String(describing: super_).contains("BackingData"))
     }
 }

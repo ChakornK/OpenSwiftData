@@ -9,17 +9,15 @@ public enum NonComparableScenarios {
     /// One matrix rationale per declared scenario.
     public static let declared: [ScenarioID: (reasonCategory: String, rationale: String)] = [
         // Deferred behavior gaps — Apple bugs not replicated.
-        ScenarioID(suite: "FetchDescriptorParityTests", test: "defaults match SwiftData"): deferred(
-            "OpenSwiftData's FetchDescriptor leaves fetchOffset nil by default; Apple's is non-nil."),
         ScenarioID(suite: "ModelContainerParityTests", test: "erasing removes stored models and keeps the store usable"): deferred(
-            "Apple traps during its post-erase save probe; OpenSwiftData completes the probe."),
+            "Apple's ModelContext.save() after ModelContainer.erase() triggers an abnormal termination that stops the checkpointed probe process at step 2 (lastCompletedStep == 2, pendingSaveReturned == false); OpenSwiftData's erase() keeps the store usable so the save completes (lastCompletedStep == 4, pendingNamesAfterSave == [\"pending\"]), which is the documented intent of erase(). OpenSwiftData intentionally does not replicate Apple's crash, so the two outcomes cannot be compared."),
         ScenarioID(suite: "UniqueConstraintParityTests", test: "duplicates inserted in one save collapse into one row"): deferred(
-            "Apple's survivor is non-deterministic (Set iteration order); OpenSwiftData deterministically keeps the last insert."),
+            "Apple's surviving row is selected non-deterministically (its conflict resolver iterates a Set, whose order is not guaranteed), so the survivorsObserved set varies run to run; OpenSwiftData deterministically keeps the last insert (z/2/nil), so the survivorsObserved sets cannot be compared. The parity harness has no per-field non-comparable mechanism, so the comparable everyTrialHasOneRow field is necessarily dropped along with survivorsObserved."),
         // Variants inside otherwise-compared entries.
         ScenarioID(suite: "StringPredicateParityTests", test: "string count counts characters/saved"): deferred(
-            "Apple's saved-model String.count predicates match no rows or every row; OpenSwiftData counts characters."),
+            "Apple's saved-model String.count predicate translation matches no rows for counts that should match and every row for counts that should not, contradicting Swift semantics; OpenSwiftData evaluates String.count per Swift semantics (grapheme cluster count), so the saved-model outputs cannot be compared."),
         ScenarioID(suite: "StringPredicateParityTests", test: "optional flatMap over a string/saved"): deferred(
-            "Apple's saved-model optional flatMap and isEmpty predicates match no rows; OpenSwiftData matches."),
+            "Apple's saved-model Optional.flatMap and String.isEmpty predicate translation matches no rows, contradicting Swift semantics; OpenSwiftData evaluates Optional.flatMap and String.isEmpty per Swift semantics, so the saved-model outputs cannot be compared."),
     ]
 
     /// Returns the disposition for a scenario, or `nil` when the scenario is comparable.

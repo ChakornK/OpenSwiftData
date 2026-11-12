@@ -53,13 +53,13 @@ extension NoOpDefaultsConfiguration: Equatable, Hashable {
         let store = try NoOpDefaultsDataStore(NoOpDefaultsConfiguration(name: "no-op"), migrationPlan: nil)
         let editingState = EditingState(id: UUID(), author: nil)
         store.initializeState(for: editingState)
-        #expect(true)
+        #expect(store.identifier == "no-op")
     }
 
     @Test func `invalidateState returns without throwing`() throws {
         let store = try NoOpDefaultsDataStore(NoOpDefaultsConfiguration(name: "no-op"), migrationPlan: nil)
         let editingState = EditingState(id: UUID(), author: nil)
         store.invalidateState(for: editingState)
-        #expect(true)
+        #expect(store.identifier == "no-op")
     }
 }

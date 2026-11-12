@@ -30,20 +30,23 @@ private struct ConcreteRelationshipCollection: RelationshipCollection {
     }
 
     @Test func `DefaultStore type and historyType static member are referable`() throws {
-        let _: DefaultStore.Type = DefaultStore.self
-        let _: DefaultHistoryTransaction.Type = DefaultStore.historyType
-        #expect(true)
+        let storeType: DefaultStore.Type = DefaultStore.self
+        let historyType: DefaultHistoryTransaction.Type = DefaultStore.historyType
+        #expect(storeType == DefaultStore.self)
+        #expect(historyType == DefaultHistoryTransaction.self)
     }
 
     @Test func `HistoryProviding protocol and HistoryType associatedtype are referable`() throws {
-        let _: (any HistoryProviding.Type)? = nil
-        let _: DefaultStore.HistoryType.Type? = nil
-        #expect(true)
+        let provider: (any HistoryProviding.Type)? = nil
+        let historyType: DefaultStore.HistoryType.Type? = nil
+        #expect(provider == nil)
+        #expect(historyType == nil)
     }
 
     @Test func `RelationshipCollection protocol and PersistentElement associatedtype are referable`() throws {
-        let _: (any RelationshipCollection.Type)? = nil
-        let _: ConcreteRelationshipCollection.PersistentElement.Type? = nil
-        #expect(true)
+        let collection: (any RelationshipCollection.Type)? = nil
+        let element: ConcreteRelationshipCollection.PersistentElement.Type? = nil
+        #expect(collection == nil)
+        #expect(element == nil)
     }
 }

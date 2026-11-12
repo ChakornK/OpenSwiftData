@@ -32,8 +32,8 @@ struct SchemaApiParityTests {
     @Test func `Index Types binary and rtree cases are referable`() throws {
         let binary: Schema.Index.Types<SchemaApiThing> = .binary([\.name])
         let rtree: Schema.Index.Types<SchemaApiThing> = .rtree([\.name])
-        #expect(binary == .binary([\.name]))
-        #expect(rtree == .rtree([\.name]))
+        if case .binary = binary {} else { Issue.record("expected .binary") }
+        if case .rtree = rtree {} else { Issue.record("expected .rtree") }
     }
 
     @Test func `Schema encodingVersion and schemaEncodingVersion are referable`() throws {

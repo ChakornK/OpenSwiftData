@@ -110,9 +110,10 @@ import Testing
     @Test func `FetchResultsCollection Indices and SubSequence typealiases are referable`() throws {
         // `Indices`/`SubSequence` are MemberTypeSyntax nodes covering the
         // synthesized RandomAccessCollection conformance typealiases.
-        let _: FetchResultsCollection<ApiCoverageGapThing>.Indices? = nil
-        let _: FetchResultsCollection<ApiCoverageGapThing>.SubSequence? = nil
-        #expect(true)
+        let indices: FetchResultsCollection<ApiCoverageGapThing>.Indices? = nil
+        let subSequence: FetchResultsCollection<ApiCoverageGapThing>.SubSequence? = nil
+        #expect(indices == nil)
+        #expect(subSequence == nil)
     }
 
     @Test func `DataStoreSnapshotCodingKey intValue is nil`() throws {

@@ -1782,10 +1782,6 @@ public enum ModelContextParityScenarioCatalog {
             "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
             "fetchOffsetAbsent": .bool(false), "includePendingChanges": .bool(true),
             "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
-        ], expectedOSDObservations: [
-            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
-            "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
-            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
         ])
     public static let fetchDescriptorProperties = scenario(
         "FetchDescriptorParityTests", "properties to fetch is a mutable array", .fetchDescriptorProperties,

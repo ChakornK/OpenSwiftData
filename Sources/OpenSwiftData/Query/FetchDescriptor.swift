@@ -32,7 +32,7 @@ public struct FetchDescriptor<Model: PersistentModel>: Equatable {
         predicate: Predicate<Model>? = nil,
         sortBy: [SortDescriptor<Model>] = [],
         fetchLimit: Int? = nil,
-        fetchOffset: Int? = nil,
+        fetchOffset: Int? = 0,
         includePendingChanges: Bool = true,
         propertiesToFetch: [PartialKeyPath<Model>] = [],
         relationshipKeyPathsForPrefetching: [PartialKeyPath<Model>] = []

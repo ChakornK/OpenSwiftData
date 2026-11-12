@@ -559,27 +559,20 @@ import Testing
         #expect(ModelContextParityExpectationValidator.validate(apple, against: specification, implementation: "openswiftdata"))
     }
 
-    @Test func fetchDescriptorDefaultsDivergenceUsesExactPerImplementationValues() {
+    @Test func fetchDescriptorDefaultsMatchAcrossImplementations() {
         let specification = ModelContextParityScenarioCatalog.fetchDescriptorDefaults
-        let appleValues: [String: ObservedValue] = [
+        let values: [String: ObservedValue] = [
             "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
             "fetchOffsetAbsent": .bool(false), "includePendingChanges": .bool(true),
             "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
         ]
-        let osdValues: [String: ObservedValue] = [
-            "predicateAbsent": .bool(true), "sortEmpty": .bool(true), "fetchLimitAbsent": .bool(true),
-            "fetchOffsetAbsent": .bool(true), "includePendingChanges": .bool(true),
-            "propertiesToFetchEmpty": .bool(true), "prefetchRelationshipsEmpty": .bool(true),
-        ]
-        let apple = ScenarioResult(id: specification.id, observations: appleValues.map { field, value in
-            ParityObservation(step: 0, field: field, value: value)
-        })
-        let osd = ScenarioResult(id: specification.id, observations: osdValues.map { field, value in
+        let result = ScenarioResult(id: specification.id, observations: values.map { field, value in
             ParityObservation(step: 0, field: field, value: value)
         })
 
-        #expect(ModelContextParityExpectationValidator.validate(apple, against: specification))
-        #expect(ModelContextParityExpectationValidator.validate(osd, against: specification, implementation: "openswiftdata"))
+        #expect(ModelContextParityExpectationValidator.validate(result, against: specification))
+        #expect(ModelContextParityExpectationValidator.validate(
+            result, against: specification, implementation: "openswiftdata"))
     }
 
     @Test func fetchDescriptorEqualityUsesExactPerImplementationValues() {

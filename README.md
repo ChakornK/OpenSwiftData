@@ -93,17 +93,16 @@ The parity suite tracks behavior and API differences. Expand the list for detail
 <details>
 <summary>Show all</summary>
 
-1. Fetch descriptor defaults, `fetchOffsetAbsent`: Apple's offset is present; OpenSwiftData's is absent.
-2. Erase, `lastCompletedStep`: Apple's probe checkpoints step 2 before its post-erase save traps; OpenSwiftData completes step 4.
-3. Erase, `pendingFetchReturned`: the Apple probe does not complete the fetch after its save trap; OpenSwiftData completes it.
-4. Erase, `pendingNamesAfterSave`: the Apple probe has no fetched names after its save trap; OpenSwiftData fetches `[\"pending\"]`.
-5. Erase, `pendingSaveReturned`: the Apple probe does not complete the save after `erase()`; OpenSwiftData completes it.
-6. Saved optional `flatMap`, `nick.empty.false`: OpenSwiftData matches `délta`; Apple returns no matches.
-7. Saved optional `flatMap`, `nick.isEmpty.direct`: OpenSwiftData matches `délta`; Apple returns no matches.
-8. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
-9. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
-10. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
-11. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData deterministically keeps the last insert as the survivor; Apple's survivor is non-deterministic (Set iteration order), so either insert may win.
+1. Erase, `lastCompletedStep`: Apple's probe checkpoints step 2 before its post-erase save traps; OpenSwiftData completes step 4.
+2. Erase, `pendingFetchReturned`: the Apple probe does not complete the fetch after its save trap; OpenSwiftData completes it.
+3. Erase, `pendingNamesAfterSave`: the Apple probe has no fetched names after its save trap; OpenSwiftData fetches `[\"pending\"]`.
+4. Erase, `pendingSaveReturned`: the Apple probe does not complete the save after `erase()`; OpenSwiftData completes it.
+5. Saved optional `flatMap`, `nick.empty.false`: OpenSwiftData matches `délta`; Apple returns no matches.
+6. Saved optional `flatMap`, `nick.isEmpty.direct`: OpenSwiftData matches `délta`; Apple returns no matches.
+7. Saved `String.count`, `length.4`: OpenSwiftData matches `beta`; Apple returns no matches.
+8. Saved `String.count`, `length.5`: OpenSwiftData matches `Alpha`, `Gamma`, and `délta`; Apple returns no matches.
+9. Saved `String.count`, `length.gt5`: OpenSwiftData matches `Épsilon`; Apple matches every row.
+10. Duplicate inserts in one save, `survivorsObserved`: OpenSwiftData deterministically keeps the last insert as the survivor; Apple's survivor is non-deterministic (Set iteration order), so either insert may win.
 
 </details>
 
